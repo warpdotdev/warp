@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
+#[cfg(not(target_family = "wasm"))]
+use remote_server::manager::RemoteServerManager;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_editor::model::CoreEditorModel;
 #[cfg(feature = "local_fs")]
@@ -28,9 +30,6 @@ use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
-
-#[cfg(not(target_family = "wasm"))]
-use remote_server::manager::RemoteServerManager;
 
 use super::context_menu::{show_rich_editor_context_menu, ContextMenuAction, ContextMenuState};
 use super::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};

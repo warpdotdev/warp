@@ -80,6 +80,21 @@ impl AgentSource {
         }
     }
 
+    /// Returns true when tasks from this source must not accept user-triggered cloud follow-ups.
+    pub fn blocks_cloud_followups(&self) -> bool {
+        match self {
+            AgentSource::GitHubAction => true,
+            AgentSource::Linear
+            | AgentSource::AgentWebhook
+            | AgentSource::Slack
+            | AgentSource::Cli
+            | AgentSource::ScheduledAgent
+            | AgentSource::Interactive
+            | AgentSource::WebApp
+            | AgentSource::CloudMode => false,
+        }
+    }
+
     /// Returns true if this source represents a user-initiated conversation
     /// (as opposed to automated/programmatic sources like CLI or scheduled runs).
     pub fn is_user_initiated(&self) -> bool {
@@ -249,6 +264,13 @@ impl AmbientAgentTask {
 
     pub fn conversation_id(&self) -> Option<&str> {
         self.conversation_id.as_deref()
+    }
+
+    /// Returns true when this task's source must not accept user-triggered cloud follow-ups.
+    pub fn blocks_cloud_followups(&self) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(AgentSource::blocks_cloud_followups)
     }
 
     pub fn active_run_execution(&self) -> RunExecution<'_> {

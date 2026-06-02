@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use cloud_object_client::MockObjectClient;
 use lazy_static::lazy_static;
 use mockall::Sequence;
 use rand::Rng;
@@ -43,7 +44,6 @@ use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 use crate::{NetworkStatus, UpdateManager};
-use cloud_object_client::MockObjectClient;
 
 fn create_cloud_model(
     app: &mut App,

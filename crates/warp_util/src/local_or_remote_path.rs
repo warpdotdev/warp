@@ -56,6 +56,41 @@ impl LocalOrRemotePath {
         }
     }
 
+    /// Returns this location's parent, preserving remote host identity.
+    pub fn parent(&self) -> Option<LocalOrRemotePath> {
+        match self {
+            LocalOrRemotePath::Local(path) => path
+                .parent()
+                .map(|parent| LocalOrRemotePath::Local(parent.to_path_buf())),
+            LocalOrRemotePath::Remote(remote) => remote.path.parent().map(|parent| {
+                LocalOrRemotePath::Remote(RemotePath::new(remote.host_id.clone(), parent))
+            }),
+        }
+    }
+
+    /// Returns the file name component, regardless of where the path lives.
+    pub fn file_name(&self) -> Option<&str> {
+        match self {
+            LocalOrRemotePath::Local(path) => path.file_name().and_then(|name| name.to_str()),
+            LocalOrRemotePath::Remote(remote) => remote.path.file_name(),
+        }
+    }
+
+    /// Returns whether this location starts with `base`.
+    ///
+    /// Remote locations only compare as ancestors when they are on the same
+    /// host. This prevents `/repo` on one host from matching `/repo` on another.
+    pub fn starts_with(&self, base: &LocalOrRemotePath) -> bool {
+        match (self, base) {
+            (LocalOrRemotePath::Local(path), LocalOrRemotePath::Local(base)) => {
+                path.starts_with(base)
+            }
+            (LocalOrRemotePath::Remote(path), LocalOrRemotePath::Remote(base)) => {
+                path.host_id == base.host_id && path.path.starts_with(&base.path)
+            }
+            _ => false,
+        }
+    }
     /// Returns the local path if this is a `Local` location, `None` for `Remote`.
     /// Callers that only work with local files (LSP, save-to-disk, reveal-in-finder)
     /// should use this to gate their behavior.

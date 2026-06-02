@@ -1,13 +1,15 @@
 use std::fmt::Display;
+use std::fs;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::Result;
 use lazy_static::lazy_static;
 use regex::Regex;
 use thiserror::Error;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use super::parser::parse_markdown_file;
+use super::parser::parse_markdown_content;
 use super::skill_provider::{get_provider_for_path, get_scope_for_path, SkillProvider, SkillScope};
 
 const MAX_SKILL_DESCRIPTION_CHARS: usize = 512;
@@ -17,6 +19,50 @@ lazy_static! {
         Regex::new(r"\n\s*\n").expect("Block separator regex should be valid");
     static ref INCOMPLETE_SENTENCE: Regex =
         Regex::new(r"[^.!?]*$").expect("Incomplete sentence regex should be valid");
+}
+/// Parse skill markdown content that was fetched outside the local filesystem.
+///
+/// This is used for remote project skills, whose SKILL.md body arrives through
+/// the remote file-read transport rather than `std::fs`.
+pub fn parse_skill_content_at_location(
+    path: LocalOrRemotePath,
+    content: &str,
+    provider: SkillProvider,
+    scope: SkillScope,
+) -> Result<ParsedSkill> {
+    let parsed = parse_markdown_content(content)?;
+    let name = match parsed
+        .front_matter
+        .get("name")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        Some(name) => name.to_string(),
+        None => derive_skill_name_from_path(&path)?,
+    };
+
+    let description = match parsed
+        .front_matter
+        .get("description")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        Some(description) => description.to_string(),
+        None => truncate_skill_description(
+            &derive_description_from_content(&parsed.content, parsed.line_range.as_ref())
+                .unwrap_or_default(),
+        ),
+    };
+
+    Ok(ParsedSkill {
+        path,
+        name,
+        description,
+        content: parsed.content,
+        line_range: parsed.line_range,
+        provider,
+        scope,
+    })
 }
 
 #[derive(Error, Debug)]
@@ -30,7 +76,7 @@ pub enum ParseSkillError {
 /// Represents a parsed skill with validated fields
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedSkill {
-    pub path: PathBuf,
+    pub path: LocalOrRemotePath,
     pub name: String,
     pub description: String,
     /// The entire content of the file (including front matter)
@@ -53,7 +99,7 @@ impl ParsedSkill {
 
 impl Display for ParsedSkill {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Skill: {}", self.path.display())
+        write!(f, "Skill: {}", self.path.display_path())
     }
 }
 
@@ -65,9 +111,10 @@ impl Display for ParsedSkill {
 /// # Returns
 /// * `Result<ParsedSkill>` - Parsed skill with validated name and description
 pub fn parse_skill(path: &Path) -> Result<ParsedSkill> {
-    let provider = get_provider_for_path(path).unwrap_or(SkillProvider::Agents);
+    let provider_path = LocalOrRemotePath::Local(path.to_path_buf());
+    let provider = get_provider_for_path(&provider_path).unwrap_or(SkillProvider::Agents);
     let scope = get_scope_for_path(path);
-    parse_skill_internal(path, provider, scope)
+    parse_local_skill_internal(path, provider, scope)
 }
 
 /// Parse a bundled skill markdown file.
@@ -82,55 +129,26 @@ pub fn parse_skill(path: &Path) -> Result<ParsedSkill> {
 /// # Returns
 /// * `Result<ParsedSkill>` - Parsed skill with validated name and description
 pub fn parse_bundled_skill(path: &Path) -> Result<ParsedSkill> {
-    parse_skill_internal(path, SkillProvider::Warp, SkillScope::Bundled)
+    parse_local_skill_internal(path, SkillProvider::Warp, SkillScope::Bundled)
 }
 
-fn parse_skill_internal(
+fn parse_local_skill_internal(
     path: &Path,
     provider: SkillProvider,
     scope: SkillScope,
 ) -> Result<ParsedSkill> {
-    let parsed = parse_markdown_file(path)?;
-
-    let name = match parsed
-        .front_matter
-        .get("name")
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        Some(name) => name.to_string(),
-        None => derive_skill_name_from_path(path)?,
-    };
-
-    let description = match parsed
-        .front_matter
-        .get("description")
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        Some(description) => description.to_string(),
-        None => truncate_skill_description(
-            &derive_description_from_content(&parsed.content, parsed.line_range.as_ref())
-                .unwrap_or_default(),
-        ),
-    };
-
-    Ok(ParsedSkill {
-        path: path.to_path_buf(),
-        name,
-        description,
-        content: parsed.content,
-        line_range: parsed.line_range,
+    let content = fs::read_to_string(path)?;
+    parse_skill_content_at_location(
+        LocalOrRemotePath::Local(path.to_path_buf()),
+        &content,
         provider,
         scope,
-    })
+    )
 }
 
-fn derive_skill_name_from_path(path: &Path) -> Result<String> {
+fn derive_skill_name_from_path(path: &LocalOrRemotePath) -> Result<String> {
     path.parent()
-        .and_then(|parent| parent.file_name())
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_string())
+        .and_then(|parent| parent.file_name().map(str::to_owned))
         .ok_or(ParseSkillError::CouldNotDeriveSkillNameFromPath.into())
 }
 

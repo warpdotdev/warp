@@ -10,10 +10,10 @@ use std::path::Path;
 
 use warp_core::HostId;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::file_tree_store::FileTreeState;
-use crate::file_tree_update::RepoMetadataUpdate;
+use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{
     GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoContent, RepositoryMetadataEvent,
 };
@@ -34,7 +34,12 @@ pub enum RepoMetadataEvent {
     /// File trees for repositories were updated.
     FileTreeUpdated { ids: Vec<RepositoryIdentifier> },
     /// A file tree entry was updated.
-    FileTreeEntryUpdated { id: RepositoryIdentifier },
+    FileTreeEntryUpdated {
+        id: RepositoryIdentifier,
+        /// Specifies whether this event contains a precise delta or requires a conservative
+        /// refresh because the entry was replaced without one.
+        update_type: MetadataUpdateType,
+    },
     /// Updating a repository failed.
     UpdatingRepositoryFailed { id: RepositoryIdentifier },
     /// An incremental file tree update is ready to be sent to the remote
@@ -110,9 +115,10 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RepositoryMetadataEvent::FileTreeEntryUpdated { path } => {
+            RepositoryMetadataEvent::FileTreeEntryUpdated { path, update_type } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::local(path.clone()),
+                    update_type: update_type.clone(),
                 }
             }
             RepositoryMetadataEvent::UpdatingRepositoryFailed { path } => {
@@ -154,9 +160,10 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id } => {
+            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id, update_type } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::Remote(id.clone()),
+                    update_type: update_type.clone(),
                 }
             }
         };
@@ -395,7 +402,7 @@ impl RepoMetadataModel {
     }
 }
 
-impl warpui::Entity for RepoMetadataModel {
+impl warpui_core::Entity for RepoMetadataModel {
     type Event = RepoMetadataEvent;
 }
 

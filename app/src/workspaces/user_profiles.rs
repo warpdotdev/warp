@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+pub use cloud_object_models::UserProfileWithUID;
 use warpui::{Entity, SingletonEntity};
 
 use crate::auth::UserUid;
-pub use cloud_object_models::UserProfileWithUID;
 
 pub enum UserProfilesEvent {}
 

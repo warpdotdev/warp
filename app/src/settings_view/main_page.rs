@@ -1,8 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use ::settings::{Setting, ToggleableSetting};
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::sync::{Arc, Mutex};
 use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;

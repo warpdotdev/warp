@@ -1,7 +1,6 @@
 pub mod util;
-pub use util::{action_type_to_gql_action_type, object_action_history_from_gql};
-
 use anyhow::{bail, Result};
+pub use util::{action_type_to_gql_action_type, object_action_history_from_gql};
 use warp_graphql::generic_string_object::GenericStringObjectFormat;
 use warp_graphql::mutations::update_generic_string_object::{
     GenericStringObjectUpdate, UpdateGenericStringObjectResult,

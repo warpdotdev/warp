@@ -19,6 +19,7 @@ use itertools::Itertools as _;
 use oneshot::{Canceled, Receiver, Sender};
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
+use session_sharing_protocol::sharer::SessionRetentionReason;
 use uuid::Uuid;
 use warp_cli::agent::{Harness, OutputFormat};
 use warp_cli::mcp::MCPSpec;
@@ -28,6 +29,7 @@ use warp_core::features::FeatureFlag;
 use warp_core::{report_error, report_if_error, safe_debug, safe_error, safe_info};
 use warp_graphql::ai::AgentTaskState;
 use warp_managed_secrets::ManagedSecretValue;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -716,6 +718,15 @@ impl AgentDriver {
             td.add_share_requests(share_requests, ctx);
         });
     }
+    fn extend_shared_session_retention(
+        &mut self,
+        reason: SessionRetentionReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.terminal_driver.update(ctx, |driver, ctx| {
+            driver.extend_shared_session_retention(reason, ctx);
+        });
+    }
 
     pub fn run(
         &mut self,
@@ -724,6 +735,7 @@ impl AgentDriver {
     ) -> impl Future<Output = Result<(), AgentDriverError>> {
         let (tx, rx) = oneshot::channel();
         let foreground = ctx.spawner();
+        let foreground_for_error = foreground.clone();
         let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
         let task_id = self.task_id;
         let idle_on_complete = self.idle_on_complete;
@@ -794,16 +806,25 @@ impl AgentDriver {
             // Success/blocked/cancelled are handled by LocalAgentTaskSyncModel.
             if let (Some(task_id), Err(err)) = (task_id, &result) {
                 report_driver_error(task_id, err, &server_api_for_error).await;
+                if matches!(err, AgentDriverError::EnvironmentSetupFailed(_)) {
+                    let _ = foreground_for_error
+                        .spawn(|me, ctx| {
+                            me.extend_shared_session_retention(
+                                SessionRetentionReason::SetupFailed,
+                                ctx,
+                            );
+                        })
+                        .await;
 
-                // Keep the session alive after environment setup failures so
-                // the viewer can connect, receive scrollback, and see the error.
-                if let (Some(idle_timeout), true) = (
-                    idle_on_complete,
-                    matches!(err, AgentDriverError::EnvironmentSetupFailed(_)),
-                ) {
-                    let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
-                    log::info!("Environment setup failed; keeping session alive for {timeout:?}");
-                    warpui::r#async::Timer::after(timeout).await;
+                    // Keep the session alive after environment setup failures so
+                    // the viewer can connect, receive scrollback, and see the error.
+                    if let Some(idle_timeout) = idle_on_complete {
+                        let timeout = idle_timeout.min(SETUP_FAILED_IDLE_TIMEOUT);
+                        log::info!(
+                            "Environment setup failed; keeping session alive for {timeout:?}"
+                        );
+                        warpui::r#async::Timer::after(timeout).await;
+                    }
                 }
             }
 
@@ -1505,7 +1526,7 @@ impl AgentDriver {
 
         let load_skills_result = foreground
             .spawn(move |_, ctx| {
-                let skills = SkillWatcher::read_skills_for_repos(&repo_paths, ctx);
+                let skills = SkillWatcher::read_local_skills_for_repos(&repo_paths, ctx);
                 if !skills.is_empty() {
                     log::info!("Loaded {} environment skill(s)", skills.len());
                 } else {
@@ -1552,7 +1573,11 @@ impl AgentDriver {
                         .iter()
                         .map(|def| repo_path.join(&def.skills_path));
                     let repo_skills = read_skills_from_directories(skill_dirs);
-                    let filtered = filter_skills_by_spec(&repo_path, repo_skills, &specs);
+                    let filtered = filter_skills_by_spec(
+                        &LocalOrRemotePath::Local(repo_path),
+                        repo_skills,
+                        &specs,
+                    );
                     all_skills.extend(filtered);
                 }
                 all_skills
@@ -2148,7 +2173,7 @@ impl AgentDriver {
                     .map(|parsed_skill| ResolvePromptAttachedSkill {
                         name: parsed_skill.name.clone(),
                         content: parsed_skill.content.clone(),
-                        path: Some(parsed_skill.path.to_string_lossy().to_string()),
+                        path: Some(parsed_skill.path.display_path()),
                     });
                 let request = ResolvePromptRequest {
                     skill,

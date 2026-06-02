@@ -116,7 +116,9 @@ use session_sharing_protocol::common::{
     RoleRequestResponse, ServerConversationToken as SessionSharingServerConversationToken,
     WindowSize as SessionSharingWindowSize,
 };
-use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason};
+use session_sharing_protocol::sharer::{
+    RoleUpdateReason, SessionEndedReason, SessionRetentionReason,
+};
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 use shared_session::{SharedSessionAdapter, Viewer};
@@ -269,10 +271,10 @@ use crate::ai::blocklist::{
     BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers, ConversationStatusUpdate,
     InputConfig, InputType, InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent,
     LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
-    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQueryModel,
-    RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
-    SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
+    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
+    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
+    StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
 };
 use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
@@ -1767,6 +1769,9 @@ pub enum Event {
     StopSharingCurrentSession {
         reason: SessionEndedReason,
     },
+    ExtendSessionRetention {
+        reason: SessionRetentionReason,
+    },
     CloseRequested,
     OpenShareSessionModal {
         open_source: SharedSessionActionSource,
@@ -2639,6 +2644,7 @@ pub struct TerminalView {
     pending_user_query_view_id: Option<EntityId>,
     pending_user_query_kind: Option<PendingUserQueryKind>,
     queued_prompt_callback: Option<ConversationFinishedCallback>,
+    last_observed_conversation_status: HashMap<AIConversationId, ConversationStatus>,
 
     /// Cached view ids for usage footers keyed by the AI block view id that owns them.
     usage_footer_view_ids: HashMap<EntityId, EntityId>,
@@ -4233,6 +4239,7 @@ impl TerminalView {
             pending_user_query_view_id: None,
             pending_user_query_kind: None,
             queued_prompt_callback: None,
+            last_observed_conversation_status: Default::default(),
             usage_footer_view_ids: Default::default(),
             block_onboarding_active: false,
             onboarding_agentic_suggestions_block: None,
@@ -5189,6 +5196,58 @@ impl TerminalView {
         }
     }
 
+    /// Append a prompt to the queued-query singleton for regular Agent Mode queueing surfaces
+    /// such as the queue-next toggle and `/queue`. Returns `None` if no conversation is selected
+    /// (e.g. the agent view is closed), in which case the prompt is silently dropped.
+    pub fn enqueue_prompt(
+        &mut self,
+        prompt: String,
+        origin: QueuedQueryOrigin,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<QueuedQueryId> {
+        // Guard against queueing when no conversation is active to avoid stranding prompts.
+        let conversation_id = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)?;
+        let id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx)
+        });
+        Some(id)
+    }
+
+    pub fn enqueue_initial_cloud_mode_prompt(
+        &mut self,
+        prompt: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<QueuedQueryId> {
+        self.enqueue_prompt(prompt, QueuedQueryOrigin::InitialCloudMode, ctx)
+    }
+
+    /// Files a follow-up prompt that will run after the next conversation finishes on
+    /// `conversation_id`. Used by `/compact-and` (targets the active conversation) and
+    /// `/fork-and-compact` (targets the newly forked conversation, which may differ from the
+    /// currently selected one). Falls back to the legacy pending-user-query block when
+    /// `QueuedPromptsV2` is disabled.
+    pub fn enqueue_followup_prompt(
+        &mut self,
+        prompt: String,
+        origin: QueuedQueryOrigin,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if FeatureFlag::QueuedPromptsV2.is_enabled() {
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx);
+            });
+        } else {
+            self.send_user_query_after_next_conversation_finished(
+                prompt, /* show_close_button */ true, /* show_send_now_button */ false,
+                ctx,
+            );
+        }
+    }
+
     /// Drains one prompt from the queued-query singleton for `conversation_id` when that
     /// conversation finishes.
     fn drain_queued_prompts(
@@ -5212,7 +5271,7 @@ impl TerminalView {
                 match action {
                     Some(AutofireAction::Submit { text }) => {
                         self.input.update(ctx, |input, ctx| {
-                            input.submit_queued_prompt(text, ctx);
+                            input.submit_queued_prompt_for_active_pane(text, ctx);
                         });
                     }
                     Some(AutofireAction::PopFromEditMode { text }) => {
@@ -5556,7 +5615,10 @@ impl TerminalView {
         ai_block_model: &AIBlockModelImpl<AIBlock>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if self.pending_user_query_kind != Some(PendingUserQueryKind::CloudMode) {
+        let kind_is_cloud_mode =
+            self.pending_user_query_kind == Some(PendingUserQueryKind::CloudMode);
+        let v2_is_enabled = FeatureFlag::QueuedPromptsV2.is_enabled();
+        if !kind_is_cloud_mode && !v2_is_enabled {
             return;
         }
 
@@ -5568,9 +5630,16 @@ impl TerminalView {
                 .display_user_query(initial_conversation_query.as_ref())
                 .is_some()
         });
-        if has_renderable_user_query {
+        if !has_renderable_user_query {
+            return;
+        }
+        // Pending-user-query block removal stays scoped to the legacy CloudMode kind so we
+        // don't tear down /queue or other PendingUserQueryKind blocks under V2. The V2
+        // queue-row removal is independent and is a no-op when no InitialCloudMode row exists.
+        if kind_is_cloud_mode {
             self.remove_pending_user_query_block(ctx);
         }
+        self.remove_cloud_mode_queue_row(ctx);
     }
     fn render_owner_for_ai_history_event(
         &self,
@@ -5716,6 +5785,7 @@ impl TerminalView {
                     .is_some_and(|model| model.as_ref(ctx).is_local_to_cloud_handoff())
                 {
                     self.remove_pending_user_query_block(ctx);
+                    self.remove_cloud_mode_queue_row(ctx);
                 }
 
                 let should_add_ai_block = history_model
@@ -5949,16 +6019,43 @@ impl TerminalView {
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
                 update,
+                new_status,
                 ..
             } => {
                 // When the conversation state changes or a new conversation
                 // is selected, update the title to reflect that change.
                 self.update_pane_configuration(ctx);
 
+                let previous_status = self
+                    .last_observed_conversation_status
+                    .insert(*conversation_id, new_status.clone())
+                    .or_else(|| match update {
+                        ConversationStatusUpdate::Changed { prev_status } => {
+                            Some(prev_status.clone())
+                        }
+                        ConversationStatusUpdate::Restored => None,
+                    });
+
                 // Don't send notifications or insert ambient agent session ended tombstone
                 // if we're restoring this conversation on startup.
                 if matches!(update, ConversationStatusUpdate::Restored) {
                     return;
+                }
+
+                if FeatureFlag::QueuedPromptsV2.is_enabled()
+                    && self.is_ambient_agent_session(ctx)
+                    && previous_status
+                        .is_some_and(|status| status.is_in_progress() || status.is_blocked())
+                {
+                    let finish_reason = match new_status {
+                        ConversationStatus::Success => Some(FinishReason::Complete),
+                        ConversationStatus::Error => Some(FinishReason::Error),
+                        ConversationStatus::Cancelled => Some(FinishReason::Cancelled),
+                        ConversationStatus::InProgress | ConversationStatus::Blocked { .. } => None,
+                    };
+                    if let Some(finish_reason) = finish_reason {
+                        self.handle_finished_conversation(*conversation_id, finish_reason, ctx);
+                    }
                 }
 
                 self.maybe_send_agent_mode_desktop_notification(conversation_id, ctx);
@@ -6026,6 +6123,9 @@ impl TerminalView {
                 active_conversation_id,
                 ..
             } => {
+                // The singleton's own history subscriber drops queue state for cleared
+                // conversations, so no `clear_all` call is needed here.
+                self.last_observed_conversation_status.clear();
                 if let Some(active_conversation_id) = active_conversation_id {
                     self.ai_controller.update(ctx, |controller, ctx| {
                         controller.cancel_conversation_progress(
@@ -6080,11 +6180,17 @@ impl TerminalView {
                     .block_list_mut()
                     .remove_command_blocks_for_conversation(*conversation_id);
             }
-            BlocklistAIHistoryEvent::RemoveConversation { .. }
-            | BlocklistAIHistoryEvent::DeletedConversation { .. } => {
+            BlocklistAIHistoryEvent::RemoveConversation {
+                conversation_id, ..
+            }
+            | BlocklistAIHistoryEvent::DeletedConversation {
+                conversation_id, ..
+            } => {
                 // The queue is always for the currently active conversation; agent-view exit
                 // already wipes it via `ExitedAgentView`, so no per-conversation cleanup is
                 // needed here.
+                self.last_observed_conversation_status
+                    .remove(conversation_id);
             }
             BlocklistAIHistoryEvent::CreatedSubtask { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
@@ -6382,7 +6488,8 @@ impl TerminalView {
             conversation.wall_to_wall_response_time_since_last_query();
 
         let conversation_usage_info = ConversationUsageInfo {
-            credits_spent: conversation.credits_spent(),
+            credits_spent: conversation.inference_credits_spent(),
+            platform_credits_spent: conversation.platform_credits_spent(),
             credits_spent_for_last_block: conversation.credits_spent_for_last_block(),
             tool_calls: tool_usage.total_tool_calls(),
             models: conversation.token_usage().to_vec(),
@@ -7661,6 +7768,9 @@ impl TerminalView {
             return false;
         }
         if self.conversation_ended_tombstone_view_id.is_some() {
+            return false;
+        }
+        if self.blocks_cloud_followups_for_ambient_agent_session_from_model(model, app) {
             return false;
         }
         if self.has_active_cli_agent_input_session(app) {
@@ -19184,8 +19294,19 @@ impl TerminalView {
     }
 
     fn close_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
-        self.find_model.update(ctx, |find_model, _ctx| {
+        self.find_model.update(ctx, |find_model, ctx| {
             find_model.set_is_find_bar_open(false);
+            // Notify rich-content child views (e.g. AI blocks) to repaint and
+            // drop their stale find highlights. Terminal grid highlights are
+            // gated at paint time on `is_find_bar_open()`, but AI blocks are
+            // separate child views that won't repaint on their own when the
+            // find bar closes.
+            //
+            // Uses `clear_rich_content_matches` (rich-content only) rather
+            // than the broader `clear_matches`: on the async-find path the
+            // latter drops `current_find_options`, breaking `open_find_bar`'s
+            // restore-previous-query path (it reads `active_find_options`).
+            find_model.clear_rich_content_matches(ctx);
         });
         ctx.notify();
     }
@@ -20712,6 +20833,14 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if !FeatureFlag::HandoffCloudCloud.is_enabled() {
+            return false;
+        }
+        let blocks_cloud_followups = {
+            let model = self.model.lock();
+            self.blocks_cloud_followups_for_ambient_agent_session_from_model(&model, ctx)
+        };
+        if blocks_cloud_followups {
+            self.pending_cloud_followup_task_id = None;
             return false;
         }
         let Some(task_id) = self
@@ -26587,7 +26716,9 @@ impl TypedActionView for TerminalView {
                     warp_md_path.push(WARP_MD_PATH);
                     #[cfg(feature = "local_fs")]
                     ctx.emit(Event::OpenCodeInWarp {
-                        source: CodeSource::ProjectRules { path: warp_md_path },
+                        source: CodeSource::ProjectRules {
+                            location: LocalOrRemotePath::Local(warp_md_path),
+                        },
                         layout: *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
                             .open_file_layout
                             .value(),
@@ -26623,7 +26754,7 @@ impl TypedActionView for TerminalView {
                             ctx.emit(Event::OpenCodeInWarp {
                                 source: CodeSource::Skill {
                                     reference: skill_reference.clone(),
-                                    path: path.clone(),
+                                    location: path.clone(),
                                     origin: crate::ai::skills::SkillOpenOrigin::OpenSkillCommand,
                                 },
                                 layout:

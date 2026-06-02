@@ -1,6 +1,6 @@
-use ai::api_keys::ApiKeyManager;
 use std::collections::HashMap;
 
+use ai::api_keys::ApiKeyManager;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
@@ -11,7 +11,8 @@ use super::{
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
-use crate::auth::{auth_manager::AuthManager, AuthStateProvider};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::persistence::model::AgentConversationData;
 use crate::server::server_api::ServerApiProvider;

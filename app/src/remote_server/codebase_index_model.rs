@@ -1,6 +1,13 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use ai::index::full_source_code_embedding::NodeHash;
+use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
+use warp_core::{HostId, SessionId};
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
+use warpui::{Entity, ModelContext, SingletonEntity};
+
 use super::manager::{
     RemoteCodebaseIndexStatusWithPath, RemoteCodebaseIndexUpdateOperation, RemoteServerManager,
     RemoteServerManagerEvent,
@@ -15,12 +22,6 @@ use crate::server::telemetry::{
 };
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
-use ai::index::full_source_code_embedding::NodeHash;
-use remote_server::codebase_index_proto::{RemoteCodebaseIndexState, RemoteCodebaseIndexStatus};
-use warp_core::{HostId, SessionId};
-use warp_util::remote_path::RemotePath;
-use warp_util::standardized_path::StandardizedPath;
-use warpui::{Entity, ModelContext, SingletonEntity};
 
 #[derive(Clone, Debug)]
 pub struct RemoteCodebaseSearchContext {

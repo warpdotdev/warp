@@ -581,10 +581,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let ai_settings = AISettings::as_ref(app);
 
         // Handoff to cloud only available for local agents.
-        if !is_cloud_agent
-            && ai_settings
-                .is_ampersand_handoff_enabled_for_conversation(Some(active_conversation), app)
-        {
+        if !is_cloud_agent && ai_settings.is_ampersand_handoff_enabled(app) {
             items.push(
                 MessageItem::clickable(
                     vec![
@@ -637,8 +634,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         // Code review only works locally.
         #[cfg(not(target_family = "wasm"))]
         if !is_cloud_agent
-            && !ai_settings
-                .is_cloud_handoff_enabled_for_conversation(Some(active_conversation), app)
+            && !ai_settings.is_cloud_handoff_enabled(app)
             && *TabSettings::as_ref(app).show_code_review_button
         {
             let code_review_keystroke = if OperatingSystem::get().is_mac() {

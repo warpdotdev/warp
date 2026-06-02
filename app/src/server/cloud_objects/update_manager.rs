@@ -59,6 +59,11 @@ use crate::cloud_object::{
     ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflowEnum, Space,
     UpdateCloudObjectResult,
 };
+use crate::drive::drive_helpers::{
+    is_feature_gated_anonymous_user_past_env_var_limit,
+    is_feature_gated_anonymous_user_past_notebook_limit,
+    is_feature_gated_anonymous_user_past_workflow_limit,
+};
 use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::sharing::SharingAccessLevel;
 use crate::drive::CloudObjectTypeAndId;
@@ -3338,10 +3343,10 @@ impl UpdateManager {
                 .count()
         });
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(ObjectType::Notebook, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_notebook_limit(
+                auth_state_provider.get(),
+                count + 1,
+            )
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);
@@ -3409,10 +3414,10 @@ impl UpdateManager {
                 .count()
         });
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(ObjectType::Workflow, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_workflow_limit(
+                auth_state_provider.get(),
+                count + 1,
+            )
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);
@@ -3474,14 +3479,8 @@ impl UpdateManager {
                 .active_non_welcome_env_var_collections_in_space(Space::Personal, ctx)
                 .count()
         });
-        let env_var_collection_type = ObjectType::GenericStringObject(
-            GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
-        );
         if AuthStateProvider::handle(ctx).read(ctx, |auth_state_provider, _ctx| {
-            auth_state_provider
-                .get()
-                .is_anonymous_user_past_object_limit(env_var_collection_type, count + 1)
-                .unwrap_or_default()
+            is_feature_gated_anonymous_user_past_env_var_limit(auth_state_provider.get(), count + 1)
         }) {
             AuthManager::handle(ctx).update(ctx, |auth_manager: &mut AuthManager, ctx| {
                 auth_manager.anonymous_user_hit_drive_object_limit(ctx);

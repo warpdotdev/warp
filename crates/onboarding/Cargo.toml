@@ -12,7 +12,7 @@ path = "src/bin/main.rs"
 required-features = ["bin"]
 
 [features]
-bin = ["warpui/log_named_telemetry_events"]
+bin = ["warpui_core/log_named_telemetry_events"]
 
 [dependencies]
 ai.workspace = true
@@ -31,4 +31,5 @@ strum_macros.workspace = true
 uuid.workspace = true
 warp_core = { workspace = true }
 warpui.workspace = true
+warpui_core.workspace = true
 warp_logging.workspace = true

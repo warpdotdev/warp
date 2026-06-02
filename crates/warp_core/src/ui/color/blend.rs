@@ -1,4 +1,4 @@
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 pub trait Blend<Rhs = Self> {
     type Output;

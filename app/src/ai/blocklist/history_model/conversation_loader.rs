@@ -634,7 +634,7 @@ impl BlocklistAIHistoryModel {
                 let credits_spent = conversation_data
                     .as_ref()
                     .and_then(|data| data.conversation_usage_metadata.as_ref())
-                    .map(|m| m.credits_spent);
+                    .map(|m| m.credits_spent + m.platform_credits_spent);
                 let artifacts = conversation_data
                     .as_ref()
                     .and_then(|data| data.artifacts_json.as_ref())

@@ -1,6 +1,8 @@
-use super::*;
-use crate::{themes::theme::CustomTheme, user_config};
 use std::path::PathBuf;
+
+use super::*;
+use crate::themes::theme::CustomTheme;
+use crate::user_config;
 
 fn custom(path: PathBuf) -> ThemeKind {
     ThemeKind::Custom(CustomTheme::new("Custom".to_string(), path))

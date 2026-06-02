@@ -17,8 +17,8 @@ use warp::integration_testing::workflow::{
 };
 use warp::integration_testing::{self, view_of_type};
 use warp::workflows::CategoriesView;
-use warpui::integration::TestStep;
-use warpui::{async_assert_eq, ViewHandle};
+use warpui_core::integration::TestStep;
+use warpui_core::{async_assert_eq, ViewHandle};
 
 use super::{new_builder, TEST_ONLY_ASSETS};
 use crate::Builder;

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
+use warpui_core::SingletonEntity;
 
 /// Errors that can occur when working with repository metadata.
 #[derive(Error, Debug)]
@@ -49,7 +49,7 @@ pub use repository::Repository;
 pub use watcher::{DirectoryWatcher, RepositoryUpdate, TargetFile};
 
 #[cfg(not(target_family = "wasm"))]
-pub fn is_in_repo(path: &str, app: &warpui::AppContext) -> bool {
+pub fn is_in_repo(path: &str, app: &warpui_core::AppContext) -> bool {
     use warp_util::local_or_remote_path::LocalOrRemotePath;
 
     use crate::repositories::DetectedRepositories;
@@ -60,11 +60,11 @@ pub fn is_in_repo(path: &str, app: &warpui::AppContext) -> bool {
 }
 
 #[cfg(target_family = "wasm")]
-pub fn is_in_repo(_path: &str, _app: &warpui::AppContext) -> bool {
+pub fn is_in_repo(_path: &str, _app: &warpui_core::AppContext) -> bool {
     false
 }
 pub use file_tree_store::FileTreeEntry;
-pub use file_tree_update::RepoMetadataUpdate;
+pub use file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 pub use local_model::{LocalRepoMetadataModel, RepoContent};
 pub use remote_model::RemoteRepoMetadataModel;
 pub use repository_identifier::{RemoteRepositoryIdentifier, RepositoryIdentifier};

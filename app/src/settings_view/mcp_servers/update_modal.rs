@@ -1,3 +1,21 @@
+use chrono::{Local, TimeZone};
+use uuid::Uuid;
+use warp_core::ui::external_product_icon::ExternalProductIcon;
+use warp_core::ui::icons::Icon;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Flex, Hoverable, MainAxisAlignment, MouseStateHandle, Padding, ParentElement, Radius,
+    Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::Keystroke;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
+
 use crate::ai::mcp::{Author, MCPServerUpdate};
 use crate::appearance::Appearance;
 use crate::settings_view::mcp_servers::style::{
@@ -8,24 +26,6 @@ use crate::ui_components::blended_colors;
 use crate::util::time_format::format_approx_duration_from_now;
 use crate::view_components::action_button::{
     ActionButton, KeystrokeSource, NakedTheme, PrimaryTheme,
-};
-use chrono::{Local, TimeZone};
-use uuid::Uuid;
-use warp_core::ui::external_product_icon::ExternalProductIcon;
-use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::elements::{Align, Empty, Padding, Shrinkable};
-use warpui::fonts::{Properties, Weight};
-use warpui::keymap::Keystroke;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::SingletonEntity;
-use warpui::{
-    elements::{
-        Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
-        Hoverable, MainAxisAlignment, MouseStateHandle, ParentElement, Radius, Text,
-    },
-    platform::Cursor,
-    AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
 pub enum UpdateModalBodyEvent {

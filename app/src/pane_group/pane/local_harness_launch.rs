@@ -20,8 +20,9 @@ use crate::ai::ambient_agents::task::{
 use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 use crate::server::server_api::ai::AIClient;
-use crate::terminal::cli_agent_sessions::plugin_manager::plugin_manager_for;
-use crate::terminal::cli_agent_sessions::plugin_manager::CliAgentPluginManager;
+use crate::terminal::cli_agent_sessions::plugin_manager::{
+    plugin_manager_for, CliAgentPluginManager,
+};
 use crate::terminal::shell::ShellType;
 
 #[derive(Clone)]

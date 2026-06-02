@@ -1,7 +1,10 @@
-use cloud_objects::{
-    cloud_object::{GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel},
-    ids::{GenericStringObjectId, ServerId, SyncId},
+#[cfg(not(target_family = "wasm"))]
+pub mod persistence;
+
+use cloud_objects::cloud_object::{
+    GenericCloudObject, GenericServerObject, ObjectType, ServerObjectModel,
 };
+use cloud_objects::ids::{GenericStringObjectId, ServerId, SyncId};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 

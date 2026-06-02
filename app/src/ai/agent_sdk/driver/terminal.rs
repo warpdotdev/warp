@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
+use session_sharing_protocol::sharer::SessionRetentionReason;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
@@ -32,7 +33,7 @@ use crate::terminal::model::session::ExecuteCommandOptions;
 use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
 use crate::terminal::TerminalView;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -593,6 +594,29 @@ impl TerminalDriver {
             }
         }
     }
+
+    pub fn extend_shared_session_retention(
+        &mut self,
+        reason: SessionRetentionReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.terminal_view.update(ctx, |terminal, ctx| {
+            if !terminal
+                .model
+                .lock()
+                .shared_session_status()
+                .is_active_sharer()
+            {
+                log::warn!(
+                    "Tried to extend shared session retention before sharing was active: {reason:?}"
+                );
+                return;
+            }
+
+            log::info!("Emitting request to extend shared session retention: {reason:?}");
+            ctx.emit(Event::ExtendSessionRetention { reason });
+        });
+    }
 }
 
 /// The first DFA match returned by
@@ -707,3 +731,7 @@ impl TerminalDriver {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_tests.rs"]
+mod tests;

@@ -1,7 +1,6 @@
 #[cfg(feature = "local_fs")]
 use std::path::{Path, PathBuf};
 
-use crate::util::git::{PrInfo, RepositoryInfo};
 #[cfg(feature = "local_fs")]
 use settings::Setting as _;
 #[cfg(feature = "local_fs")]
@@ -31,6 +30,7 @@ use {
 
 #[cfg(feature = "local_fs")]
 use super::diff_state::{diff_metadata_against_head, DiffStats};
+use crate::util::git::{PrInfo, RepositoryInfo};
 #[cfg(feature = "local_fs")]
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(feature = "local_fs")]

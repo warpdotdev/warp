@@ -586,13 +586,6 @@ pub fn init(app: &mut AppContext) {
         .with_group(bindings::BindingGroup::Navigation.as_str())
         .with_custom_action(CustomAction::ActivateNextPane),
         EditableBinding::new(
-            "workspace:toggle_mouse_reporting",
-            "Toggle Mouse Reporting",
-            WorkspaceAction::ToggleMouseReporting,
-        )
-        .with_group(bindings::BindingGroup::Settings.as_str())
-        .with_context_predicate(id!("Workspace")),
-        EditableBinding::new(
             "workspace:create_team_notebook",
             BindingDescription::new("Create a new team notebook")
                 .with_custom_description(bindings::MAC_MENUS_CONTEXT, "New Team Notebook"),

@@ -307,8 +307,7 @@ impl SlashCommandDataSource {
         ActiveCommandsContext {
             session_context,
             is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
-            is_cloud_handoff_enabled: ai_settings
-                .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx),
+            is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),
             #[cfg(not(target_family = "wasm"))]
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
             has_default_host,
@@ -504,11 +503,13 @@ impl SyncDataSource for SlashCommandDataSource {
         // Skills are invoked by the agent, so they're hidden entirely when AI is globally off.
         if FeatureFlag::ListSkills.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
             let cli_agent_providers = self.active_cli_agent_providers(app);
-            let cwd = self.active_session.as_ref(app).current_working_directory();
-            let cwd_path = cwd.as_ref().map(std::path::Path::new);
+            let cwd_path = self
+                .active_session
+                .as_ref(app)
+                .current_working_directory_location(app);
             let skills = SkillManager::handle(app)
                 .as_ref(app)
-                .get_skills_for_working_directory(cwd_path, app);
+                .get_skills_for_working_directory(cwd_path.as_ref(), app);
 
             let skill_manager = SkillManager::as_ref(app);
             for mut skill in skills {

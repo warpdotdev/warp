@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use chrono::DateTime;
 use uuid::Uuid;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -8,7 +7,6 @@ use crate::ai::mcp::templatable::{
     GalleryData, JsonTemplate, TemplatableMCPServer, TemplateVariable,
 };
 use crate::server::cloud_objects::update_manager::{UpdateManager, UpdateManagerEvent};
-use crate::server::datetime_ext::DateTimeExt;
 
 #[derive(Clone, Debug)]
 pub struct GalleryMCPServer {
@@ -84,7 +82,7 @@ impl TryFrom<GalleryMCPServer> for TemplatableMCPServer {
             name: title,
             description: Some(description),
             template: json_template,
-            version: DateTime::now().timestamp(),
+            version: chrono::Local::now().timestamp(),
             gallery_data: Some(GalleryData {
                 gallery_item_id: gallery_uuid,
                 version: gallery_version,

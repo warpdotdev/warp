@@ -1715,9 +1715,10 @@ fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
     // `parent_conversation_id` (children get one through
     // `start_new_child_conversation`). The discriminator in
     // `register_viewer_mode_consumer_if_possible` must accept this shape.
-    use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
     use warp_core::features::FeatureFlag;
     use warpui::SingletonEntity;
+
+    use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
@@ -1781,9 +1782,10 @@ fn viewer_model_does_not_register_when_active_conversation_is_a_child_placeholde
     // `SwapPaneToConversation` before the orchestrator placeholder is
     // activated — which would persist the orchestration cursor on the
     // wrong row.
-    use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
     use warp_core::features::FeatureFlag;
     use warpui::SingletonEntity;
+
+    use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
