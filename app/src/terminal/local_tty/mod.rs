@@ -100,13 +100,7 @@ pub struct PtyOptions {
     pub honor_ps1: bool,
     /// Whether the Node.js Version context chip is enabled for this session. When
     /// `false`, the shell bootstrap skips the per-prompt `node --version` detection
-    /// (gated via the `WARP_PROMPT_NODE_VERSION_ENABLED` env var). Defaults to `true`
-    /// to preserve behavior for any spawn path that does not set it.
-    #[serde(default = "default_node_version_chip_enabled")]
+    /// (gated via the `WARP_PROMPT_NODE_VERSION_ENABLED` env var).
     pub node_version_chip_enabled: bool,
     pub close_fds: bool,
-}
-
-fn default_node_version_chip_enabled() -> bool {
-    true
 }
