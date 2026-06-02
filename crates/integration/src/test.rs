@@ -175,14 +175,14 @@ use warp::workspace::{
     Workspace, WorkspaceAction, NEW_SESSION_MENU_BUTTON_POSITION_ID, NEW_TAB_BUTTON_POSITION_ID,
 };
 use warp::{cmd_or_ctrl_shift, AgentModeEntrypoint};
-use warpui::event::KeyState;
-use warpui::integration::{AssertionOutcome, StepData, TestStep};
-use warpui::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
-use warpui::platform::keyboard::KeyCode;
-use warpui::platform::{OperatingSystem, TerminationMode};
-use warpui::units::Lines;
-use warpui::windowing::WindowManager;
-use warpui::{
+use warpui_core::event::KeyState;
+use warpui_core::integration::{AssertionOutcome, StepData, TestStep};
+use warpui_core::keymap::{Keystroke, PerPlatformKeystroke, Trigger};
+use warpui_core::platform::keyboard::KeyCode;
+use warpui_core::platform::{OperatingSystem, TerminationMode};
+use warpui_core::units::Lines;
+use warpui_core::windowing::WindowManager;
+use warpui_core::{
     async_assert, async_assert_eq, AssetProvider, Event, SingletonEntity, UpdateView, ViewHandle,
 };
 pub use websockets::*;

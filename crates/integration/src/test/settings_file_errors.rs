@@ -11,8 +11,8 @@ use warp::features::FeatureFlag;
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::view_getters::workspace_view;
-use warpui::async_assert;
-use warpui::integration::TestStep;
+use warpui_core::async_assert;
+use warpui_core::integration::TestStep;
 
 use super::{new_builder, Builder};
 

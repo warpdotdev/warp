@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
@@ -5,8 +6,9 @@ use ai::skills::{
     ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
+use repo_metadata::file_tree_update::RepoNodeMetadata;
 use repo_metadata::local_model::GetContentsArgs;
-use repo_metadata::{RepoContent, RepoMetadataModel, RepositoryIdentifier};
+use repo_metadata::{RepoContent, RepoMetadataModel, RepoMetadataUpdate, RepositoryIdentifier};
 use walkdir::{DirEntry, WalkDir};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -27,6 +29,44 @@ fn local_or_remote_path_for_repo_path(
     }
 }
 
+/// Returns whether an incremental metadata update can alter project skills for a repository.
+///
+/// Local provider-directory changes are included because symlinked skill directories are
+/// hydrated from the local filesystem rather than represented directly in repo metadata.
+pub(super) fn update_might_affect_project_skills(
+    repo_id: &RepositoryIdentifier,
+    update: &RepoMetadataUpdate,
+    known_skill_files: Option<&HashSet<LocalOrRemotePath>>,
+) -> bool {
+    if update.remove_entries.iter().any(|removed_path| {
+        let removed_path = local_or_remote_path_for_repo_path(repo_id, removed_path);
+        known_skill_files
+            .into_iter()
+            .flatten()
+            .any(|known_skill_file| known_skill_file.starts_with(&removed_path))
+    }) {
+        return true;
+    }
+
+    let is_local_repo = matches!(repo_id, RepositoryIdentifier::Local(_));
+    update.update_entries.iter().any(|entry_update| {
+        if is_local_repo
+            && is_project_provider_path(&entry_update.parent_path_to_replace.to_local_path_lossy())
+        {
+            return true;
+        }
+
+        entry_update.subtree_metadata.iter().any(|node| match node {
+            RepoNodeMetadata::File(file) => {
+                let path = local_or_remote_path_for_repo_path(repo_id, &file.path);
+                extract_skill_parent_directory(&path).is_ok()
+            }
+            RepoNodeMetadata::Directory(directory) => {
+                is_local_repo && is_project_provider_path(&directory.path.to_local_path_lossy())
+            }
+        })
+    })
+}
 /// Finds project skill files and local symlinked skill files with one metadata traversal.
 ///
 /// Local provider directories are included in the metadata query so filesystem hydration can

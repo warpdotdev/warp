@@ -116,7 +116,9 @@ use session_sharing_protocol::common::{
     RoleRequestResponse, ServerConversationToken as SessionSharingServerConversationToken,
     WindowSize as SessionSharingWindowSize,
 };
-use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason};
+use session_sharing_protocol::sharer::{
+    RoleUpdateReason, SessionEndedReason, SessionRetentionReason,
+};
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 use shared_session::{SharedSessionAdapter, Viewer};
@@ -1766,6 +1768,9 @@ pub enum Event {
     RejoinCurrentSession,
     StopSharingCurrentSession {
         reason: SessionEndedReason,
+    },
+    ExtendSessionRetention {
+        reason: SessionRetentionReason,
     },
     CloseRequested,
     OpenShareSessionModal {
@@ -5219,6 +5224,30 @@ impl TerminalView {
         self.enqueue_prompt(prompt, QueuedQueryOrigin::InitialCloudMode, ctx)
     }
 
+    /// Files a follow-up prompt that will run after the next conversation finishes on
+    /// `conversation_id`. Used by `/compact-and` (targets the active conversation) and
+    /// `/fork-and-compact` (targets the newly forked conversation, which may differ from the
+    /// currently selected one). Falls back to the legacy pending-user-query block when
+    /// `QueuedPromptsV2` is disabled.
+    pub fn enqueue_followup_prompt(
+        &mut self,
+        prompt: String,
+        origin: QueuedQueryOrigin,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if FeatureFlag::QueuedPromptsV2.is_enabled() {
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx);
+            });
+        } else {
+            self.send_user_query_after_next_conversation_finished(
+                prompt, /* show_close_button */ true, /* show_send_now_button */ false,
+                ctx,
+            );
+        }
+    }
+
     /// Drains one prompt from the queued-query singleton for `conversation_id` when that
     /// conversation finishes.
     fn drain_queued_prompts(
@@ -6459,7 +6488,8 @@ impl TerminalView {
             conversation.wall_to_wall_response_time_since_last_query();
 
         let conversation_usage_info = ConversationUsageInfo {
-            credits_spent: conversation.credits_spent(),
+            credits_spent: conversation.inference_credits_spent(),
+            platform_credits_spent: conversation.platform_credits_spent(),
             credits_spent_for_last_block: conversation.credits_spent_for_last_block(),
             tool_calls: tool_usage.total_tool_calls(),
             models: conversation.token_usage().to_vec(),

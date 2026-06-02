@@ -10,7 +10,7 @@ use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for
 use warp::integration_testing::view_getters::{pane_group_view, workspace_view};
 use warp::settings::CodeEditorLineNumberMode;
 use warp::workspace::WorkspaceAction;
-use warpui::{async_assert_eq, App};
+use warpui_core::{async_assert_eq, App};
 
 use super::{new_builder, Builder};
 use crate::util::write_all_rc_files_for_test;

@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use mermaid_to_svg::MermaidTheme;
-use warpui::assets::asset_cache::{
+use warpui_core::assets::asset_cache::{
     AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
 };
-use warpui::image_cache::ImageType;
-use warpui::units::{IntoPixels, Pixels};
-use warpui::{AppContext, SingletonEntity};
+use warpui_core::image_cache::ImageType;
+use warpui_core::units::{IntoPixels, Pixels};
+use warpui_core::{AppContext, SingletonEntity};
 
 use crate::render::layout::TextLayout;
 use crate::render::model::{BlockSpacing, ImageBlockConfig};

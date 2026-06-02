@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt;
 
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 use super::OPAQUE;
 

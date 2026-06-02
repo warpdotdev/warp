@@ -31,10 +31,10 @@ use warp::settings::PaneSettings;
 use warp::terminal::shell::ShellType;
 use warp::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
 use warp::workspace::{WorkspaceAction, NEW_TAB_BUTTON_POSITION_ID};
-use warpui::event::{Event, ModifiersState};
-use warpui::integration::{AssertionCallback, AssertionOutcome, TestStep};
-use warpui::windowing::WindowManager;
-use warpui::{async_assert, async_assert_eq, SingletonEntity, TypedActionView, WindowId};
+use warpui_core::event::{Event, ModifiersState};
+use warpui_core::integration::{AssertionCallback, AssertionOutcome, TestStep};
+use warpui_core::windowing::WindowManager;
+use warpui_core::{async_assert, async_assert_eq, SingletonEntity, TypedActionView, WindowId};
 
 use super::new_builder;
 use crate::util::skip_if_powershell_core_2303;
@@ -54,7 +54,7 @@ fn tab_position_id(tab_index: usize) -> String {
     format!("tab_position_{tab_index}")
 }
 
-fn vertical_tab_pane_row_position_id(app: &mut warpui::App, window_id: WindowId) -> String {
+fn vertical_tab_pane_row_position_id(app: &mut warpui_core::App, window_id: WindowId) -> String {
     let workspace = workspace_view(app, window_id);
     let pane_group = workspace.read(app, |workspace, _ctx| {
         workspace
@@ -70,7 +70,7 @@ fn vertical_tab_pane_row_position_id(app: &mut warpui::App, window_id: WindowId)
 }
 
 fn vertical_tab_pane_row_position_id_for_pane_index(
-    app: &mut warpui::App,
+    app: &mut warpui_core::App,
     window_id: WindowId,
     pane_index: usize,
 ) -> String {
@@ -90,7 +90,10 @@ fn vertical_tab_pane_row_position_id_for_pane_index(
     })
 }
 
-fn first_vertical_tab_pane_row_position_id(app: &mut warpui::App, window_id: WindowId) -> String {
+fn first_vertical_tab_pane_row_position_id(
+    app: &mut warpui_core::App,
+    window_id: WindowId,
+) -> String {
     vertical_tab_pane_row_position_id_for_pane_index(app, window_id, 0)
 }
 
@@ -368,7 +371,7 @@ fn focus_other_window(other_window_key: &'static str, known_window_key: &'static
     })
 }
 
-fn dispatch_mouse_event(app: &mut warpui::App, window_id: WindowId, event: Event) {
+fn dispatch_mouse_event(app: &mut warpui_core::App, window_id: WindowId, event: Event) {
     let window = app.read(|ctx| {
         ctx.windows()
             .platform_window(window_id)
@@ -379,7 +382,7 @@ fn dispatch_mouse_event(app: &mut warpui::App, window_id: WindowId, event: Event
     });
 }
 
-fn tab_bounds(app: &mut warpui::App, window_id: WindowId, tab_index: usize) -> RectF {
+fn tab_bounds(app: &mut warpui_core::App, window_id: WindowId, tab_index: usize) -> RectF {
     let presenter = app.presenter(window_id).expect("presenter should exist");
     let bounds = presenter
         .borrow()
@@ -389,12 +392,12 @@ fn tab_bounds(app: &mut warpui::App, window_id: WindowId, tab_index: usize) -> R
     bounds
 }
 
-fn tab_center(app: &mut warpui::App, window_id: WindowId, tab_index: usize) -> Vector2F {
+fn tab_center(app: &mut warpui_core::App, window_id: WindowId, tab_index: usize) -> Vector2F {
     tab_bounds(app, window_id, tab_index).center()
 }
 
 fn source_local_point_for_screen_point(
-    app: &mut warpui::App,
+    app: &mut warpui_core::App,
     source_window_id: WindowId,
     screen_point: Vector2F,
 ) -> Vector2F {
@@ -405,7 +408,7 @@ fn source_local_point_for_screen_point(
 }
 
 fn tab_screen_point(
-    app: &mut warpui::App,
+    app: &mut warpui_core::App,
     window_id: WindowId,
     tab_index: usize,
     x_offset: f32,
@@ -446,7 +449,7 @@ fn set_saved_window_origin(window_key: &'static str, origin: Vector2F) -> TestSt
 
 fn assert_total_tab_count(
     expected_total_tab_count: usize,
-) -> impl FnMut(&mut warpui::App, WindowId) -> AssertionOutcome {
+) -> impl FnMut(&mut warpui_core::App, WindowId) -> AssertionOutcome {
     move |app, _| {
         let total_tab_count = app
             .window_ids()
