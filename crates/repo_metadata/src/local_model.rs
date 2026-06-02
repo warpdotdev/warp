@@ -419,12 +419,6 @@ impl LocalRepoMetadataModel {
         }
 
         // Register this path with the watcher if we have one.
-        // LRMM tracks the full file tree (including gitignored entries
-        // for the file tree UI), so we register without a
-        // gitignore-pruning filter — the `.git/` allowlist still
-        // applies via `repo_watch_filter`. The code-review watcher
-        // (`DirectoryWatcher`) passes a populated gitignore stack to
-        // prune `node_modules` / `target` / etc. from its own tree.
         #[cfg(feature = "local_fs")]
         {
             if let Some(ref watcher) = self.watcher {
@@ -432,7 +426,7 @@ impl LocalRepoMetadataModel {
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(Arc::new(Vec::new())),
+                        repo_watch_filter(),
                         RecursiveMode::Recursive,
                     ));
                 });
