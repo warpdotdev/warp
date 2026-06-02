@@ -120,6 +120,7 @@ handlebars.workspace = true
 hex.workspace = true
 http.workspace = true
 http_client.workspace = true
+i18n = { workspace = true }
 image.workspace = true
 infer = "0.19.0"
 jaq-json.workspace = true
