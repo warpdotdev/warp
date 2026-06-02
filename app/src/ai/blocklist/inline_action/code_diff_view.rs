@@ -2373,7 +2373,7 @@ impl CodeDiffView {
                                 .iter()
                                 .cloned()
                                 .map(file_context_range_to_editor_range)
-                                .collect_vec()
+                                .collect()
                         } else {
                             editor_changed_lines
                         };
