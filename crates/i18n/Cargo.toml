@@ -9,4 +9,4 @@ license.workspace = true
 [dependencies]
 log = { workspace = true }
 serde_yaml.workspace = true
-sys-locale.workspace = true
+sys-locale = "0.3.2"
