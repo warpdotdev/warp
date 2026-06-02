@@ -939,10 +939,6 @@ impl ImageCache {
                             };
                         }
                     }
-
-                    log::info!(
-                        "converting image to bitmap with size {bounds:?} from source: {asset_source:?}"
-                    );
                     Some(cache)
                 } else {
                     None
