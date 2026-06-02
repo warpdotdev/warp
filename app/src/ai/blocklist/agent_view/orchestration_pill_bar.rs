@@ -93,8 +93,7 @@ const PILL_BAR_SCROLLBAR_WIDTH: f32 = 4.;
 const PILL_BAR_SCROLLBAR_GAP: f32 = 1.;
 /// Bottom gutter for the overlaid scrollbar. Its track sits 2px below the thumb
 /// (NewScrollable's `RIGHT_PADDING`), so gap = gutter - width - 2.
-const PILL_BAR_SCROLLBAR_GUTTER: f32 =
-    PILL_BAR_SCROLLBAR_GAP + PILL_BAR_SCROLLBAR_WIDTH + 2.;
+const PILL_BAR_SCROLLBAR_GUTTER: f32 = PILL_BAR_SCROLLBAR_GAP + PILL_BAR_SCROLLBAR_WIDTH + 2.;
 
 /// Stable palette used to color child agent avatars deterministically by name.
 fn pill_palette(theme: &WarpTheme) -> [ColorU; 6] {
