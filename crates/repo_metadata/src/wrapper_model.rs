@@ -234,12 +234,15 @@ impl RepoMetadataModel {
     }
 
     /// Returns repository contents for the specified repository.
+    ///
+    /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents<'a>(
         &self,
         id: &RepositoryIdentifier,
         args: GetContentsArgs,
         ctx: &'a AppContext,
-    ) -> Option<Vec<RepoContent<'a>>> {
+    ) -> Result<Vec<RepoContent<'a>>, RepoMetadataError> {
         match id {
             RepositoryIdentifier::Local(path) => {
                 self.local.as_ref(ctx).get_repo_contents(path, args)

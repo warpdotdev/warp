@@ -72,6 +72,7 @@ use crate::terminal::model::block::{
     AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
 };
 use crate::ui_components::icons::Icon;
+use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4070,6 +4071,8 @@ pub struct ServerAIConversationMetadata {
 
     /// Server metadata (revision, timestamps, creator info, etc.).
     pub metadata: crate::cloud_object::ServerMetadata,
+    /// Public profile for the conversation's creator, when available.
+    pub creator: Option<UserProfileWithUID>,
 
     /// Permissions for this conversation (space, guests, link sharing).
     pub permissions: crate::cloud_object::ServerPermissions,

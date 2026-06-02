@@ -3486,7 +3486,7 @@ impl Input {
             BlocklistAIStatusBar::new(
                 ai_controller.clone(),
                 agent_view_controller.clone(),
-                cli_subagent_controller,
+                cli_subagent_controller.clone(),
                 ai_action_model.clone(),
                 ai_context_model.clone(),
                 ai_input_model.clone(),
@@ -3505,8 +3505,14 @@ impl Input {
         });
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
+            let cli_subagent_controller = cli_subagent_controller.clone();
             let panel = ctx.add_typed_action_view(|ctx| {
-                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model.clone(), ctx)
+                QueuedPromptsPanelView::new(
+                    terminal_view_id,
+                    suggestions_mode_model.clone(),
+                    cli_subagent_controller,
+                    ctx,
+                )
             });
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
@@ -3686,10 +3692,7 @@ impl Input {
                 self.submit_queued_prompt_for_active_pane(text.clone(), ctx);
                 self.focus_input_box(ctx);
             }
-            QueuedPromptsPanelEvent::RowDeleted { text } => {
-                if self.buffer_text(ctx).is_empty() {
-                    self.replace_buffer_content(text, ctx);
-                }
+            QueuedPromptsPanelEvent::RowDeleted => {
                 self.focus_input_box(ctx);
             }
             QueuedPromptsPanelEvent::EditEnded => {

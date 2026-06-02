@@ -99,7 +99,7 @@ pub(super) fn find_project_skill_files_in_tree(
     let mut local_provider_directories = Vec::new();
     for content in repo_metadata
         .get_repo_contents(repo_id, args, ctx)
-        .unwrap_or_default()
+        .unwrap_or_else(|_| Vec::new())
     {
         match content {
             RepoContent::File(file) => {

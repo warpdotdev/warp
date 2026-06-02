@@ -286,7 +286,10 @@ fn test_get_repo_contents() {
                     filter: None,
                 };
                 let non_existent_result = model.get_repo_contents(&non_existent, args);
-                assert!(non_existent_result.is_none());
+                assert!(matches!(
+                    non_existent_result,
+                    Err(RepoMetadataError::RepositoryNotIndexed)
+                ));
             });
         });
     });

@@ -25,6 +25,14 @@ pub enum RepoMetadataError {
     BuildTree(BuildTreeError),
     #[error("Failed to start watcher: {0}")]
     WatcherError(#[from] anyhow::Error),
+    #[error("Result size exceeded maximum limit of {0}")]
+    ExceededMaxResultSize(usize),
+    #[error("Repository not indexed")]
+    RepositoryNotIndexed,
+    #[error("Repository indexing in progress")]
+    RepositoryIndexingPending,
+    #[error("Repository indexing failed")]
+    RepositoryIndexingFailed,
 }
 // Re-export the modules
 pub mod entry;

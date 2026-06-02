@@ -252,6 +252,156 @@ fn participant_for_agent_id_uses_pill_style_child_agent_avatar() {
     });
 }
 
+/// A restored child run id (persisted via run_id in the SQLite
+/// `agent_conversations` row) must resolve to the child's display name
+/// after `BlocklistAIHistoryModel::new` eagerly hydrates the orchestration
+/// child into `conversations_by_id`. Otherwise this falls back to
+/// "Unknown agent" because the child conversation is not loaded into memory
+/// until its hidden pane materializes lazily.
+#[test]
+fn participant_for_restored_child_run_id_resolves_to_agent_name() {
+    use chrono::Utc;
+    use uuid::Uuid;
+    use warp_core::features::FeatureFlag;
+
+    use crate::persistence::model::{
+        AgentConversation, AgentConversationData, AgentConversationRecord,
+    };
+
+    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+
+        // A persisted child conversation with at least one root task so
+        // `AIConversation::new_restored` succeeds, parent linkage via
+        // `parent_conversation_id`, and a `run_id` so the orchestration
+        // transcript can resolve its display name from a server-side
+        // agent identifier.
+        let child = AgentConversation {
+            conversation: AgentConversationRecord {
+                id: 1,
+                conversation_id: child_id.to_string(),
+                conversation_data: serde_json::to_string(&AgentConversationData {
+                    server_conversation_token: Some("child-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: Some(parent_run_id.clone()),
+                    agent_name: Some("Agent 1".to_string()),
+                    orchestration_harness_type: None,
+                    parent_conversation_id: Some(parent_id.to_string()),
+                    is_remote_child: false,
+                    root_task_is_optimistic: None,
+                    run_id: Some(child_run_id.clone()),
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                    pinned: false,
+                })
+                .expect("child conversation data should serialize"),
+                last_modified_at: now,
+            },
+            tasks: vec![warp_multi_agent_api::Task {
+                id: format!("task-{child_id}"),
+                messages: vec![warp_multi_agent_api::Message {
+                    id: "child-msg".to_string(),
+                    task_id: format!("task-{child_id}"),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    message: Some(warp_multi_agent_api::message::Message::UserQuery(
+                        warp_multi_agent_api::message::UserQuery {
+                            query: "Child query".to_string(),
+                            context: None,
+                            referenced_attachments: Default::default(),
+                            mode: None,
+                            intended_agent: Default::default(),
+                        },
+                    )),
+                    request_id: "request-1".to_string(),
+                    timestamp: None,
+                }],
+                dependencies: None,
+                description: "Child query".to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }],
+        };
+
+        // Parent must also be hydrated so the orchestrator id is in the
+        // run-id reverse index.
+        let parent = AgentConversation {
+            conversation: AgentConversationRecord {
+                id: 2,
+                conversation_id: parent_id.to_string(),
+                conversation_data: serde_json::to_string(&AgentConversationData {
+                    server_conversation_token: Some("parent-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: None,
+                    agent_name: None,
+                    orchestration_harness_type: None,
+                    parent_conversation_id: None,
+                    is_remote_child: false,
+                    root_task_is_optimistic: None,
+                    run_id: Some(parent_run_id.clone()),
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                    pinned: false,
+                })
+                .expect("parent conversation data should serialize"),
+                last_modified_at: now - chrono::Duration::seconds(1),
+            },
+            tasks: vec![warp_multi_agent_api::Task {
+                id: format!("task-{parent_id}"),
+                messages: vec![warp_multi_agent_api::Message {
+                    id: "parent-msg".to_string(),
+                    task_id: format!("task-{parent_id}"),
+                    server_message_data: String::new(),
+                    citations: vec![],
+                    message: Some(warp_multi_agent_api::message::Message::UserQuery(
+                        warp_multi_agent_api::message::UserQuery {
+                            query: "Parent query".to_string(),
+                            context: None,
+                            referenced_attachments: Default::default(),
+                            mode: None,
+                            intended_agent: Default::default(),
+                        },
+                    )),
+                    request_id: "request-2".to_string(),
+                    timestamp: None,
+                }],
+                dependencies: None,
+                description: "Parent query".to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }],
+        };
+
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[child, parent]));
+
+        // Before Fix C the child would not be loaded into
+        // `conversations_by_id`, so `participant_for_agent_id` would return
+        // "Unknown agent". With Fix C, the child is eagerly hydrated and the
+        // display name resolves.
+        let participant =
+            app.read(|ctx| participant_for_agent_id(&child_run_id, Some(&parent_run_id), ctx));
+        assert_eq!(
+            participant.display_name, "Agent 1",
+            "restored child run id must resolve to the child's display name, not 'Unknown agent'",
+        );
+        assert_eq!(
+            participant.avatar,
+            OrchestrationAvatar::agent("Agent 1".to_string()),
+        );
+    });
+}
+
 #[test]
 fn transcript_metadata_uses_transcript_copy_without_technical_labels() {
     let recipients = vec![OrchestrationParticipant {

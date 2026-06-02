@@ -16,6 +16,7 @@ use crate::file_tree_store::{FileTreeEntry, FileTreeState};
 use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContent};
 use crate::repository_identifier::RemoteRepositoryIdentifier;
+use crate::RepoMetadataError;
 
 /// Events emitted by the [`RemoteRepoMetadataModel`].
 #[derive(Debug)]
@@ -91,14 +92,25 @@ impl RemoteRepoMetadataModel {
     }
 
     /// Returns repository contents for the specified remote repository.
+    ///
+    /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents(
         &self,
         id: &RemoteRepositoryIdentifier,
         args: GetContentsArgs,
-    ) -> Option<Vec<RepoContent<'_>>> {
-        let state = match self.repositories.get(id)? {
-            IndexedRepoState::Indexed(state) => state,
-            IndexedRepoState::Pending(_) | IndexedRepoState::Failed(_) => return None,
+    ) -> Result<Vec<RepoContent<'_>>, RepoMetadataError> {
+        let state = match self.repositories.get(id) {
+            Some(IndexedRepoState::Indexed(state)) => state,
+            Some(IndexedRepoState::Pending(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingPending);
+            }
+            Some(IndexedRepoState::Failed(_)) => {
+                return Err(RepoMetadataError::RepositoryIndexingFailed);
+            }
+            None => {
+                return Err(RepoMetadataError::RepositoryNotIndexed);
+            }
         };
         let mut contents = Vec::new();
         collect_contents_recursive(
@@ -106,8 +118,8 @@ impl RemoteRepoMetadataModel {
             state.entry.root_directory(),
             &mut contents,
             &args,
-        );
-        Some(contents)
+        )?;
+        Ok(contents)
     }
 
     /// Returns all tracked remote repository identifiers, including those in

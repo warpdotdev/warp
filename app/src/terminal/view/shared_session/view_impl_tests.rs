@@ -596,6 +596,7 @@ fn server_conversation_metadata(
             last_editor_uid: None,
             current_editor_uid: None,
         },
+        creator: None,
         permissions,
         ambient_agent_task_id: Some(ambient_agent_task_id),
         server_conversation_token: ServerConversationToken::new(server_conversation_token),
