@@ -87,6 +87,11 @@ const PILL_ICON_SIZE: f32 = 12.;
 const PILL_OVERFLOW_BUTTON_RIGHT_OFFSET: f32 = 4.;
 const STATIC_PILL_LABEL_MAX_WIDTH: f32 = 110.;
 const STATIC_PILL_HORIZONTAL_PADDING_RIGHT: f32 = 10.;
+/// Width of the overlaid horizontal scrollbar; thin hairline by design.
+const PILL_BAR_SCROLLBAR_WIDTH: f32 = 4.;
+/// Bottom gutter inside the scrollable so the overlaid scrollbar paints below
+/// the pills, not across them. Slightly wider than the scrollbar for a 2px gap.
+const PILL_BAR_SCROLLBAR_GUTTER: f32 = 6.;
 
 /// Stable palette used to color child agent avatars deterministically by name.
 fn pill_palette(theme: &WarpTheme) -> [ColorU; 6] {
@@ -1197,28 +1202,34 @@ impl View for OrchestrationPillBar {
         let scrollable = NewScrollable::horizontal(
             SingleAxisConfig::Clipped {
                 handle: horizontal_scroll_state,
-                child: row.finish(),
+                // Gutter goes inside the scrollable; outer padding can't clear
+                // the scrollbar since it sits outside the scrollbar's track.
+                child: Container::new(row.finish())
+                    .with_padding_bottom(PILL_BAR_SCROLLBAR_GUTTER)
+                    .finish(),
             },
             theme.nonactive_ui_detail().into(),
             theme.active_ui_detail().into(),
             ElementFill::None,
         )
-        // 4px overlaid scrollbar so the bar height stays constant
-        // whether or not the row overflows.
-        .with_horizontal_scrollbar(ScrollableAppearance::new(ScrollbarWidth::Custom(4.), true))
+        // Overlaid so the bar height stays constant whether or not it overflows.
+        .with_horizontal_scrollbar(ScrollableAppearance::new(
+            ScrollbarWidth::Custom(PILL_BAR_SCROLLBAR_WIDTH),
+            true,
+        ))
         // Let a standard vertical mouse wheel pan the bar horizontally;
         // trackpad horizontal swipes already work through the default path.
         .with_remap_cross_axis_wheel_to_main_axis(true)
         .with_propagate_mousewheel_if_not_handled(true)
         .finish();
 
-        // Padding lives outside the scrollable so it doesn't scroll away
-        // with the content.
+        // L/R padding outside so it doesn't scroll with the content; bottom is
+        // small since the scrollbar gutter is handled inside the scrollable.
         let bar = Container::new(scrollable)
             .with_padding_left(12.)
             .with_padding_right(12.)
             .with_padding_top(4.)
-            .with_padding_bottom(4.)
+            .with_padding_bottom(2.)
             .finish();
 
         // When the 3-dot menu is open, overlay it directly beneath the
