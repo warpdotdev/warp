@@ -75,6 +75,9 @@ pub enum RepositoryMetadataEvent {
     /// The file tree's [`Entry`] was updated.
     FileTreeEntryUpdated {
         path: StandardizedPath,
+        /// Applied incremental metadata when this update is represented as a delta.
+        /// `None` indicates a conservative lazy-load or opaque entry update.
+        update: Option<RepoMetadataUpdate>,
     },
     UpdatingRepositoryFailed {
         path: StandardizedPath,
@@ -358,13 +361,14 @@ impl LocalRepoMetadataModel {
                                 &mut state.entry,
                                 mutations,
                                 lazy_load,
-                                model.emit_incremental_updates,
-                            );
+                                true,
+                            )
+                            .expect("update tracking was enabled");
                             ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
                                 path: repo_path,
+                                update: Some(update.clone()),
                             });
-
-                            if let Some(update) = update {
+                            if model.emit_incremental_updates {
                                 ctx.emit(RepositoryMetadataEvent::IncrementalUpdateReady {
                                     update,
                                 });
@@ -596,6 +600,7 @@ impl LocalRepoMetadataModel {
 
         ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
             path: repo_root.clone(),
+            update: None,
         });
         Ok(())
     }
@@ -684,10 +689,10 @@ impl LocalRepoMetadataModel {
     /// No filesystem I/O — only tree-structure operations. When `lazy_load` is
     /// true, additions are skipped if the parent directory has not been expanded.
     ///
-    /// When `emit_updates` is true,
-    /// from the mutations that were actually applied (filtering out any skipped
-    /// by `lazy_load`), suitable for sending to the remote client. When false,
-    /// no update tracking is performed and the function returns `None`.
+    /// When `emit_updates` is true, returns a [`RepoMetadataUpdate`] built from the mutations
+    /// that were actually applied (filtering out any skipped by `lazy_load`), suitable for
+    /// consumers and the remote client. When false, no update tracking is performed and the
+    /// function returns `None`.
     pub(crate) fn apply_file_tree_mutations(
         root_entry: &mut FileTreeEntry,
         mutations: Vec<FileTreeMutation>,

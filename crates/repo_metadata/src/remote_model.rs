@@ -29,7 +29,12 @@ pub enum RemoteRepositoryMetadataEvent {
         ids: Vec<RemoteRepositoryIdentifier>,
     },
     /// The file tree entry for a remote repository was updated.
-    FileTreeEntryUpdated { id: RemoteRepositoryIdentifier },
+    FileTreeEntryUpdated {
+        id: RemoteRepositoryIdentifier,
+        /// Applied incremental metadata when this update is represented as a delta.
+        /// `None` indicates an opaque whole-entry replacement.
+        update: Option<RepoMetadataUpdate>,
+    },
 }
 
 /// Client-side model for remote repository metadata.
@@ -145,7 +150,10 @@ impl RemoteRepoMetadataModel {
     ) {
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(id) {
             state.entry = entry;
-            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id: id.clone() });
+            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
+                id: id.clone(),
+                update: None,
+            });
         }
     }
 
@@ -208,7 +216,10 @@ impl RemoteRepoMetadataModel {
 
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&id) {
             state.entry.apply_repo_metadata_update(update);
-            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id });
+            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
+                id,
+                update: Some(update.clone()),
+            });
         }
     }
 }

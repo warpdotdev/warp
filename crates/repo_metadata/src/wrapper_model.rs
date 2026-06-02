@@ -34,7 +34,12 @@ pub enum RepoMetadataEvent {
     /// File trees for repositories were updated.
     FileTreeUpdated { ids: Vec<RepositoryIdentifier> },
     /// A file tree entry was updated.
-    FileTreeEntryUpdated { id: RepositoryIdentifier },
+    FileTreeEntryUpdated {
+        id: RepositoryIdentifier,
+        /// Applied incremental metadata when available.
+        /// `None` indicates an update that consumers should handle conservatively.
+        update: Option<RepoMetadataUpdate>,
+    },
     /// Updating a repository failed.
     UpdatingRepositoryFailed { id: RepositoryIdentifier },
     /// An incremental file tree update is ready to be sent to the remote
@@ -110,9 +115,10 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RepositoryMetadataEvent::FileTreeEntryUpdated { path } => {
+            RepositoryMetadataEvent::FileTreeEntryUpdated { path, update } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::local(path.clone()),
+                    update: update.clone(),
                 }
             }
             RepositoryMetadataEvent::UpdatingRepositoryFailed { path } => {
@@ -154,9 +160,10 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id } => {
+            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id, update } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::Remote(id.clone()),
+                    update: update.clone(),
                 }
             }
         };
