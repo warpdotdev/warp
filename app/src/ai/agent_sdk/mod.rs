@@ -239,13 +239,6 @@ fn format_skill_resolution_error(err: ResolveSkillError) -> String {
     }
 }
 
-fn skill_needs_sandbox_repo_clone(
-    sandboxed: bool,
-    skill: Option<&warp_cli::skill::SkillSpec>,
-) -> bool {
-    sandboxed && skill.is_some_and(|skill| skill.org.is_some() && skill.repo.is_some())
-}
-
 /// Run the agent with the provided command.
 fn run_agent(
     ctx: &mut AppContext,
@@ -830,7 +823,7 @@ impl AgentDriverRunner {
             .await
     }
 
-    async fn bootstrap_git_credentials_for_skill_resolution(
+    async fn bootstrap_git_credentials_for_task(
         foreground: &ModelSpawner<Self>,
         task_id_str: &str,
     ) -> Result<(), AgentDriverError> {
@@ -855,13 +848,24 @@ impl AgentDriverRunner {
             })
             .await?;
 
-        let credentials = Self::fetch_task_git_credentials(task_id_str, ai_client)
-            .await
-            .map_err(|err| {
-                AgentDriverError::SkillResolutionFailed(format!(
+        let credentials = match Self::fetch_task_git_credentials(task_id_str, ai_client).await {
+            Ok(credentials) => credentials,
+            Err(err)
+                if err
+                    .downcast_ref::<IsolationPlatformError>()
+                    .is_some_and(|err| {
+                        matches!(err, IsolationPlatformError::NoIsolationPlatformDetected)
+                    }) =>
+            {
+                log::debug!("Skipping git credentials bootstrap: {err}");
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(AgentDriverError::SkillResolutionFailed(format!(
                     "Failed to fetch git credentials before skill resolution: {err:#}"
-                ))
-            })?;
+                )));
+            }
+        };
         if credentials.is_empty() {
             log::debug!("No git credentials returned before skill resolution");
             return Ok(());
@@ -872,7 +876,7 @@ impl AgentDriverRunner {
                 "Failed to write git credentials before skill resolution: {err:#}"
             ))
         })?;
-        log::info!("Git credentials configured before skill resolution");
+        log::info!("Git credentials configured before task setup");
         Ok(())
     }
 
@@ -948,11 +952,8 @@ impl AgentDriverRunner {
         }
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
-        if skill_needs_sandbox_repo_clone(args.sandboxed, args.skill.as_ref()) {
-            if let Some(task_id_str) = args.task_id.as_ref() {
-                Self::bootstrap_git_credentials_for_skill_resolution(foreground, task_id_str)
-                    .await?;
-            }
+        if let Some(task_id_str) = args.task_id.as_ref() {
+            Self::bootstrap_git_credentials_for_task(foreground, task_id_str).await?;
         }
         // Resolve the skill, if we have one
         let resolved_skill =
@@ -1177,34 +1178,7 @@ impl AgentDriverRunner {
             .await
         };
 
-        let git_creds_ai_client = ai_client.clone();
-        let git_creds_task_id = task_id_str.clone();
-        let git_credentials = async move {
-            if !FeatureFlag::GitCredentialRefresh.is_enabled() {
-                return Ok(vec![]);
-            }
-            match Self::fetch_task_git_credentials(git_creds_task_id, git_creds_ai_client).await {
-                Ok(credentials) => Ok(credentials),
-                Err(e)
-                    if e.downcast_ref::<IsolationPlatformError>()
-                        .is_some_and(|err| {
-                            matches!(err, IsolationPlatformError::NoIsolationPlatformDetected)
-                        }) =>
-                {
-                    log::debug!("Skipping git credentials fetch: {e}");
-                    Ok(vec![])
-                }
-                Err(e) => Err(e),
-            }
-        };
-
-        let (
-            secrets_result,
-            attachments_result,
-            task_metadata_result,
-            handoff_snapshot_result,
-            git_credentials_result,
-        ) = futures::join!(
+        let (secrets_result, attachments_result, task_metadata_result, handoff_snapshot_result) = futures::join!(
             task_secrets,
             driver::attachments::fetch_and_download_attachments(
                 ai_client.clone(),
@@ -1214,7 +1188,6 @@ impl AgentDriverRunner {
             ),
             task_metadata,
             handoff_snapshot,
-            git_credentials,
         );
 
         // Extract attachments_dir from successful result, log errors
@@ -1235,25 +1208,6 @@ impl AgentDriverRunner {
             Ok(None) => {}
             Err(e) => {
                 log::warn!("Failed to fetch handoff snapshot attachments: {e:#}");
-            }
-        }
-
-        if FeatureFlag::GitCredentialRefresh.is_enabled() {
-            match git_credentials_result {
-                Ok(credentials) if !credentials.is_empty() => {
-                    if let Err(e) = driver::git_credentials::configure_git_credentials(&credentials)
-                    {
-                        log::warn!("Failed to write git credentials: {e:#}");
-                    } else {
-                        log::info!("Git credentials configured from taskGitCredentials");
-                    }
-                }
-                Ok(_) => {
-                    log::debug!("No git credentials returned; skipping credential file setup");
-                }
-                Err(e) => {
-                    log::warn!("Failed to fetch git credentials: {e:#}");
-                }
             }
         }
 
