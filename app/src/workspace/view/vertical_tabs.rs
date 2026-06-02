@@ -8,24 +8,24 @@ use std::sync::{Arc, Mutex};
 use languages::language_by_local_filename;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent as _;
+use warp_core::ui::Icon as WarpIcon;
 use warp_core::ui::color::blend::Blend;
 use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as WarpThemeFill, WarpTheme};
-use warp_core::ui::Icon as WarpIcon;
 use warpui::elements::{
-    resizable_state_handle, Border, ChildAnchor, Clipped, ClippedScrollStateHandle,
-    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DispatchEventResult, DragAxis, DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty,
-    EventHandler, Expanded, Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
-    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
-    ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
-    Shrinkable, Stack, Text,
+    Border, ChildAnchor, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, DragAxis, DragBarSide,
+    Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
+    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -40,30 +40,30 @@ use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_status_ui::render_status_element;
 use crate::appearance::Appearance;
-use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::code::editor::{add_color, remove_color};
 use crate::code::icon_from_file_path;
 use crate::context_chips::display_chip::GitLineChanges;
 use crate::context_chips::github_pr_display_text_from_url;
-use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::editor::EditorView;
 use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{
     CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, TerminalPane, WorkflowPane,
 };
 use crate::safe_triangle::SafeTriangle;
-use crate::tab::{tab_position_id, SelectedTabColor, TabData};
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
+use crate::tab::{SelectedTabColor, TabData, tab_position_id};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
 use crate::terminal::{CLIAgent, TerminalView};
 use crate::themes::theme::Fill as ThemeFill;
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
+use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::color::Opacity;
@@ -82,7 +82,7 @@ use crate::workspace::{
     PaneViewLocator, TabBarLocation, TabContextMenuAnchor, VerticalTabsPaneContextMenuTarget,
     VerticalTabsPaneDropTargetData, Workspace,
 };
-use crate::{send_telemetry_from_app_ctx, FeatureFlag};
+use crate::{FeatureFlag, send_telemetry_from_app_ctx};
 
 const PANEL_WIDTH: f32 = 248.;
 const MIN_PANEL_WIDTH: f32 = 200.;
@@ -797,6 +797,7 @@ struct VerticalTabsSummaryBranchEntry {
     branch_name: String,
     diff_stats: Option<GitLineChanges>,
     pull_request_label: Option<String>,
+    pull_request_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -955,6 +956,9 @@ fn coalesce_summary_branch_entries(
             }
             if existing.pull_request_label.is_none() {
                 existing.pull_request_label = entry.pull_request_label;
+            }
+            if existing.pull_request_url.is_none() {
+                existing.pull_request_url = entry.pull_request_url;
             }
         } else {
             indices.insert(key, coalesced.len());
@@ -3286,15 +3290,18 @@ fn build_vertical_tabs_summary_data(
                         .current_git_branch(app)
                         .and_then(|branch| normalize_summary_text(&branch)),
                 ) {
+                    let pull_request_url = terminal_view.current_pull_request_url(app);
+                    let pull_request_label = pull_request_url
+                        .as_deref()
+                        .map(terminal_pull_request_badge_label)
+                        .and_then(|label| normalize_summary_text(&label));
+
                     branch_entries.push(VerticalTabsSummaryBranchEntry {
                         repo_path,
                         branch_name,
                         diff_stats: terminal_view.current_diff_line_changes(app),
-                        pull_request_label: terminal_view
-                            .current_pull_request_url(app)
-                            .as_deref()
-                            .map(terminal_pull_request_badge_label)
-                            .and_then(|label| normalize_summary_text(&label)),
+                        pull_request_label,
+                        pull_request_url,
                     });
                 }
             }
@@ -4277,9 +4284,13 @@ fn render_summary_tab_item(
     // Branch region. Each branch line gets the existing 4px top margin from APP-3875.
     for branch_entry in summary.branch_entries.iter().take(MAX_VISIBLE_BRANCH_LINES) {
         text_col.add_child(
-            Container::new(render_summary_branch_line(branch_entry, appearance))
-                .with_margin_top(REGION_GAP)
-                .finish(),
+            Container::new(render_summary_branch_line(
+                branch_entry,
+                props.badge_mouse_states.pull_request.clone(),
+                appearance,
+            ))
+            .with_margin_top(REGION_GAP)
+            .finish(),
         );
     }
 
@@ -4589,6 +4600,7 @@ fn summary_pane_kind_icon(
 
 fn render_summary_branch_line(
     entry: &VerticalTabsSummaryBranchEntry,
+    pull_request_mouse_state: MouseStateHandle,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -4616,10 +4628,20 @@ fn render_summary_branch_line(
         has_right_badges = true;
     }
     if let Some(pull_request_label) = &entry.pull_request_label {
-        right_badges.add_child(render_passive_terminal_pull_request_badge(
-            pull_request_label,
-            appearance,
-        ));
+        if let Some(pull_request_url) = &entry.pull_request_url {
+            right_badges.add_child(render_terminal_pull_request_badge(
+                pull_request_label.clone(),
+                pull_request_url.clone(),
+                VerticalTabsChipEntrypoint::Tab,
+                pull_request_mouse_state,
+                appearance,
+            ));
+        } else {
+            right_badges.add_child(render_passive_terminal_pull_request_badge(
+                pull_request_label,
+                appearance,
+            ));
+        }
         has_right_badges = true;
     }
     if has_right_badges {
