@@ -286,7 +286,7 @@ fn test_get_repo_contents() {
                     filter: None,
                 };
                 let non_existent_result = model.get_repo_contents(&non_existent, args);
-                assert_eq!(non_existent_result, None);
+                assert!(non_existent_result.unwrap().is_empty());
             });
         });
     });
