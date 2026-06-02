@@ -221,11 +221,7 @@ impl RemoteServerErrorKind {
             ClientError::Timeout(_) => Self::Timeout,
             ClientError::Disconnected | ClientError::ResponseChannelClosed => Self::Disconnected,
             ClientError::ServerError { .. } => Self::ServerError,
-            ClientError::Protocol(_)
-            | ClientError::UnexpectedResponse
-            | ClientError::FileOperationFailed(_)
-            | ClientError::FragmentMetadataLookup { .. }
-            | ClientError::DiscardFailed(_) => Self::Other,
+            ClientError::Protocol(_) | ClientError::UnexpectedResponse => Self::Other,
         }
     }
 }
@@ -652,6 +648,15 @@ pub enum HostRequestError {
         code: crate::proto::ErrorCode,
         message: String,
     },
+    /// The server replied with a variant that didn't match the request, or
+    /// an empty result where one was required.
+    #[error("unexpected response")]
+    UnexpectedResponse,
+    /// The request was delivered and answered, but the server reported a
+    /// domain-level failure (e.g. a file could not be written). Carries the
+    /// server-provided message verbatim so callers can surface it directly.
+    #[error("{0}")]
+    OperationFailed(String),
 }
 
 /// Tracks an in-flight host-scoped request on the manager.
@@ -713,6 +718,159 @@ impl HostRequestHandle {
             .map_err(|_| HostRequestError::AllSessionsDisconnected)?;
         rx.await
             .map_err(|_| HostRequestError::AllSessionsDisconnected)?
+    }
+
+    // ── Typed host-scoped requests ──────────────────────────────────
+    //
+    // These mirror the request inputs and response shapes of the former
+    // `RemoteServerClient` methods so call sites never construct
+    // `host_scoped_request::Message` wrappers or match on
+    // `server_message::Message` themselves. Each one wraps the inner request,
+    // dispatches via [`Self::send`], and extracts the matching response
+    // variant.
+
+    /// Writes content to a file on the remote host, creating parent
+    /// directories if they don't exist.
+    pub async fn write_file(&self, path: String, content: String) -> Result<(), HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::WriteFile(
+                crate::proto::WriteFile { path, content },
+            ))
+            .await?;
+        crate::host_response::write_file_result(&msg).map_err(HostRequestError::OperationFailed)
+    }
+
+    /// Deletes a file on the remote host.
+    pub async fn delete_file(&self, path: String) -> Result<(), HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::DeleteFile(
+                crate::proto::DeleteFile { path },
+            ))
+            .await?;
+        crate::host_response::delete_file_result(&msg).map_err(HostRequestError::OperationFailed)
+    }
+
+    /// Saves a remote buffer to disk on the host.
+    pub async fn save_buffer(&self, path: String) -> Result<(), HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::SaveBuffer(
+                crate::proto::SaveBuffer { path },
+            ))
+            .await?;
+        crate::host_response::save_buffer_result(&msg).map_err(HostRequestError::OperationFailed)
+    }
+
+    /// Opens a buffer on the remote host for bidirectional syncing.
+    ///
+    /// When `force_reload` is true, the server discards any in-memory buffer
+    /// state and re-reads the file from disk.
+    pub async fn open_buffer(
+        &self,
+        path: String,
+        force_reload: bool,
+    ) -> Result<crate::proto::OpenBufferResponse, HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::OpenBuffer(
+                crate::proto::OpenBuffer { path, force_reload },
+            ))
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::OpenBufferResponse(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for OpenBuffer: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Batch-reads one or more files from the remote host with full context
+    /// (line ranges, binary/image support, metadata, size limits).
+    ///
+    /// Per-file failures are reported in `ReadFileContextResponse::failed_files`
+    /// rather than as a top-level error; this only returns `Err` for transport
+    /// or unexpected-response failures.
+    pub async fn read_file_context(
+        &self,
+        request: crate::proto::ReadFileContextRequest,
+    ) -> Result<crate::proto::ReadFileContextResponse, HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::ReadFileContext(
+                request,
+            ))
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::ReadFileContextResponse(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for ReadFileContext: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Maps backend content hashes to server-local fragment metadata for a
+    /// synced repo snapshot.
+    pub async fn get_fragment_metadata_from_hash(
+        &self,
+        repo_path: String,
+        root_hash: String,
+        content_hashes: Vec<String>,
+    ) -> Result<crate::proto::GetFragmentMetadataFromHashSuccess, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::GetFragmentMetadataFromHash(
+                    crate::proto::GetFragmentMetadataFromHash {
+                        repo_path,
+                        root_hash,
+                        content_hashes,
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GetFragmentMetadataFromHashResponse(
+                resp,
+            )) => match resp.result {
+                Some(crate::proto::get_fragment_metadata_from_hash_response::Result::Success(
+                    success,
+                )) => Ok(success),
+                Some(crate::proto::get_fragment_metadata_from_hash_response::Result::Error(
+                    error,
+                )) => Err(HostRequestError::OperationFailed(error.message)),
+                None => Err(HostRequestError::UnexpectedResponse),
+            },
+            other => {
+                log::error!(
+                    "Unexpected response variant for GetFragmentMetadataFromHash: {other:?}"
+                );
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Asks the remote daemon to gather and upload a handoff snapshot for the
+    /// given paths.
+    pub async fn upload_handoff_snapshot(
+        &self,
+        paths: Vec<StandardizedPath>,
+    ) -> Result<crate::proto::UploadHandoffSnapshotResponse, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::UploadHandoffSnapshot(
+                    crate::proto::UploadHandoffSnapshot {
+                        paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::UploadHandoffSnapshotResponse(resp)) => {
+                Ok(resp)
+            }
+            other => {
+                log::error!("Unexpected response variant for UploadHandoffSnapshot: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
     }
 
     /// Returns the `HostId` this handle targets.
@@ -1978,7 +2136,9 @@ impl RemoteServerManager {
                         let error_kind = match &e {
                             HostRequestError::AllSessionsDisconnected => RemoteServerErrorKind::Disconnected,
                             HostRequestError::Timeout => RemoteServerErrorKind::Timeout,
-                            HostRequestError::ServerError { .. } => RemoteServerErrorKind::ServerError,
+                            HostRequestError::ServerError { .. }
+                            | HostRequestError::OperationFailed(_) => RemoteServerErrorKind::ServerError,
+                            HostRequestError::UnexpectedResponse => RemoteServerErrorKind::Other,
                         };
                         let _ = spawner
                             .spawn(move |_me, ctx| {

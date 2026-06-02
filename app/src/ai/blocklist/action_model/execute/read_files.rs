@@ -164,24 +164,10 @@ impl ReadFilesExecutor {
                         max_batch_bytes: None,
                     };
 
-                    let msg = handle
-                        .send(
-                            remote_server::proto::host_scoped_request::Message::ReadFileContext(
-                                request,
-                            ),
-                        )
+                    let response = handle
+                        .read_file_context(request)
                         .await
                         .map_err(|e| anyhow::anyhow!("Remote read failed: {e}"))?;
-                    let response = match msg.message {
-                        Some(
-                            remote_server::proto::server_message::Message::ReadFileContextResponse(
-                                resp,
-                            ),
-                        ) => resp,
-                        _ => {
-                            return Err(anyhow::anyhow!("Unexpected response for ReadFileContext"))
-                        }
-                    };
 
                     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
                         let failed = response

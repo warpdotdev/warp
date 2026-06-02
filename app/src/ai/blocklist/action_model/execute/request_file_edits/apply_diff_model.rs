@@ -117,50 +117,43 @@ async fn read_remote_file(
         max_file_bytes: Some(MAX_DIFF_READ_BYTES),
         max_batch_bytes: None,
     };
-    let response = match handle
-        .send(remote_server::proto::host_scoped_request::Message::ReadFileContext(request))
-        .await
-    {
-        Ok(msg) => match msg.message {
-            Some(remote_server::proto::server_message::Message::ReadFileContextResponse(resp)) => {
-                resp
-            }
-            _ => return FileReadResult::ReadError("Unexpected response".to_string()),
-        },
-        Err(err) => return FileReadResult::ReadError(format!("{err}")),
-    };
-    if let Some(fc) = response.file_contexts.into_iter().next() {
-        // A whole-file read that was truncated by the byte limit will
-        // have line_range_start/end set even though no ranges were
-        // requested. Detect this and fail explicitly rather than
-        // applying the diff to partial content.
-        if fc.line_range_start.is_some() || fc.line_range_end.is_some() {
-            return FileReadResult::ReadError(format!(
-                "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for remote diff \
+    match handle.read_file_context(request).await {
+        Ok(response) => {
+            if let Some(fc) = response.file_contexts.into_iter().next() {
+                // A whole-file read that was truncated by the byte limit will
+                // have line_range_start/end set even though no ranges were
+                // requested. Detect this and fail explicitly rather than
+                // applying the diff to partial content.
+                if fc.line_range_start.is_some() || fc.line_range_end.is_some() {
+                    return FileReadResult::ReadError(format!(
+                        "File exceeds the {MAX_DIFF_READ_BYTES}-byte limit for remote diff \
                          application and was truncated. The diff cannot be applied safely."
-            ));
-        }
-        match fc.content {
-            Some(remote_server::proto::file_context_proto::Content::TextContent(content)) => {
-                FileReadResult::Found(content)
+                    ));
+                }
+                match fc.content {
+                    Some(remote_server::proto::file_context_proto::Content::TextContent(
+                        content,
+                    )) => FileReadResult::Found(content),
+                    Some(remote_server::proto::file_context_proto::Content::BinaryContent(_)) => {
+                        // apply-diff only works with text files
+                        FileReadResult::ReadError("File is binary".to_string())
+                    }
+                    None => FileReadResult::Found(String::new()),
+                }
+            } else if let Some(failed) = response.failed_files.into_iter().next() {
+                let message = failed
+                    .error
+                    .map(|e| e.message)
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                if message.contains("not found") || message.contains("Not found") {
+                    FileReadResult::NotFound
+                } else {
+                    FileReadResult::ReadError(message)
+                }
+            } else {
+                FileReadResult::NotFound
             }
-            Some(remote_server::proto::file_context_proto::Content::BinaryContent(_)) => {
-                // apply-diff only works with text files
-                FileReadResult::ReadError("File is binary".to_string())
-            }
-            None => FileReadResult::Found(String::new()),
         }
-    } else if let Some(failed) = response.failed_files.into_iter().next() {
-        let message = failed
-            .error
-            .map(|e| e.message)
-            .unwrap_or_else(|| "Unknown error".to_string());
-        if message.contains("not found") || message.contains("Not found") {
-            FileReadResult::NotFound
-        } else {
-            FileReadResult::ReadError(message)
-        }
-    } else {
-        FileReadResult::NotFound
+        Err(err) => FileReadResult::ReadError(format!("{err}")),
     }
 }

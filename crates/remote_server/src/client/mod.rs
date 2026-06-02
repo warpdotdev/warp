@@ -14,17 +14,11 @@ use crate::codebase_index_proto::{
     RemoteCodebaseIndexStatus,
 };
 use crate::proto::{
-    get_branches_response, get_fragment_metadata_from_hash_response, host_scoped_request,
-    notification, server_message, session_scoped_request, Abort, Authenticate, BranchInfo,
-    BufferEdit, ClientMessage, CloseBuffer, CodebaseIndexLimits, DeleteFile, DiffMode,
-    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, DiscardFilesRequest, ErrorCode,
-    FileStatusInfo, FragmentMetadataLookupErrorCode, GetBranches, GetDiffState,
-    GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess,
-    Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
-    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextRequest,
-    ReadFileContextResponse, RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage,
-    SessionBootstrapped, TextEdit, UnsubscribeDiffState, UploadHandoffSnapshot,
-    UploadHandoffSnapshotResponse, WriteFile,
+    notification, server_message, session_scoped_request, Abort, Authenticate, BufferEdit,
+    ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, Initialize, InitializeResponse,
+    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, RunCommandRequest,
+    RunCommandResponse, ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -61,18 +55,6 @@ pub enum ClientError {
 
     #[error("Request timed out after {0:?}")]
     Timeout(Duration),
-
-    #[error("File operation failed: {0}")]
-    FileOperationFailed(String),
-
-    #[error("Fragment metadata lookup failed ({code:?}): {message}")]
-    FragmentMetadataLookup {
-        code: FragmentMetadataLookupErrorCode,
-        message: String,
-    },
-
-    #[error("Discard files failed: {0}")]
-    DiscardFailed(String),
 }
 
 /// Events received from the remote server, delivered through the event
@@ -349,52 +331,6 @@ impl RemoteServerClient {
             }
         }
     }
-    /// Maps backend content hashes to server-local fragment metadata for a synced repo snapshot.
-    /// DEPRECATED: Use `HostRequestHandle::send` via the manager instead.
-    pub async fn get_fragment_metadata_from_hash(
-        &self,
-        repo_path: String,
-        root_hash: String,
-        content_hashes: Vec<String>,
-    ) -> Result<GetFragmentMetadataFromHashSuccess, ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::GetFragmentMetadataFromHash(
-                    GetFragmentMetadataFromHash {
-                        repo_path,
-                        root_hash,
-                        content_hashes,
-                    },
-                ),
-                crate::manager::RemoteServerOperation::GetFragmentMetadataFromHash,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::GetFragmentMetadataFromHashResponse(resp)) => {
-                match resp.result {
-                    Some(get_fragment_metadata_from_hash_response::Result::Success(success)) => {
-                        Ok(success)
-                    }
-                    Some(get_fragment_metadata_from_hash_response::Result::Error(error)) => {
-                        let code = FragmentMetadataLookupErrorCode::try_from(error.code)
-                            .unwrap_or(FragmentMetadataLookupErrorCode::Unspecified);
-                        Err(ClientError::FragmentMetadataLookup {
-                            code,
-                            message: error.message,
-                        })
-                    }
-                    None => Err(ClientError::UnexpectedResponse),
-                }
-            }
-            other => {
-                log::error!(
-                    "Unexpected response variant for GetFragmentMetadataFromHash: {other:?}"
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
 
     /// Sends an `Authenticate` notification to rotate the daemon-wide
     /// credential after initialization.
@@ -509,84 +445,6 @@ impl RemoteServerClient {
         }
     }
 
-    /// Writes content to a file on the remote host.
-    /// Creates parent directories if they don't exist.
-    pub async fn write_file(&self, path: String, content: String) -> Result<(), ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::WriteFile(WriteFile { path, content }),
-                crate::manager::RemoteServerOperation::WriteFile,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::WriteFileResponse(resp)) => match resp.result {
-                Some(crate::proto::write_file_response::Result::Success(_)) | None => Ok(()),
-                Some(crate::proto::write_file_response::Result::Error(e)) => {
-                    Err(ClientError::FileOperationFailed(e.message))
-                }
-            },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for WriteFile"),
-                    full: ("Remote server unexpected response for WriteFile: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
-    /// Batch-reads one or more files from the remote host with full context
-    /// (line ranges, binary/image support, metadata, size limits).
-    ///
-    /// Per-file failures are reported in `ReadFileContextResponse::failed_files`
-    /// rather than as a top-level error. The method only returns `Err` for
-    /// transport-level failures (disconnect, timeout, etc.).
-    pub async fn read_file_context(
-        &self,
-        request: ReadFileContextRequest,
-    ) -> Result<ReadFileContextResponse, ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::ReadFileContext(request),
-                crate::manager::RemoteServerOperation::ReadFileContext,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::ReadFileContextResponse(resp)) => Ok(resp),
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for ReadFileContext"),
-                    full: ("Remote server unexpected response for ReadFileContext: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
-    /// Opens a buffer on the remote host for bidirectional syncing.
-    ///
-    /// When `force_reload` is true, the server discards any in-memory buffer
-    /// state and re-reads the file from disk. Used to resolve conflicts.
-    pub async fn open_buffer(
-        &self,
-        path: String,
-        force_reload: bool,
-    ) -> Result<OpenBufferResponse, ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::OpenBuffer(OpenBuffer { path, force_reload }),
-                crate::manager::RemoteServerOperation::OpenBuffer,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::OpenBufferResponse(resp)) => Ok(resp),
-            other => {
-                log::error!("Unexpected response variant for OpenBuffer: {other:?}");
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
     /// Sends a buffer edit notification (fire-and-forget) to the remote host.
     pub fn send_buffer_edit(
         &self,
@@ -604,58 +462,11 @@ impl RemoteServerClient {
         self.send_notification(msg);
     }
 
-    /// Saves a buffer on the remote host to disk.
-    pub async fn save_buffer(&self, path: String) -> Result<(), ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::SaveBuffer(SaveBuffer { path }),
-                crate::manager::RemoteServerOperation::SaveBuffer,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::SaveBufferResponse(resp)) => match resp.result {
-                Some(crate::proto::save_buffer_response::Result::Success(_)) | None => Ok(()),
-                Some(crate::proto::save_buffer_response::Result::Error(e)) => {
-                    Err(ClientError::FileOperationFailed(e.message))
-                }
-            },
-            other => {
-                log::error!("Unexpected response variant for SaveBuffer: {other:?}");
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
     /// Tells the remote host to close a buffer (stop watching).
     pub fn close_buffer(&self, path: String) {
         let msg =
             ClientMessage::notification(notification::Message::CloseBuffer(CloseBuffer { path }));
         self.send_notification(msg);
-    }
-
-    /// Deletes a file on the remote host.
-    pub async fn delete_file(&self, path: String) -> Result<(), ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::DeleteFile(DeleteFile { path }),
-                crate::manager::RemoteServerOperation::DeleteFile,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::DeleteFileResponse(resp)) => match resp.result {
-                Some(crate::proto::delete_file_response::Result::Success(_)) | None => Ok(()),
-                Some(crate::proto::delete_file_response::Result::Error(e)) => {
-                    Err(ClientError::FileOperationFailed(e.message))
-                }
-            },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for DeleteFile"),
-                    full: ("Remote server unexpected response for DeleteFile: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
     }
 
     /// Converts a server push message (empty request_id) into a domain event.
@@ -783,34 +594,6 @@ impl RemoteServerClient {
         }
     }
 
-    /// Sends a `GetDiffState` request and awaits the response.
-    pub async fn get_diff_state(
-        &self,
-        repo_path: &StandardizedPath,
-        mode: DiffMode,
-    ) -> Result<GetDiffStateResponse, ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::GetDiffState(GetDiffState {
-                    repo_path: repo_path.to_string(),
-                    mode: Some(mode),
-                }),
-                crate::manager::RemoteServerOperation::GetDiffState,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::GetDiffStateResponse(resp)) => Ok(resp),
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for GetDiffState"),
-                    full: ("Remote server unexpected response for GetDiffState: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
     /// Sends an `UnsubscribeDiffState` notification (fire-and-forget).
     pub fn unsubscribe_diff_state(&self, repo_path: &StandardizedPath, mode: DiffMode) {
         let msg = ClientMessage::notification(notification::Message::UnsubscribeDiffState(
@@ -820,94 +603,6 @@ impl RemoteServerClient {
             },
         ));
         self.send_notification(msg);
-    }
-
-    /// Sends a `GetBranches` request and awaits the response.
-    pub async fn get_branches(
-        &self,
-        repo_path: &StandardizedPath,
-        max_branch_count: Option<u32>,
-        include_remotes: bool,
-    ) -> Result<Vec<BranchInfo>, ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::GetBranches(GetBranches {
-                    repo_path: repo_path.to_string(),
-                    max_branch_count,
-                    include_remotes,
-                }),
-                crate::manager::RemoteServerOperation::GetBranches,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::GetBranchesResponse(resp)) => match resp.result {
-                Some(get_branches_response::Result::Success(success)) => Ok(success.branches),
-                Some(get_branches_response::Result::Error(e)) => Err(ClientError::ServerError {
-                    code: ErrorCode::Internal,
-                    message: e.message,
-                }),
-                None => {
-                    safe_error!(
-                        safe: ("Remote server empty result for GetBranches"),
-                        full: ("Remote server empty result for GetBranches")
-                    );
-                    Err(ClientError::UnexpectedResponse)
-                }
-            },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for GetBranches"),
-                    full: ("Remote server unexpected response for GetBranches: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
-    /// Sends a `DiscardFiles` request and awaits the response.
-    pub async fn discard_files(
-        &self,
-        repo_path: &StandardizedPath,
-        files: Vec<FileStatusInfo>,
-        should_stash: bool,
-        branch_name: Option<String>,
-        mode: DiffMode,
-    ) -> Result<(), ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::DiscardFiles(DiscardFilesRequest {
-                    repo_path: repo_path.to_string(),
-                    files,
-                    should_stash,
-                    branch_name,
-                    mode: Some(mode),
-                }),
-                crate::manager::RemoteServerOperation::DiscardFiles,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::DiscardFilesResponse(resp)) => match resp.result {
-                Some(crate::proto::discard_files_response::Result::Success(_)) => Ok(()),
-                Some(crate::proto::discard_files_response::Result::Error(e)) => {
-                    Err(ClientError::DiscardFailed(e.message))
-                }
-                None => {
-                    safe_error!(
-                        safe: ("Remote server empty result for DiscardFiles"),
-                        full: ("Remote server empty result for DiscardFiles")
-                    );
-                    Err(ClientError::UnexpectedResponse)
-                }
-            },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for DiscardFiles"),
-                    full: ("Remote server unexpected response for DiscardFiles: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
     }
 
     /// Sends a `RunCommand` request
@@ -949,33 +644,6 @@ impl RemoteServerClient {
         }
     }
 
-    /// Sends an `UploadHandoffSnapshot` request to the remote server and
-    /// awaits the `UploadHandoffSnapshotResponse`.
-    pub async fn upload_handoff_snapshot(
-        &self,
-        paths: Vec<StandardizedPath>,
-    ) -> Result<UploadHandoffSnapshotResponse, ClientError> {
-        let response = self
-            .send_host_scoped_request(
-                host_scoped_request::Message::UploadHandoffSnapshot(UploadHandoffSnapshot {
-                    paths: paths.into_iter().map(|p| p.to_string()).collect(),
-                }),
-                crate::manager::RemoteServerOperation::UploadHandoffSnapshot,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::UploadHandoffSnapshotResponse(resp)) => Ok(resp),
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for UploadHandoffSnapshot"),
-                    full: ("Remote server unexpected response for UploadHandoffSnapshot: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
     /// Wrapper around [`send_request_internal`] that automatically fires a
     /// [`ClientEvent::RequestFailed`] event on error, so transport-level
     /// failures are tracked for telemetry without requiring each caller
@@ -995,22 +663,6 @@ impl RemoteServerClient {
             });
         }
         result
-    }
-
-    /// Sends a host-scoped request and awaits the raw `ServerMessage` response.
-    ///
-    /// This is the generic entry point for all host-scoped request/response
-    /// calls. It assigns a fresh `RequestId`, wraps the inner message in
-    /// `ClientMessage::host_scoped`, and routes the round-trip through
-    /// `send_request` (which instruments failures for telemetry).
-    pub async fn send_host_scoped_request(
-        &self,
-        inner: host_scoped_request::Message,
-        operation: crate::manager::RemoteServerOperation,
-    ) -> Result<ServerMessage, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage::host_scoped(request_id.to_string(), inner);
-        self.send_request(request_id, msg, operation).await
     }
 
     /// Generic request/response correlation.

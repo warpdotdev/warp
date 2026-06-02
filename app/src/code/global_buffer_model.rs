@@ -829,25 +829,10 @@ impl GlobalBufferModel {
                     batch.flush(client, &path);
                 }
 
-                let rx = manager.update(ctx, |mgr, _ctx| {
-                    mgr.send_host_scoped_request(
-                        &host_id,
-                        remote_server::proto::host_scoped_request::Message::SaveBuffer(
-                            remote_server::proto::SaveBuffer { path },
-                        ),
-                    )
-                });
-                ctx.spawn(async move { rx.await }, move |_me, result, ctx| {
-                    // Map the layered result into a single Result<(), String>:
-                    // transport failure (HostRequestError), request
-                    // cancellation, or an operation-specific error nested
-                    // in the SaveBufferResponse.
-                    let save_result = match result {
-                        Ok(Ok(msg)) => remote_server::host_response::save_buffer_result(&msg),
-                        Ok(Err(e)) => Err(e.to_string()),
-                        Err(_) => Err("request cancelled".to_string()),
-                    };
-                    match save_result {
+                let handle = manager.as_ref(ctx).host_request_handle(&host_id);
+                ctx.spawn(
+                    async move { handle.save_buffer(path).await },
+                    move |_me, result, ctx| match result {
                         Ok(()) => {
                             ctx.emit(GlobalBufferModelEvent::FileSaved { file_id });
                         }
@@ -855,11 +840,11 @@ impl GlobalBufferModel {
                             log::warn!("Remote save failed: {error}");
                             ctx.emit(GlobalBufferModelEvent::FailedToSave {
                                 file_id,
-                                error: Rc::new(FileSaveError::RemoteError(error)),
+                                error: Rc::new(FileSaveError::RemoteError(error.to_string())),
                             });
                         }
-                    }
-                });
+                    },
+                );
                 return Ok(());
             }
         }
@@ -1785,30 +1770,13 @@ impl GlobalBufferModel {
 
         // Send OpenBuffer via the manager for daemon-side failover.
         log::debug!("[remote-buffer] Sending OpenBuffer for path={path_str} host={host_id:?}");
-        let rx = RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
-            mgr.send_host_scoped_request(
-                &host_id,
-                remote_server::proto::host_scoped_request::Message::OpenBuffer(
-                    remote_server::proto::OpenBuffer {
-                        path: path_str,
-                        force_reload: false,
-                    },
-                ),
-            )
-        });
-        ctx.spawn(async move { rx.await }, move |me, result, ctx| {
-            let parsed = match result {
-                Ok(Ok(msg)) => match msg.message {
-                    Some(remote_server::proto::server_message::Message::OpenBufferResponse(
-                        resp,
-                    )) => Ok(resp),
-                    _ => Err("Unexpected response for OpenBuffer".to_string()),
-                },
-                Ok(Err(e)) => Err(e.to_string()),
-                Err(_) => Err("request cancelled".to_string()),
-            };
-            me.apply_open_buffer_response(file_id, parsed, ctx);
-        });
+        let handle = RemoteServerManager::as_ref(ctx).host_request_handle(&host_id);
+        ctx.spawn(
+            async move { handle.open_buffer(path_str, false).await },
+            move |me, result, ctx| {
+                me.apply_open_buffer_response(file_id, result.map_err(|e| e.to_string()), ctx);
+            },
+        );
 
         BufferState::new(file_id, buffer)
     }
@@ -2218,30 +2186,13 @@ impl GlobalBufferModel {
         let host_id = remote_path.host_id.clone();
 
         log::debug!("[remote-buffer] Re-opening buffer with force_reload: path={path_str}");
-        let rx = RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
-            mgr.send_host_scoped_request(
-                &host_id,
-                remote_server::proto::host_scoped_request::Message::OpenBuffer(
-                    remote_server::proto::OpenBuffer {
-                        path: path_str,
-                        force_reload: true,
-                    },
-                ),
-            )
-        });
-        ctx.spawn(async move { rx.await }, move |me, result, ctx| {
-            let parsed = match result {
-                Ok(Ok(msg)) => match msg.message {
-                    Some(remote_server::proto::server_message::Message::OpenBufferResponse(
-                        resp,
-                    )) => Ok(resp),
-                    _ => Err("Unexpected response for OpenBuffer".to_string()),
-                },
-                Ok(Err(e)) => Err(e.to_string()),
-                Err(_) => Err("request cancelled".to_string()),
-            };
-            me.apply_open_buffer_response(file_id, parsed, ctx);
-        });
+        let handle = RemoteServerManager::as_ref(ctx).host_request_handle(&host_id);
+        ctx.spawn(
+            async move { handle.open_buffer(path_str, true).await },
+            move |me, result, ctx| {
+                me.apply_open_buffer_response(file_id, result.map_err(|e| e.to_string()), ctx);
+            },
+        );
     }
 
     /// Handle an incoming `BufferConflictDetected` push from the remote server.

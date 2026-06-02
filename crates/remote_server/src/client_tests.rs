@@ -5,13 +5,10 @@ use warpui_core::r#async::executor;
 
 use super::*;
 use crate::proto::{
-    client_message, get_fragment_metadata_from_hash_response, host_scoped_request, notification,
-    run_command_response, server_message, session_scoped_request, ClientMessage,
-    CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
-    CodebaseIndexStatusesSnapshot, ErrorCode, FileOperationError, FragmentMetadata,
-    FragmentMetadataLookupError, FragmentMetadataLookupErrorCode,
-    GetFragmentMetadataFromHashResponse, GetFragmentMetadataFromHashSuccess, InitializeResponse,
-    MissingFragmentMetadata, RunCommandResponse, RunCommandSuccess, ServerMessage,
+    client_message, host_scoped_request, notification, run_command_response, server_message,
+    session_scoped_request, ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState,
+    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, ErrorCode, InitializeResponse,
+    RunCommandResponse, RunCommandSuccess, ServerMessage, WriteFile,
 };
 use crate::protocol;
 
@@ -248,105 +245,6 @@ async fn initialize_sends_auth_token_when_provided() {
         )
         .await
         .unwrap();
-}
-
-#[tokio::test]
-async fn get_fragment_metadata_from_hash_round_trip() {
-    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
-        match &msg.message {
-            _ => {
-                let host_scoped_request::Message::GetFragmentMetadataFromHash(request) =
-                    unwrap_host_scoped(msg)
-                else {
-                    panic!("Expected GetFragmentMetadataFromHash");
-                };
-                assert_eq!(request.repo_path, "/repo");
-                assert_eq!(request.root_hash, "root-hash");
-                assert_eq!(request.content_hashes, vec!["found-hash", "missing-hash"]);
-            }
-        }
-        server_message::Message::GetFragmentMetadataFromHashResponse(
-            GetFragmentMetadataFromHashResponse {
-                result: Some(get_fragment_metadata_from_hash_response::Result::Success(
-                    GetFragmentMetadataFromHashSuccess {
-                        fragments: vec![FragmentMetadata {
-                            content_hash: "found-hash".to_string(),
-                            path: "/repo/src/lib.rs".to_string(),
-                            start_line: 1,
-                            end_line: 3,
-                            byte_start: 0,
-                            byte_end: 42,
-                        }],
-                        missing_hashes: vec![MissingFragmentMetadata {
-                            content_hash: "missing-hash".to_string(),
-                            error: Some(FileOperationError {
-                                message: "missing".to_string(),
-                            }),
-                        }],
-                    },
-                )),
-            },
-        )
-    });
-
-    let response = client
-        .get_fragment_metadata_from_hash(
-            "/repo".to_string(),
-            "root-hash".to_string(),
-            vec!["found-hash".to_string(), "missing-hash".to_string()],
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.fragments.len(), 1);
-    assert_eq!(response.fragments[0].content_hash, "found-hash");
-    assert_eq!(response.missing_hashes.len(), 1);
-    assert_eq!(response.missing_hashes[0].content_hash, "missing-hash");
-}
-
-#[tokio::test]
-async fn get_fragment_metadata_from_hash_error_maps_to_typed_client_error() {
-    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
-        match &msg.message {
-            _ => {
-                let host_scoped_request::Message::GetFragmentMetadataFromHash(request) =
-                    unwrap_host_scoped(msg)
-                else {
-                    panic!("Expected GetFragmentMetadataFromHash");
-                };
-                assert_eq!(request.repo_path, "/repo");
-                assert_eq!(request.root_hash, "root-hash");
-            }
-        }
-        server_message::Message::GetFragmentMetadataFromHashResponse(
-            GetFragmentMetadataFromHashResponse {
-                result: Some(get_fragment_metadata_from_hash_response::Result::Error(
-                    FragmentMetadataLookupError {
-                        code: FragmentMetadataLookupErrorCode::IndexNotSynced.into(),
-                        message: "Codebase index has no synced root hash".to_string(),
-                        current_root_hash: None,
-                    },
-                )),
-            },
-        )
-    });
-
-    let error = client
-        .get_fragment_metadata_from_hash(
-            "/repo".to_string(),
-            "root-hash".to_string(),
-            vec!["hash".to_string()],
-        )
-        .await
-        .unwrap_err();
-
-    match error {
-        ClientError::FragmentMetadataLookup { code, message } => {
-            assert_eq!(code, FragmentMetadataLookupErrorCode::IndexNotSynced);
-            assert_eq!(message, "Codebase index has no synced root hash");
-        }
-        other => panic!("Expected FragmentMetadataLookup error, got {other:?}"),
-    }
 }
 
 #[tokio::test]

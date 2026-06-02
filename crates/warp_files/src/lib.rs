@@ -82,13 +82,14 @@ enum WatcherType {
 }
 
 /// Per-file backing store.
-/// Remote files dispatch through `RemoteServerClient` via [`RemoteServerManager`].
+/// Remote files dispatch host-scoped requests through a
+/// [`RemoteServerManager`] `HostRequestHandle`.
 enum FileBackend {
     Local(LocalFile),
     Remote {
-        /// Identifies the remote host. The actual client is looked up from
+        /// Identifies the remote host. A `HostRequestHandle` is resolved from
         /// [`RemoteServerManager`] at call time, which naturally handles
-        /// disconnect (lookup returns `Err`) without holding an `Arc` alive
+        /// disconnect (the request fails) without holding an `Arc` alive
         /// per file.
         host_id: HostId,
         /// Platform-aware path on the remote host.
@@ -729,33 +730,11 @@ impl FileModel {
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let rx = RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
-                    mgr.send_host_scoped_request(
-                        host_id,
-                        remote_server::proto::host_scoped_request::Message::WriteFile(
-                            remote_server::proto::WriteFile {
-                                path: path.as_str().to_string(),
-                                content,
-                            },
-                        ),
-                    )
-                });
-                ctx.spawn(async move { rx.await }, move |me, result, ctx| {
-                    // A non-transport response can still carry a file-operation
-                    // error nested in the WriteFileResponse; parse it before
-                    // treating the save as successful.
-                    let write_result = match result {
-                        Ok(Ok(msg)) => remote_server::host_response::write_file_result(&msg),
-                        Ok(Err(e)) => Err(e.to_string()),
-                        Err(_) => Err("request cancelled".to_string()),
-                    };
-                    match write_result {
-                        Err(msg) => {
-                            ctx.emit(FileModelEvent::FailedToSave {
-                                id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(msg)),
-                            });
-                        }
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
+                let path = path.as_str().to_string();
+                ctx.spawn(
+                    async move { handle.write_file(path, content).await },
+                    move |me, result, ctx| match result {
                         Ok(()) => {
                             me.set_version(file_id, version);
                             ctx.emit(FileModelEvent::FileSaved {
@@ -763,8 +742,14 @@ impl FileModel {
                                 version,
                             });
                         }
-                    }
-                });
+                        Err(e) => {
+                            ctx.emit(FileModelEvent::FailedToSave {
+                                id: file_id,
+                                error: Rc::new(FileSaveError::RemoteError(e.to_string())),
+                            });
+                        }
+                    },
+                );
             }
         }
 
@@ -890,32 +875,11 @@ impl FileModel {
                 );
             }
             FileBackend::Remote { host_id, path } => {
-                let rx = RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
-                    mgr.send_host_scoped_request(
-                        host_id,
-                        remote_server::proto::host_scoped_request::Message::DeleteFile(
-                            remote_server::proto::DeleteFile {
-                                path: path.as_str().to_string(),
-                            },
-                        ),
-                    )
-                });
-                ctx.spawn(async move { rx.await }, move |me, result, ctx| {
-                    // A non-transport response can still carry a file-operation
-                    // error nested in the DeleteFileResponse; parse it before
-                    // treating the delete as successful.
-                    let delete_result = match result {
-                        Ok(Ok(msg)) => remote_server::host_response::delete_file_result(&msg),
-                        Ok(Err(e)) => Err(e.to_string()),
-                        Err(_) => Err("request cancelled".to_string()),
-                    };
-                    match delete_result {
-                        Err(msg) => {
-                            ctx.emit(FileModelEvent::FailedToSave {
-                                id: file_id,
-                                error: Rc::new(FileSaveError::RemoteError(msg)),
-                            });
-                        }
+                let handle = RemoteServerManager::as_ref(ctx).host_request_handle(host_id);
+                let path = path.as_str().to_string();
+                ctx.spawn(
+                    async move { handle.delete_file(path).await },
+                    move |me, result, ctx| match result {
                         Ok(()) => {
                             me.set_version(file_id, version);
                             ctx.emit(FileModelEvent::FileSaved {
@@ -923,8 +887,14 @@ impl FileModel {
                                 version,
                             });
                         }
-                    }
-                });
+                        Err(e) => {
+                            ctx.emit(FileModelEvent::FailedToSave {
+                                id: file_id,
+                                error: Rc::new(FileSaveError::RemoteError(e.to_string())),
+                            });
+                        }
+                    },
+                );
             }
         }
 

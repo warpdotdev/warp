@@ -157,27 +157,9 @@ async fn upload_handoff_snapshot(
 ) -> (TouchedWorkspace, Result<HandoffUploadResult, anyhow::Error>) {
     match target {
         SnapshotUploadTarget::Remote { handle } => {
-            let result = match handle
-                .send(
-                    remote_server::proto::host_scoped_request::Message::UploadHandoffSnapshot(
-                        remote_server::proto::UploadHandoffSnapshot {
-                            paths: paths.into_iter().map(|p| p.to_string()).collect(),
-                        },
-                    ),
-                )
-                .await
-            {
-                Ok(msg) => match msg.message {
-                    Some(
-                        remote_server::proto::server_message::Message::UploadHandoffSnapshotResponse(
-                            resp,
-                        ),
-                    ) => try_upload_result_from_proto(resp),
-                    _ => Err(anyhow::anyhow!("Unexpected response for UploadHandoffSnapshot")),
-                },
-                Err(err) => {
-                    Err(anyhow::anyhow!(err).context("Remote handoff snapshot RPC failed"))
-                }
+            let result = match handle.upload_handoff_snapshot(paths).await {
+                Ok(resp) => try_upload_result_from_proto(resp),
+                Err(err) => Err(anyhow::anyhow!(err).context("Remote handoff snapshot RPC failed")),
             };
             (TouchedWorkspace::default(), result)
         }

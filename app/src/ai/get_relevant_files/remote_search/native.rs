@@ -156,48 +156,14 @@ async fn execute_remote_codebase_search(
         .iter()
         .map(ToString::to_string)
         .collect_vec();
-    let metadata_msg = handle
-        .send(
-            remote_server::proto::host_scoped_request::Message::GetFragmentMetadataFromHash(
-                remote_server::proto::GetFragmentMetadataFromHash {
-                    repo_path: repo_path.clone(),
-                    root_hash: root_hash_string,
-                    content_hashes: candidate_hash_strings,
-                },
-            ),
+    let metadata_response = handle
+        .get_fragment_metadata_from_hash(
+            repo_path.clone(),
+            root_hash_string,
+            candidate_hash_strings,
         )
-        .await?;
-    let metadata_response = match metadata_msg.message {
-        Some(
-            remote_server::proto::server_message::Message::GetFragmentMetadataFromHashResponse(
-                resp,
-            ),
-        ) => match resp.result {
-            Some(
-                remote_server::proto::get_fragment_metadata_from_hash_response::Result::Success(
-                    success,
-                ),
-            ) => success,
-            Some(
-                remote_server::proto::get_fragment_metadata_from_hash_response::Result::Error(e),
-            ) => {
-                return Err(anyhow::anyhow!(
-                    "Fragment metadata lookup failed: {}",
-                    e.message
-                ));
-            }
-            None => {
-                return Err(anyhow::anyhow!(
-                    "Empty result for GetFragmentMetadataFromHash"
-                ));
-            }
-        },
-        _ => {
-            return Err(anyhow::anyhow!(
-                "Unexpected response for GetFragmentMetadataFromHash"
-            ));
-        }
-    };
+        .await
+        .map_err(|e| anyhow::anyhow!("Fragment metadata lookup failed: {e}"))?;
     if !metadata_response.missing_hashes.is_empty() {
         log::warn!(
             "Remote codebase search metadata lookup missed {} hashes for repo {}",
@@ -234,17 +200,9 @@ async fn execute_remote_codebase_search(
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
 
-    let read_msg = handle
-        .send(
-            remote_server::proto::host_scoped_request::Message::ReadFileContext(
-                read_full_fragment_files_request(&parsed_fragment_metadata),
-            ),
-        )
+    let response = handle
+        .read_file_context(read_full_fragment_files_request(&parsed_fragment_metadata))
         .await?;
-    let response = match read_msg.message {
-        Some(remote_server::proto::server_message::Message::ReadFileContextResponse(resp)) => resp,
-        _ => return Err(anyhow::anyhow!("Unexpected response for ReadFileContext")),
-    };
     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
         let failed = response
             .failed_files
@@ -290,17 +248,9 @@ async fn execute_remote_codebase_search(
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
 
-    let read_msg2 = handle
-        .send(
-            remote_server::proto::host_scoped_request::Message::ReadFileContext(
-                read_context_locations_request(&locations),
-            ),
-        )
+    let response = handle
+        .read_file_context(read_context_locations_request(&locations))
         .await?;
-    let response = match read_msg2.message {
-        Some(remote_server::proto::server_message::Message::ReadFileContextResponse(resp)) => resp,
-        _ => return Err(anyhow::anyhow!("Unexpected response for ReadFileContext")),
-    };
     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
         let failed = response
             .failed_files

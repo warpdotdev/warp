@@ -228,7 +228,7 @@ pub fn assert_command_executor_is_remote_server(tab_idx: usize) -> AssertionCall
 }
 
 /// Returns a `TestStep` action that writes a file on the remote host via
-/// the `RemoteServerManager::send_host_scoped_request` API. The write is dispatched
+/// the `HostRequestHandle::write_file` API. The write is dispatched
 /// on a background thread using `tokio::runtime::Runtime::block_on` since
 /// the action callback is synchronous.
 pub fn write_file_via_remote_server(
@@ -253,14 +253,7 @@ pub fn write_file_via_remote_server(
             // but send is async.
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                let result = rt.block_on(handle.send(
-                    remote_server::proto::host_scoped_request::Message::WriteFile(
-                        remote_server::proto::WriteFile {
-                            path: path.clone(),
-                            content,
-                        },
-                    ),
-                ));
+                let result = rt.block_on(handle.write_file(path.clone(), content));
                 if let Err(e) = &result {
                     log::error!("write_file_via_remote_server failed for {path}: {e}");
                 }
