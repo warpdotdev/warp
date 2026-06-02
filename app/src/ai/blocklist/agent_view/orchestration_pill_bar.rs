@@ -89,9 +89,12 @@ const STATIC_PILL_LABEL_MAX_WIDTH: f32 = 110.;
 const STATIC_PILL_HORIZONTAL_PADDING_RIGHT: f32 = 10.;
 /// Width of the overlaid horizontal scrollbar; thin hairline by design.
 const PILL_BAR_SCROLLBAR_WIDTH: f32 = 4.;
-/// Bottom gutter inside the scrollable so the overlaid scrollbar paints below
-/// the pills, not across them. Slightly wider than the scrollbar for a 2px gap.
-const PILL_BAR_SCROLLBAR_GUTTER: f32 = 6.;
+/// Desired gap between the pills and the scrollbar thumb.
+const PILL_BAR_SCROLLBAR_GAP: f32 = 1.;
+/// Bottom gutter for the overlaid scrollbar. Its track sits 2px below the thumb
+/// (NewScrollable's `RIGHT_PADDING`), so gap = gutter - width - 2.
+const PILL_BAR_SCROLLBAR_GUTTER: f32 =
+    PILL_BAR_SCROLLBAR_GAP + PILL_BAR_SCROLLBAR_WIDTH + 2.;
 
 /// Stable palette used to color child agent avatars deterministically by name.
 fn pill_palette(theme: &WarpTheme) -> [ColorU; 6] {
