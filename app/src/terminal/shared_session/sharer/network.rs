@@ -27,8 +27,9 @@ use session_sharing_protocol::common::{
 use session_sharing_protocol::sharer::{
     AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, FailedToInitializeSessionReason,
     LinkAccessLevelUpdateResponse, ReconnectPayload, ReconnectToken, RemoveGuestResponse,
-    RoleUpdateReason, SessionEndedReason, SessionSourceType, SessionTerminatedReason,
-    TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse, UpstreamMessage,
+    RoleUpdateReason, SessionEndedReason, SessionRetentionReason, SessionSourceType,
+    SessionTerminatedReason, TeamAccessLevelUpdateResponse, UpdatePendingUserRoleResponse,
+    UpstreamMessage,
 };
 use warp_core::features::FeatureFlag;
 use warpui::r#async::Timer;
@@ -1257,6 +1258,10 @@ impl Network {
         }
     }
 
+    pub fn extend_session_retention(&mut self, reason: SessionRetentionReason) {
+        log::info!("Requesting extended shared session retention: {reason:?}");
+        self.send_message_to_server(UpstreamMessage::ExtendSessionRetention { reason });
+    }
     /// Send all stored terminal events from [start_event_no, ...) to the server
     /// The events are not removed from memory.
     fn flush_terminal_events_to_server(&self, start_event_no: usize) {

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::{safe_warn, send_telemetry_from_ctx};
 use warp_util::sync::Condition;
-use warpui::ModelHandle;
+use warpui_core::ModelHandle;
 
 /// Represents either a file or directory in a repository.
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ cfg_if::cfg_if! {
         use crate::entry::repo_watch_filter;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
-        use warpui::SingletonEntity as _;
+        use warpui_core::SingletonEntity as _;
 
         /// Duration between filesystem watch events in seconds
         const FILESYSTEM_WATCHER_DEBOUNCE_SECS: u64 = 1;
@@ -40,7 +40,7 @@ cfg_if::cfg_if! {
 }
 
 use ignore::gitignore::Gitignore;
-use warpui::ModelContext;
+use warpui_core::ModelContext;
 
 use crate::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntry, FileTreeEntryState, FileTreeFileMetadata,
@@ -48,7 +48,7 @@ use crate::file_tree_store::{
 };
 use crate::file_tree_update::{
     flatten_entry_metadata, DirectoryNodeMetadata, FileNodeMetadata, FileTreeEntryUpdate,
-    RepoMetadataUpdate, RepoNodeMetadata,
+    MetadataUpdateType, RepoMetadataUpdate, RepoNodeMetadata,
 };
 
 /// Maximum depth to traverse when building file trees
@@ -75,6 +75,9 @@ pub enum RepositoryMetadataEvent {
     /// The file tree's [`Entry`] was updated.
     FileTreeEntryUpdated {
         path: StandardizedPath,
+        /// Specifies whether this event contains a precise delta or requires a conservative
+        /// refresh because the entry was replaced without one.
+        update_type: MetadataUpdateType,
     },
     UpdatingRepositoryFailed {
         path: StandardizedPath,
@@ -358,13 +361,14 @@ impl LocalRepoMetadataModel {
                                 &mut state.entry,
                                 mutations,
                                 lazy_load,
-                                model.emit_incremental_updates,
-                            );
+                                true,
+                            )
+                            .expect("update tracking was enabled");
                             ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
                                 path: repo_path,
+                                update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
                             });
-
-                            if let Some(update) = update {
+                            if model.emit_incremental_updates {
                                 ctx.emit(RepositoryMetadataEvent::IncrementalUpdateReady {
                                     update,
                                 });
@@ -596,6 +600,7 @@ impl LocalRepoMetadataModel {
 
         ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
             path: repo_root.clone(),
+            update_type: MetadataUpdateType::FullReplace,
         });
         Ok(())
     }
@@ -684,10 +689,10 @@ impl LocalRepoMetadataModel {
     /// No filesystem I/O — only tree-structure operations. When `lazy_load` is
     /// true, additions are skipped if the parent directory has not been expanded.
     ///
-    /// When `emit_updates` is true,
-    /// from the mutations that were actually applied (filtering out any skipped
-    /// by `lazy_load`), suitable for sending to the remote client. When false,
-    /// no update tracking is performed and the function returns `None`.
+    /// When `emit_updates` is true, returns a [`RepoMetadataUpdate`] built from the mutations
+    /// that were actually applied (filtering out any skipped by `lazy_load`), suitable for
+    /// consumers and the remote client. When false, no update tracking is performed and the
+    /// function returns `None`.
     pub(crate) fn apply_file_tree_mutations(
         root_entry: &mut FileTreeEntry,
         mutations: Vec<FileTreeMutation>,
@@ -1123,7 +1128,7 @@ impl LocalRepoMetadataModel {
     }
 }
 
-impl warpui::Entity for LocalRepoMetadataModel {
+impl warpui_core::Entity for LocalRepoMetadataModel {
     type Event = RepositoryMetadataEvent;
 }
 

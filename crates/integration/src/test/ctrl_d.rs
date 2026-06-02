@@ -13,7 +13,7 @@ use warp::terminal::model::bootstrap::BootstrapStage;
 use warp::terminal::shell::ShellType;
 use warp::terminal::TerminalView;
 use warp::workspace::Workspace;
-use warpui::integration::TestStep;
+use warpui_core::integration::TestStep;
 
 use super::{new_builder, Builder};
 use crate::util::write_all_rc_files_for_test;

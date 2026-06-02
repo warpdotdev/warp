@@ -33,20 +33,20 @@ objc2-app-kit.workspace = true
 objc2-core-foundation.workspace = true
 objc2-core-graphics.workspace = true
 tempfile.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 ashpd.workspace = true
 futures.workspace = true
 image.workspace = true
 url.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 x11rb = { workspace = true, features = ["xtest"] }
 zbus.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 image.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

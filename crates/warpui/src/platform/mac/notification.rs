@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use chrono::DateTime;
 use cocoa::base::id;
-use cocoa::foundation::NSUInteger;
+use objc2_foundation::NSUInteger;
 use warpui_core::notification::{
     NotificationResponse, NotificationSendError, RequestPermissionsOutcome,
 };

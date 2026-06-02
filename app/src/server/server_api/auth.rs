@@ -47,7 +47,6 @@ use crate::auth::user::{FirebaseAuthTokens, User};
 use crate::auth::UserUid;
 use crate::channel::ChannelState;
 use crate::convert_to_server_experiment;
-use crate::server::datetime_ext::DateTimeExt as _;
 use crate::server::experiments::ServerExperiment;
 use crate::server::graphql::{
     default_request_options, get_request_context, get_user_facing_error_message,
@@ -238,7 +237,9 @@ impl ServerApi {
 
                 // Generate a new ID token if the token has expired or will expire in the
                 // next five minutes. This matches the behavior of the Firebase Auth SDK.
-                if chrono::DateTime::now() + chrono::Duration::minutes(5) >= expiration_time {
+                if chrono::Local::now().fixed_offset() + chrono::Duration::minutes(5)
+                    >= expiration_time
+                {
                     let refresh_token = auth_tokens.refresh_token.clone();
                     let firebase_token = FirebaseToken::Refresh(RefreshToken::new(refresh_token));
 
@@ -262,7 +263,7 @@ impl ServerApi {
                 Ok(AuthToken::Firebase(auth_tokens.id_token))
             }
             Credentials::SessionCookie => Ok(AuthToken::NoAuth),
-            #[cfg(any(test, feature = "integration_tests", feature = "skip_login"))]
+            #[cfg(any(feature = "integration_tests", feature = "skip_login"))]
             Credentials::Test => Ok(AuthToken::NoAuth),
         }
     }

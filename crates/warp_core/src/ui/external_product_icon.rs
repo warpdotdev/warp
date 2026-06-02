@@ -1,4 +1,4 @@
-use warpui::elements::Icon as WarpUiIcon;
+use warpui_core::elements::Icon as WarpUiIcon;
 
 use crate::ui::theme::Fill;
 

@@ -16,7 +16,7 @@ cfg_if::cfg_if! {
         use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
         use warp_core::features::FeatureFlag;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
-        use warpui::r#async::Timer;
+        use warpui_core::r#async::Timer;
         use warp_core::{send_telemetry_from_ctx, report_if_error};
         use crate::telemetry::AITelemetryEvent;
         use instant::Instant;
@@ -25,7 +25,7 @@ cfg_if::cfg_if! {
     }
 }
 use warp_core::safe_anyhow;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
 use super::fragment_metadata::FragmentMetadata;

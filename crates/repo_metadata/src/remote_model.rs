@@ -9,11 +9,11 @@ use std::sync::Arc;
 
 use futures::future::{self, BoxFuture, FutureExt as _};
 use warp_core::HostId;
-use warpui::ModelContext;
+use warpui_core::ModelContext;
 
 use super::local_model::collect_contents_recursive;
 use crate::file_tree_store::{FileTreeEntry, FileTreeState};
-use crate::file_tree_update::RepoMetadataUpdate;
+use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContent};
 use crate::repository_identifier::RemoteRepositoryIdentifier;
 
@@ -29,7 +29,12 @@ pub enum RemoteRepositoryMetadataEvent {
         ids: Vec<RemoteRepositoryIdentifier>,
     },
     /// The file tree entry for a remote repository was updated.
-    FileTreeEntryUpdated { id: RemoteRepositoryIdentifier },
+    FileTreeEntryUpdated {
+        id: RemoteRepositoryIdentifier,
+        /// Specifies whether this event contains a precise delta or an opaque whole-entry
+        /// replacement.
+        update_type: MetadataUpdateType,
+    },
 }
 
 /// Client-side model for remote repository metadata.
@@ -145,7 +150,10 @@ impl RemoteRepoMetadataModel {
     ) {
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(id) {
             state.entry = entry;
-            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id: id.clone() });
+            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
+                id: id.clone(),
+                update_type: MetadataUpdateType::FullReplace,
+            });
         }
     }
 
@@ -208,12 +216,15 @@ impl RemoteRepoMetadataModel {
 
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&id) {
             state.entry.apply_repo_metadata_update(update);
-            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id });
+            ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
+                id,
+                update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
+            });
         }
     }
 }
 
-impl warpui::Entity for RemoteRepoMetadataModel {
+impl warpui_core::Entity for RemoteRepoMetadataModel {
     type Event = RemoteRepositoryMetadataEvent;
 }
 

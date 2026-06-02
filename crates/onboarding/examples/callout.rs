@@ -9,11 +9,11 @@ use rust_embed::RustEmbed;
 use ui_components::Component as _;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::{AnsiColor, AnsiColors, Details, Fill, TerminalColors, WarpTheme};
-use warpui::color::ColorU;
-use warpui::elements::{Rect, Stack};
-use warpui::fonts::{Cache, FamilyId, Weight};
-use warpui::prelude::*;
-use warpui::{platform, AddWindowOptions, AssetProvider, ModelContext};
+use warpui_core::color::ColorU;
+use warpui_core::elements::{Rect, Stack};
+use warpui_core::fonts::{Cache, FamilyId, Weight};
+use warpui_core::prelude::*;
+use warpui_core::{platform, AddWindowOptions, AssetProvider, ModelContext};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "../../app/assets"]
@@ -30,8 +30,11 @@ impl AssetProvider for Assets {
 }
 
 fn main() -> platform::app::TerminationResult {
-    let app_builder =
-        platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
+    let app_builder = warpui::platform::AppBuilder::new(
+        platform::AppCallbacks::default(),
+        Box::new(ASSETS),
+        None,
+    );
 
     app_builder.run(move |ctx| {
         let font_name = if cfg!(target_os = "macos") {

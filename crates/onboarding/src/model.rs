@@ -1,6 +1,6 @@
 use ai::LLMId;
 use warp_core::send_telemetry_from_ctx;
-use warpui::{Entity, ModelContext};
+use warpui_core::{Entity, ModelContext};
 
 use crate::slides::{
     AgentAutonomy, AgentDevelopmentSettings, OnboardingModelInfo, ProjectOnboardingSettings,

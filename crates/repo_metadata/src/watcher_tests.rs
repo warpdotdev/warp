@@ -9,8 +9,8 @@ use futures::channel::mpsc;
 use futures::{FutureExt as _, StreamExt as _};
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::Timer;
-use warpui::{App, ModelContext, ModelHandle};
+use warpui_core::r#async::Timer;
+use warpui_core::{App, ModelContext, ModelHandle};
 
 use crate::repositories::stub_git_repository;
 use crate::repository::{RepositorySubscriber, TrackedRemoteRef};

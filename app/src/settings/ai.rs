@@ -24,10 +24,8 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warpui::platform::keyboard::KeyCode;
 use warpui::platform::OperatingSystem;
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, UpdateModel};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
-use crate::ai::agent::conversation::AIConversation;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::report_if_error;
@@ -394,6 +392,67 @@ impl ThinkingDisplayMode {
 
     pub fn should_keep_expanded(&self) -> bool {
         matches!(self, ThinkingDisplayMode::AlwaysShow)
+    }
+}
+
+/// Controls what happens when a user submits a new prompt while the agent is
+/// still responding to an earlier prompt.
+///
+/// This is the *default* used when a conversation has no explicit auto-queue
+/// override. Per-conversation overrides live on `QueuedQueryModel` and take
+/// precedence over this setting.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Default behavior when submitting a new prompt while the agent is still responding.",
+    rename_all = "snake_case"
+)]
+pub enum PromptSubmissionMode {
+    /// Cancel the in-flight response and submit the new prompt immediately
+    /// (default).
+    #[default]
+    Interrupt,
+    /// Hold the new prompt until the in-flight response finishes, then submit.
+    Queue,
+}
+
+settings::macros::implement_setting_for_enum!(
+    PromptSubmissionMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "agents.warp_agent.other.default_prompt_submission_mode",
+    description: "Default behavior when submitting a new prompt while the agent is still responding.",
+    feature_flag: FeatureFlag::QueueSlashCommand,
+);
+
+impl PromptSubmissionMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Interrupt response",
+            PromptSubmissionMode::Queue => "Queue until response finishes",
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Set default prompt submission: interrupt response",
+            PromptSubmissionMode::Queue => {
+                "Set default prompt submission: queue until response finishes"
+            }
+        }
     }
 }
 
@@ -1251,6 +1310,11 @@ define_settings_group!(AISettings, settings: [
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
 
+    // Default behavior when the user submits a new prompt while the agent is still
+    // responding. Per-conversation overrides live on `QueuedQueryModel`; this
+    // setting is the fallback used when a conversation has no explicit override.
+    default_prompt_submission_mode: PromptSubmissionMode,
+
     // Whether agent-executed shell commands should be included in command history
     // (up-arrow, Ctrl-R search, inline history menu).
     // When false, commands run by the AI agent are excluded from history.
@@ -1555,45 +1619,8 @@ impl AISettings {
             crate::workspaces::workspace::AdminEnablementSetting::Disable
         )
     }
-    pub fn is_cloud_handoff_enabled_for_conversation(
-        &self,
-        conversation: Option<&AIConversation>,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled(app)
-            && !conversation
-                .is_some_and(|conversation| is_orchestration_conversation(conversation, app))
-    }
-
-    pub fn is_cloud_handoff_enabled_for_terminal_view(
-        &self,
-        terminal_view_id: EntityId,
-        app: &warpui::AppContext,
-    ) -> bool {
-        let active_conversation =
-            BlocklistAIHistoryModel::as_ref(app).active_conversation(terminal_view_id);
-        self.is_cloud_handoff_enabled_for_conversation(active_conversation, app)
-    }
-
     pub fn is_ampersand_handoff_enabled(&self, app: &warpui::AppContext) -> bool {
         self.is_cloud_handoff_enabled(app) && !*self.should_force_disable_ampersand_handoff
-    }
-    pub fn is_ampersand_handoff_enabled_for_conversation(
-        &self,
-        conversation: Option<&AIConversation>,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled_for_conversation(conversation, app)
-            && !*self.should_force_disable_ampersand_handoff
-    }
-
-    pub fn is_ampersand_handoff_enabled_for_terminal_view(
-        &self,
-        terminal_view_id: EntityId,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled_for_terminal_view(terminal_view_id, app)
-            && !*self.should_force_disable_ampersand_handoff
     }
 
     pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
@@ -1890,12 +1917,6 @@ impl AISettings {
     }
 }
 
-fn is_orchestration_conversation(conversation: &AIConversation, app: &AppContext) -> bool {
-    conversation.has_parent_agent()
-        || !BlocklistAIHistoryModel::as_ref(app)
-            .child_conversation_ids_of(&conversation.id())
-            .is_empty()
-}
 /// Singleton model that caches compiled regexes for the `cli_agent_footer_enabled_commands`
 /// setting. Each entry pairs a compiled regex with the CLI agent it maps to.
 pub struct CompiledCommandsForCodingAgentToolbar {

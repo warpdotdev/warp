@@ -10,15 +10,15 @@ use pathfinder_geometry::vector::vec2f;
 use rust_embed::RustEmbed;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::{AnsiColor, AnsiColors, Details, Fill, TerminalColors, WarpTheme};
-use warpui::elements::{
+use warpui_core::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, Flex, MainAxisAlignment, MainAxisSize,
     OffsetPositioning, ParentElement, PositionedElementAnchor, PositionedElementOffsetBounds, Rect,
     SavePosition, Stack,
 };
-use warpui::fonts::{Cache, FamilyId, Weight};
-use warpui::prelude::CrossAxisAlignment;
-use warpui::ui_components::components::UiComponent;
-use warpui::{
+use warpui_core::fonts::{Cache, FamilyId, Weight};
+use warpui_core::prelude::CrossAxisAlignment;
+use warpui_core::ui_components::components::UiComponent;
+use warpui_core::{
     platform, AddWindowOptions, AppContext, AssetProvider, Element, Entity, SingletonEntity as _,
     TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -179,8 +179,11 @@ fn main() -> Result<()> {
         ..Default::default()
     })?;
 
-    let app_builder =
-        platform::AppBuilder::new(platform::AppCallbacks::default(), Box::new(ASSETS), None);
+    let app_builder = warpui::platform::AppBuilder::new(
+        platform::AppCallbacks::default(),
+        Box::new(ASSETS),
+        None,
+    );
     let _ = app_builder.run(move |ctx| {
         // Register Appearance singleton so views can access Appearance::handle(ctx).
         ctx.add_singleton_model(|ctx| build_appearance(adeberry(), ctx));

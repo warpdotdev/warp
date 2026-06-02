@@ -49,7 +49,7 @@ use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationReason,
-    MessageToAIAgentOutputMessageError,
+    MessageToAIAgentOutputMessageError, SummarizationType,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
@@ -648,12 +648,44 @@ impl AIConversation {
         self.conversation_usage_metadata.was_summarized
     }
 
+    /// Returns true if the conversation is currently being summarized.
+    pub fn is_summarizing(&self) -> bool {
+        let Some(exchange) = self.latest_visible_exchange() else {
+            return false;
+        };
+        let Some(output) = exchange.output_status.output() else {
+            return false;
+        };
+        output.get().messages.last().is_some_and(|m| {
+            matches!(
+                m.message,
+                AIAgentOutputMessageType::Summarization {
+                    finished_duration: None,
+                    summarization_type: SummarizationType::ConversationSummary,
+                    ..
+                }
+            )
+        })
+    }
+
     pub fn context_window_usage(&self) -> f32 {
         self.conversation_usage_metadata.context_window_usage
     }
 
+    /// Total credits spent in the conversation, including both LLM inference
+    /// and platform credits.
     pub fn credits_spent(&self) -> f32 {
-        (self.conversation_usage_metadata.credits_spent * 10.0).round() / 10.0
+        let total = self.conversation_usage_metadata.credits_spent
+            + self.conversation_usage_metadata.platform_credits_spent;
+        (total * 10.0).round() / 10.0
+    }
+
+    pub fn inference_credits_spent(&self) -> f32 {
+        self.conversation_usage_metadata.credits_spent
+    }
+
+    pub fn platform_credits_spent(&self) -> f32 {
+        self.conversation_usage_metadata.platform_credits_spent
     }
 
     /// Test-only helper that sets the conversation's credit total directly.
@@ -663,6 +695,7 @@ impl AIConversation {
     #[cfg(test)]
     pub(crate) fn set_credits_spent_for_test(&mut self, credits: f32) {
         self.conversation_usage_metadata.credits_spent = credits;
+        self.conversation_usage_metadata.platform_credits_spent = 0.0;
     }
 
     /// Test-only helper that simulates the root-task upgrade performed by the
@@ -1881,6 +1914,8 @@ impl AIConversation {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
+            self.conversation_usage_metadata.platform_credits_spent =
+                usage_metadata.platform_credits_spent;
             let llm_preferences = LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
                 footer_model_token_usage(&usage_metadata, llm_preferences);

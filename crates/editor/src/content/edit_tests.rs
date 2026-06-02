@@ -2,11 +2,11 @@ use std::path::Path;
 
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
-use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
-use warpui::fonts::{Properties, Style, Weight};
-use warpui::image_cache::ImageType;
-use warpui::text_layout::{LayoutCache, StyleAndFont, TextStyle};
-use warpui::{App, SingletonEntity};
+use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
+use warpui_core::fonts::{Properties, Style, Weight};
+use warpui_core::image_cache::ImageType;
+use warpui_core::text_layout::{LayoutCache, StyleAndFont, TextStyle};
+use warpui_core::{App, SingletonEntity};
 
 use super::{
     BlockLocation, LayOutArgs, layout_mermaid_diagram_block, layout_table_block, layout_text_block,

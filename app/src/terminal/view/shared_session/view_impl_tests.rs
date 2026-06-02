@@ -580,6 +580,7 @@ fn server_conversation_metadata(
             was_summarized: false,
             context_window_usage: 0.0,
             credits_spent: 0.0,
+            platform_credits_spent: 0.0,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -808,6 +809,7 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                         snapshot_upload: SnapshotUploadStatus::Pending,
                         submission_state: HandoffSubmissionState::Idle,
                         auto_submit: None,
+                        orchestration_handoff: None,
                     }),
                     ctx,
                 );
