@@ -165,8 +165,7 @@ float roundedBoxShadow(float2 lower, float2 upper, float2 point, float sigma, fl
 }
 
 fragment float4 rect_fragment_shader(
-    RectFragmentData in [[stage_in]],
-    constant Uniforms *uniforms [[buffer(0)]])
+    RectFragmentData in [[stage_in]])
 {
     float outer_distance;
     float inner_distance;
