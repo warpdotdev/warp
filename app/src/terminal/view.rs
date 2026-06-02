@@ -402,9 +402,7 @@ use crate::terminal::cli_agent_sessions::event::{
     parse_event, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventType,
     CLI_AGENT_NOTIFICATION_SENTINEL,
 };
-use crate::terminal::cli_agent_sessions::listener::{
-    agent_supports_rich_status, is_agent_supported, CLIAgentSessionListener,
-};
+use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{
@@ -11778,6 +11776,7 @@ impl TerminalView {
                                         let model = me.model.lock();
                                         me.detect_cli_agent_from_model(&model, ctx)
                                     };
+
                                     let view_id = me.view_id;
                                     CLIAgentSessionsModel::handle(ctx).update(
                                         ctx,
@@ -11820,6 +11819,7 @@ impl TerminalView {
                                     if matches!(detection, Some((CLIAgent::Codex, _))) {
                                         me.register_cli_agent_listener_without_session_start_event(
                                             CLIAgent::Codex,
+                                            false,
                                             ctx,
                                         );
                                     }
@@ -12893,7 +12893,7 @@ impl TerminalView {
         if !is_agent_supported(&notification.agent) {
             return;
         }
-        
+
         if notification.agent == CLIAgent::Codex && !FeatureFlag::CodexPlugin.is_enabled() {
             return;
         }
@@ -12941,6 +12941,7 @@ impl TerminalView {
         let remote_host = self.active_session_remote_host(ctx);
         let should_auto_toggle_input =
             *AISettings::as_ref(ctx).auto_open_rich_input_on_cli_agent_start;
+
         // Seed context from the event that caused registration before the
         // listener subscribes to future events.
         CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
@@ -12964,16 +12965,16 @@ impl TerminalView {
     fn register_cli_agent_listener_without_session_start_event(
         &mut self,
         agent: CLIAgent,
+        seed_plugin_version: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        // No SessionStart event in this path (mid-session install/update).
-        // Assume the just-installed plugin meets the minimum version for this agent
-        // so the update chip doesn't flash before the user runs /reload-plugins.
         #[cfg(not(target_family = "wasm"))]
-        let plugin_version =
-            plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned());
+        let plugin_version = seed_plugin_version
+            .then(|| plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned()))
+            .flatten();
         #[cfg(target_family = "wasm")]
         let plugin_version = None;
+
         let notification = CLIAgentEvent {
             v: 1,
             agent,
@@ -13127,11 +13128,7 @@ impl TerminalView {
         {
             let should_auto_toggle_input = CLIAgentSessionsModel::as_ref(ctx)
                 .session(self.view_id)
-                .is_some_and(|s| {
-                    s.listener.is_some()
-                        && s.should_auto_toggle_input
-                        && agent_supports_rich_status(&s.agent)
-                });
+                .is_some_and(|s| s.supports_rich_status() && s.should_auto_toggle_input);
             if should_auto_toggle_input {
                 match status {
                     CLIAgentSessionStatus::Blocked { .. } => {
@@ -21360,7 +21357,7 @@ impl TerminalView {
                 self.enter_environment_setup_selector(repos.clone(), ctx);
             }
             InputEvent::RegisterPluginListener(agent) => {
-                self.register_cli_agent_listener_without_session_start_event(*agent, ctx);
+                self.register_cli_agent_listener_without_session_start_event(*agent, true, ctx);
             }
             #[cfg(not(target_family = "wasm"))]
             InputEvent::OpenPluginInstructionsPane(agent, kind) => {

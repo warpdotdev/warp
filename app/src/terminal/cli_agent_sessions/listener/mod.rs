@@ -129,10 +129,9 @@ impl CodexSessionHandler {
 
 impl CLIAgentSessionHandler for CodexSessionHandler {
     /// Before Codex enabled support for hooks, we relied on OSC 9 to trigger notifications in Warp.
-	/// Here, we try to parse an OSC 777 event if we can, and set the plugin on CodexSessionHandler to
-	/// be true after the first OSC 777 notification we receive. This lets us ignore OSC 9 notifications 
-	/// if we are working with a client that is using the new plugin, but keeps them intact for legacy
-	/// clients.
+    /// Here, we try to parse an OSC 777 event if we can, and remember when we've seen one.
+    /// This lets us ignore OSC 9 notifications if we are working with a client that is using
+    /// the new plugin, but keeps them intact for legacy clients.
     fn try_parse(&mut self, title: Option<&str>, body: &str) -> Option<CLIAgentEvent> {
         if let Some(event) = parse_event(title, body) {
             if event.agent == CLIAgent::Codex {
@@ -145,7 +144,7 @@ impl CLIAgentSessionHandler for CodexSessionHandler {
             return None;
         }
         // OSC 9 notifications have no title. Also skip OSC 9 processing if the plugin is active, otherwise
-		// we'd process both OSC 777 and OSC 9 notifications.
+        // we'd process both OSC 777 and OSC 9 notifications.
         if title.is_some() || self.structured_plugin_active {
             return None;
         }

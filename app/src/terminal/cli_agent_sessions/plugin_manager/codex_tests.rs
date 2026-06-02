@@ -1,8 +1,6 @@
 use super::CodexPluginManager;
 use crate::features::FeatureFlag;
-use crate::terminal::cli_agent_sessions::plugin_manager::{
-    compare_versions, CliAgentPluginManager,
-};
+use crate::terminal::cli_agent_sessions::plugin_manager::CliAgentPluginManager;
 use std::fs;
 
 #[test]
@@ -80,10 +78,14 @@ fn update_instructions_has_steps() {
     let instructions = CodexPluginManager::new(None, None, None).update_instructions();
     assert_eq!(
         instructions.steps[0].command,
-        "codex plugin marketplace upgrade codex-warp"
+        "codex plugin marketplace remove codex-warp"
     );
     assert_eq!(
         instructions.steps[1].command,
+        "codex plugin marketplace add warpdotdev/codex-warp"
+    );
+    assert_eq!(
+        instructions.steps[2].command,
         "codex plugin add warp@codex-warp"
     );
     assert!(!instructions.steps.is_empty());
@@ -168,44 +170,6 @@ fn installed_version_returns_none_when_manifest_has_no_version() {
 }
 
 #[test]
-fn needs_update_logic_true_when_version_outdated() {
-    let dir = tempfile::tempdir().unwrap();
-    write_enabled_config(dir.path());
-    write_manifest(dir.path(), "0.2.0");
-
-    let needs_update = match super::installed_version(dir.path()) {
-        Some(v) => compare_versions(&v, "0.4.0").is_lt(),
-        None => super::check_installed(dir.path()),
-    };
-    assert!(needs_update);
-}
-
-#[test]
-fn needs_update_logic_true_when_installed_without_manifest() {
-    let dir = tempfile::tempdir().unwrap();
-    write_enabled_config(dir.path());
-
-    let needs_update = match super::installed_version(dir.path()) {
-        Some(v) => compare_versions(&v, "0.4.0").is_lt(),
-        None => super::check_installed(dir.path()),
-    };
-    assert!(needs_update);
-}
-
-#[test]
-fn needs_update_logic_false_when_version_current() {
-    let dir = tempfile::tempdir().unwrap();
-    write_enabled_config(dir.path());
-    write_manifest(dir.path(), "0.4.0");
-
-    let needs_update = match super::installed_version(dir.path()) {
-        Some(v) => compare_versions(&v, "0.4.0").is_lt(),
-        None => super::check_installed(dir.path()),
-    };
-    assert!(!needs_update);
-}
-
-#[test]
 #[serial_test::serial]
 fn is_not_installed_via_trait_without_codex_plugin() {
     let _guard = FeatureFlag::CodexPlugin.override_enabled(false);
@@ -255,6 +219,35 @@ fn needs_update_via_trait_with_codex_home_env() {
     let dir = tempfile::tempdir().unwrap();
     write_enabled_config(dir.path());
     write_manifest(dir.path(), "0.2.0");
+
+    std::env::set_var("CODEX_HOME", dir.path());
+    let result = CodexPluginManager::new(None, None, None).needs_update();
+    std::env::remove_var("CODEX_HOME");
+
+    assert!(result);
+}
+
+#[test]
+#[serial_test::serial]
+fn does_not_need_update_via_trait_when_version_current() {
+    let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    write_enabled_config(dir.path());
+    write_manifest(dir.path(), "0.4.0");
+
+    std::env::set_var("CODEX_HOME", dir.path());
+    let result = CodexPluginManager::new(None, None, None).needs_update();
+    std::env::remove_var("CODEX_HOME");
+
+    assert!(!result);
+}
+
+#[test]
+#[serial_test::serial]
+fn needs_update_via_trait_when_installed_without_manifest() {
+    let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    write_enabled_config(dir.path());
 
     std::env::set_var("CODEX_HOME", dir.path());
     let result = CodexPluginManager::new(None, None, None).needs_update();

@@ -110,8 +110,16 @@ impl CliAgentPluginManager for CodexPluginManager {
             return Ok(());
         }
         let mut log = String::new();
+        // Remove and re-add the marketplace to refresh the local snapshot, then
+        // reinstall the plugin. Mirrors the Claude update flow.
+        let _ = self
+            .run_logged(
+                &["plugin", "marketplace", "remove", MARKETPLACE_NAME],
+                &mut log,
+            )
+            .await;
         self.run_logged(
-            &["plugin", "marketplace", "upgrade", MARKETPLACE_NAME],
+            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
             &mut log,
         )
         .await?;
@@ -237,8 +245,14 @@ static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> =
         subtitle: "Run the following commands, then restart Codex.",
         steps: &[
             PluginInstructionStep {
-                description: "Upgrade the Warp plugin marketplace",
-                command: "codex plugin marketplace upgrade codex-warp",
+                description: "Remove the existing marketplace (if present)",
+                command: "codex plugin marketplace remove codex-warp",
+                executable: true,
+                link: None,
+            },
+            PluginInstructionStep {
+                description: "Re-add the marketplace",
+                command: "codex plugin marketplace add warpdotdev/codex-warp",
                 executable: true,
                 link: None,
             },

@@ -1084,10 +1084,9 @@ impl AgentInputFooter {
             let manager = plugin_manager_for(session.agent)?;
             let min_version = manager.minimum_plugin_version();
             let chip_key = plugin_chip_key(session.agent.command_prefix(), &session.remote_host);
-
-            // If the plugin is connected (listener present) and this agent supports
+            // If a structured plugin is connected and this agent supports
             // version-based updates, check the reported version.
-            if session.listener.is_some() && manager.supports_update() {
+            if session.has_structured_plugin() && manager.supports_update() {
                 let needs_update = match &session.plugin_version {
                     // No version reported = pre-versioning plugin, definitely outdated.
                     None => true,

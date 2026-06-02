@@ -122,12 +122,12 @@ pub struct CLIAgentSession {
     pub input_state: CLIAgentInputState,
     /// Whether status-driven auto-toggle is enabled for this session.
     pub should_auto_toggle_input: bool,
-    /// Plugin-backed event listener, if the CLI agent plugin is installed.
-    /// `None` for sessions created by command detection alone.
+    /// Event listener for plugin-backed sessions or Codex OSC9 fallback.
+    /// `None` for non-Codex sessions created by command detection alone.
     /// Dropping this handle cleans up the listener's PTY event subscription.
     pub listener: Option<ModelHandle<CLIAgentSessionListener>>,
-    /// The plugin version reported by the `SessionStart` event.
-    /// `None` if the plugin predates version reporting or hasn't connected yet.
+    /// The plugin version reported by structured plugin events.
+    /// `None` if the plugin predates version reporting or Codex is using OSC9 fallback.
     pub plugin_version: Option<String>,
     /// `None` when the session is local.
     /// `Some("user@hostname")` when running over SSH (warpified or legacy).
@@ -146,6 +146,21 @@ impl CLIAgentSession {
     pub fn is_remote(&self) -> bool {
         self.remote_host.is_some()
     }
+    /// Whether this session is backed by a connected structured plugin (rich
+    /// OSC 777 events) rather than command detection or Codex's OSC 9 fallback.
+    /// Codex's structured plugin always reports a version on connect, so a
+    /// present `plugin_version` distinguishes it from the versionless OSC 9
+    /// fallback. Other agents only ever connect via the structured plugin.
+    pub fn has_structured_plugin(&self) -> bool {
+        self.listener.is_some()
+            && (!matches!(self.agent, CLIAgent::Codex) || self.plugin_version.is_some())
+    }
+
+    pub fn supports_rich_status(&self) -> bool {
+        self.has_structured_plugin()
+            && (matches!(self.agent, CLIAgent::Codex)
+                || listener::agent_supports_rich_status(&self.agent))
+    }
 
     /// Clears state populated by `PermissionRequest`. Called whenever the
     /// session leaves the permission flow (the user replied, a new prompt
@@ -161,6 +176,9 @@ impl CLIAgentSession {
     /// Applies an event to this session, updating context and status.
     /// Returns the new status if it changed, or `None` if the event was irrelevant.
     fn apply_event(&mut self, event: &CLIAgentEvent) -> Option<CLIAgentSessionStatus> {
+        if let Some(plugin_version) = &event.payload.plugin_version {
+            self.plugin_version = Some(plugin_version.clone());
+        }
         self.session_context.cwd = event.cwd.clone().or(self.session_context.cwd.take());
         self.session_context.project = event
             .project
@@ -216,7 +234,6 @@ impl CLIAgentSession {
             // This should not affect status — otherwise it would override Success after a Stop event.
             CLIAgentEventType::IdlePrompt => return None,
             CLIAgentEventType::SessionStart => {
-                self.plugin_version = event.payload.plugin_version.clone();
                 return None;
             }
             CLIAgentEventType::Unknown(_) => return None,
@@ -403,6 +420,7 @@ impl CLIAgentSessionsModel {
         };
 
         let event_type = &event.event;
+        let old_plugin_version = session.plugin_version.clone();
         if let Some(new_status) = session.apply_event(event) {
             let agent = session.agent;
             ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
@@ -418,7 +436,8 @@ impl CLIAgentSessionsModel {
             CLIAgentEventType::SessionStart
                 | CLIAgentEventType::PromptSubmit
                 | CLIAgentEventType::ToolComplete
-        ) {
+        ) || session.plugin_version != old_plugin_version
+        {
             ctx.emit(CLIAgentSessionsModelEvent::SessionUpdated {
                 terminal_view_id,
                 agent: session.agent,
@@ -486,6 +505,7 @@ impl CLIAgentSessionsModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let agent = session.agent;
+
         // Close any open rich input before replacing, so subscribers can
         // restore input config before the session ends.
         self.close_input(terminal_view_id, false, ctx);
