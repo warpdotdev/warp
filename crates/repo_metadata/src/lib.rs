@@ -43,6 +43,7 @@ pub mod remote_model;
 pub mod repositories;
 pub mod repository;
 pub mod repository_identifier;
+pub mod standing_queries;
 mod telemetry;
 pub mod watcher;
 pub mod wrapper_model;
@@ -76,6 +77,9 @@ pub use file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 pub use local_model::{LocalRepoMetadataModel, RepoContent};
 pub use remote_model::RemoteRepoMetadataModel;
 pub use repository_identifier::{RemoteRepositoryIdentifier, RepositoryIdentifier};
+pub use standing_queries::{
+    StandingQueryContent, StandingQueryDefinitions, StandingQueryResults, StandingQueryResultsDelta,
+};
 pub use wrapper_model::{RepoMetadataEvent, RepoMetadataModel};
 
 /// A wrapper around PathBuf that ensures the path is canonicalized.

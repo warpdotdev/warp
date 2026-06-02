@@ -190,6 +190,11 @@ impl SkillWatcher {
                 RepoMetadataEvent::RepositoryUpdated { id } => {
                     me.refresh_project_skills_for_repo(id, ctx);
                 }
+                RepoMetadataEvent::StandingQueryResultsUpdated { id, delta } => {
+                    if delta.project_skills_changed() {
+                        me.refresh_project_skills_for_repo(id, ctx);
+                    }
+                }
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id,
                     update_type: MetadataUpdateType::IncrementalUpdate(update),

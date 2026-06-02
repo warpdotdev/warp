@@ -3,6 +3,7 @@ use std::fs;
 use ignore::gitignore::Gitignore;
 
 use super::{Entry, IgnoredPathStrategy};
+use crate::{StandingQueryDefinitions, StandingQueryResults};
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;
@@ -222,6 +223,49 @@ fn ignored_skill_file_is_loaded_for_registered_provider_path() {
         let skill_file = find_entry(&tree, &repo.join(".agents/skills/test/SKILL.md"))
             .expect("ignored skill file should be present");
         assert!(skill_file.ignored());
+    });
+}
+
+#[test]
+fn standing_queries_report_rules_below_an_unloaded_shallow_directory() {
+    virtual_fs::VirtualFS::test("standing_queries_report_shallow_rules", |dirs, mut vfs| {
+        vfs.mkdir("repo/src/deep")
+            .with_files(vec![virtual_fs::Stub::FileWithContent(
+                "repo/src/deep/WARP.md",
+                "project rules",
+            )]);
+        let repo = dirs.tests().join("repo");
+
+        let mut files = Vec::new();
+        let mut gitignores = Vec::new();
+        let mut results = StandingQueryResults::default();
+        let tree = Entry::build_tree_with_standing_queries(
+            &repo,
+            &mut files,
+            &mut gitignores,
+            None,
+            super::BuildTreeOptions {
+                max_depth: 1,
+                current_depth: 0,
+                ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                ignored_path_interests: &[],
+            },
+            &mut results,
+            &StandingQueryDefinitions::default(),
+        )
+        .unwrap();
+
+        let src = find_entry(&tree, &repo.join("src")).expect("src should be represented");
+        assert!(!src.loaded());
+        assert!(find_entry(&tree, &repo.join("src/deep/WARP.md")).is_none());
+
+        let rule_path = warp_util::standardized_path::StandardizedPath::try_from_local(
+            &repo.join("src/deep/WARP.md"),
+        )
+        .unwrap();
+        assert!(results
+            .project_rules()
+            .any(|content| content.path == rule_path));
     });
 }
 

@@ -28,11 +28,13 @@ impl LocalRepoMetadataModel {
     fn new_for_test() -> Self {
         Self {
             repositories: HashMap::new(),
+            standing_results: HashMap::new(),
             lazy_loaded_paths: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
             ignored_path_interests: Vec::new(),
+            standing_query_definitions: Default::default(),
         }
     }
 }
@@ -352,6 +354,39 @@ fn test_lazy_loaded_path_registrations_are_refcounted() {
                 assert!(!model.has_repository(
                     &StandardizedPath::from_local_canonicalized(&shared_dir).unwrap()
                 ));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_lazy_loaded_path_builds_standing_rule_results_below_shallow_tree() {
+    VirtualFS::test("lazy_loaded_path_standing_rules", |dirs, mut vfs| {
+        vfs.mkdir("workspace/src/deep")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/src/deep/WARP.md",
+                "project rules",
+            )]);
+
+        let workspace = dirs.tests().join("workspace");
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let workspace_path = StandardizedPath::from_local_canonicalized(&workspace).unwrap();
+            let rule_path =
+                StandardizedPath::try_from_local(&workspace.join("src/deep/WARP.md")).unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.index_lazy_loaded_path(&workspace_path, ctx).unwrap();
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                let results = model
+                    .standing_query_results(&workspace_path)
+                    .expect("lazy indexed paths should retain standing results");
+                assert!(results
+                    .project_rules()
+                    .any(|content| content.path == rule_path));
             });
         });
     });
@@ -730,10 +765,12 @@ fn test_update_file_tree_entry_respects_gitignore() {
         };
 
         // Compute mutations on the "background thread" then apply on the "main thread".
-        let mutations = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+        let standing_query_definitions = Default::default();
+        let (mutations, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
             &gitignores,
             &[],
+            &standing_query_definitions,
         ));
         LocalRepoMetadataModel::apply_file_tree_mutations(&mut root, mutations, false, false);
 

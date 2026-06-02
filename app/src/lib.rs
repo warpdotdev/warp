@@ -1539,6 +1539,12 @@ pub(crate) fn initialize_app(
                     .map(|provider| provider.skills_path.clone()),
                 ctx,
             );
+            model.set_project_skill_provider_paths(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+                ctx,
+            );
 
             // Subscribe to RemoteServerManager push events so that remote repo
             // metadata snapshots and incremental updates populate the remote

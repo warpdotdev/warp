@@ -336,6 +336,10 @@ impl ServerModel {
                         let entries = super::repo_metadata_proto::file_tree_entry_to_snapshot_proto(
                             &state.entry,
                         );
+                        let standing_results = repo_model
+                            .as_ref(ctx)
+                            .standing_query_results(&id, ctx)
+                            .map(|results| (&results.as_snapshot_delta()).into());
                         me.send_server_message(
                             None,
                             None,
@@ -344,6 +348,7 @@ impl ServerModel {
                                     repo_path: path.to_string(),
                                     entries,
                                     sync_complete: true,
+                                    standing_results,
                                 },
                             ),
                         );
@@ -357,6 +362,7 @@ impl ServerModel {
                 RepoMetadataEvent::RepositoryRemoved { .. }
                 | RepoMetadataEvent::FileTreeUpdated { .. }
                 | RepoMetadataEvent::FileTreeEntryUpdated { .. }
+                | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
                 | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                 | RepoMetadataEvent::RepositoryUpdated {
                     id: RepositoryIdentifier::Remote(_),
@@ -1869,6 +1875,10 @@ impl ServerModel {
                         let entries = super::repo_metadata_proto::file_tree_entry_to_snapshot_proto(
                             &state.entry,
                         );
+                        let standing_results = repo_model
+                            .as_ref(ctx)
+                            .standing_query_results(&id, ctx)
+                            .map(|results| (&results.as_snapshot_delta()).into());
                         // Git snapshots target the requesting connection;
                         // non-git snapshots broadcast to all.
                         let target = if is_git {
@@ -1884,6 +1894,7 @@ impl ServerModel {
                                     repo_path: indexed_path,
                                     entries,
                                     sync_complete: true,
+                                    standing_results,
                                 },
                             ),
                         );

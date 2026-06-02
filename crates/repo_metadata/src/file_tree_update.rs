@@ -8,6 +8,7 @@
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::entry::{DirectoryEntry, Entry, FileMetadata};
+use crate::standing_queries::StandingQueryResultsDelta;
 /// Describes how a file-tree entry update should be interpreted by consumers.
 #[derive(Debug, Clone)]
 pub enum MetadataUpdateType {
@@ -31,6 +32,8 @@ pub struct RepoMetadataUpdate {
     pub remove_entries: Vec<StandardizedPath>,
     /// Subtree patches to add or replace in the tree.
     pub update_entries: Vec<FileTreeEntryUpdate>,
+    /// Standing query changes synchronized with this tree change.
+    pub standing_results_delta: StandingQueryResultsDelta,
 }
 
 /// Mirrors `FileTreeEntry` proto.
