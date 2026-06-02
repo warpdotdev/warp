@@ -498,6 +498,9 @@ impl Network {
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
                 }
                 RequestState::RequestFailedRetryPending(e) => {
+                    ServerApiProvider::as_ref(ctx)
+                        .get()
+                        .check_ws_connect_for_iap_challenge(&e);
                     log::warn!("Failed to reconnect to shared session as viewer, will retry: {e}");
                 }
                 RequestState::RequestFailed(e) => {

@@ -688,10 +688,6 @@ impl ObjectClient for ServerApi {
 
         let subscription = GetWarpDriveUpdates::build(());
 
-        // IAP handshake header (to access staging envs only)
-        let handshake_headers: Vec<(&str, String)> =
-            self.iap_handshake_header().into_iter().collect();
-
         let result = start_graphql_streaming_operation(
             &ChannelState::ws_server_url(),
             init_payload,
@@ -704,7 +700,7 @@ impl ObjectClient for ServerApi {
             },
             message_sender,
             stream_ready_sender,
-            handshake_headers,
+            self.iap_handshake_header().into_iter().collect(),
         )
         .await;
 

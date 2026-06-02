@@ -699,7 +699,9 @@ impl Network {
                 }
                 Err(e) => {
                     network.log_diagnostic("initial_websocket_connect_failed", "outcome=transport_error");
-                    ServerApiProvider::as_ref(ctx).get().report_ws_iap_challenge(&e);
+                    ServerApiProvider::as_ref(ctx)
+                        .get()
+                        .check_ws_connect_for_iap_challenge(&e);
                     let cause = Arc::new(e.context("Failed to create shared session"));
                     report_error!(&*cause);
                     ctx.emit(NetworkEvent::FailedToCreateSharedSession {
@@ -815,6 +817,9 @@ impl Network {
                             "reconnect_attempt_failed",
                             "outcome=retry_pending",
                         );
+                        ServerApiProvider::as_ref(ctx)
+                            .get()
+                            .check_ws_connect_for_iap_challenge(&e);
                         log::warn!("Failed to reconnect to shared session, will retry: {e}");
                     }
                     RequestState::RequestFailed(e) => {

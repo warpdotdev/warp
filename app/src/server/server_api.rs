@@ -629,6 +629,7 @@ impl ServerApi {
     #[cfg(target_family = "wasm")]
     pub fn check_ws_connect_for_iap_challenge(&self, _err: &anyhow::Error) {}
 
+    // IAP handshake header (to access staging envs only)
     pub fn iap_handshake_header(&self) -> Option<(&'static str, String)> {
         let token = self
             .iap_state
@@ -859,6 +860,9 @@ impl ServerApi {
             Ok(response)
         } else {
             self.check_for_iap_challenge(&response);
+            // Put `HttpStatusError` in the error chain so shared retry classifiers
+            // (`is_transient_http_error`) can distinguish transient 5xx / 408 / 429
+            // from permanent 4xx without string-matching the Display output.
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             let status_err = HttpStatusError {
