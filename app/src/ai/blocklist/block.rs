@@ -4073,6 +4073,13 @@ impl AIBlock {
 
     /// Handles find match focus changes by auto-expanding collapsed reasoning blocks
     /// that contain the focused match.
+    /// The number of cached find matches for this AI block. Test-only; used to
+    /// assert that find highlights are cleared when the find bar closes.
+    #[cfg(test)]
+    pub(crate) fn find_match_count(&self) -> usize {
+        self.find_state.match_count()
+    }
+
     fn handle_find_match_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
         // Get the currently focused match ID from the terminal's find model.
         // The helper handles both the sync and async find paths.

@@ -151,7 +151,7 @@ pub trait TypedActionView {
     ///
     /// ### When and how to use it?
     /// This method should be implemented for all the meaningful Actions. For example, actions related to mouse movement are not meaningful, but action related to user copying the selected content - is.
-    /// If your Action enum has tons of actions, and only some of them are meaningful, you can use helper implementations from the `warpui::accessibility` (like `ActionAccessibilityContent::Default()` or `ActionAccessibility_content::from_debug()`).
+    /// If your Action enum has tons of actions, and only some of them are meaningful, you can use helper implementations from the `warpui_core::accessibility` (like `ActionAccessibilityContent::Default()` or `ActionAccessibility_content::from_debug()`).
     fn action_accessibility_contents(
         &mut self,
         _action: &Self::Action,

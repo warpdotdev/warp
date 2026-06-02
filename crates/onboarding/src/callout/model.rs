@@ -1,5 +1,5 @@
 use warp_core::send_telemetry_from_ctx;
-use warpui::{Entity, ModelContext};
+use warpui_core::{Entity, ModelContext};
 
 use crate::telemetry::OnboardingEvent;
 use crate::OnboardingIntention;

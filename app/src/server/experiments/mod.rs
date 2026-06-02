@@ -11,7 +11,6 @@
 //! See [here](https://www.notion.so/warpdev/Server-side-experiments-dynamic-feature-enablement-c0fb9aed695d4178a19b8830e3269094)
 //! for a full guide on the server-side experiment framework.
 
-use settings::Setting;
 use warpui::AppContext;
 #[cfg(not(test))]
 use warpui::SingletonEntity as _;
@@ -19,7 +18,6 @@ use warpui::SingletonEntity as _;
 use warpui::SingletonEntity;
 
 use crate::features::FeatureFlag;
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
 
@@ -54,8 +52,6 @@ pub enum ServerExperiment {
     FreeUserNoAiExperiment,
     OzMultiHarnessControl,
     OzMultiHarnessExperiment,
-    SshRemoteServerControl,
-    SshRemoteServerExperiment,
     /// A test-only experiment.
     /// Does not correspond to a real server-side experiment.
     #[cfg(test)]
@@ -154,50 +150,6 @@ impl ServerExperiment {
             }
             Self::OzMultiHarnessExperiment => {
                 FeatureFlag::AgentHarness.set_enabled(true);
-            }
-            Self::SshRemoteServerControl => {
-                // Remote server binary is not yet supported on Windows.
-                if cfg!(not(windows)) {
-                    FeatureFlag::SshRemoteServer.set_enabled(true);
-                    // Override the default install mode to NeverInstall for users
-                    // who haven't explicitly changed it. `load_value` sets the
-                    // in-memory value without persisting, so the override is
-                    // re-applied from the experiment cache on every launch and
-                    // disappears if the user leaves the experiment.
-                    WarpifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
-                        if !settings
-                            .ssh_extension_install_mode
-                            .is_value_explicitly_set()
-                        {
-                            let _ = settings.ssh_extension_install_mode.load_value(
-                                SshExtensionInstallMode::NeverInstall,
-                                false,
-                                ctx,
-                            );
-                        }
-                    });
-                }
-            }
-            Self::SshRemoteServerExperiment => {
-                // Remote server binary is not yet supported on Windows.
-                if cfg!(not(windows)) {
-                    FeatureFlag::SshRemoteServer.set_enabled(true);
-                    // Restore the default install mode in case the user was
-                    // previously in the control arm (which overrides it to
-                    // NeverInstall).
-                    WarpifySettings::handle(_ctx).update(_ctx, |settings, ctx| {
-                        if !settings
-                            .ssh_extension_install_mode
-                            .is_value_explicitly_set()
-                        {
-                            let _ = settings.ssh_extension_install_mode.load_value(
-                                SshExtensionInstallMode::default(),
-                                false,
-                                ctx,
-                            );
-                        }
-                    });
-                }
             }
             #[cfg(test)]
             Self::TestExperiment => {

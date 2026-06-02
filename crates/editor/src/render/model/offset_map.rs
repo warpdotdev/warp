@@ -18,7 +18,7 @@ mod tests;
 /// certain character runs are interactive. Within those runs, there's a 1:1 mapping between
 /// `char`s in the content model and `char`s in the text frame. It translates in two directions:
 /// * From a [`CharOffset`] relative to the start of the content model block (a [`super::Paragraph`])
-///   to the character index in the [`warpui::text_layout::TextFrame`].
+///   to the character index in the [`warpui_core::text_layout::TextFrame`].
 /// * From a [`FrameOffset`] in the `TextFrame` to the closest `CharOffset` in the content model
 ///   block (for example, clicking within a placeholder should snap the cursor to a regular content
 ///   character).

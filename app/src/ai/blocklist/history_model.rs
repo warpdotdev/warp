@@ -133,7 +133,10 @@ impl AIConversationMetadata {
             .metadata_last_updated_ts
             .utc()
             .naive_utc();
-        let credits_spent = Some(server_conversation_metadata.usage.credits_spent);
+        let credits_spent = Some(
+            server_conversation_metadata.usage.credits_spent
+                + server_conversation_metadata.usage.platform_credits_spent,
+        );
         let server_conversation_token = Some(
             server_conversation_metadata
                 .server_conversation_token

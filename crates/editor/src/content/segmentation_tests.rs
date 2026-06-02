@@ -2,10 +2,10 @@ use itertools::Itertools;
 use markdown_parser::parse_markdown;
 use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
-use warpui::App;
-use warpui::text::TextBuffer;
-use warpui::text::point::Point;
-use warpui::text::word_boundaries::WordBoundariesPolicy;
+use warpui_core::App;
+use warpui_core::text::TextBuffer;
+use warpui_core::text::point::Point;
+use warpui_core::text::word_boundaries::WordBoundariesPolicy;
 
 use crate::content::buffer::{Buffer, EditOrigin};
 use crate::content::selection_model::BufferSelectionModel;

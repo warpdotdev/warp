@@ -24,6 +24,7 @@ use crate::ai::agent::conversation::{
 };
 use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_navigation_card;
+use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::drive::sharing::ShareableObject;
@@ -991,7 +992,9 @@ impl TerminalView {
 
     /// Selected conversation status for chrome, or [`ConversationStatus::InProgress`] while the
     /// active block is long-running (terminal-derived; not mirrored in history events) or while
-    /// a cloud-mode ambient agent is still in its environment-setup phase.
+    /// a cloud-mode ambient agent is still in its environment-setup phase. For orchestrator
+    /// conversations, returns the aggregated child status so tab/header badges keep reflecting
+    /// active descendants after its turn finishes.
     pub fn selected_conversation_status(&self, ctx: &AppContext) -> Option<ConversationStatus> {
         let long_running = self.is_long_running();
         let cloud_setup = self.is_in_cloud_agent_setup_phase(ctx);
@@ -1014,7 +1017,10 @@ impl TerminalView {
             return None;
         }
 
-        Some(conversation.status().clone())
+        Some(orchestration_aware_conversation_status(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            conversation,
+        ))
     }
 
     pub fn selected_conversation_is_empty(&self, ctx: &AppContext) -> bool {

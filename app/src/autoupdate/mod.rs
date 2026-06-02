@@ -27,7 +27,6 @@ pub use self::changelog::get_current_changelog;
 use self::channel_versions::fetch_channel_versions;
 use crate::channel::Channel;
 use crate::features::FeatureFlag;
-use crate::server::datetime_ext::DateTimeExt;
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::TelemetryEvent;
 use crate::workspace::Workspace;
@@ -249,7 +248,7 @@ impl AutoupdateState {
     /// The caller is responsible for checking that we _should_ check for an update. Generally, the
     /// only caller should be [`Self::try_execute_request`].
     fn check_for_update(&mut self, request_type: RequestType, ctx: &mut ModelContext<Self>) {
-        let current_date = DateTime::now().date_naive();
+        let current_date = chrono::Local::now().date_naive();
         let is_daily = self.should_make_daily_request(
             request_type,
             &current_date,
@@ -394,7 +393,7 @@ impl AutoupdateState {
         ctx: &mut ModelContext<AutoupdateState>,
     ) {
         if is_daily && version.is_ok() {
-            self.last_successful_daily_update_check = Some(DateTime::now());
+            self.last_successful_daily_update_check = Some(chrono::Local::now().fixed_offset());
         }
 
         // If one update was already applied, we cannot apply another.

@@ -39,6 +39,12 @@ impl FindState {
     pub(super) fn location_for_match(&self, id: RichContentMatchId) -> Option<&FindMatchLocation> {
         self.matches.get(&id)
     }
+
+    /// The number of find matches currently cached for this block.
+    #[cfg(test)]
+    pub(crate) fn match_count(&self) -> usize {
+        self.matches.len()
+    }
 }
 
 impl FindableRichContentView for AIBlock {

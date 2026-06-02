@@ -20,9 +20,6 @@ use crate::drive::items::WarpDriveItem;
 use crate::drive::CloudObjectTypeAndId;
 #[cfg(not(target_family = "wasm"))]
 use crate::persistence::model::MCPEnvironmentVariables;
-#[cfg(not(target_family = "wasm"))]
-#[cfg(not(target_family = "wasm"))]
-use crate::server::datetime_ext::DateTimeExt;
 use crate::server::ids::SyncId;
 use crate::server::sync_queue::QueueItem;
 
@@ -431,7 +428,7 @@ impl MCPServerExt for MCPServer {
             name: self.name.clone(),
             description: None,
             template: JsonTemplate { json, variables },
-            version: chrono::DateTime::now().timestamp(),
+            version: chrono::Local::now().timestamp(),
             gallery_data: None,
         };
         let templatable_mcp_server_installation: Option<TemplatableMCPServerInstallation> =

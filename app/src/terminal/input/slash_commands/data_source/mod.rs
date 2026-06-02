@@ -307,8 +307,7 @@ impl SlashCommandDataSource {
         ActiveCommandsContext {
             session_context,
             is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
-            is_cloud_handoff_enabled: ai_settings
-                .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx),
+            is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),
             #[cfg(not(target_family = "wasm"))]
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
             has_default_host,

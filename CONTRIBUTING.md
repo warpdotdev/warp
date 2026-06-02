@@ -92,9 +92,17 @@ Issues labeled `ready-to-spec` need a spec before code can begin. A spec consist
 - **`product.md`** (the *product spec*) — Defines the desired behavior from the consumer's perspective (the user, an API caller, a CLI user, etc.) and stays out of implementation detail. The core is a numbered list of **testable behavior invariants** covering the happy path, user-visible states, inputs and responses, and edge cases (empty / error / loading, cancellation, offline, permission denied, races, accessibility). Optional sections: problem statement, goals / non-goals, Figma link, open questions.
 - **`tech.md`** (the *tech spec*) — The implementation plan, grounded in this codebase. Required sections: **Context** (the current system and relevant files with line references), **Proposed changes** (modules touched, new types / APIs / state, data flow, tradeoffs), and **Testing and validation** (how each invariant from the product spec will be verified). Optional: end-to-end flow, Mermaid diagrams, risks, parallelization, follow-ups.
 
+The spec-writing skills are sourced from [`warpdotdev/common-skills`](https://github.com/warpdotdev/common-skills), not authored directly in this repository. This checkout pins the expected versions in [`skills-lock.json`](skills-lock.json), and the bootstrap scripts can restore them for you:
+
+- `./script/bootstrap` installs or updates common skills by default and prompts for a project-local or global install target when needed.
+- `./script/bootstrap --install-common-skills-in-repo` installs the pinned common skills into this checkout's `.agents/skills/`.
+- `./script/bootstrap --install-common-skills-globally` installs the pinned common skills into `~/.agents/skills/`.
+- `WARP_COMMON_SKILLS_INSTALL_TARGET=project ./script/bootstrap` and `WARP_COMMON_SKILLS_INSTALL_TARGET=global ./script/bootstrap` select the same targets non-interactively.
+- `./script/bootstrap --skip-common-skills` leaves common skills untouched if you are managing them separately.
+
 To open a spec PR:
 
-1. Add `specs/GH<issue-number>/product.md` and `specs/GH<issue-number>/tech.md`. See [`specs/GH408/`](specs/GH408/), [`specs/GH1063/`](specs/GH1063/), and [`specs/GH1066/`](specs/GH1066/) for examples of well-structured specs, and browse the rest of [`specs/`](specs/) for more. The [`/write-product-spec`](.agents/skills/write-product-spec/SKILL.md) and [`/write-tech-spec`](.agents/skills/write-tech-spec/SKILL.md) skills are available to scaffold these for you.
+1. Add `specs/GH<issue-number>/product.md` and `specs/GH<issue-number>/tech.md`. See [`specs/GH408/`](specs/GH408/), [`specs/GH1063/`](specs/GH1063/), and [`specs/GH1066/`](specs/GH1066/) for examples of well-structured specs, and browse the rest of [`specs/`](specs/) for more. After common skills are installed, the `/write-product-spec` and `/write-tech-spec` skills are available to scaffold these for you.
 2. Use the PR as the home for product and technical discussion.
 3. Once the specs are approved, implementation generally continues on the same PR. In rarer cases — for example, if a large spec is merged on its own so the implementation can be broken up — it can move to a linked follow-up PR.
 

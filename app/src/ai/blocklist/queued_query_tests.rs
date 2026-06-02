@@ -45,6 +45,10 @@ fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
 }
 
+fn initial_cloud_mode_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::InitialCloudMode)
+}
+
 fn append_user(
     model: &warpui::ModelHandle<QueuedQueryModel>,
     app: &mut App,
@@ -54,6 +58,101 @@ fn append_user(
     model.update(app, |model, ctx| {
         model.append(conversation_id, user_query(text), ctx)
     })
+}
+
+#[test]
+fn initial_cloud_mode_head_rejects_user_mutations_and_autofire() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        let followup_id = append_user(&model, &mut app, conv, "follow up");
+
+        let removed = model.update(&mut app, |model, ctx| {
+            model.remove_by_id(conv, initial_id, ctx)
+        });
+        assert!(removed.is_none());
+
+        model.update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conv, initial_id, ctx);
+            model.reorder(conv, initial_id, 1, ctx);
+            model.reorder(conv, followup_id, 0, ctx);
+        });
+
+        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(conv, ctx));
+        assert!(action.is_none());
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), initial_id);
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::InitialCloudMode);
+            assert_eq!(queue[1].id(), followup_id);
+            assert_eq!(model.editing_row(conv), None);
+        });
+    });
+}
+
+#[test]
+fn pop_front_no_ops_when_head_is_locked() {
+    // The Error/Cancelled drain path calls `pop_front` to restore a row to the editor. A locked
+    // initial Cloud Mode head must not be popped even if a status-transition arrives before the
+    // ambient-agent cleanup events fire `remove_initial_cloud_mode_row`.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(conv, initial_cloud_mode_query("locked initial"), ctx)
+        });
+        let followup_id = append_user(&model, &mut app, conv, "follow up");
+
+        let popped = model.update(&mut app, |model, ctx| model.pop_front(conv, ctx));
+        assert!(popped.is_none());
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), initial_id);
+            assert_eq!(queue[1].id(), followup_id);
+        });
+    });
+}
+
+#[test]
+fn remove_initial_cloud_mode_row_only_removes_the_locked_head() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let initial_id = model.update(&mut app, |model, ctx| {
+            model.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        append_user(&model, &mut app, conv, "follow up");
+        events.borrow_mut().clear();
+
+        let removed = model.update(&mut app, |model, ctx| {
+            model.remove_initial_cloud_mode_row(conv, ctx)
+        });
+        assert_eq!(
+            removed.map(|query| query.text().to_owned()),
+            Some("initial".to_owned())
+        );
+
+        let removed_again = model.update(&mut app, |model, ctx| {
+            model.remove_initial_cloud_mode_row(conv, ctx)
+        });
+        assert!(removed_again.is_none());
+
+        let action = model.update(&mut app, |model, ctx| model.pop_for_autofire(conv, ctx));
+        match action {
+            Some(AutofireAction::Submit { text }) => assert_eq!(text, "follow up"),
+            other => panic!("expected Submit, got {other:?}"),
+        }
+
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.first(),
+            Some(QueuedQueryEvent::Removed { query_id, .. }) if *query_id == initial_id
+        ));
+    });
 }
 
 #[test]

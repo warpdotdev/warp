@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use warpui::assets::asset_cache::AssetSource;
-use warpui::color::ColorU;
-use warpui::geometry::vector::vec2f;
+use warpui_core::assets::asset_cache::AssetSource;
+use warpui_core::color::ColorU;
+use warpui_core::geometry::vector::vec2f;
 
 use self::color::CustomDetails;
 use super::color::blend::Blend;
@@ -435,17 +435,17 @@ impl ContrastingColor for Fill {
     }
 }
 
-impl From<Fill> for warpui::elements::Fill {
+impl From<Fill> for warpui_core::elements::Fill {
     fn from(theme: Fill) -> Self {
         match theme {
-            Fill::Solid(c) => warpui::elements::Fill::Solid(c),
-            Fill::HorizontalGradient(g) => warpui::elements::Fill::Gradient {
+            Fill::Solid(c) => warpui_core::elements::Fill::Solid(c),
+            Fill::HorizontalGradient(g) => warpui_core::elements::Fill::Gradient {
                 start: vec2f(0.0, 0.0),
                 end: vec2f(1.0, 0.0),
                 start_color: g.left,
                 end_color: g.right,
             },
-            Fill::VerticalGradient(g) => warpui::elements::Fill::Gradient {
+            Fill::VerticalGradient(g) => warpui_core::elements::Fill::Gradient {
                 start: vec2f(0.0, 0.0),
                 end: vec2f(0.0, 1.0),
                 start_color: g.top,

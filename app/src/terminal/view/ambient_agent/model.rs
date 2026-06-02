@@ -160,6 +160,9 @@ pub(crate) struct PendingHandoff {
     /// stashed here so `maybe_auto_submit_handoff` can consume it once
     /// the touched workspace and snapshot upload have settled.
     pub(crate) auto_submit: Option<PendingCloudLaunch>,
+    /// True when the source conversation was orchestrated at handoff time.
+    /// Forwarded to the server as `SpawnAgentRequest.orchestration_handoff`.
+    pub(crate) orchestration_handoff: Option<bool>,
 }
 
 /// Status of the ambient agent run.
@@ -651,6 +654,10 @@ impl AmbientAgentViewModel {
             initial_snapshot_token,
             agent_identity_uid: None,
             snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
+            orchestration_handoff: self
+                .pending_handoff
+                .as_ref()
+                .and_then(|h| h.orchestration_handoff),
         }
     }
 
@@ -1148,6 +1155,7 @@ impl AmbientAgentViewModel {
             conversation_id: None,
             initial_snapshot_token: None,
             snapshot_disabled: should_disable_snapshot(ctx).then_some(true),
+            orchestration_handoff: None,
         };
 
         self.spawn_internal(request, ctx);
@@ -1187,20 +1195,29 @@ impl AmbientAgentViewModel {
         self.spawn_internal(request, ctx);
     }
 
-    /// Spawn an ambient agent given `request`.
-    fn spawn_internal(&mut self, mut request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
+    /// Stores `request` on `self.request` and starts the spawn-task RPC stream, routing its
+    /// events back through [`Self::handle_ambient_agent_event_result`]. Does NOT transition
+    /// `status`, start the progress timer, or emit [`AmbientAgentViewModelEvent::DispatchedAgent`]
+    /// — callers own those side effects. Used by [`Self::spawn_internal`] for the full
+    /// first-time dispatch and by [`Self::submit_handoff`] to start the stream once the
+    /// handoff snapshot has settled, without re-running the UI transition that
+    /// [`Self::queue_handoff_auto_submit`] already performed.
+    fn start_spawn_stream(&mut self, mut request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
         request.interactive = Some(true);
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         self.request = Some(request.clone());
         self.source = None;
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let stream = spawn_task(request, ai_client, None);
-
         ctx.spawn_stream_local(
             stream,
             |me, event_result, ctx| me.handle_ambient_agent_event_result(event_result, ctx),
             |_me, _ctx| {},
         );
+    }
 
+    /// Spawn an ambient agent given `request`.
+    fn spawn_internal(&mut self, request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
+        self.start_spawn_stream(request, ctx);
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
             kind: SessionStartupKind::InitialRun,
@@ -1574,8 +1591,15 @@ impl AmbientAgentViewModel {
 
     /// Drive the local-to-cloud handoff submission for this pane. Reads the cached
     /// forked conversation id and snapshot upload result off the pending handoff,
-    /// then routes through `spawn_agent_with_request`. Caller must check
-    /// `is_handoff_ready_to_submit`.
+    /// then starts the spawn stream. Caller must check `is_handoff_ready_to_submit`.
+    ///
+    /// When [`Self::queue_handoff_auto_submit`] has already run (the `&` / `/handoff`
+    /// auto-submit path), the pane is already in [`Status::WaitingForSession`] with
+    /// progress timer running and [`AmbientAgentViewModelEvent::DispatchedAgent`] emitted;
+    /// we just start the network call via [`Self::start_spawn_stream`]. When it has
+    /// not (manual submit from a handoff pane that was opened without an auto-submit
+    /// launch — currently only reachable through defensive paths), we fall back to the
+    /// full [`Self::spawn_internal`] so the pane still transitions and emits.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     pub(crate) fn submit_handoff(
         &mut self,
@@ -1604,6 +1628,7 @@ impl AmbientAgentViewModel {
         }
         let initial_snapshot_token = handoff.snapshot_upload.initial_snapshot_token();
         let forked_conversation_id = handoff.forked_conversation_id.clone();
+        let already_dispatched = matches!(handoff.submission_state, HandoffSubmissionState::Queued);
         handoff.submission_state = HandoffSubmissionState::Starting;
         ctx.emit(AmbientAgentViewModelEvent::PendingHandoffChanged);
 
@@ -1614,7 +1639,11 @@ impl AmbientAgentViewModel {
             initial_snapshot_token,
             ctx,
         );
-        self.spawn_agent_with_request(request, ctx);
+        if already_dispatched {
+            self.start_spawn_stream(request, ctx);
+        } else {
+            self.spawn_internal(request, ctx);
+        }
     }
 
     #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]

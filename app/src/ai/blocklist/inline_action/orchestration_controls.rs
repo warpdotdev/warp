@@ -100,15 +100,18 @@ pub trait OrchestrationControlAction: DropdownItemAction + Clone {
 // ── Shared edit state ───────────────────────────────────────────────
 
 /// The user's current selection in the auth secret picker. Only `Named(_)`
-/// is persisted across sessions; `Inherit` and `Unset` are per-session.
+/// is persisted across sessions; the other variants are per-session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthSecretSelection {
-    /// No choice yet. Picker shows "+ New API key…" and Accept is blocked.
+    /// No choice yet; re-seeded from persisted settings. Blocks Accept.
     Unset,
     /// User explicitly chose to inherit credentials from the worker env.
     Inherit,
     /// User picked a managed secret by name.
     Named(String),
+    /// Creating a key (modal open). Blocks Accept and, unlike `Unset`, is
+    /// not re-seeded from persisted settings.
+    CreatingNew,
 }
 
 impl AuthSecretSelection {
@@ -149,8 +152,16 @@ impl OrchestrationEditState {
         }
         match &self.auth_secret_selection {
             AuthSecretSelection::Named(name) => Some(name.as_str()),
-            AuthSecretSelection::Inherit | AuthSecretSelection::Unset => None,
+            AuthSecretSelection::Inherit
+            | AuthSecretSelection::Unset
+            | AuthSecretSelection::CreatingNew => None,
         }
+    }
+
+    /// User picked "New API key…"; mark `CreatingNew` to block Accept until a
+    /// key is created or another option is chosen.
+    pub fn select_create_new_auth_secret(&mut self) {
+        self.auth_secret_selection = AuthSecretSelection::CreatingNew;
     }
 }
 
@@ -1127,7 +1138,10 @@ pub fn auth_secret_selection_required(state: &OrchestrationEditState, _ctx: &App
     if !should_show_auth_secret_picker(state) {
         return false;
     }
-    if !matches!(state.auth_secret_selection, AuthSecretSelection::Unset) {
+    if !matches!(
+        state.auth_secret_selection,
+        AuthSecretSelection::Unset | AuthSecretSelection::CreatingNew
+    ) {
         return false;
     }
     let Some(harness) = Harness::parse_orchestration_harness(&state.harness_type) else {
@@ -1248,6 +1262,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
         let final_selection = match &selection {
             AuthSecretSelection::Named(name) => name.clone(),
             AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
+            AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
             AuthSecretSelection::Unset if supports_create_new => {
                 AUTH_SECRET_CREATE_NEW_LABEL.to_string()
             }
@@ -1282,18 +1297,13 @@ pub fn apply_auth_secret_change<A: OrchestrationControlAction, V: View>(
     persist_auth_secret_selection(&state.harness_type, &state.auth_secret_selection, ctx);
 }
 
-/// No-op on `state` — the prior selection is preserved so cancelling the
-/// modal restores the user to a working configuration. Successful creation
-/// updates the selection via the `AuthSecretCreated` subscription's call
-/// to [`apply_created_auth_secret_if_matches`].
-///
-/// Kept as a named function so both card views call through the same
-/// path; a future revision can hook snapshot-and-restore behavior here
-/// without touching call sites.
+/// Marks `CreatingNew` (not re-seeded from settings, so a background refresh
+/// can't restore a stale selection mid-create). Used by both card views.
 pub fn apply_create_new_auth_secret_requested<V: View>(
-    _state: &mut OrchestrationEditState,
+    state: &mut OrchestrationEditState,
     _ctx: &mut ViewContext<V>,
 ) {
+    state.select_create_new_auth_secret();
 }
 
 /// Adopts a freshly-created secret as the active selection when its
@@ -1321,7 +1331,8 @@ pub fn apply_created_auth_secret_if_matches<V: View>(
 /// Persists the user's auth-secret choice for the active harness.
 /// `Named` writes to `last_selected_auth_secret` and clears any prior
 /// `Inherit` flag. `Inherit` clears the named entry and sets the inherit
-/// flag. `Unset` clears both (no recorded choice). No-op for Oz / unknown.
+/// flag. `Unset`/`CreatingNew` clear both (no recorded choice). No-op for
+/// Oz / unknown.
 fn persist_auth_secret_selection<V: View>(
     harness_type: &str,
     selection: &AuthSecretSelection,
@@ -1346,7 +1357,7 @@ fn persist_auth_secret_selection<V: View>(
                 named_map.remove(&key);
                 inherit_map.insert(key, true);
             }
-            AuthSecretSelection::Unset => {
+            AuthSecretSelection::Unset | AuthSecretSelection::CreatingNew => {
                 named_map.remove(&key);
                 inherit_map.remove(&key);
             }
@@ -1642,6 +1653,7 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
             let label = match &selection {
                 AuthSecretSelection::Named(name) => name.clone(),
                 AuthSecretSelection::Inherit => AUTH_SECRET_INHERIT_LABEL.to_string(),
+                AuthSecretSelection::CreatingNew => AUTH_SECRET_CREATE_NEW_LABEL.to_string(),
                 AuthSecretSelection::Unset if supports_create_new => {
                     AUTH_SECRET_CREATE_NEW_LABEL.to_string()
                 }
