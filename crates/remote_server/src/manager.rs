@@ -1092,7 +1092,6 @@ impl RemoteServerManager {
         // failure paths below resolve the receiver and hand it back.
         let (result_tx, result_rx) = oneshot::channel();
 
-
         let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
 
         // Dispatch before registering the pending entry. If the outbound
@@ -1282,11 +1281,9 @@ impl RemoteServerManager {
             return;
         }
 
-        if let Some(new_session_id) = self.dispatch_host_scoped_request(
-            &pending.host_id,
-            &pending.msg,
-            Some(session_id),
-        ) {
+        if let Some(new_session_id) =
+            self.dispatch_host_scoped_request(&pending.host_id, &pending.msg, Some(session_id))
+        {
             log::info!(
                 "Retried host-scoped request after writer failure: \
                  host={} request_id={} old_session={session_id:?} new_session={new_session_id:?}",

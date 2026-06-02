@@ -6,8 +6,8 @@ use warpui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
 use super::super::proto::{
-    server_message, write_file_response, Authenticate, Initialize, ServerMessage, WriteFileResponse,
-    WriteFileSuccess,
+    server_message, write_file_response, Authenticate, Initialize, ServerMessage,
+    WriteFileResponse, WriteFileSuccess,
 };
 use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
@@ -218,7 +218,9 @@ fn host_scoped_response_fails_over_when_target_send_fails() {
         model.connection_senders.insert(alternate, alt_tx);
 
         // Mark the request as host-scoped so failover is eligible.
-        model.host_scoped_requests.insert(request_id.clone(), target);
+        model
+            .host_scoped_requests
+            .insert(request_id.clone(), target);
 
         model.send_server_message(
             Some(target),
@@ -227,7 +229,9 @@ fn host_scoped_response_fails_over_when_target_send_fails() {
         );
 
         // The response was re-routed to the alternate connection.
-        let received = alt_rx.try_recv().expect("alternate should receive failover response");
+        let received = alt_rx
+            .try_recv()
+            .expect("alternate should receive failover response");
         assert_eq!(received.request_id, request_id.to_string());
         // The host-scoped entry is consumed regardless of delivery path.
         assert!(!model.host_scoped_requests.contains_key(&request_id));
@@ -246,7 +250,9 @@ fn host_scoped_response_fails_over_when_target_missing() {
         // request is still tracked as host-scoped.
         let (alt_tx, alt_rx) = async_channel::unbounded();
         model.connection_senders.insert(alternate, alt_tx);
-        model.host_scoped_requests.insert(request_id.clone(), target);
+        model
+            .host_scoped_requests
+            .insert(request_id.clone(), target);
 
         model.send_server_message(
             Some(target),
@@ -254,7 +260,9 @@ fn host_scoped_response_fails_over_when_target_missing() {
             write_file_success_message(),
         );
 
-        let received = alt_rx.try_recv().expect("alternate should receive failover response");
+        let received = alt_rx
+            .try_recv()
+            .expect("alternate should receive failover response");
         assert_eq!(received.request_id, request_id.to_string());
         assert!(!model.host_scoped_requests.contains_key(&request_id));
     });
