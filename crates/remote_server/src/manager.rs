@@ -6,6 +6,7 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
+use futures::channel::oneshot;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
 #[cfg(not(target_family = "wasm"))]
@@ -16,8 +17,6 @@ use warp_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
 use warpui_core::r#async::FutureExt as _;
 use warpui_core::{Entity, ModelContext, ModelSpawner, SingletonEntity};
-
-use futures::channel::oneshot;
 
 use crate::auth::RemoteServerAuthContext;
 #[cfg(not(target_family = "wasm"))]
