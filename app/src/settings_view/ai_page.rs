@@ -62,8 +62,7 @@ use crate::ai::execution_profiles::profiles::{
 };
 use crate::ai::execution_profiles::{
     long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt,
-    ActionPermission, WriteToPtyPermission,
-    LONG_CONTEXT_PRICING_WARNING_TEXT,
+    ActionPermission, WriteToPtyPermission, LONG_CONTEXT_PRICING_WARNING_TEXT,
 };
 use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -4908,7 +4907,7 @@ impl AgentsWidget {
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(min_label)
-            .with_child(slider)
+            .with_child(Shrinkable::new(1., slider).finish())
             .with_child(max_label)
             .with_child(input_box)
             .finish();

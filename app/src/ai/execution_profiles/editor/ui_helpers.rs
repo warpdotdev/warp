@@ -15,8 +15,7 @@ use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::{
     long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt as _,
-    ActionPermission,
-    LONG_CONTEXT_PRICING_WARNING_TEXT,
+    ActionPermission, LONG_CONTEXT_PRICING_WARNING_TEXT,
 };
 use crate::editor::EditorView;
 use crate::settings::AISettings;
@@ -420,7 +419,7 @@ fn render_context_window_row(
     let slider_row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(min_label)
-        .with_child(slider)
+        .with_child(Shrinkable::new(1., slider).finish())
         .with_child(max_label)
         .with_child(input_box)
         .finish();
