@@ -174,7 +174,7 @@ impl Entity for CallMCPToolExecutor {
 /// where `Self.allOf = [{$ref: "#/Self"}]`). [`resolve_refs`] already breaks
 /// pure `$ref` chains; this guards every other recursive edge so a malicious
 /// MCP server can't hang the client by advertising a recursive composed
-/// schema (#10596 review).
+/// schema.
 const MAX_COERCE_DEPTH: usize = 64;
 
 /// Maximum total recursive calls allowed across a single
@@ -183,8 +183,9 @@ const MAX_COERCE_DEPTH: usize = 64;
 /// so an adversarial schema with `allOf: [s, s]` where each `s` references
 /// the same shape can still fan out exponentially before any single chain
 /// reaches [`MAX_COERCE_DEPTH`]. Real MCP schemas use a few hundred calls at
-/// most; 10_000 leaves ~20× headroom for unusual but legitimate shapes.
-const MAX_COERCE_OPS: usize = 10_000;
+/// most; 2_000 covers that with comfortable headroom while keeping the bound
+/// on the same order of magnitude as observed traffic.
+const MAX_COERCE_OPS: usize = 2_000;
 
 /// Bounds on `patternProperties` regex compilation. The patterns come from the
 /// MCP server's advertised schema, which is untrusted input. Rust's `regex`
@@ -192,7 +193,7 @@ const MAX_COERCE_OPS: usize = 10_000;
 /// no catastrophic backtracking), so the only attack surface is forcing a
 /// pathological *compile*: a huge or deeply-nested pattern that blows up
 /// memory/CPU while building the program. We defend by capping the number of
-/// patterns, the length of each, and the compiled program size (#10596 review).
+/// patterns, the length of each, and the compiled program size.
 const MAX_PATTERN_PROPERTIES: usize = 64;
 const MAX_PATTERN_LEN: usize = 1024;
 const PATTERN_REGEX_SIZE_LIMIT: usize = 64 * 1024;
@@ -256,7 +257,7 @@ fn coerce_recursive(
     // we never coerce a value according to a branch it isn't governed by — e.g.
     // a tagged union where one arm types a field as `integer` and another as
     // `number`. For branches with no recognized discriminator the check is a
-    // no-op, preserving the prior "try them all" behavior (#10596 review).
+    // no-op, preserving the prior "try them all" behavior.
     for key in ["oneOf", "anyOf"] {
         if let Some(branches) = schema.get(key).and_then(|v| v.as_array()) {
             for b in branches {
@@ -498,6 +499,12 @@ fn resolve_refs<'a>(
     let mut visited = HashSet::<String>::new();
     let mut current = schema;
     while let Some(ref_str) = current.get("$ref").and_then(|v| v.as_str()) {
+        // Stop the chain in two cases — both return the *current* schema so
+        // walking can continue conservatively against whatever's in hand:
+        //   1. External `$ref` (anything not starting with `#`). We don't fetch
+        //      remote schemas, so the reference can't be resolved.
+        //   2. Cycle detection: we've already visited this `$ref`. Without this
+        //      we'd loop forever on schemas like `A -> B -> A`.
         if !ref_str.starts_with('#') || !visited.insert(ref_str.to_string()) {
             return current;
         }

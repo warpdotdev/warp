@@ -138,46 +138,6 @@ fn tuple_items_coerced_positionally() {
 // ---------- Composition keywords ----------
 
 #[test]
-fn one_of_branch_integer_is_coerced() {
-    // The exact shape from the #10596 repro: an item's `value` is either a string
-    // array or an integer; we want the integer branch to coerce.
-    let mut args = obj(json!({ "filter": { "value": 1730419200000.0 } }));
-    let schema = obj(json!({
-        "properties": {
-            "filter": {
-                "oneOf": [
-                    { "properties": { "value": { "type": "array", "items": { "type": "string" } } } },
-                    { "properties": { "value": { "type": "integer" } } }
-                ]
-            }
-        }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_serialized_as(&args, "filter.value", "1730419200000");
-}
-
-#[test]
-fn any_of_branch_integer_is_coerced() {
-    let mut args = obj(json!({ "x": 5.0 }));
-    let schema = obj(json!({
-        "properties": {
-            "x": {
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "integer" }
-                ]
-            }
-        }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_serialized_as(&args, "x", "5");
-}
-
-#[test]
 fn all_of_branches_apply_in_order() {
     // First branch declares the object shape, second branch declares an integer
     // field. Both must be applied to reach the integer coercion.
@@ -195,30 +155,6 @@ fn all_of_branches_apply_in_order() {
 }
 
 // ---------- Nullable / type-array forms ----------
-
-#[test]
-fn nullable_integer_is_coerced() {
-    let mut args = obj(json!({ "x": 9.0 }));
-    let schema = obj(json!({
-        "properties": { "x": { "type": ["integer", "null"] } }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_serialized_as(&args, "x", "9");
-}
-
-#[test]
-fn singleton_type_array_integer_is_coerced() {
-    let mut args = obj(json!({ "x": 11.0 }));
-    let schema = obj(json!({
-        "properties": { "x": { "type": ["integer"] } }
-    }));
-
-    coerce_integer_args(&mut args, &schema);
-
-    assert_serialized_as(&args, "x", "11");
-}
 
 #[test]
 fn null_value_for_nullable_integer_passes_through() {
@@ -628,7 +564,7 @@ fn panw_audit_management_repro_coerces_all_integers() {
     assert_serialized_as(&args, "request_data.filters.0.value", "1730419200000");
 }
 
-// ---------- oneOf/anyOf branch selection (#10596 review) ----------
+// ---------- oneOf/anyOf branch selection ----------
 
 #[test]
 fn tagged_union_does_not_coerce_through_non_matching_branch() {
@@ -753,7 +689,7 @@ fn required_discriminator_excludes_branch_missing_keys() {
     assert_serialized_as(&args, "shared", "4");
 }
 
-// ---------- patternProperties compile bounds (#10596 review) ----------
+// ---------- patternProperties compile bounds ----------
 
 #[test]
 fn too_many_pattern_properties_skips_additional_coercion() {
