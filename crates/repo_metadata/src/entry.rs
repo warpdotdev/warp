@@ -910,21 +910,79 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
     }
 }
 
+/// Returns whether a repository file watcher should descend into (and register
+/// a watch on) `path`.
+///
+/// This is the descend predicate of [`repo_watch_filter`]. Precedence:
+/// 1. `.git/` internals follow the existing allowlist
+///    ([`should_watch_directory_in_git_path`]).
+/// 2. Any directory on the path to — or inside — a registered ignored-path
+///    interest is always watched, so consumers (e.g. skills) keep getting
+///    updates for ignored subtrees they explicitly care about. This mirrors
+///    the tree builder's lazy-load exception
+///    ([`matches_ignored_path_interest`]) and, because that match also returns
+///    `true` for the ancestor prefixes leading to an interest, it preserves
+///    the watcher's monotonicity invariant.
+/// 3. Otherwise, gitignored directories are pruned so we don't register
+///    inotify watches on `node_modules`, build output, vendored deps, etc.
+///
+/// Ancestor-aware matching (`check_ancestors = true`) is what makes pruning
+/// safe w.r.t. the monotonicity invariant: a child of an ignored directory is
+/// itself reported as ignored, so we never accept a descendant after
+/// rejecting its parent. Directory-only re-include negations
+/// (`parentdir/*` + `!parentdir/*/`) keep working because the negated
+/// directory matches as not-ignored on its own path (last-match-wins via
+/// `matched_path_or_any_parents`), so we still descend into it.
+pub fn should_watch_repo_directory(
+    path: &Path,
+    gitignores: &[Gitignore],
+    ignored_path_interests: &[PathBuf],
+) -> bool {
+    if is_git_internal_path(path) {
+        return should_watch_directory_in_git_path(path);
+    }
+
+    if matches_ignored_path_interest(path, ignored_path_interests) {
+        return true;
+    }
+
+    !matches_gitignores(
+        path,
+        path.is_dir(),
+        gitignores,
+        /* check_ancestors */ true,
+    )
+}
+
 /// Returns the [`WatchFilter`] used by repository file watchers.
 ///
 /// Emit predicate: forwards events for everything outside `.git/` plus the
 /// allowlisted files inside `.git/` (HEAD, refs/heads/*, index.lock,
 /// config, config.worktree, refs/remotes/<r>/*, and worktree equivalents).
+/// Gitignored files that live directly in a watched (non-ignored) directory
+/// are still emitted here and tagged `is_ignored` downstream, preserving
+/// existing behavior.
 ///
-/// Descend predicate: prunes `.git/objects/`, `.git/hooks/`, `.git/logs/`,
-/// `.git/info/`, `.git/lfs/`, etc. so the recursive walk does not register
-/// watches on those subtrees, but still descends into `.git/`,
-/// `.git/refs/heads/`, `.git/refs/remotes/<r>/`, and `.git/worktrees/<n>/`
-/// so the allowlisted children remain reachable on Linux.
+/// Descend predicate: see [`should_watch_repo_directory`]. In addition to the
+/// `.git/` allowlist, it prunes gitignored directories (honoring registered
+/// ignored-path interests) so the recursive walk does not register watches on
+/// gitignored subtrees.
+///
+/// `gitignores` should be the repo's root + global gitignores (as produced by
+/// [`gitignores_for_directory`]), matching `Repository::check_gitignore_status`
+/// so descend decisions and the downstream `is_ignored` tagging stay
+/// consistent. Nested per-directory `.gitignore` files are not consulted here
+/// (same limitation as the existing tagging), which can only cause us to
+/// over-watch, never to miss events.
 #[cfg(feature = "local_fs")]
-pub fn repo_watch_filter() -> WatchFilter {
+pub fn repo_watch_filter(
+    gitignores: Vec<Gitignore>,
+    ignored_path_interests: Vec<PathBuf>,
+) -> WatchFilter {
+    let should_watch =
+        move |path: &Path| should_watch_repo_directory(path, &gitignores, &ignored_path_interests);
     WatchFilter::with_filter(
-        Arc::new(should_watch_directory_in_git_path),
+        Arc::new(should_watch),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),
     )
 }

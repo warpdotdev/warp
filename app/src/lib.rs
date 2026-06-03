@@ -1563,6 +1563,19 @@ pub(crate) fn initialize_app(
 
             model
         });
+
+        // Mirror the skill interests onto the DirectoryWatcher so the
+        // gitignore-pruning descend filter still watches gitignored skill
+        // directories for `Repository` subscribers (LSP, MCP). Registered at
+        // startup, before any repository begins watching, so it gates descent
+        // on the very first registration.
+        DirectoryWatcher::handle(ctx).update(ctx, |watcher, _| {
+            watcher.register_ignored_path_interests(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+            );
+        });
     }
 
     {

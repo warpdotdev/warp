@@ -41,6 +41,12 @@ pub struct DirectoryWatcher {
 
     /// Handle to the internal processing queue model that orders scan & update tasks.
     processing_queue: ModelHandle<TaskQueue>,
+
+    /// Component-sequence paths that should stay watched even when gitignored
+    /// (e.g. skill provider directories). Fed into the watch descend filter so
+    /// consumers keep getting updates for ignored subtrees they care about.
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+    ignored_path_interests: Vec<PathBuf>,
 }
 
 impl DirectoryWatcher {
@@ -68,6 +74,7 @@ impl DirectoryWatcher {
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
             processing_queue,
+            ignored_path_interests: Vec::new(),
         }
     }
 
@@ -92,6 +99,23 @@ impl DirectoryWatcher {
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
             processing_queue,
+            ignored_path_interests: Vec::new(),
+        }
+    }
+
+    /// Registers component-sequence paths that should stay watched even when
+    /// gitignored. Mirrors `LocalRepoMetadataModel::register_ignored_path_interests`
+    /// but applies to the watcher backing `Repository` subscribers (LSP, MCP).
+    /// Must be called before repositories begin watching for the interest to
+    /// take effect on already-registered watches.
+    pub fn register_ignored_path_interests(
+        &mut self,
+        interests: impl IntoIterator<Item = PathBuf>,
+    ) {
+        for interest in interests {
+            if !self.ignored_path_interests.contains(&interest) {
+                self.ignored_path_interests.push(interest);
+            }
         }
     }
 
@@ -321,6 +345,11 @@ impl DirectoryWatcher {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
+                // Build the gitignore set (root + global) and interest list up
+                // front so the descend filter prunes gitignored subtrees while
+                // still watching registered interests.
+                let gitignores = crate::gitignores_for_directory(&local_path);
+                let interests = self.ignored_path_interests.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     use notify_debouncer_full::notify::RecursiveMode;
 
@@ -328,7 +357,7 @@ impl DirectoryWatcher {
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(),
+                        repo_watch_filter(gitignores, interests),
                         RecursiveMode::Recursive,
                     ))
                 })

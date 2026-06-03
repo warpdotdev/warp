@@ -2,7 +2,7 @@ use std::fs;
 
 use ignore::gitignore::Gitignore;
 
-use super::{Entry, IgnoredPathStrategy};
+use super::{matches_gitignores, Entry, IgnoredPathStrategy};
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;
@@ -171,6 +171,160 @@ fn test_git_path_filtering_allowlist() {
             r"C:\Users\user\project\.git\index"
         )));
     }
+}
+
+/// Writes a `.gitignore` with `content` at `root` and returns a [`Gitignore`]
+/// rooted there. Uses only the repo-root gitignore (not the machine's global
+/// gitignore) so tests are deterministic.
+fn gitignore_rooted(root: &std::path::Path, content: &str) -> Gitignore {
+    fs::write(root.join(".gitignore"), content).unwrap();
+    let (gitignore, _) = Gitignore::new(root.join(".gitignore"));
+    gitignore
+}
+
+#[test]
+fn should_watch_prunes_gitignored_directory() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir(root.join("node_modules")).unwrap();
+    fs::create_dir(root.join("src")).unwrap();
+    let gitignores = vec![gitignore_rooted(&root, "node_modules/\n")];
+
+    // Root and non-ignored dirs are watched; the gitignored dir is pruned.
+    assert!(super::should_watch_repo_directory(&root, &gitignores, &[]));
+    assert!(super::should_watch_repo_directory(
+        &root.join("src"),
+        &gitignores,
+        &[]
+    ));
+    assert!(!super::should_watch_repo_directory(
+        &root.join("node_modules"),
+        &gitignores,
+        &[]
+    ));
+    // Descendants of an ignored dir are also pruned (ancestor-aware), which is
+    // what preserves the watcher's monotonicity invariant.
+    assert!(!super::should_watch_repo_directory(
+        &root.join("node_modules/foo"),
+        &gitignores,
+        &[]
+    ));
+}
+
+#[test]
+fn should_watch_descends_to_interest_under_ignored_ancestor() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(root.join(".agents/skills/test")).unwrap();
+    fs::create_dir(root.join(".agents/other")).unwrap();
+    let gitignores = vec![gitignore_rooted(&root, ".agents/\n")];
+    let interests = vec![std::path::PathBuf::from(".agents/skills")];
+
+    // The whole `.agents` subtree is gitignored, but we still descend along the
+    // prefix to reach the registered interest, and into the interest subtree.
+    assert!(super::should_watch_repo_directory(
+        &root.join(".agents"),
+        &gitignores,
+        &interests
+    ));
+    assert!(super::should_watch_repo_directory(
+        &root.join(".agents/skills"),
+        &gitignores,
+        &interests
+    ));
+    assert!(super::should_watch_repo_directory(
+        &root.join(".agents/skills/test"),
+        &gitignores,
+        &interests
+    ));
+    // A sibling ignored dir that is not part of any interest is still pruned.
+    assert!(!super::should_watch_repo_directory(
+        &root.join(".agents/other"),
+        &gitignores,
+        &interests
+    ));
+}
+
+#[test]
+fn should_watch_handles_nested_ignored_ancestor_with_deeper_interest() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(root.join("a/b/c")).unwrap();
+    fs::create_dir(root.join("a/b/other")).unwrap();
+    let gitignores = vec![gitignore_rooted(&root, "a/b/\n")];
+    let interests = vec![std::path::PathBuf::from("a/b/c")];
+
+    // `a/b` is ignored but `a/b/c` is a registered interest: descend along the
+    // whole prefix and into the interest, while pruning the ignored sibling.
+    assert!(super::should_watch_repo_directory(
+        &root.join("a"),
+        &gitignores,
+        &interests
+    ));
+    assert!(super::should_watch_repo_directory(
+        &root.join("a/b"),
+        &gitignores,
+        &interests
+    ));
+    assert!(super::should_watch_repo_directory(
+        &root.join("a/b/c"),
+        &gitignores,
+        &interests
+    ));
+    assert!(!super::should_watch_repo_directory(
+        &root.join("a/b/other"),
+        &gitignores,
+        &interests
+    ));
+}
+
+#[test]
+fn should_watch_descends_dir_only_reinclude_negation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::create_dir_all(root.join("parentdir/sub")).unwrap();
+    fs::write(root.join("parentdir/loose.txt"), "").unwrap();
+    // Ignore the loose files in `parentdir` but re-include its subdirectories.
+    let gitignores = vec![gitignore_rooted(&root, "parentdir/*\n!parentdir/*/\n")];
+
+    // `parentdir` itself is not matched by `parentdir/*`, so we descend.
+    assert!(super::should_watch_repo_directory(
+        &root.join("parentdir"),
+        &gitignores,
+        &[]
+    ));
+    // The subdirectory is re-included by the directory-only negation, so it is
+    // still watched even though `parentdir/*` matched it first.
+    assert!(super::should_watch_repo_directory(
+        &root.join("parentdir/sub"),
+        &gitignores,
+        &[]
+    ));
+    // The loose file remains gitignored (the negation is directory-only); the
+    // emit predicate filters it, but `parentdir` stays watched for its subdirs.
+    assert!(matches_gitignores(
+        &root.join("parentdir/loose.txt"),
+        false,
+        &gitignores,
+        true,
+    ));
+}
+
+#[test]
+fn should_watch_preserves_git_internal_allowlist() {
+    // No gitignores / interests needed: `.git` handling short-circuits and is
+    // path-based, mirroring `should_watch_directory_in_git_path`.
+    let repo = std::path::Path::new("/home/user/project");
+    assert!(super::should_watch_repo_directory(
+        &repo.join(".git/refs/heads"),
+        &[],
+        &[]
+    ));
+    assert!(!super::should_watch_repo_directory(
+        &repo.join(".git/objects"),
+        &[],
+        &[]
+    ));
 }
 
 fn find_entry<'a>(entry: &'a super::Entry, path: &std::path::Path) -> Option<&'a super::Entry> {

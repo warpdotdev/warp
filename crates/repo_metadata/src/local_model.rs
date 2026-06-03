@@ -435,15 +435,20 @@ impl LocalRepoMetadataModel {
             ));
         }
 
-        // Register this path with the watcher if we have one.
+        // Register this path with the watcher if we have one
         #[cfg(feature = "local_fs")]
         {
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
+                // Build the gitignore set (root + global) and interest list so
+                // the descend filter prunes gitignored subtrees while still
+                // watching registered ignored-path interests (e.g. skills).
+                let gitignores = crate::gitignores_for_directory(&watch_path);
+                let interests = self.ignored_path_interests.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(),
+                        repo_watch_filter(gitignores, interests),
                         RecursiveMode::Recursive,
                     ));
                 });
