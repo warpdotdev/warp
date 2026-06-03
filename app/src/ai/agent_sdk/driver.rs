@@ -2127,6 +2127,8 @@ impl AgentDriver {
             .await?;
 
         // Install plugins before running the harness command.
+        let harness_name = harness.cli_agent().command_prefix().to_owned();
+        let requires_platform_plugin = harness.requires_verified_platform_plugin();
         let plugin_manager: Option<Box<dyn CliAgentPluginManager>> =
             plugin_manager_for(harness.cli_agent());
         if let Some(manager) = plugin_manager {
@@ -2144,13 +2146,46 @@ impl AgentDriver {
 
             if manager.platform_plugin_needs_update() {
                 if let Err(e) = manager.update_platform_plugin().await {
+                    if requires_platform_plugin {
+                        return Err(AgentDriverError::HarnessSetupFailed {
+                            harness: harness_name,
+                            reason: format!("Required platform plugin update failed: {e}"),
+                        });
+                    }
                     log::warn!("Platform plugin update failed (continuing): {e}");
                 }
             } else if !manager.is_platform_plugin_installed() {
                 if let Err(e) = manager.install_platform_plugin().await {
+                    if requires_platform_plugin {
+                        return Err(AgentDriverError::HarnessSetupFailed {
+                            harness: harness_name,
+                            reason: format!("Required platform plugin installation failed: {e}"),
+                        });
+                    }
                     log::warn!("Platform plugin installation failed (continuing): {e}");
                 }
             }
+
+            if requires_platform_plugin {
+                if !manager.is_platform_plugin_installed() {
+                    return Err(AgentDriverError::HarnessSetupFailed {
+                        harness: harness_name,
+                        reason: "Required platform plugin is not installed".to_owned(),
+                    });
+                }
+                if manager.platform_plugin_needs_update() {
+                    return Err(AgentDriverError::HarnessSetupFailed {
+                        harness: harness_name,
+                        reason: "Required platform plugin is below the minimum supported version"
+                            .to_owned(),
+                    });
+                }
+            }
+        } else if requires_platform_plugin {
+            return Err(AgentDriverError::HarnessSetupFailed {
+                harness: harness_name,
+                reason: "Required platform plugin manager is unavailable".to_owned(),
+            });
         }
 
         Ok(exit_rx)

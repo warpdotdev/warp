@@ -156,6 +156,12 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         &[]
     }
 
+    /// Whether this harness requires its Oz platform plugin to be verified
+    /// before launch.
+    fn requires_verified_platform_plugin(&self) -> bool {
+        false
+    }
+
     /// Fetch the harness-specific resume payload for an existing conversation.
     ///
     /// The driver calls this when the user passes `--conversation <id>` and the harness

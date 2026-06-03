@@ -88,6 +88,10 @@ impl ThirdPartyHarness for CodexHarness {
         ]
     }
 
+    fn requires_verified_platform_plugin(&self) -> bool {
+        true
+    }
+
     /// Fetch the codex transcript for the current task's conversation and wrap it into a
     /// [`ResumePayload::Codex`].
     async fn fetch_resume_payload(
@@ -173,7 +177,8 @@ impl ThirdPartyHarness for CodexHarness {
 /// `--dangerously-bypass-approvals-and-sandbox` disables both the sandbox and approval
 /// prompts so the agent can run autonomously.
 /// `--dangerously-bypass-hook-trust` allows the orchestration plugin hooks installed by
-/// Warp to run without a manual hook review in unattended driver sessions.
+/// Warp to run without a manual hook review in unattended driver sessions. Driver setup
+/// verifies the Codex platform plugin before launching commands with this flag.
 /// `Some(session_id)` indicates that we want to resume that prior session. Unlike claude,
 /// codex does not support assigning a session_id to a new conversation.
 fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -> String {
