@@ -33,11 +33,14 @@ impl WarningBoxButtonConfig {
         }
     }
 }
+pub enum WarningBoxTitle {
+    Text(String),
+    Formatted(FormattedTextInline),
+}
 
 pub struct WarningBoxConfig {
     pub icon: Icon,
-    pub title: String,
-    pub formatted_title: Option<FormattedTextInline>,
+    pub title: WarningBoxTitle,
     pub description: Option<String>,
 
     /// Optional max width. If provided, the WarningBox will not exceed this width,
@@ -51,10 +54,17 @@ pub struct WarningBoxConfig {
 
 impl WarningBoxConfig {
     pub fn new(title: impl Into<String>) -> Self {
+        Self::from_title(WarningBoxTitle::Text(title.into()))
+    }
+
+    pub fn formatted_title(title: FormattedTextInline) -> Self {
+        Self::from_title(WarningBoxTitle::Formatted(title))
+    }
+
+    fn from_title(title: WarningBoxTitle) -> Self {
         Self {
             icon: Icon::AlertTriangle,
-            title: title.into(),
-            formatted_title: None,
+            title,
             description: None,
             width: None,
             margin_top: 8.,
@@ -81,11 +91,6 @@ impl WarningBoxConfig {
         self.button = Some(button);
         self
     }
-
-    pub fn with_formatted_title(mut self, formatted_title: FormattedTextInline) -> Self {
-        self.formatted_title = Some(formatted_title);
-        self
-    }
 }
 pub fn render_warning_box(config: WarningBoxConfig, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -103,9 +108,17 @@ pub fn render_warning_box(config: WarningBoxConfig, appearance: &Appearance) -> 
 
     let background = theme.surface_2().blend(&warning_fill.with_opacity(15));
 
-    let title = if let Some(formatted_title) = config.formatted_title {
-        FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(formatted_title)]),
+    let title = match config.title {
+        WarningBoxTitle::Text(title) => Text::new(
+            title,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(text_color)
+        .soft_wrap(true)
+        .finish(),
+        WarningBoxTitle::Formatted(title) => FormattedTextElement::new(
+            FormattedText::new([FormattedTextLine::Line(title)]),
             appearance.ui_font_size(),
             appearance.ui_font_family(),
             appearance.ui_font_family(),
@@ -118,16 +131,7 @@ pub fn render_warning_box(config: WarningBoxConfig, appearance: &Appearance) -> 
                 app.open_url(url);
             }
         })
-        .finish()
-    } else {
-        Text::new(
-            config.title,
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(text_color)
-        .soft_wrap(true)
-        .finish()
+        .finish(),
     };
 
     let mut text_col = Flex::column()

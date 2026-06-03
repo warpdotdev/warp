@@ -15,7 +15,7 @@ use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::{
     long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt as _,
-    ActionPermission, LONG_CONTEXT_PRICING_WARNING_TEXT,
+    ActionPermission,
 };
 use crate::editor::EditorView;
 use crate::settings::AISettings;
@@ -204,8 +204,7 @@ fn render_info_section(
 }
 fn render_long_context_pricing_warning(appearance: &Appearance) -> Box<dyn Element> {
     render_warning_box(
-        WarningBoxConfig::new(LONG_CONTEXT_PRICING_WARNING_TEXT)
-            .with_formatted_title(long_context_pricing_warning_title()),
+        WarningBoxConfig::formatted_title(long_context_pricing_warning_title()),
         appearance,
     )
 }

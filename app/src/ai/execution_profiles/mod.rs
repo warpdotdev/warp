@@ -16,9 +16,8 @@ use crate::cloud_object::{
 use crate::server::sync_queue::QueueItem;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+/// This threshold currently only applies to GPT 5.4, GPT 5.5 and Grape models
 pub const LONG_CONTEXT_WARNING_THRESHOLD: u32 = 272_000;
-pub(crate) const LONG_CONTEXT_PRICING_WARNING_TEXT: &str =
-    "OpenAI automatically applies long-context pricing when context exceeds 272,000 tokens. Learn more";
 pub(crate) const LONG_CONTEXT_PRICING_WARNING_URL: &str =
     "https://developers.openai.com/api/docs/pricing";
 pub(crate) fn long_context_pricing_warning_title() -> FormattedTextInline {
@@ -129,7 +128,7 @@ pub trait AIExecutionProfileAppExt {
 impl AIExecutionProfileAppExt for AIExecutionProfile {
     fn configurable_context_window(&self, app: &AppContext) -> Option<LLMContextWindow> {
         let llm = effective_base_model(self, app);
-        if has_effective_configurable_context_window(
+        if has_configurable_context_window(
             llm,
             FeatureFlag::GPTConfigurableContextWindow.is_enabled(),
         ) {
@@ -145,11 +144,15 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
     }
     fn context_window_limit_for_request(&self, app: &AppContext) -> Option<u32> {
         let llm = effective_base_model(self, app);
-        sanitize_context_window_limit_for_request(
+        if !has_configurable_context_window(
             llm,
-            self.context_window_limit,
             FeatureFlag::GPTConfigurableContextWindow.is_enabled(),
-        )
+        ) {
+            return None;
+        }
+
+        self.context_window_limit
+            .map(|limit| limit.clamp(llm.context_window.min, llm.context_window.max))
     }
 
     fn should_show_long_context_pricing_warning(
@@ -170,18 +173,7 @@ impl AIExecutionProfileAppExt for AIExecutionProfile {
     }
 }
 
-pub(crate) fn sanitize_context_window_limit_for_request(
-    llm: &LLMInfo,
-    selected_limit: Option<u32>,
-    gpt_configurable_context_window_enabled: bool,
-) -> Option<u32> {
-    if !has_effective_configurable_context_window(llm, gpt_configurable_context_window_enabled) {
-        return None;
-    }
-
-    selected_limit.map(|limit| limit.clamp(llm.context_window.min, llm.context_window.max))
-}
-pub(crate) fn has_effective_configurable_context_window(
+pub(crate) fn has_configurable_context_window(
     llm: &LLMInfo,
     gpt_configurable_context_window_enabled: bool,
 ) -> bool {
@@ -196,8 +188,10 @@ pub(crate) fn should_show_long_context_pricing_warning(
     gpt_configurable_context_window_enabled: bool,
 ) -> bool {
     llm.provider == LLMProvider::OpenAI
-        && has_effective_configurable_context_window(llm, gpt_configurable_context_window_enabled)
-        && selected_limit.is_some_and(|limit| limit > LONG_CONTEXT_WARNING_THRESHOLD)
+        && has_configurable_context_window(llm, gpt_configurable_context_window_enabled)
+        && selected_limit
+            .map(|limit| limit.clamp(llm.context_window.min, llm.context_window.max))
+            .is_some_and(|limit| limit > LONG_CONTEXT_WARNING_THRESHOLD)
 }
 
 impl StringModel for AIExecutionProfile {
