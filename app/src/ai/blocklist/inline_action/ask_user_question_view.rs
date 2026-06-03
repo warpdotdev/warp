@@ -860,6 +860,7 @@ impl AskUserQuestionView {
             );
             dropdown.set_vertical_margin(0., ctx);
             dropdown.set_top_bar_height(24., ctx);
+            dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
             let permissions = [
                 AskUserQuestionPermission::Never,
                 AskUserQuestionPermission::AskExceptInAutoApprove,

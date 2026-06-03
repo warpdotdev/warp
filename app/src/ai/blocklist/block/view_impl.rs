@@ -43,9 +43,10 @@ use warp_core::ui::color::contrast::{
 use warp_core::ui::color::Rgb;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
-    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Expanded,
-    Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, SelectableArea, Text,
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Expanded, Flex, FormattedTextElement, Highlight, HighlightedRange, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition,
+    SelectableArea, Text,
 };
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -735,52 +736,59 @@ where
 {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_child(
-            Container::new(
-                Text::new(
-                    description,
-                    appearance.ui_font_family(),
-                    appearance.monospace_font_size() - 1.,
+    Clipped::new(
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(
+                Container::new(
+                    Text::new(
+                        description,
+                        appearance.ui_font_family(),
+                        appearance.monospace_font_size() - 1.,
+                    )
+                    .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+                    .with_selectable(false)
+                    .finish(),
                 )
-                .with_color(blended_colors::text_sub(theme, theme.surface_1()))
-                .with_selectable(false)
+                .with_margin_right(8.)
                 .finish(),
             )
-            .with_margin_right(8.)
-            .finish(),
-        )
-        .with_child(warpui::elements::ChildView::new(dropdown).finish())
-        .with_child(
-            Expanded::new(
-                1.,
-                Align::new(
-                    appearance
-                        .ui_builder()
-                        .link(
-                            "Manage AI Autonomy permissions".into(),
-                            None,
-                            Some(Box::new(move |ctx| {
-                                ctx.dispatch_typed_action(
-                                    WorkspaceAction::ShowSettingsPageWithSearch {
-                                        search_query: "Autonomy".to_string(),
-                                        section: Some(SettingsSection::AI),
-                                    },
-                                );
-                            })),
-                            settings_link_handle,
-                        )
-                        .build()
-                        .finish(),
+            .with_child(
+                Container::new(warpui::elements::ChildView::new(dropdown).finish())
+                    .with_margin_right(8.)
+                    .finish(),
+            )
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Align::new(
+                        appearance
+                            .ui_builder()
+                            .link(
+                                "Manage AI Autonomy permissions".into(),
+                                None,
+                                Some(Box::new(move |ctx| {
+                                    ctx.dispatch_typed_action(
+                                        WorkspaceAction::ShowSettingsPageWithSearch {
+                                            search_query: "Autonomy".to_string(),
+                                            section: Some(SettingsSection::AI),
+                                        },
+                                    );
+                                })),
+                                settings_link_handle,
+                            )
+                            .build()
+                            .finish(),
+                    )
+                    .right()
+                    .finish(),
                 )
-                .right()
                 .finish(),
             )
             .finish(),
-        )
-        .finish()
+    )
+    .finish()
 }
 
 /// TODO: All AIBlock footer-related rendering logic should probably be put into its own View.
