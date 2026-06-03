@@ -12967,7 +12967,7 @@ impl TerminalView {
         #[cfg(not(target_family = "wasm"))]
         let plugin_version = if matches!(agent, CLIAgent::Codex) {
             // We use the lack of a plugin version for codex to differentiate between
-			// OSC 9 notification fallback and real plugin.
+            // OSC 9 notification fallback and real plugin.
             None
         } else {
             // No SessionStart event in this path (mid-session install/update).

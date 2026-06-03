@@ -78,14 +78,10 @@ fn update_instructions_has_steps() {
     let instructions = CodexPluginManager::new(None, None, None).update_instructions();
     assert_eq!(
         instructions.steps[0].command,
-        "codex plugin marketplace remove codex-warp"
+        "codex plugin marketplace upgrade codex-warp"
     );
     assert_eq!(
         instructions.steps[1].command,
-        "codex plugin marketplace add warpdotdev/codex-warp"
-    );
-    assert_eq!(
-        instructions.steps[2].command,
         "codex plugin add warp@codex-warp"
     );
     assert!(!instructions.steps.is_empty());
