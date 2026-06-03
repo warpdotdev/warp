@@ -41,13 +41,14 @@ pub use assets::AssetProvider;
 pub use clipboard::Clipboard;
 pub use elements::Element;
 pub use event::Event;
+pub use pathfinder_color as color;
 use pathfinder_color::ColorU;
+pub use pathfinder_geometry as geometry;
 pub use presenter::{
     AfterLayoutContext, EventContext, LayoutContext, PaintContext, Presenter, SizeConstraint,
 };
 pub use scene::{ClipBounds, Scene};
 pub use zoom::ZoomFactor;
-pub use {pathfinder_color as color, pathfinder_geometry as geometry};
 
 pub use crate::core::*;
 
