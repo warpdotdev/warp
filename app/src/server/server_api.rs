@@ -586,10 +586,7 @@ impl ServerApi {
         }
         if super::iap::ws_connect_is_iap_challenge(err) {
             log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
-            if let Err(err) = self
-                .event_sender
-                .try_send(AuthEvent::IapChallengeReceived)
-            {
+            if let Err(err) = self.event_sender.try_send(AuthEvent::IapChallengeReceived) {
                 log::warn!("Failed to enqueue IapChallengeReceived: {err}");
             }
         }
