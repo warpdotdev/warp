@@ -29,7 +29,7 @@ use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use notify_debouncer_full::notify::RecursiveMode;
-        use crate::entry::repo_watch_filter;
+        use crate::entry::repo_watch_filter_with_gitignores;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui_core::SingletonEntity as _;
@@ -431,10 +431,11 @@ impl LocalRepoMetadataModel {
         {
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
+                let gitignores = Arc::new(crate::entry::gitignores_for_directory(&watch_path));
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(),
+                        repo_watch_filter_with_gitignores(gitignores),
                         RecursiveMode::Recursive,
                     ));
                 });

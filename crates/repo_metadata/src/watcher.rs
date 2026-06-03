@@ -321,14 +321,16 @@ impl DirectoryWatcher {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
+                let gitignores =
+                    std::sync::Arc::new(crate::entry::gitignores_for_directory(&local_path));
                 watcher.update(ctx, |watcher, _ctx| {
                     use notify_debouncer_full::notify::RecursiveMode;
 
-                    use crate::entry::repo_watch_filter;
+                    use crate::entry::repo_watch_filter_with_gitignores;
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(),
+                        repo_watch_filter_with_gitignores(gitignores),
                         RecursiveMode::Recursive,
                     ))
                 })
