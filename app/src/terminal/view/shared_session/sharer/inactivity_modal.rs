@@ -148,11 +148,13 @@ impl InactivityModalBody {
     }
 
     fn render_countdown(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let text = format!(
-            "Sharing will end in {}:{:02} due to inactivity.",
+        let time = format!(
+            "{}:{:02}",
             self.duration.as_secs() / 60,
-            self.duration.as_secs() % 60,
+            self.duration.as_secs() % 60
         );
+        let text = i18n::t("terminal.shared_session.sharing_will_end_due_to_inactivity")
+            .replace("{time}", &time);
 
         Container::new(
             Text::new_inline(text, appearance.ui_font_family(), TEXT_FONT_SIZE)
@@ -179,7 +181,7 @@ impl InactivityModalBody {
                     font_weight: Some(Weight::Bold),
                     ..Default::default()
                 })
-                .with_centered_text_label(String::from("Stop sharing"))
+                .with_centered_text_label(i18n::t("terminal.shared_session.stop_sharing"))
                 .build()
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| {
@@ -205,7 +207,7 @@ impl InactivityModalBody {
                 font_weight: Some(Weight::Bold),
                 ..Default::default()
             })
-            .with_centered_text_label(String::from("Continue sharing"))
+            .with_centered_text_label(i18n::t("terminal.shared_session.continue_sharing"))
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(move |ctx, _, _| {
@@ -232,7 +234,7 @@ impl View for InactivityModalBody {
 
         let header = Container::new(
             Text::new_inline(
-                "Are you still there?",
+                i18n::t("terminal.shared_session.are_you_still_there"),
                 appearance.ui_font_family(),
                 HEADER_FONT_SIZE,
             )

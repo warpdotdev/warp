@@ -63,10 +63,9 @@ impl TerminalView {
             let window_id = ctx.window_id();
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
-                    DismissibleToast::error(
-                        "Cannot start a new conversation while agent is monitoring a command."
-                            .to_string(),
-                    ),
+                    DismissibleToast::error(i18n::t(
+                        "terminal.input.cannot_start_while_monitoring",
+                    )),
                     window_id,
                     ctx,
                 );
@@ -312,7 +311,7 @@ impl TerminalView {
                         key: "enter".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text("again to send to agent"),
+                    MessageItem::text(i18n::t("terminal.message_bar.again_to_send_to_agent")),
                 ])
                 .with_text_color(appearance.theme().ansi_fg_magenta());
                 self.ephemeral_message_model.update(ctx, |model, ctx| {

@@ -299,7 +299,7 @@ impl CodeReviewState {
                 .map(|repo_path| {
                     let display_name = self
                         .get_repo_display_name(repo_path, ctx)
-                        .unwrap_or_else(|| "Unknown".to_string());
+                        .unwrap_or_else(|| i18n::t("workspace.right_panel.repo.unknown"));
                     DropdownItem::new(
                         display_name,
                         RightPanelAction::SelectRepo {
@@ -435,7 +435,7 @@ impl RightPanelView {
         let maximize_button = ctx.add_typed_action_view(|ctx| {
             let mut button = ActionButton::new("", PaneHeaderTheme)
                 .with_icon(Icon::Maximize)
-                .with_tooltip("Maximize")
+                .with_tooltip(i18n::t("workspace.right_panel.maximize.tooltip"))
                 .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize));
 
@@ -451,11 +451,14 @@ impl RightPanelView {
 
         #[cfg(feature = "local_fs")]
         let open_repository_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Open repository", NakedTheme)
-                .with_size(crate::view_components::action_button::ButtonSize::Small)
-                .with_tooltip("Navigate to a repo and initialize it for coding")
-                .with_tooltip_alignment(TooltipAlignment::Center)
-                .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::OpenRepository))
+            ActionButton::new(
+                i18n::t("workspace.right_panel.open_repository.label"),
+                NakedTheme,
+            )
+            .with_size(crate::view_components::action_button::ButtonSize::Small)
+            .with_tooltip(i18n::t("workspace.right_panel.open_repository.tooltip"))
+            .with_tooltip_alignment(TooltipAlignment::Center)
+            .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::OpenRepository))
         });
 
         Self {
@@ -762,12 +765,15 @@ impl RightPanelView {
 
         let tooltip = if let Some(keybinding) = tooltip_keybinding {
             ui_builder
-                .tool_tip_with_sublabel("Close panel".to_string(), keybinding)
+                .tool_tip_with_sublabel(
+                    i18n::t("workspace.right_panel.close_panel.tooltip"),
+                    keybinding,
+                )
                 .build()
                 .finish()
         } else {
             ui_builder
-                .tool_tip("Close panel".to_string())
+                .tool_tip(i18n::t("workspace.right_panel.close_panel.tooltip"))
                 .build()
                 .finish()
         };
@@ -1035,10 +1041,14 @@ impl RightPanelView {
 
         let title = Shrinkable::new(
             1.0,
-            Text::new_inline("Code review".to_string(), appearance.ui_font_family(), 12.)
-                .with_style(Properties::default().weight(Weight::Bold))
-                .with_color(sub_text_color.into())
-                .finish(),
+            Text::new_inline(
+                i18n::t("workspace.right_panel.code_review.title"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_style(Properties::default().weight(Weight::Bold))
+            .with_color(sub_text_color.into())
+            .finish(),
         )
         .finish();
 
@@ -1081,9 +1091,15 @@ impl RightPanelView {
 
     pub fn set_maximized(&mut self, is_maximized: bool, ctx: &mut ViewContext<Self>) {
         let (icon, tooltip) = if is_maximized {
-            (Icon::Minimize, "Minimize")
+            (
+                Icon::Minimize,
+                i18n::t("workspace.right_panel.minimize.tooltip"),
+            )
         } else {
-            (Icon::Maximize, "Maximize")
+            (
+                Icon::Maximize,
+                i18n::t("workspace.right_panel.maximize.tooltip"),
+            )
         };
 
         self.maximize_button.update(ctx, |button, ctx| {

@@ -47,10 +47,10 @@ fn parse_repo_spec(spec: &str) -> anyhow::Result<GithubRepo> {
         return Ok(GithubRepo::new(parts[0].to_string(), parts[1].to_string()));
     }
 
-    Err(anyhow::anyhow!(
-        "Invalid repo format: '{}'. Expected 'owner/repo' or 'https://github.com/owner/repo'",
-        spec
-    ))
+    Err(anyhow::anyhow!(i18n::t(
+        "ai.agent_sdk.agent_config.invalid_repo_format"
+    )
+    .replace("{repo}", spec)))
 }
 
 impl AgentConfigRunner {
@@ -77,10 +77,10 @@ impl AgentConfigRunner {
         if attempt > MAX_AUTH_ATTEMPTS {
             ctx.terminate_app(
                 TerminationMode::ForceTerminate,
-                Some(Err(anyhow::anyhow!(
-                    "Exceeded maximum number of authorization attempts ({}). Please try again later.",
-                    MAX_AUTH_ATTEMPTS
-                ))),
+                Some(Err(anyhow::anyhow!(i18n::t(
+                    "ai.agent_sdk.agent_config.max_authorization_attempts_exceeded"
+                )
+                .replace("{count}", &MAX_AUTH_ATTEMPTS.to_string())))),
             );
             return;
         }
@@ -111,15 +111,24 @@ impl AgentConfigRunner {
                             UserRepoAuthStatusEnum::NoInstallationOrAccessForRepo => {
                                 if !status.is_public {
                                     eprintln!(
-                                        "Cannot access private repo {}/{}",
-                                        status.owner, status.repo,
+                                        "{}",
+                                        i18n::t(
+                                            "ai.agent_sdk.agent_config.cannot_access_private_repo"
+                                        )
+                                        .replace("{owner}", &status.owner)
+                                        .replace("{repo}", &status.repo),
                                     );
                                     has_blocking_private_issues = true;
                                 }
                                 // Public repos without auth are fine - no warning needed
                             }
                             UserRepoAuthStatusEnum::UserNotConnectedToGithub => {
-                                eprintln!("User not connected to GitHub");
+                                eprintln!(
+                                    "{}",
+                                    i18n::t(
+                                        "ai.agent_sdk.agent_config.user_not_connected_to_github"
+                                    )
+                                );
                                 has_blocking_private_issues = true;
                                 break;
                             }
@@ -135,8 +144,19 @@ impl AgentConfigRunner {
                     // Handle OAuth flow if server provides auth_url + tx_id
                     match (response.auth_url, response.tx_id) {
                         (Some(auth_url), Some(tx_id)) => {
-                            println!("\nAuthorization required for private repository access.");
-                            println!("Opening browser for GitHub authorization: {auth_url}\n");
+                            println!(
+                                "\n{}",
+                                i18n::t(
+                                    "ai.agent_sdk.agent_config.private_repo_authorization_required"
+                                )
+                            );
+                            println!(
+                                "{}\n",
+                                i18n::t(
+                                    "ai.agent_sdk.agent_config.opening_github_authorization"
+                                )
+                                .replace("{url}", &auth_url)
+                            );
                             ctx.open_url(&auth_url);
 
                             let integrations_client = ServerApiProvider::handle(ctx)
@@ -157,7 +177,9 @@ impl AgentConfigRunner {
                                         ctx.terminate_app(
                                             TerminationMode::ForceTerminate,
                                             Some(Err(anyhow::anyhow!(
-                                                "GitHub authorization failed. Please try again."
+                                                i18n::t(
+                                                    "ai.agent_sdk.agent_config.github_authorization_failed"
+                                                )
                                             ))),
                                         );
                                     }
@@ -165,7 +187,9 @@ impl AgentConfigRunner {
                                         ctx.terminate_app(
                                             TerminationMode::ForceTerminate,
                                             Some(Err(anyhow::anyhow!(
-                                                "GitHub authorization expired. Please try again."
+                                                i18n::t(
+                                                    "ai.agent_sdk.agent_config.github_authorization_expired"
+                                                )
                                             ))),
                                         );
                                     }
@@ -173,7 +197,9 @@ impl AgentConfigRunner {
                                         ctx.terminate_app(
                                             TerminationMode::ForceTerminate,
                                             Some(Err(anyhow::anyhow!(
-                                                "Unexpected OAuth status"
+                                                i18n::t(
+                                                    "ai.agent_sdk.agent_config.unexpected_oauth_status"
+                                                )
                                             ))),
                                         );
                                     }
@@ -181,7 +207,10 @@ impl AgentConfigRunner {
                                         ctx.terminate_app(
                                             TerminationMode::ForceTerminate,
                                             Some(Err(anyhow::anyhow!(
-                                                "Error polling OAuth status: {err}"
+                                                i18n::t(
+                                                    "ai.agent_sdk.agent_config.poll_oauth_status_error"
+                                                )
+                                                .replace("{error}", &err.to_string())
                                             ))),
                                         );
                                     }
@@ -189,15 +218,22 @@ impl AgentConfigRunner {
                             });
                         }
                         (Some(auth_url), None) => {
-                            println!("\nAuthorize access here: {auth_url}\n");
-                            println!("After authorizing, please re-run this command.");
+                            println!(
+                                "\n{}\n",
+                                i18n::t("ai.agent_sdk.agent_config.authorize_access_here")
+                                    .replace("{url}", &auth_url)
+                            );
+                            println!(
+                                "{}",
+                                i18n::t("ai.agent_sdk.agent_config.rerun_after_authorizing")
+                            );
                             ctx.terminate_app(TerminationMode::ForceTerminate, None);
                         }
                         _ => {
                             ctx.terminate_app(
                                 TerminationMode::ForceTerminate,
                                 Some(Err(anyhow::anyhow!(
-                                    "Cannot list agents: authorization required but no auth flow provided"
+                                    i18n::t("ai.agent_sdk.agent_config.no_auth_flow_provided")
                                 ))),
                             );
                         }
@@ -206,7 +242,9 @@ impl AgentConfigRunner {
                 Err(e) => {
                     ctx.terminate_app(
                         TerminationMode::ForceTerminate,
-                        Some(Err(e.context("Failed to check GitHub auth status"))),
+                        Some(Err(e.context(i18n::t(
+                            "ai.agent_sdk.agent_config.check_github_auth_status_failed",
+                        )))),
                     );
                 }
             }
@@ -217,9 +255,15 @@ impl AgentConfigRunner {
         let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
 
         if repo.is_some() {
-            println!("Fetching agent skills from the specified repository...");
+            println!(
+                "{}",
+                i18n::t("ai.agent_sdk.agent_config.fetching_from_repository")
+            );
         } else {
-            println!("Fetching agent skills from your Warp environments...");
+            println!(
+                "{}",
+                i18n::t("ai.agent_sdk.agent_config.fetching_from_environments")
+            );
         }
 
         let list_future = async move { ai_client.list_skills(repo).await };
@@ -238,14 +282,18 @@ impl AgentConfigRunner {
     /// Print a list of agents in a card-style format.
     fn print_agents_table(agents: &[AgentSkillItem]) {
         if agents.is_empty() {
-            println!("No skills found.");
+            println!("{}", i18n::t("ai.agent_sdk.agent_config.no_skills_found"));
             return;
         }
 
         if agents.len() == 1 {
-            println!("\nAgent:");
+            println!("\n{}", i18n::t("ai.agent_sdk.agent_config.heading.agent"));
         } else {
-            println!("\nAgents ({}):", agents.len());
+            println!(
+                "\n{}",
+                i18n::t("ai.agent_sdk.agent_config.heading.agents")
+                    .replace("{count}", &agents.len().to_string())
+            );
         }
 
         for agent in agents {
@@ -255,12 +303,15 @@ impl AgentConfigRunner {
                 let mut table = super::output::standard_table();
 
                 // ID
-                table.add_row(vec![format!("ID: {}", variant.id)]);
+                table.add_row(vec![
+                    i18n::t("ai.agent_sdk.agent_config.field.id").replace("{id}", &variant.id)
+                ]);
 
                 // Description
                 if !variant.description.is_empty() {
+                    let description_label = i18n::t("ai.agent_sdk.agent_config.label.description");
                     let description_cell = super::text_layout::render_labeled_wrapped_field(
-                        "Description",
+                        &description_label,
                         &variant.description,
                         MAX_LINE_WIDTH,
                     );
@@ -276,8 +327,9 @@ impl AgentConfigRunner {
                     } else {
                         truncated
                     };
+                    let base_prompt_label = i18n::t("ai.agent_sdk.agent_config.label.base_prompt");
                     let prompt_cell = super::text_layout::render_labeled_wrapped_field(
-                        "Base Prompt",
+                        &base_prompt_label,
                         &truncated_prompt,
                         MAX_LINE_WIDTH,
                     );
@@ -286,8 +338,10 @@ impl AgentConfigRunner {
 
                 // Source
                 table.add_row(vec![format!(
-                    "Source: {}/{}",
-                    variant.source.owner, variant.source.name
+                    "{}",
+                    i18n::t("ai.agent_sdk.agent_config.field.source")
+                        .replace("{owner}", &variant.source.owner)
+                        .replace("{name}", &variant.source.name)
                 )]);
 
                 // Environments
@@ -297,7 +351,10 @@ impl AgentConfigRunner {
                         .iter()
                         .map(|e| format!("{} ({})", e.name, e.uid))
                         .collect();
-                    table.add_row(vec![format!("Environments: {}", env_entries.join(", "))]);
+                    table.add_row(vec![i18n::t(
+                        "ai.agent_sdk.agent_config.field.environments",
+                    )
+                    .replace("{environments}", &env_entries.join(", "))]);
                 }
 
                 println!("{table}");

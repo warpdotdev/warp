@@ -66,21 +66,21 @@ struct FeatureItem {
 const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::Cloud,
-        title: "Run any agent harness in the cloud",
-        description: "Use Oz to spin up Claude Code or Codex agents in the cloud; Oz will help you track and steer the agents.",
+        title: "workspace.orchestration_launch.feature.cloud_harness.title",
+        description: "workspace.orchestration_launch.feature.cloud_harness.description",
         badge: None,
     },
     FeatureItem {
         icon: Icon::Atom,
-        title: "Multi-agent orchestration",
-        description: "Warp Agents will now orchestrate swarms of subagents, allowing you to parallelize tasks.",
+        title: "workspace.orchestration_launch.feature.multi_agent.title",
+        description: "workspace.orchestration_launch.feature.multi_agent.description",
         badge: None,
     },
     FeatureItem {
         icon: Icon::Cognition,
-        title: "Agent Memory",
-        description: "Agents will now store and access long-term memories, enabling self-improvement over time.",
-        badge: Some("Research preview"),
+        title: "workspace.orchestration_launch.feature.agent_memory.title",
+        description: "workspace.orchestration_launch.feature.agent_memory.description",
+        badge: Some("workspace.orchestration_launch.feature.agent_memory.badge"),
     },
 ];
 
@@ -184,7 +184,7 @@ impl OrchestrationLaunchModal {
         });
 
         let learn_more_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Learn more", LearnMoreButtonTheme)
+            ActionButton::new(i18n::t("common.learn_more"), LearnMoreButtonTheme)
                 .with_icon(Icon::LinkExternal)
                 .with_full_width(true)
                 .on_click(|ctx| {
@@ -193,7 +193,7 @@ impl OrchestrationLaunchModal {
         });
 
         let go_to_warp_button = ctx.add_view(|_ctx| {
-            ActionButton::new("Close", CtaButtonTheme)
+            ActionButton::new(i18n::t("common.close"), CtaButtonTheme)
                 .with_full_width(true)
                 .on_click(|ctx| ctx.dispatch_typed_action(OrchestrationLaunchModalAction::Close))
         });
@@ -247,7 +247,7 @@ impl OrchestrationLaunchModal {
     fn render_badge(appearance: &Appearance) -> Box<dyn Element> {
         let text_color = modal_terminal_magenta(appearance);
         let background_color = modal_terminal_magenta_overlay_1(appearance);
-        let text = Text::new_inline("New".to_string(), appearance.ui_font_family(), 14.)
+        let text = Text::new_inline(i18n::t("common.new"), appearance.ui_font_family(), 14.)
             .with_color(text_color)
             .finish();
         ConstrainedBox::new(
@@ -269,7 +269,7 @@ impl OrchestrationLaunchModal {
 
     fn render_title(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "Orchestrate any agent, anywhere",
+            i18n::t("workspace.orchestration_launch.title"),
             appearance.ui_font_family(),
             20.,
         )
@@ -280,7 +280,7 @@ impl OrchestrationLaunchModal {
 
     fn render_description(appearance: &Appearance) -> Box<dyn Element> {
         Text::new(
-            "We've made major improvements to Warp's cloud agent orchestration platform, Oz.",
+            i18n::t("workspace.orchestration_launch.description"),
             appearance.ui_font_family(),
             14.,
         )
@@ -292,7 +292,7 @@ impl OrchestrationLaunchModal {
         let font_family = appearance.ui_font_family();
         let color = modal_text_sub(appearance);
         Container::new(
-            Text::new_inline(label.to_string(), font_family, 11.)
+            Text::new_inline(i18n::t(label), font_family, 11.)
                 .with_color(color)
                 .finish(),
         )
@@ -317,7 +317,7 @@ impl OrchestrationLaunchModal {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.);
         title_row.add_child(
-            Text::new_inline(item.title.to_string(), appearance.ui_font_family(), 14.)
+            Text::new_inline(i18n::t(item.title), appearance.ui_font_family(), 14.)
                 .with_color(modal_text_main(appearance))
                 .finish(),
         );
@@ -330,7 +330,7 @@ impl OrchestrationLaunchModal {
             .with_spacing(2.)
             .with_child(title_row.finish())
             .with_child(
-                Text::new(item.description, appearance.ui_font_family(), 14.)
+                Text::new(i18n::t(item.description), appearance.ui_font_family(), 14.)
                     .with_color(modal_text_sub(appearance))
                     .finish(),
             )

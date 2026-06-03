@@ -14,35 +14,35 @@ fn test_format_sigfigs() {
 fn test_human_readable_precise_duration() {
     assert_eq!(
         human_readable_precise_duration(Duration::milliseconds(3)),
-        "3 ms".to_owned()
+        "3 毫秒".to_owned()
     );
     assert_eq!(
         human_readable_precise_duration(Duration::milliseconds(10)),
-        "10 ms".to_owned()
+        "10 毫秒".to_owned()
     );
     assert_eq!(
         human_readable_precise_duration(Duration::milliseconds(3141)),
-        "3.14 sec".to_owned()
+        "3.14 秒".to_owned()
     );
     assert_eq!(
         human_readable_precise_duration(Duration::milliseconds(19961)),
-        "20.0 sec".to_owned()
+        "20.0 秒".to_owned()
     );
     assert_eq!(
         human_readable_precise_duration(Duration::seconds(61)),
-        "1.02 min".to_owned()
+        "1.02 分钟".to_owned()
     );
     assert_eq!(
         human_readable_precise_duration(Duration::minutes(930)),
-        "15.5 hours".to_owned()
+        "15.5 小时".to_owned()
     );
     assert_eq!(
         human_readable_precise_duration(Duration::hours(46)),
-        "1.92 days".to_owned()
+        "1.92 天".to_owned()
     );
     assert_eq!(
         human_readable_precise_duration(Duration::weeks(2)),
-        ">1 week".to_owned()
+        ">1 周".to_owned()
     );
 }
 
@@ -50,46 +50,46 @@ fn test_human_readable_precise_duration() {
 fn test_human_readable_approx_duration() {
     assert_eq!(
         human_readable_approx_duration(Duration::milliseconds(2), false),
-        "just now".to_owned()
+        "刚刚".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::seconds(2), false),
-        "just now".to_owned()
+        "刚刚".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::milliseconds(2), true),
-        "Just now".to_owned()
+        "刚刚".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::seconds(2), true),
-        "Just now".to_owned()
+        "刚刚".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::seconds(90), false),
-        "1 min ago".to_owned()
+        "1 分钟前".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::minutes(100), false),
-        "1 hour ago".to_owned()
+        "1 小时前".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::minutes(130), false),
-        "2 hours ago".to_owned()
+        "2 小时前".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::days(4), false),
-        "4 days ago".to_owned()
+        "4 天前".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::weeks(1), false),
-        "1 week ago".to_owned()
+        "1 周前".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::weeks(15), false),
-        "3 months ago".to_owned()
+        "3 个月前".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::weeks(520), false),
-        "9 years ago".to_owned()
+        "9 年前".to_owned()
     );
 }

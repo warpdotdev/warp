@@ -35,10 +35,6 @@ use crate::view_components::ToastFlavor;
 
 const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
-const UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT: &str =
-    "Are you sure you want to unshare this block?\n\
-\nIt will no longer be accessible by link and will be permanently deleted from Warp servers.";
-
 #[derive(Clone, Debug)]
 struct UserOwnedBlock {
     id: String,
@@ -148,7 +144,7 @@ impl UserOwnedBlock {
                 ButtonVariant::Basic,
                 self.copy_button_mouse_state_handle.clone(),
             )
-            .with_text_label("Copy link".into());
+            .with_text_label(i18n::t("common.copy_link"));
 
         let button = if self.unshare_request_status == UnshareBlockRequestState::InFlight {
             button.disabled().build()
@@ -165,7 +161,7 @@ impl UserOwnedBlock {
         if self.unshare_request_status == UnshareBlockRequestState::InFlight {
             appearance
                 .ui_builder()
-                .label("Deleting...")
+                .label(i18n::t("settings.show_blocks.deleting"))
                 .with_style(
                     UiComponentStyles::default()
                         .set_font_family_id(appearance.monospace_font_family())
@@ -238,15 +234,15 @@ impl UserOwnedBlock {
                 .finish(),
         )
         .finish();
+        let executed_at = self
+            .time_started
+            .with_timezone(&Local)
+            .format("%a, %b %-d %Y at %-I:%M %p")
+            .to_string();
         let timestamp_row = Container::new(
             appearance
                 .ui_builder()
-                .label(format!(
-                    "Executed on: {}",
-                    self.time_started
-                        .with_timezone(&Local)
-                        .format("%a, %b %-d %Y at %-I:%M %p")
-                ))
+                .label(i18n::t("settings.show_blocks.executed_on").replace("{date}", &executed_at))
                 .with_style(
                     UiComponentStyles::default()
                         .set_font_color(
@@ -303,14 +299,15 @@ impl GetBlocksForUserRequestState {
         let ui_builder = appearance.ui_builder();
         match self {
             GetBlocksForUserRequestState::NotStarted => pad(ui_builder
-                .label("You don't have any shared blocks yet.")
+                .label(i18n::t("settings.show_blocks.empty"))
                 .build()
                 .finish()),
-            GetBlocksForUserRequestState::InFlight => {
-                pad(ui_builder.label("Getting blocks...").build().finish())
-            }
+            GetBlocksForUserRequestState::InFlight => pad(ui_builder
+                .label(i18n::t("settings.show_blocks.loading"))
+                .build()
+                .finish()),
             GetBlocksForUserRequestState::Failed => pad(ui_builder
-                .label("Failed to load blocks. Please try again.")
+                .label(i18n::t("settings.show_blocks.load_failed"))
                 .build()
                 .finish()),
             GetBlocksForUserRequestState::Done(user_blocks) => {
@@ -363,7 +360,7 @@ impl GetBlocksForUserRequestState {
                     .finish()
                 } else {
                     pad(ui_builder
-                        .label("You don't have any shared blocks yet.")
+                        .label(i18n::t("settings.show_blocks.empty"))
                         .build()
                         .finish())
                 }
@@ -424,7 +421,8 @@ impl ShowBlocksView {
 
             menu.set_items(
                 vec![MenuItem::Item(
-                    MenuItemFields::new("Unshare").with_on_select_action(ShowBlocksAction::Unshare),
+                    MenuItemFields::new(i18n::t("settings.shared_blocks.unshare"))
+                        .with_on_select_action(ShowBlocksAction::Unshare),
                 )],
                 ctx,
             );
@@ -491,7 +489,7 @@ impl ShowBlocksView {
         ctx.clipboard()
             .write(ClipboardContent::plain_text(block_url.to_string()));
         ctx.emit(ShowBlocksEvent::ShowToast {
-            message: "Link copied.".to_string(),
+            message: i18n::t("settings.show_blocks.link_copied"),
             flavor: ToastFlavor::Default,
         })
     }
@@ -550,14 +548,14 @@ impl ShowBlocksView {
             match request_result {
                 Ok(_) => {
                     ctx.emit(ShowBlocksEvent::ShowToast {
-                        message: "Block was successfully unshared.".to_string(),
+                        message: i18n::t("settings.show_blocks.unshare_success"),
                         flavor: ToastFlavor::Success,
                     });
                     user_block.unshare_request_status = UnshareBlockRequestState::Done;
                 }
                 Err(_) => {
                     ctx.emit(ShowBlocksEvent::ShowToast {
-                        message: "Failed to unshare block. Please try again.".to_string(),
+                        message: i18n::t("settings.show_blocks.unshare_failed"),
                         flavor: ToastFlavor::Error,
                     });
                     user_block.unshare_request_status = UnshareBlockRequestState::Failed;
@@ -657,7 +655,7 @@ impl ShowBlocksWidget {
                     .with_child(
                         Align::new(
                             ui_builder
-                                .label("Unshare block")
+                                .label(i18n::t("settings.show_blocks.unshare_block"))
                                 .with_style(UiComponentStyles {
                                     font_size: Some(appearance.header_font_size()),
                                     ..Default::default()
@@ -671,7 +669,7 @@ impl ShowBlocksWidget {
                     .with_child(
                         Container::new(
                             ui_builder
-                                .paragraph(UNSHARE_BLOCK_CONFIRMATION_DIALOG_TEXT)
+                                .paragraph(i18n::t("settings.show_blocks.unshare_confirmation"))
                                 .with_style(UiComponentStyles {
                                     font_size: Some(appearance.ui_font_size() * 1.16),
                                     ..Default::default()
@@ -692,7 +690,7 @@ impl ShowBlocksWidget {
                                                 ButtonVariant::Basic,
                                                 view.state_handles.cancel_dialog_handle.clone(),
                                             )
-                                            .with_text_label("Cancel".into())
+                                            .with_text_label(i18n::t("common.cancel"))
                                             .build()
                                             .on_click(|ctx, _, _| {
                                                 ctx.dispatch_typed_action(
@@ -710,7 +708,9 @@ impl ShowBlocksWidget {
                                                         .confirm_dialog_handle
                                                         .clone(),
                                                 )
-                                                .with_text_label("Unshare".into())
+                                                .with_text_label(i18n::t(
+                                                    "settings.shared_blocks.unshare",
+                                                ))
                                                 .build()
                                                 .on_click(|ctx, _, _| {
                                                     ctx.dispatch_typed_action(
@@ -799,7 +799,11 @@ impl SettingsWidget for ShowBlocksWidget {
             );
         }
 
-        let header = render_page_title("Shared blocks", HEADER_FONT_SIZE, appearance);
+        let header = render_page_title(
+            &i18n::t("settings.show_blocks.title"),
+            HEADER_FONT_SIZE,
+            appearance,
+        );
         let col = Flex::column()
             .with_child(Container::new(header).with_margin_bottom(24.).finish())
             .with_child(Expanded::new(1., stack.finish()).finish());

@@ -41,7 +41,8 @@ pub fn render_rich_history(entry: &HistoryEntry, ctx: &AppContext) -> Box<dyn El
         flex_column.add_child(
             Container::new(render_row_with_icon_and_paragraph(
                 icon.into(),
-                format!("Exit code {}", exit_code.value()),
+                i18n::t("terminal.rich_history.exit_code")
+                    .replace("{code}", &exit_code.value().to_string()),
                 appearance,
             ))
             .with_margin_top(DETAILS_PARAGRAPH_SPACING)
@@ -77,9 +78,9 @@ pub fn render_rich_history(entry: &HistoryEntry, ctx: &AppContext) -> Box<dyn El
         flex_column.add_child(
             Container::new(
                 ui_builder
-                    .paragraph(format!(
-                        "Finished in {}",
-                        human_readable_precise_duration((completed_ts).sub(start_ts))
+                    .paragraph(i18n::t("terminal.rich_history.finished_in").replace(
+                        "{duration}",
+                        &human_readable_precise_duration((completed_ts).sub(start_ts)),
                     ))
                     .build()
                     .finish(),
@@ -93,10 +94,10 @@ pub fn render_rich_history(entry: &HistoryEntry, ctx: &AppContext) -> Box<dyn El
         flex_column.add_child(
             Container::new(
                 ui_builder
-                    .paragraph(format!(
-                        "Last ran {}",
-                        format_approx_duration_from_now(start_ts)
-                    ))
+                    .paragraph(
+                        i18n::t("terminal.rich_history.last_ran")
+                            .replace("{time}", &format_approx_duration_from_now(start_ts)),
+                    )
                     .build()
                     .finish(),
             )
@@ -138,10 +139,10 @@ pub(crate) fn render_ai_query_rich_history(
         Container::new(
             appearance
                 .ui_builder()
-                .paragraph(format!(
-                    "Ran {}",
-                    format_approx_duration_from_now(entry.start_time)
-                ))
+                .paragraph(
+                    i18n::t("terminal.rich_history.ran")
+                        .replace("{time}", &format_approx_duration_from_now(entry.start_time)),
+                )
                 .build()
                 .finish(),
         )

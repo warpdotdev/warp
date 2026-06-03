@@ -98,6 +98,10 @@ pub struct StaticCommand {
 }
 
 impl StaticCommand {
+    pub fn description(&self) -> String {
+        i18n::t(self.description)
+    }
+
     pub fn matches_filter(&self, filter_text: &str) -> bool {
         if filter_text.is_empty() {
             return true;

@@ -2,7 +2,7 @@
 //!
 //! Usage:
 //! ```
-//! cargo run --bin generate_settings_schema -- [--channel dev|preview|stable] [output_path]
+//! cargo run --bin generate_settings_schema -- [--channel dev|preview|stable] [--locale en|zh-CN] [output_path]
 //! ```
 
 use std::collections::HashSet;
@@ -106,6 +106,29 @@ fn active_flags_for_channel(channel: &str) -> HashSet<FeatureFlag> {
     flags
 }
 
+fn localized_catalog_string(key: &str, fallback: &str) -> Option<String> {
+    let value = i18n::t(key);
+    if value == key {
+        if fallback.is_empty() {
+            None
+        } else {
+            Some(fallback.to_string())
+        }
+    } else {
+        Some(value)
+    }
+}
+
+fn localized_schema_description(entry: &SettingSchemaEntry) -> Option<String> {
+    if let Some(key) = entry.description_key {
+        localized_catalog_string(key, entry.description)
+    } else if entry.description.is_empty() {
+        None
+    } else {
+        Some(entry.description.to_string())
+    }
+}
+
 /// Creates intermediate hierarchy objects so that a setting at e.g.
 /// `appearance.text` is nested under `properties.appearance.properties.text.properties`.
 fn ensure_hierarchy<'a>(
@@ -145,6 +168,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut channel = "dev";
+    let mut locale = i18n::FALLBACK_LOCALE;
     let mut output_path: Option<&str> = None;
     let mut i = 1;
     while i < args.len() {
@@ -153,6 +177,12 @@ fn main() {
                 i += 1;
                 if i < args.len() {
                     channel = &args[i];
+                }
+            }
+            "--locale" => {
+                i += 1;
+                if i < args.len() {
+                    locale = &args[i];
                 }
             }
             arg if !arg.starts_with('-') => {
@@ -165,6 +195,8 @@ fn main() {
         }
         i += 1;
     }
+
+    i18n::set_locale(locale);
 
     let active_flags = active_flags_for_channel(channel);
     let mut generator = SchemaGenerator::default();
@@ -197,13 +229,10 @@ fn main() {
             }
         }
 
-        // Always overwrite description with the macro-provided one
-        if !entry.description.is_empty() {
+        // Always overwrite description with the macro-provided/localized one.
+        if let Some(description) = localized_schema_description(entry) {
             if let Some(obj) = schema_value.as_object_mut() {
-                obj.insert(
-                    "description".to_string(),
-                    Value::String(entry.description.to_string()),
-                );
+                obj.insert("description".to_string(), Value::String(description));
             }
         }
 
@@ -227,16 +256,17 @@ fn main() {
         "$schema".to_string(),
         Value::String("https://json-schema.org/draft/2020-12/schema".to_string()),
     );
-    root.insert(
-        "title".to_string(),
-        Value::String("Warp Settings".to_string()),
-    );
-    root.insert(
-        "description".to_string(),
-        Value::String(format!(
-            "JSON Schema for Warp settings ({channel} channel, {entry_count} settings)"
-        )),
-    );
+    let title =
+        localized_catalog_string("settings.schema.title", "Warp Settings").unwrap_or_default();
+    root.insert("title".to_string(), Value::String(title));
+    let description = localized_catalog_string(
+        "settings.schema.description",
+        "JSON Schema for Warp settings ({channel} channel, {entry_count} settings)",
+    )
+    .unwrap_or_default()
+    .replace("{channel}", channel)
+    .replace("{entry_count}", &entry_count.to_string());
+    root.insert("description".to_string(), Value::String(description));
     root.insert("type".to_string(), Value::String("object".to_string()));
     root.insert("properties".to_string(), Value::Object(root_properties));
 

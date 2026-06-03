@@ -9,7 +9,9 @@ use warpui::{Element, EventContext};
 use crate::appearance::Appearance;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
-use crate::search::{FilterChipRenderer as CommonFilterChipRenderer, QueryFilter};
+use crate::search::{
+    query_filter_display_name, FilterChipRenderer as CommonFilterChipRenderer, QueryFilter,
+};
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 
 /// Trait to render filter chips for the command palette.
@@ -42,7 +44,7 @@ impl FilterChipRenderer for QueryFilter {
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_child(
                         Text::new_inline(
-                            self.display_name(),
+                            query_filter_display_name(*self),
                             appearance.ui_font_family(),
                             font_size,
                         )

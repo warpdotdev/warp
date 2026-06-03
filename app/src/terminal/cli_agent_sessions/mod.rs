@@ -198,13 +198,13 @@ impl CLIAgentSession {
                     message: event.payload.summary.clone(),
                 }
             }
-            CLIAgentEventType::QuestionAsked => CLIAgentSessionStatus::Blocked {
-                message: event
-                    .payload
-                    .summary
-                    .clone()
-                    .or_else(|| Some("Waiting for your answer".to_owned())),
-            },
+            CLIAgentEventType::QuestionAsked => {
+                CLIAgentSessionStatus::Blocked {
+                    message: event.payload.summary.clone().or_else(|| {
+                        Some(i18n::t("terminal.cli_agent_sessions.waiting_for_answer"))
+                    }),
+                }
+            }
             CLIAgentEventType::PermissionReplied => {
                 if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
                     return None;

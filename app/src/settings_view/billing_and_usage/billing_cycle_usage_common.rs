@@ -91,26 +91,30 @@ pub fn cost_type_color(cost_type: &AiCreditsUsageAndCostType) -> ColorU {
     }
 }
 
-fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> &'static str {
+fn cost_type_label(cost_type: &AiCreditsUsageAndCostType) -> String {
     match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => "Base",
-        AiCreditsUsageAndCostType::BonusGrant => "Add-ons",
-        AiCreditsUsageAndCostType::Payg => "Pay-as-you-go",
-        AiCreditsUsageAndCostType::AmbientBonusGrant => "Cloud-only",
-        AiCreditsUsageAndCostType::Aggregate => "Combined",
-        AiCreditsUsageAndCostType::Other(_) => "Other",
+        AiCreditsUsageAndCostType::BaseLimit => i18n::t("settings.billing.legend_base"),
+        AiCreditsUsageAndCostType::BonusGrant => i18n::t("settings.billing.legend_addons"),
+        AiCreditsUsageAndCostType::Payg => i18n::t("settings.billing.legend_payg"),
+        AiCreditsUsageAndCostType::AmbientBonusGrant => {
+            i18n::t("settings.billing.legend_cloud_only")
+        }
+        AiCreditsUsageAndCostType::Aggregate => i18n::t("settings.billing.legend_combined"),
+        AiCreditsUsageAndCostType::Other(_) => i18n::t("settings.billing.usage.bucket.other"),
     }
 }
 
-fn bucket_label(bucket: &AiCreditsUsageBucket) -> &'static str {
+fn bucket_label(bucket: &AiCreditsUsageBucket) -> String {
     match bucket {
-        AiCreditsUsageBucket::Ai => "AI",
-        AiCreditsUsageBucket::Compute => "Compute",
-        AiCreditsUsageBucket::Platform => "Platform",
-        AiCreditsUsageBucket::SuggestedCodeDiffs => "Suggested code diffs",
-        AiCreditsUsageBucket::Voice => "Voice",
-        AiCreditsUsageBucket::Aggregate => "Total",
-        AiCreditsUsageBucket::Other(_) => "Other",
+        AiCreditsUsageBucket::Ai => i18n::t("settings.billing.usage.bucket.ai"),
+        AiCreditsUsageBucket::Compute => i18n::t("settings.billing.usage.bucket.compute"),
+        AiCreditsUsageBucket::Platform => i18n::t("settings.billing.usage.bucket.platform"),
+        AiCreditsUsageBucket::SuggestedCodeDiffs => {
+            i18n::t("settings.billing.usage.bucket.suggested_code_diffs")
+        }
+        AiCreditsUsageBucket::Voice => i18n::t("settings.billing.usage.bucket.voice"),
+        AiCreditsUsageBucket::Aggregate => i18n::t("settings.billing.usage.bucket.total"),
+        AiCreditsUsageBucket::Other(_) => i18n::t("settings.billing.usage.bucket.other"),
     }
 }
 
@@ -286,7 +290,7 @@ pub fn render_breakdown_tooltip(
 
     column.add_child(render_tooltip_row(
         /* no swatch on the total row */ None,
-        "Total usage".to_string(),
+        i18n::t("settings.billing.usage.total"),
         total_credits,
         total_cost_cents,
         main,

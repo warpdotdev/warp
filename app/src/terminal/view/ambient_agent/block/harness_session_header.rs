@@ -32,7 +32,7 @@ impl HarnessSessionHeader {
     pub fn new(block_id: BlockId, cli_agent: Option<CLIAgent>) -> Self {
         let cli_name = cli_agent
             .map(|agent| agent.display_name().to_owned())
-            .unwrap_or_else(|| "Agent".to_owned());
+            .unwrap_or_else(|| i18n::t("terminal.ambient_agent.generic_agent_name"));
 
         Self {
             block_id,
@@ -63,7 +63,8 @@ impl View for HarnessSessionHeader {
             Icon::ChevronRight
         };
 
-        let label = format!("Running {}...", self.cli_name);
+        let label = i18n::t("terminal.ambient_agent.harness_session.running")
+            .replace("{name}", &self.cli_name);
 
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)

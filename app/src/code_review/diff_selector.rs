@@ -162,7 +162,7 @@ impl View for DiffSelector {
         let font_size = appearance.ui_font_size();
 
         let label = if self.trigger_label.is_empty() {
-            "Uncommitted changes".to_string()
+            i18n::t("code_review.diff_target.uncommitted_changes")
         } else {
             self.trigger_label.clone()
         };

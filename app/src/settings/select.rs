@@ -13,7 +13,7 @@ define_settings_group!(SelectionSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.copy_on_select",
-        description: "Whether text is automatically copied to the clipboard when selected.",
+        description_key: "settings.schema.terminal.copy_on_select.description",
     },
     linux_selection_clipboard: LinuxSelectionClipboard {
         type: bool,
@@ -22,7 +22,7 @@ define_settings_group!(SelectionSettings, settings: [
         sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "system.linux_selection_clipboard",
-        description: "Whether the Linux primary selection clipboard is used.",
+        description_key: "settings.schema.system.linux_selection_clipboard.description",
     },
     middle_click_paste_enabled: MiddleClickPasteEnabled {
         type: bool,
@@ -34,7 +34,7 @@ define_settings_group!(SelectionSettings, settings: [
         sync_to_cloud: SyncToCloud::PerPlatform(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.input.middle_click_paste_enabled",
-        description: "Whether middle-click pastes from the clipboard.",
+        description_key: "settings.schema.terminal.input.middle_click_paste_enabled.description",
     }
 ]);
 

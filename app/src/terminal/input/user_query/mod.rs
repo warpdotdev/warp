@@ -34,7 +34,7 @@ impl InlineMenuAction for SelectUserQuery {
                         key: "enter".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text(" current pane"),
+                    MessageItem::text(i18n::t("terminal.message_bar.current_pane")),
                 ],
                 move |ctx| {
                     ctx.dispatch_typed_action(InlineMenuRowAction::Accept {
@@ -63,7 +63,7 @@ impl InlineMenuAction for SelectUserQuery {
             items.push(MessageItem::clickable(
                 vec![
                     MessageItem::keystroke(modifier_keystroke),
-                    MessageItem::text(" new pane"),
+                    MessageItem::text(i18n::t("terminal.message_bar.new_pane")),
                 ],
                 move |ctx| {
                     ctx.dispatch_typed_action(InlineMenuRowAction::Accept {

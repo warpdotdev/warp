@@ -75,14 +75,14 @@ pub struct InstallationModalBody {
 impl InstallationModalBody {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let cancel_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+            ActionButton::new(i18n::t("common.cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(InstallationModalBodyAction::Cancel);
             })
         });
 
         let enter_keystroke = Keystroke::parse("enter").expect("valid keystroke");
         let install_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Install", PrimaryTheme)
+            ActionButton::new(i18n::t("common.install"), PrimaryTheme)
                 .with_keybinding(KeystrokeSource::Fixed(enter_keystroke), ctx)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(InstallationModalBodyAction::Install);
@@ -257,7 +257,7 @@ impl InstallationModalBody {
 
         // Renders MCP title text
         let title = Text::new(
-            format!("Install {name}"),
+            i18n::t("settings.mcp.modal.install_title").replace("{name}", &name),
             appearance.ui_font_family(),
             appearance.header_font_size(),
         )
@@ -349,7 +349,10 @@ impl InstallationModalBody {
             )
             .with_margin_bottom(INSTALLATION_MODAL_TITLE_VERTICAL_SPACING)
             .finish()),
-            Err(e) => Err(format!("Failed to parse markdown: {e:?}")),
+            Err(e) => {
+                Err(i18n::t("settings.mcp.markdown_parse_failed")
+                    .replace("{error}", &format!("{e:?}")))
+            }
         }
     }
 
@@ -423,13 +426,13 @@ impl InstallationModalBody {
         .finish();
 
         let source_text = if is_shared {
-            "Shared from team"
+            i18n::t("settings.mcp.chip.shared_from_team")
         } else {
-            "From another device"
+            i18n::t("settings.mcp.chip.from_another_device")
         };
 
         let label_text = Text::new_inline(
-            source_text.to_string(),
+            source_text,
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
@@ -548,7 +551,7 @@ impl View for InstallationModalBody {
                 .finish()
         } else {
             Text::new(
-                "No MCP server selected",
+                i18n::t("settings.mcp.no_server_selected"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )

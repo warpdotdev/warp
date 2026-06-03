@@ -93,7 +93,10 @@ impl StartupShellView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Executable path", ctx);
+            editor.set_placeholder_text(
+                i18n::t("settings.features.startup_shell.executable_path_placeholder"),
+                ctx,
+            );
 
             if let Some(shell) = custom_shell_text.as_ref() {
                 editor.set_buffer_text(shell, ctx);
@@ -132,7 +135,7 @@ impl StartupShellView {
     ) {
         dropdown.update(ctx, |dropdown, ctx| {
             let mut items = vec![DropdownItem::new(
-                "Default",
+                i18n::t("common.default"),
                 NewSessionShellAction::Set(AvailableShell::default()),
             )];
             let shell_to_index = AvailableShells::handle(ctx).read(ctx, |model, _| {
@@ -150,7 +153,7 @@ impl StartupShellView {
             });
 
             items.push(DropdownItem::new(
-                "Custom",
+                i18n::t("settings.startup_shell.custom"),
                 NewSessionShellAction::ShowCustomPathInput,
             ));
             let custom_index = items.len() - 1;

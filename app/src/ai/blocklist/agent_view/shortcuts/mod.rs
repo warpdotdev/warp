@@ -122,7 +122,7 @@ pub fn render_agent_shortcuts_view(
                     key: "!".to_owned(),
                     ..Default::default()
                 },
-                text: "input shell command".into(),
+                text: i18n::t("ai.agent_shortcuts.input_shell_command").into(),
                 ..Default::default()
             },
             app,
@@ -135,7 +135,7 @@ pub fn render_agent_shortcuts_view(
                 key: "/".to_owned(),
                 ..Default::default()
             },
-            text: "for slash commands".into(),
+            text: i18n::t("ai.agent_shortcuts.slash_commands").into(),
             ..Default::default()
         },
         app,
@@ -147,7 +147,7 @@ pub fn render_agent_shortcuts_view(
                 key: "@".to_owned(),
                 ..Default::default()
             },
-            text: "for file paths and attaching other context".into(),
+            text: i18n::t("ai.agent_shortcuts.file_paths_context").into(),
             ..Default::default()
         },
         app,
@@ -160,7 +160,7 @@ pub fn render_agent_shortcuts_view(
             shortcuts.push(render_shortcut(
                 ShortcutProps {
                     keystroke,
-                    text: "open code review".into(),
+                    text: i18n::t("ai.agent_shortcuts.open_code_review").into(),
                     ..Default::default()
                 },
                 app,
@@ -175,7 +175,7 @@ pub fn render_agent_shortcuts_view(
             shortcuts.push(render_shortcut(
                 ShortcutProps {
                     keystroke,
-                    text: "toggle conversation list".into(),
+                    text: i18n::t("ai.agent_shortcuts.toggle_conversation_list").into(),
                     ..Default::default()
                 },
                 app,
@@ -186,7 +186,7 @@ pub fn render_agent_shortcuts_view(
     shortcuts.push(render_shortcut(
         ShortcutProps {
             keystroke: Keystroke::parse(cmd_or_ctrl_shift("y")).expect("is valid keystroke"),
-            text: "search and continue conversations".into(),
+            text: i18n::t("ai.agent_shortcuts.search_continue_conversations").into(),
             ..Default::default()
         },
         app,
@@ -202,7 +202,7 @@ pub fn render_agent_shortcuts_view(
     shortcuts.push(render_shortcut(
         ShortcutProps {
             keystroke: new_conversation_keystroke.clone(),
-            text: "start a new conversation".into(),
+            text: i18n::t("ai.agent_shortcuts.start_new_conversation").into(),
             ..Default::default()
         },
         app,
@@ -215,7 +215,7 @@ pub fn render_agent_shortcuts_view(
             shortcuts.push(render_shortcut(
                 ShortcutProps {
                     keystroke,
-                    text: "toggle auto-accept".into(),
+                    text: i18n::t("ai.agent_shortcuts.toggle_auto_accept").into(),
                     ..Default::default()
                 },
                 app,
@@ -230,7 +230,7 @@ pub fn render_agent_shortcuts_view(
                 ctrl: true,
                 ..Default::default()
             },
-            text: "pause agent".into(),
+            text: i18n::t("ai.agent_shortcuts.pause_agent").into(),
             ..Default::default()
         },
         app,
@@ -242,7 +242,7 @@ pub fn render_agent_shortcuts_view(
                 key: "escape".to_owned(),
                 ..Default::default()
             },
-            text: "go back to terminal".into(),
+            text: i18n::t("ai.agent_shortcuts.go_back_to_terminal").into(),
             ..Default::default()
         },
         app,

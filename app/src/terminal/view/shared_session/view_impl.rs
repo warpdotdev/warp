@@ -58,7 +58,7 @@ use crate::terminal::shared_session::role_change_modal::{
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::{
     join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus, COPY_LINK_TEXT,
+    SharedSessionStatus,
 };
 use crate::terminal::view::{
     ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
@@ -942,12 +942,12 @@ impl TerminalView {
         }
 
         let Some(ambient_agent_view_model) = self.ambient_agent_view_model.as_ref() else {
-            self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
+            self.show_error_toast(i18n::t("terminal.toast.couldnt_continue_cloud_task"), ctx);
             return;
         };
 
         if ambient_agent_view_model.as_ref(ctx).task_id() != Some(task_id) {
-            self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
+            self.show_error_toast(i18n::t("terminal.toast.couldnt_continue_cloud_task"), ctx);
             return;
         }
         self.enable_cloud_followup_input_after_conversation_end(task_id, ctx);
@@ -982,7 +982,7 @@ impl TerminalView {
             ctx,
         );
         self.show_persistent_toast(
-            "Sharing ended due to inactivity".to_owned(),
+            i18n::t("terminal.shared_session.ended_due_to_inactivity"),
             ToastFlavor::Error,
             ctx,
         );
@@ -1033,7 +1033,7 @@ impl TerminalView {
                 ctx,
             );
             self.show_persistent_toast(
-                "Shared editing permissions were revoked due to inactivity".to_owned(),
+                i18n::t("terminal.shared_session.permissions_revoked_due_to_inactivity"),
                 ToastFlavor::Error,
                 ctx,
             );
@@ -1552,7 +1552,8 @@ impl TerminalView {
 
         let window_id = ctx.window_id();
         crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::default(COPY_LINK_TEXT.to_string());
+            let toast =
+                DismissibleToast::default(i18n::t("terminal.shared_session.sharing_link_copied"));
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
 
@@ -1656,7 +1657,7 @@ impl TerminalView {
             && matches!(reason, RoleUpdatedReason::InactivityLimitReached)
         {
             self.show_persistent_toast(
-                "Editing permissions were revoked because the sharer is idle".to_owned(),
+                i18n::t("terminal.shared_session.permissions_revoked_sharer_idle"),
                 ToastFlavor::Error,
                 ctx,
             );
@@ -1895,7 +1896,7 @@ impl TerminalView {
 
         if !model.shared_session_status().is_sharer_or_viewer() {
             items.push(
-                MenuItemFields::new("Share session...")
+                MenuItemFields::new(i18n::t("terminal.shared_session.share_session_ellipsis"))
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::OpenShareSessionModal,
                     ))
@@ -1904,7 +1905,7 @@ impl TerminalView {
             );
         } else if model.shared_session_status().is_active_sharer() {
             items.push(
-                MenuItemFields::new("Stop sharing")
+                MenuItemFields::new(i18n::t("terminal.shared_session.stop_sharing"))
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::StopSharing,
                     ))
@@ -1914,7 +1915,7 @@ impl TerminalView {
 
         if model.shared_session_status().is_sharer_or_viewer() {
             items.push(
-                MenuItemFields::new("Copy session sharing link")
+                MenuItemFields::new(i18n::t("terminal.shared_session.copy_session_sharing_link"))
                     .with_on_select_action(TerminalAction::CopySharedSessionLink {
                         source: SharedSessionActionSource::RightClickMenu,
                     })
@@ -2028,7 +2029,7 @@ impl TerminalView {
         appearance
             .ui_builder()
             .button(ButtonVariant::Basic, button_handle)
-            .with_text_label("Request edit access".into())
+            .with_text_label(i18n::t("terminal.shared_session.request_edit_access"))
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(TerminalAction::RequestSharedSessionRole(Role::Executor));

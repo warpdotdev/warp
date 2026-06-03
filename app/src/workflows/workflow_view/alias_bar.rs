@@ -98,7 +98,7 @@ impl AliasBar {
                 },
                 ctx,
             );
-            view.set_placeholder_text("alias name", ctx);
+            view.set_placeholder_text(i18n::t("workflows.alias.name_placeholder"), ctx);
 
             view
         });
@@ -431,7 +431,7 @@ impl View for AliasBar {
                     |_state, background| {
                         appearance
                             .ui_builder()
-                            .span("Default")
+                            .span(i18n::t("common.default"))
                             .with_style(UiComponentStyles {
                                 font_color: Some(
                                     appearance.theme().main_text_color(background).into_solid(),
@@ -467,7 +467,7 @@ impl View for AliasBar {
             .with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::IconFirst,
-                    "Add alias",
+                    i18n::t("workflows.alias.add_alias"),
                     Icon::Plus.to_warpui_icon(
                         appearance
                             .theme()

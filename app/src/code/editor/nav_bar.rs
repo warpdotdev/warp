@@ -72,14 +72,14 @@ impl NavBar {
         });
 
         let up_label_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Previous", NakedTheme)
+            ActionButton::new(i18n::t("common.previous"), NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
                 .with_icon(Icon::ArrowUp)
                 .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateUp))
         });
 
         let down_label_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Next", NakedTheme)
+            ActionButton::new(i18n::t("common.next"), NakedTheme)
                 .with_size(ButtonSize::InlineActionHeader)
                 .with_icon(Icon::ArrowDown)
                 .on_click(|ctx| ctx.dispatch_typed_action(NavBarAction::NavigateDown))
@@ -148,7 +148,7 @@ impl NavBar {
     ) -> Box<dyn Element> {
         let diff_text = appearance
             .ui_builder()
-            .span("Hunk:")
+            .span(i18n::t("code.editor.nav.hunk"))
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().sub_text_color(background).into()),
                 ..Default::default()
@@ -200,7 +200,7 @@ impl NavBar {
                     ButtonVariant::Outlined,
                     self.mouse_state_handles.revert_mouse_state.clone(),
                 )
-                .with_text_label("Reject".to_string())
+                .with_text_label(i18n::t("code.editor.nav.reject"))
                 .build()
                 .on_click(|ctx, _, _| ctx.dispatch_typed_action(NavBarAction::Revert))
                 .finish(),

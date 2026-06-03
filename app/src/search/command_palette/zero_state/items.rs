@@ -170,7 +170,10 @@ impl Items {
         let mut flex = Flex::column();
 
         if !self.recent.is_empty() {
-            flex.add_child(Self::render_section_text("Recent", appearance));
+            flex.add_child(Self::render_section_text(
+                i18n::t("search.zero_state.recent"),
+                appearance,
+            ));
 
             flex.add_children(self.recent.iter().enumerate().map(|(idx, result)| {
                 Self::render_query_result(
@@ -183,7 +186,10 @@ impl Items {
         }
 
         if !self.suggested.is_empty() {
-            flex.add_child(Self::render_section_text("Suggested", appearance));
+            flex.add_child(Self::render_section_text(
+                i18n::t("search.zero_state.suggested"),
+                appearance,
+            ));
 
             flex.add_children(self.suggested.iter().enumerate().map(|(idx, result)| {
                 Self::render_query_result(

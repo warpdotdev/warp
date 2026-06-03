@@ -46,6 +46,7 @@ fuzzy_match = { path = "crates/fuzzy_match" }
 handlebars = { path = "crates/handlebars" }
 http_client = { path = "crates/http_client" }
 http_server = { path = "crates/http_server" }
+i18n = { path = "crates/i18n" }
 input_classifier = { path = "crates/input_classifier" }
 integration = { path = "crates/integration" }
 ipc = { path = "crates/ipc" }

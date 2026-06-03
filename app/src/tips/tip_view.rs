@@ -33,8 +33,8 @@ const MODAL_WIDTH: f32 = 250.;
 
 #[derive(Clone)]
 struct TipItem {
-    pub title: String,
-    pub description: String,
+    pub title_key: &'static str,
+    pub description_key: &'static str,
     pub editable_binding_name: String,
     pub shortcut: Option<Keystroke>,
     pub tip_feature: Tip,
@@ -42,8 +42,8 @@ struct TipItem {
 
 impl TipItem {
     pub fn new(
-        title: String,
-        description: String,
+        title_key: &'static str,
+        description_key: &'static str,
         feature: TipAction,
         ctx: &mut AppContext,
     ) -> Self {
@@ -52,8 +52,8 @@ impl TipItem {
         let tip_feature = Tip::Action(feature);
 
         Self {
-            title,
-            description,
+            title_key,
+            description_key,
             editable_binding_name,
             shortcut,
             tip_feature,
@@ -125,33 +125,32 @@ impl TipsView {
 
         let tip_items = vec![
             TipItem::new(
-                "Command Palette".to_string(),
-                "Easily discover everything you can do in Warp without your hands leaving the keyboard.".to_string(),
+                "tips.command_palette.title",
+                "tips.command_palette.description",
                 TipAction::CommandPalette,
                 ctx,
             ),
             TipItem::new(
-                "Split Pane".to_string(),
-                "Split tabs into multiple panes to make your ideal layout."
-                    .to_string(),
+                "tips.split_pane.title",
+                "tips.split_pane.description",
                 TipAction::SplitPane,
                 ctx,
             ),
             TipItem::new(
-                "History Search".to_string(),
-                "Find, edit and re-run previously executed commands.".to_string(),
+                "tips.history_search.title",
+                "tips.history_search.description",
                 TipAction::HistorySearch,
                 ctx,
             ),
             TipItem::new(
-                "AI Command Search".to_string(),
-                "Generate shell commands with natural language.".to_string(),
+                "tips.ai_command_search.title",
+                "tips.ai_command_search.description",
                 TipAction::AiCommandSearch,
                 ctx,
             ),
             TipItem::new(
-                "Theme Picker".to_string(),
-                "Make Warp your own by choosing a built-in theme. Or create your own.".to_string(),
+                "tips.theme_picker.title",
+                "tips.theme_picker.description",
                 TipAction::ThemePicker,
                 ctx,
             ),
@@ -225,7 +224,7 @@ impl TipsView {
         content.add_child(
             Container::new(
                 ui_builder
-                    .wrappable_text(tip_item.title, false)
+                    .wrappable_text(i18n::t(tip_item.title_key), false)
                     .with_style(UiComponentStyles {
                         font_family_id: Some(appearance.ui_font_family()),
                         font_size: Some(appearance.monospace_font_size()),
@@ -242,7 +241,7 @@ impl TipsView {
         content.add_child(
             Container::new(
                 ui_builder
-                    .wrappable_text(tip_item.description, true)
+                    .wrappable_text(i18n::t(tip_item.description_key), true)
                     .with_style(UiComponentStyles {
                         font_family_id: Some(appearance.ui_font_family()),
                         font_size: Some(appearance.monospace_font_size() * 0.8),
@@ -260,7 +259,7 @@ impl TipsView {
                 .with_child(
                     Container::new(
                         ui_builder
-                            .wrappable_text("Shortcut".to_string(), false)
+                            .wrappable_text(i18n::t("tips.shortcut"), false)
                             .with_style(UiComponentStyles {
                                 font_family_id: Some(appearance.ui_font_family()),
                                 font_size: Some(appearance.monospace_font_size() * 0.8),
@@ -395,7 +394,7 @@ impl TipsView {
                         Align::new(
                             appearance
                                 .ui_builder()
-                                .paragraph("Skip Welcome Tips".to_string())
+                                .paragraph(i18n::t("tips.skip_welcome_tips"))
                                 .build()
                                 .finish(),
                         )
@@ -448,7 +447,7 @@ impl TipsView {
             .finish();
 
         let title = ui_builder
-            .span("Complete!")
+            .span(i18n::t("tips.complete"))
             .with_style(UiComponentStyles {
                 font_weight: Some(Weight::Bold),
                 // Set to white here as the background has 85% black overlay.
@@ -460,7 +459,7 @@ impl TipsView {
             .finish();
 
         let sub_text = ui_builder
-            .paragraph("Nice work on finishing the welcome tips!")
+            .paragraph(i18n::t("tips.finished_message"))
             .with_style(UiComponentStyles {
                 font_size: Some(12.),
                 font_color: Some(Fill::white().into()),
@@ -480,7 +479,7 @@ impl TipsView {
                     .set_width(152.)
                     .set_height(34.),
             )
-            .with_centered_text_label("Close Welcome Tips".to_string())
+            .with_centered_text_label(i18n::t("tips.close_welcome_tips"))
             .build()
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(TipsAction::DismissTips))
             .finish();

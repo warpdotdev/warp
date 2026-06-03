@@ -50,6 +50,18 @@ pub enum DetailContent {
     AIQueryHistory(Box<AIQueryHistoryEntryDetails>),
 }
 
+fn last_ran_a11y(time: impl AsRef<str>) -> String {
+    i18n::t("input_suggestions.a11y.last_ran").replace("{time}", time.as_ref())
+}
+
+fn suggestion_a11y(text: &str) -> String {
+    i18n::t("input_suggestions.a11y.suggestion").replace("{text}", text)
+}
+
+fn selected_a11y(text: &str) -> String {
+    i18n::t("input_suggestions.a11y.selected").replace("{text}", text)
+}
+
 impl From<HistoryEntry> for DetailContent {
     fn from(entry: HistoryEntry) -> Self {
         DetailContent::RichHistory(Box::new(entry))
@@ -539,11 +551,10 @@ impl InputSuggestions {
             .and_then(|details| match details {
                 DetailContent::RichHistory(entry) => entry
                     .start_ts
-                    .map(|ts| format!("Last ran {}", format_approx_duration_from_now(ts))),
+                    .map(|ts| last_ran_a11y(format_approx_duration_from_now(ts))),
                 DetailContent::Description(desc) => Some(desc.clone()),
-                DetailContent::AIQueryHistory(entry) => Some(format!(
-                    "Last ran {}",
-                    format_approx_duration_from_now(entry.start_time)
+                DetailContent::AIQueryHistory(entry) => Some(last_ran_a11y(
+                    format_approx_duration_from_now(entry.start_time),
                 )),
             })
     }
@@ -588,14 +599,14 @@ impl InputSuggestions {
         ) {
             (Some(text), Some(desc)) => {
                 ctx.emit_a11y_content(AccessibilityContent::new(
-                    format!("Suggestion: {text}.\n"),
+                    format!("{}\n", suggestion_a11y(text)),
                     desc,
                     WarpA11yRole::MenuItemRole,
                 ));
             }
             (Some(text), None) => {
                 ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-                    format!("Suggestion: {text}.\n"),
+                    format!("{}\n", suggestion_a11y(text)),
                     WarpA11yRole::MenuItemRole,
                 ));
             }
@@ -619,7 +630,7 @@ impl InputSuggestions {
 
         if let Some(text) = self.get_selected_item_text() {
             ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-                format!("Selected: {text}"),
+                selected_a11y(text),
                 WarpA11yRole::MenuItemRole,
             ));
         }
@@ -644,7 +655,7 @@ impl InputSuggestions {
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-            "Closed suggestions.",
+            i18n::t("input_suggestions.a11y.closed"),
             WarpA11yRole::UserAction,
         ));
         ctx.emit(Event::CloseSuggestion {
@@ -700,7 +711,7 @@ impl InputSuggestions {
                     Align::new(
                         Container::new(
                             Text::new_inline(
-                                String::from("No suggestions"),
+                                i18n::t("input_suggestions.no_suggestions"),
                                 appearance.monospace_font_family(),
                                 appearance.monospace_font_size(),
                             )
@@ -884,7 +895,9 @@ impl InputSuggestions {
 
                                             let tooltip_element = appearance
                                                 .ui_builder()
-                                                .tool_tip("Ignore this suggestion".to_string())
+                                                .tool_tip(i18n::t(
+                                                    "editor.autosuggestion.ignore_this_suggestion",
+                                                ))
                                                 .build()
                                                 .finish();
 
@@ -1084,10 +1097,9 @@ impl View for InputSuggestions {
 
     fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            "Command suggestions.",
+            i18n::t("input_suggestions.a11y.command_suggestions"),
             // TODO use bindings from user settings
-            "Navigate with tab and shift-tab, and confirm with enter. Execute selected command \
-                with command + enter. Esc leaves the suggestions menu.",
+            i18n::t("input_suggestions.a11y.command_suggestions_help"),
             WarpA11yRole::MenuRole,
         ))
     }

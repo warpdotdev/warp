@@ -108,7 +108,7 @@ impl GlobalSearch {
                     log::error!("GlobalSearch: warp_ripgrep CLI search failed or aborted: {err}");
                     ctx.emit(GlobalSearchEvent::Failed {
                         search_id,
-                        error: "Global search failed.".to_string(),
+                        error: i18n::t("workspace.search.failed"),
                     });
                 }
             },

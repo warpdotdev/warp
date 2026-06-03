@@ -69,19 +69,11 @@ const SECTION_SPACING: f32 = 16.;
 
 // Variable rows
 pub(super) const ROW_SPACING: f32 = 8.;
-pub const EDUCATION_TEXT: &str = "Add secret or command. Warp never stores external secrets";
 const VARIABLE_FONT_SIZE: f32 = 13.;
 const DESCRIPTION_EDITOR_CUTOFF: f32 = 30.;
 const DESCRIPTION_BOTTOM_MARGIN: f32 = 12.;
 const DIVIDER_BOTTOM_MARGIN: f32 = 4.;
 const PLACEHOLDER_FONT_SIZE: f32 = 14.;
-const VARIABLE_VALUE_PLACEHOLDER_TEXT: &str = "Value";
-const VARIABLE_DESCRIPTION_PLACEHOLDER_TEXT: &str = "Description";
-const VARIABLE_NAME_PLACEHOLDER_TEXT: &str = "Variable";
-
-// Text input fields
-const TITLE_PLACEHOLDER_TEXT: &str = "Add a title";
-const DESCRIPTION_PLACEHOLDER_TEXT: &str = "Add a description";
 
 // Button spacing
 const BUTTON_CONTAINER_HORIZONTAL_MARGIN: f32 = 36.;
@@ -348,8 +340,8 @@ impl ValidationError {
     /// Create validation error from detected secret level
     fn from_secret_level(secret_level: SecretLevel) -> Self {
         let message = match secret_level {
-            SecretLevel::Enterprise => "This environment variable cannot be created due to conflicts with your enterprise's secret redaction settings. Contact a team admin for details.".to_string(),
-            SecretLevel::User => "This environment variable cannot be created due to conflicts with your secret redaction settings. Save the secret as an environment variable (in your shell config or a .env file), or update your secret redaction settings in Settings > Privacy.".to_string(),
+            SecretLevel::Enterprise => i18n::t("env_vars.secret_redaction_conflict_enterprise"),
+            SecretLevel::User => i18n::t("env_vars.secret_redaction_conflict_user"),
         };
         Self {
             secret_level,
@@ -486,7 +478,8 @@ impl EnvVarCollectionView {
             view.handle_cloud_model_event(event, ctx);
         });
 
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Untitled"));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(i18n::t("common.untitled")));
 
         let active_env_var_collection_data = ctx.add_model(ActiveEnvVarCollectionData::new);
         ctx.subscribe_to_model(
@@ -507,14 +500,14 @@ impl EnvVarCollectionView {
             ctx,
             Some(PLACEHOLDER_FONT_SIZE),
             Some(ui_font_family),
-            Some(TITLE_PLACEHOLDER_TEXT),
+            Some(i18n::t("env_vars.title_placeholder")),
             true,
         );
         let description_editor = Self::create_editor_handle(
             ctx,
             Some(PLACEHOLDER_FONT_SIZE),
             Some(ui_font_family),
-            Some(DESCRIPTION_PLACEHOLDER_TEXT),
+            Some(i18n::t("env_vars.description_placeholder")),
             false,
         );
         ctx.subscribe_to_view(&title_editor, |me, _, event, ctx| {
@@ -658,7 +651,12 @@ impl EnvVarCollectionView {
 
         let title = collection.title.clone().unwrap_or_default();
 
-        self.set_pane_title(if title.is_empty() { "Untitled" } else { &title }, ctx);
+        let pane_title = if title.is_empty() {
+            i18n::t("common.untitled")
+        } else {
+            title.clone()
+        };
+        self.set_pane_title(&pane_title, ctx);
         if let Some(server_id) = env_var_collection.id.into_server() {
             self.pane_configuration.update(ctx, |pane_config, ctx| {
                 pane_config
@@ -740,9 +738,7 @@ impl EnvVarCollectionView {
                     let window_id = ctx.window_id();
                     crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "An error occurred while trying to invoke the env var".to_owned(),
-                            ),
+                            DismissibleToast::error(i18n::t("env_vars.invoke_failed")),
                             window_id,
                             ctx,
                         );
@@ -873,7 +869,7 @@ impl EnvVarCollectionView {
             ctx,
             Some(VARIABLE_FONT_SIZE),
             Some(ui_font_family),
-            Some(VARIABLE_NAME_PLACEHOLDER_TEXT),
+            Some(i18n::t("env_vars.variable_placeholder")),
             true,
         );
 
@@ -885,7 +881,7 @@ impl EnvVarCollectionView {
             ctx,
             Some(VARIABLE_FONT_SIZE),
             Some(ui_font_family),
-            Some(VARIABLE_VALUE_PLACEHOLDER_TEXT),
+            Some(i18n::t("env_vars.value_placeholder")),
             true,
         );
 
@@ -897,7 +893,7 @@ impl EnvVarCollectionView {
             ctx,
             Some(VARIABLE_FONT_SIZE),
             Some(ui_font_family),
-            Some(VARIABLE_DESCRIPTION_PLACEHOLDER_TEXT),
+            Some(i18n::t("common.description")),
             true,
         );
 
@@ -1130,7 +1126,7 @@ impl EnvVarCollectionView {
                     .finish()
                 } else {
                     appearance.ui_builder().tool_tip_on_element(
-                        EDUCATION_TEXT.to_string(),
+                        i18n::t("env_vars.secret_or_command_tooltip"),
                         self.button_mouse_states.secret_tooltip_state.clone(),
                         icon_button_with_context_menu(
                             Icon::Key,
@@ -1584,7 +1580,11 @@ impl BackingView for EnvVarCollectionView {
         app: &AppContext,
     ) -> view::HeaderContent {
         let title = self.title_editor.as_ref(app).buffer_text(app);
-        let title = if title.is_empty() { "Untitled" } else { &title };
+        let title = if title.is_empty() {
+            i18n::t("common.untitled")
+        } else {
+            title
+        };
         view::HeaderContent::simple(title)
     }
 

@@ -20,10 +20,7 @@ pub enum CloneRepoEvent {
 impl CloneRepoView {
     pub fn new(is_ftux: bool, ctx: &mut ViewContext<Self>) -> Self {
         let editor = ctx.add_typed_action_view(|ctx| {
-            GlowingEditor::new(
-                "Provide a repository URL e.g. \"git@github.com:username/project.git\"",
-                ctx,
-            )
+            GlowingEditor::new(i18n::t("coding_entrypoints.clone_repo.placeholder"), ctx)
         });
 
         ctx.subscribe_to_view(&editor, move |me, _, event, ctx| {

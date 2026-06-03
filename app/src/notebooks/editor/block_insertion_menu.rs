@@ -97,7 +97,7 @@ impl BlockInsertionMenuState {
 
         if embedded_objects_enabled {
             menu.add_item(
-                MenuItemFields::new("Embed")
+                MenuItemFields::new(i18n::t("notebooks.insert.embed"))
                     .with_icon(Icon::EmbedBlock)
                     .with_on_select_action(EditorViewAction::OpenEmbeddedObjectSearch)
                     .into_item(),
@@ -117,7 +117,7 @@ impl BlockInsertionMenuState {
         }
 
         menu.add_item(
-            MenuItemFields::new("Divider")
+            MenuItemFields::new(i18n::t("notebooks.insert.divider"))
                 .with_icon(Icon::HorizontalRuleBlock)
                 .with_on_select_action(EditorViewAction::InsertBlock(
                     warp_editor::content::text::BlockType::Item(BufferBlockItem::HorizontalRule),
@@ -237,7 +237,7 @@ impl RichTextEditorView {
             let title = model
                 .get_notebook(id)
                 .map(|notebook| notebook.model().title.clone())
-                .unwrap_or_else(|| "Untitled".to_string());
+                .unwrap_or_else(|| i18n::t("common.untitled"));
             let link = model
                 .get_by_uid(&CloudObjectTypeAndId::Notebook(*id).uid())
                 .and_then(|object| object.object_link());
@@ -306,7 +306,7 @@ impl RichTextEditorView {
         })
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Insert block".to_string())
+                .tool_tip(i18n::t("notebooks.insert.insert_block"))
                 .build()
                 .finish()
         })

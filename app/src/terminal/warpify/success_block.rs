@@ -47,7 +47,7 @@ struct AutoWarpifySnippet {
     selected_text: Arc<RwLock<Option<String>>>,
 
     shell_type: ShellType,
-    description: Cow<'static, str>,
+    description_key: &'static str,
     code_snippet_handles: CodeSnippetButtonHandles,
     can_write_to_rc: bool,
 }
@@ -110,21 +110,20 @@ impl WarpifySuccessBlock {
                 })
             })
         };
-        let auto_warpify_snippet = auto_warpify_snippet.map(|(output_grid, can_write_to_rc)| {
-            AutoWarpifySnippet {
-                description: (if !output_grid.is_empty() {
-                    "Run the following to automatically Warpify in the future:"
+        let auto_warpify_snippet =
+            auto_warpify_snippet.map(|(output_grid, can_write_to_rc)| AutoWarpifySnippet {
+                description_key: if !output_grid.is_empty() {
+                    "terminal.warpify.auto_warpify_command.description"
                 } else {
-                    "In remote subshells, Warp runs commands in the background to power completions, syntax highlighting, and other features."
-                }).into(),
+                    "terminal.warpify.remote_subshell.description"
+                },
                 output_grid: output_grid.into(),
                 selection_handle: Default::default(),
                 selected_text: Default::default(),
                 code_snippet_handles: Default::default(),
                 shell_type: shell.shell_type(),
                 can_write_to_rc,
-            }
-        });
+            });
 
         Self {
             source,
@@ -153,7 +152,7 @@ impl WarpifySuccessBlock {
 
     pub fn render_title_ui(&self, theme: &WarpTheme, appearance: &Appearance) -> Box<dyn Element> {
         let header_contents = render::build_header_row(
-            "Session Warpified",
+            i18n::t("terminal.warpify.session_warpified"),
             Icon::new(UiIcon::Warp.into(), theme.active_ui_detail()),
             theme,
             appearance,
@@ -191,7 +190,7 @@ impl WarpifySuccessBlock {
         appearance
             .ui_builder()
             .link(
-                "Learn more".into(),
+                i18n::t("common.learn_more"),
                 None,
                 Some(Box::new({
                     move |ctx| {
@@ -283,7 +282,7 @@ impl WarpifySuccessBlock {
             .with_child(
                 Container::new(
                     Text::new(
-                        auto_warpify_snippet.description.clone(),
+                        i18n::t(auto_warpify_snippet.description_key),
                         appearance.monospace_font_family(),
                         appearance.monospace_font_size(),
                     )

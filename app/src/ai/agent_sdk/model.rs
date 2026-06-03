@@ -38,7 +38,9 @@ impl ModelCommandRunner {
         ctx.spawn(refresh_future, move |_, refresh_result, ctx| {
             if refresh_result.is_err() {
                 super::report_fatal_error(
-                    anyhow::anyhow!("Timed out refreshing workspace metadata"),
+                    anyhow::anyhow!(i18n::t(
+                        "ai.agent_sdk.model.refresh_workspace_metadata_timeout"
+                    )),
                     ctx,
                 );
                 return;
@@ -76,7 +78,7 @@ struct ModelListItem {
 
 impl TableFormat for ModelListItem {
     fn header() -> Vec<Cell> {
-        vec![Cell::new("MODEL ID")]
+        vec![Cell::new(i18n::t("ai.agent_sdk.model.table.model_id"))]
     }
 
     fn row(&self) -> Vec<Cell> {

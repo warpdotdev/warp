@@ -201,31 +201,31 @@ pub use ::concat_idents::concat_idents;
 #[macro_export]
 macro_rules! define_setting {
     // Convenience arm: with storage_key + toml_path + max_table_depth
-    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, storage_key: $storage_key:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
-        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: $storage_key, toml_path_value: Some($toml_path), max_table_depth_value: $mtd $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, storage_key: $storage_key:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
+        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: $storage_key, toml_path_value: Some($toml_path), max_table_depth_value: $mtd $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // Convenience arm: with toml_path + max_table_depth (no explicit storage_key)
-    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
-        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path), max_table_depth_value: $mtd $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
+        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path), max_table_depth_value: $mtd $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // Convenience arm: with storage_key + toml_path
-    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, storage_key: $storage_key:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
-        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: $storage_key, toml_path_value: Some($toml_path) $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, storage_key: $storage_key:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
+        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: $storage_key, toml_path_value: Some($toml_path) $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // Convenience arm: with toml_path (no explicit storage_key)
-    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
-        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path) $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
+        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path) $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // Convenience arm: without toml_path (private settings with explicit storage_key)
-    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, storage_key: $storage_key:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
-        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: $storage_key, toml_path_value: None::<&str> $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, storage_key: $storage_key:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
+        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: $storage_key, toml_path_value: None::<&str> $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // Convenience arm: without toml_path (private settings with default storage_key)
-    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
-        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: None::<&str> $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
+        $crate::macros::define_setting!(@base $name: $type, default: $default, supported_platforms: $supported_platforms, group: $group, sync_to_cloud: $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: None::<&str> $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // Base arm: generates the struct and Setting impl
-    (@base $name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $storage_key:expr, toml_path_value: $toml_path_value:expr $(, max_table_depth_value: $mtd:literal)? $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
+    (@base $name:ident: $type:ty, default: $default:tt, supported_platforms: $supported_platforms: expr, group: $group:path, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $storage_key:expr, toml_path_value: $toml_path_value:expr $(, max_table_depth_value: $mtd:literal)? $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
         pub struct $name {
             inner: $type,
             is_explicitly_set: bool,
@@ -409,6 +409,7 @@ macro_rules! define_setting {
         $crate::submit_schema_entry!(
             private: $private,
             description: $crate::_schema_default_description!($($desc)?),
+            description_key: $crate::_schema_default_description_key!($($desc_key)?),
             toml_path_value: $toml_path_value,
             fallback_storage_key: $storage_key,
             supported_platforms: $supported_platforms,
@@ -424,7 +425,7 @@ pub use define_setting;
 #[macro_export]
 macro_rules! maybe_define_setting {
     // storage_key + toml_path + max_table_depth
-    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $key:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
+    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $key:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
         $crate::macros::define_setting!(
             $setting: $value_type,
             default: $default,
@@ -436,11 +437,12 @@ macro_rules! maybe_define_setting {
             toml_path: $toml_path,
             max_table_depth: $mtd
             $(, description: $desc)?
+            $(, description_key: $desc_key)?
             $(, feature_flag: $flag)?
         );
     };
     // toml_path + max_table_depth (no explicit storage_key)
-    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
+    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
         $crate::macros::define_setting!(
             $setting: $value_type,
             default: $default,
@@ -451,11 +453,12 @@ macro_rules! maybe_define_setting {
             toml_path: $toml_path,
             max_table_depth: $mtd
             $(, description: $desc)?
+            $(, description_key: $desc_key)?
             $(, feature_flag: $flag)?
         );
     };
     // storage_key + toml_path
-    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $key:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
+    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $key:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
         $crate::macros::define_setting!(
             $setting: $value_type,
             default: $default,
@@ -466,11 +469,12 @@ macro_rules! maybe_define_setting {
             private: $private,
             toml_path: $toml_path
             $(, description: $desc)?
+            $(, description_key: $desc_key)?
             $(, feature_flag: $flag)?
         );
     };
     // toml_path only (no explicit storage_key)
-    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
+    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
         $crate::macros::define_setting!(
             $setting: $value_type,
             default: $default,
@@ -480,11 +484,12 @@ macro_rules! maybe_define_setting {
             private: $private,
             toml_path: $toml_path
             $(, description: $desc)?
+            $(, description_key: $desc_key)?
             $(, feature_flag: $flag)?
         );
     };
     // storage_key only, no toml_path (private settings with custom key)
-    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $key:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
+    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr, storage_key: $key:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
         $crate::macros::define_setting!(
             $setting: $value_type,
             default: $default,
@@ -494,11 +499,12 @@ macro_rules! maybe_define_setting {
             sync_to_cloud: $sync_to_cloud,
             private: $private
             $(, description: $desc)?
+            $(, description_key: $desc_key)?
             $(, feature_flag: $flag)?
         );
     };
     // neither toml_path nor storage_key (private settings with default key)
-    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
+    ($setting:ident, group: $group:path, { type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)? }) => {
         $crate::macros::define_setting!(
             $setting: $value_type,
             default: $default,
@@ -507,6 +513,7 @@ macro_rules! maybe_define_setting {
             sync_to_cloud: $sync_to_cloud,
             private: $private
             $(, description: $desc)?
+            $(, description_key: $desc_key)?
             $(, feature_flag: $flag)?
         );
     };
@@ -517,7 +524,7 @@ pub use maybe_define_setting;
 #[macro_export]
 macro_rules! implement_setting_for_enum {
     // Base arm with all parameters
-    (@base $name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr, storage_key: $storage_key:expr, toml_path_value: $toml_path_value:expr $(, max_table_depth_value: $mtd:literal)? $(, description: $desc:literal)? $(, feature_flag: $flag:path)?) => {
+    (@base $name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr, storage_key: $storage_key:expr, toml_path_value: $toml_path_value:expr $(, max_table_depth_value: $mtd:literal)? $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)?) => {
         const _: () = {
             let toml_path: Option<&str> = $toml_path_value;
             if !$private && toml_path.is_none() {
@@ -668,6 +675,7 @@ macro_rules! implement_setting_for_enum {
         $crate::submit_schema_entry!(
             private: $private,
             description: $crate::_schema_default_description!($($desc)?),
+            description_key: $crate::_schema_default_description_key!($($desc_key)?),
             toml_path_value: $toml_path_value,
             fallback_storage_key: $storage_key,
             supported_platforms: $supported_platforms,
@@ -678,16 +686,16 @@ macro_rules! implement_setting_for_enum {
         );
     };
     // toml_path + max_table_depth
-    ($name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)?) => {
-        $crate::macros::implement_setting_for_enum!(@base $name, $group, $supported_platforms, $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path), max_table_depth_value: $mtd $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr, max_table_depth: $mtd:literal $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)?) => {
+        $crate::macros::implement_setting_for_enum!(@base $name, $group, $supported_platforms, $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path), max_table_depth_value: $mtd $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // toml_path only
-    ($name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)?) => {
-        $crate::macros::implement_setting_for_enum!(@base $name, $group, $supported_platforms, $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path) $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr, toml_path: $toml_path:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)?) => {
+        $crate::macros::implement_setting_for_enum!(@base $name, $group, $supported_platforms, $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: Some($toml_path) $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
     // neither (private settings)
-    ($name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)?) => {
-        $crate::macros::implement_setting_for_enum!(@base $name, $group, $supported_platforms, $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: None::<&str> $(, description: $desc)? $(, feature_flag: $flag)?);
+    ($name:ident, $group:path, $supported_platforms:expr, $sync_to_cloud:expr, private: $private:expr $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)?) => {
+        $crate::macros::implement_setting_for_enum!(@base $name, $group, $supported_platforms, $sync_to_cloud, private: $private, storage_key: stringify!($name), toml_path_value: None::<&str> $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)?);
     };
 }
 pub use implement_setting_for_enum;
@@ -701,9 +709,9 @@ pub trait SettingSection {
 
 #[macro_export]
 macro_rules! define_settings_group {
-    ($group:ident, settings: [$($var:ident: $setting:ident $({ type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, storage_key: $storage_key:literal)? $(, toml_path: $toml_path:literal)? $(, max_table_depth: $mtd:literal)? $(, description: $desc:literal)? $(, feature_flag: $flag:path)? $(,)? })? $(,)? )*]) => {
+    ($group:ident, settings: [$($var:ident: $setting:ident $({ type: $value_type:ty, default: $default:expr, supported_platforms: $supported_platforms:expr, sync_to_cloud: $sync_to_cloud:expr, private: $private:expr $(, storage_key: $storage_key:literal)? $(, toml_path: $toml_path:literal)? $(, max_table_depth: $mtd:literal)? $(, description: $desc:literal)? $(, description_key: $desc_key:literal)? $(, feature_flag: $flag:path)? $(,)? })? $(,)? )*]) => {
         $(
-            $crate::macros::maybe_define_setting!($setting, group: $group $(, { type: $value_type, default: $default, supported_platforms: $supported_platforms, sync_to_cloud: $sync_to_cloud, private: $private $(, storage_key: $storage_key)? $(, toml_path: $toml_path)? $(, max_table_depth: $mtd)? $(, description: $desc)? $(, feature_flag: $flag)? })?);
+            $crate::macros::maybe_define_setting!($setting, group: $group $(, { type: $value_type, default: $default, supported_platforms: $supported_platforms, sync_to_cloud: $sync_to_cloud, private: $private $(, storage_key: $storage_key)? $(, toml_path: $toml_path)? $(, max_table_depth: $mtd)? $(, description: $desc)? $(, description_key: $desc_key)? $(, feature_flag: $flag)? })?);
         )*
 
         pub struct $group {

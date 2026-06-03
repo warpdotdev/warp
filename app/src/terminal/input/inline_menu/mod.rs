@@ -50,19 +50,19 @@ pub enum InlineMenuType {
 }
 
 impl InlineMenuType {
-    fn display_label(&self) -> &'static str {
+    fn display_label(&self) -> String {
         match self {
-            InlineMenuType::SlashCommands => "/Commands",
-            InlineMenuType::ModelSelector => "/Model",
-            InlineMenuType::ConversationMenu => "/Conversations",
-            InlineMenuType::ProfileSelector => "/Profiles",
-            InlineMenuType::PromptsMenu => "/Prompts",
-            InlineMenuType::SkillMenu => "/Skills",
-            InlineMenuType::UserQueryMenu => "/Fork",
-            InlineMenuType::RewindMenu => "/Rewind",
-            InlineMenuType::InlineHistoryMenu => "History",
-            InlineMenuType::IndexedReposMenu => "/Repos",
-            InlineMenuType::PlanMenu => "/Plans",
+            InlineMenuType::SlashCommands => "/Commands".to_owned(),
+            InlineMenuType::ModelSelector => "/Model".to_owned(),
+            InlineMenuType::ConversationMenu => "/Conversations".to_owned(),
+            InlineMenuType::ProfileSelector => "/Profiles".to_owned(),
+            InlineMenuType::PromptsMenu => "/Prompts".to_owned(),
+            InlineMenuType::SkillMenu => "/Skills".to_owned(),
+            InlineMenuType::UserQueryMenu => "/Fork".to_owned(),
+            InlineMenuType::RewindMenu => "/Rewind".to_owned(),
+            InlineMenuType::InlineHistoryMenu => i18n::t("terminal.input.inline_menu.history"),
+            InlineMenuType::IndexedReposMenu => "/Repos".to_owned(),
+            InlineMenuType::PlanMenu => "/Plans".to_owned(),
         }
     }
 

@@ -9,9 +9,7 @@ use crate::{Args, binary_name};
 pub fn generate_to_stdout(shell: Option<Shell>) -> anyhow::Result<()> {
     let shell = match shell.or_else(Shell::from_env) {
         Some(s) => s,
-        None => anyhow::bail!(
-            "Could not determine shell from environment. Please provide a shell argument."
-        ),
+        None => anyhow::bail!(i18n::t("warp_cli.completions.error.shell_not_detected")),
     };
 
     let mut cmd = Args::clap_command();

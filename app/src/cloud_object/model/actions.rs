@@ -10,6 +10,23 @@ use crate::server::ids::{HashedSqliteId, ObjectUid};
 
 pub enum ObjectActionsEvent {}
 
+fn localized_action_name(action_type: &ObjectActionType, count: i64) -> String {
+    match action_type {
+        ObjectActionType::Execute if count == 1 => i18n::t("cloud_object.action.run"),
+        ObjectActionType::Execute => i18n::t("cloud_object.action.runs"),
+    }
+}
+
+fn localized_action_history_summary(
+    count: i64,
+    action_type: &ObjectActionType,
+    period_key: &str,
+) -> String {
+    i18n::t(period_key)
+        .replace("{count}", &count.to_string())
+        .replace("{action}", &localized_action_name(action_type, count))
+}
+
 #[cfg(not(target_family = "wasm"))]
 pub fn object_action_from_persisted(
     other: crate::persistence::model::PersistedObjectAction,
@@ -250,7 +267,11 @@ impl ObjectActions {
         // If the object is not in the model, return 0.
         let all_actions_on_this_object = self.object_actions_by_id.get(uid);
         if all_actions_on_this_object.is_none() {
-            return Some("0 runs in the last year".to_string());
+            return Some(localized_action_history_summary(
+                0,
+                &action_type,
+                "cloud_object.action_history.last_year",
+            ));
         }
 
         // If the object doesn't have any of these action types recorded, return 0.
@@ -258,21 +279,21 @@ impl ObjectActions {
             .iter()
             .filter(|a| a.action_type == action_type);
         if all_relevant_actions.clone().count() == 0 {
-            return Some("0 runs in the last year".to_string());
+            return Some(localized_action_history_summary(
+                0,
+                &action_type,
+                "cloud_object.action_history.last_year",
+            ));
         }
 
         // If the action has occurred in the last day, return Day as the time unit.
         let one_day_ago = Utc::now() - Duration::days(1);
         let in_the_last_day = all_relevant_actions.clone().filter(|a| matches!(a.action_subtype, ObjectActionSubtype::SingleAction { timestamp, .. } if timestamp > one_day_ago)).count();
         if in_the_last_day > 0 {
-            return Some(format!(
-                "{} {} in the last day",
-                in_the_last_day,
-                if in_the_last_day == 1 {
-                    action_type.singular()
-                } else {
-                    action_type.plural()
-                }
+            return Some(localized_action_history_summary(
+                in_the_last_day as i64,
+                &action_type,
+                "cloud_object.action_history.last_day",
             ));
         }
 
@@ -280,14 +301,10 @@ impl ObjectActions {
         let one_week_ago = Utc::now() - Duration::days(7);
         let in_the_last_week = all_relevant_actions.clone().filter(|a| matches!(a.action_subtype, ObjectActionSubtype::SingleAction { timestamp, .. } if timestamp > one_week_ago)).count();
         if in_the_last_week > 0 {
-            return Some(format!(
-                "{} {} in the last week",
-                in_the_last_week,
-                if in_the_last_week == 1 {
-                    action_type.singular()
-                } else {
-                    action_type.plural()
-                }
+            return Some(localized_action_history_summary(
+                in_the_last_week as i64,
+                &action_type,
+                "cloud_object.action_history.last_week",
             ));
         }
 
@@ -295,14 +312,10 @@ impl ObjectActions {
         let one_month_ago = Utc::now() - Duration::days(30);
         let in_the_last_month = all_relevant_actions.clone().filter(|a| matches!(a.action_subtype, ObjectActionSubtype::SingleAction { timestamp, .. } if timestamp > one_month_ago)).count();
         if in_the_last_month > 0 {
-            return Some(format!(
-                "{} {} in the last month",
-                in_the_last_month,
-                if in_the_last_month == 1 {
-                    action_type.singular()
-                } else {
-                    action_type.plural()
-                }
+            return Some(localized_action_history_summary(
+                in_the_last_month as i64,
+                &action_type,
+                "cloud_object.action_history.last_month",
             ));
         }
 
@@ -323,14 +336,10 @@ impl ObjectActions {
             })
             .sum();
 
-        Some(format!(
-            "{} {} in the last year",
-            in_the_last_year,
-            if in_the_last_year == 1 {
-                action_type.singular()
-            } else {
-                action_type.plural()
-            }
+        Some(localized_action_history_summary(
+            i64::from(in_the_last_year),
+            &action_type,
+            "cloud_object.action_history.last_year",
         ))
     }
 

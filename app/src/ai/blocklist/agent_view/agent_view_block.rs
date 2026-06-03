@@ -216,7 +216,7 @@ fn render_deleted_state(
         .with_main_axis_size(MainAxisSize::Max)
         .with_child(
             Text::new(
-                cached_title.unwrap_or_else(|| "Deleted conversation".to_string()),
+                cached_title.unwrap_or_else(|| i18n::t("ai.agent_view.deleted_conversation")),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -227,7 +227,7 @@ fn render_deleted_state(
             })
             .finish(),
         )
-        .with_child(render_subtext("Deleted".to_string(), appearance))
+        .with_child(render_subtext(i18n::t("ai.agent_view.deleted"), appearance))
         .finish();
 
     render_block_container(
@@ -292,9 +292,9 @@ impl View for AgentViewEntryBlock {
         let is_open_elsewhere = is_active && !is_active_in_this_pane;
 
         let subtext = if is_open_elsewhere {
-            Some("Open in different pane")
+            Some(i18n::t("ai.agent_view.open_in_different_pane"))
         } else if self.is_restored {
-            Some("Restored")
+            Some(i18n::t("ai.agent_view.restored"))
         } else if !self.is_new
             && !matches!(
                 self.origin,
@@ -302,7 +302,7 @@ impl View for AgentViewEntryBlock {
                     | AgentViewEntryOrigin::AgentRequestedNewConversation
             )
         {
-            Some("Continued")
+            Some(i18n::t("ai.agent_view.continued"))
         } else {
             None
         };
@@ -316,7 +316,7 @@ impl View for AgentViewEntryBlock {
                     Text::new(
                         conversation
                             .title()
-                            .unwrap_or("Untitled conversation".to_string()),
+                            .unwrap_or_else(|| i18n::t("ai.agent_view.untitled_conversation")),
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -335,7 +335,7 @@ impl View for AgentViewEntryBlock {
                 .finish(),
             );
         if let Some(subtext) = subtext {
-            title_section.add_child(render_subtext(subtext.to_string(), appearance));
+            title_section.add_child(render_subtext(subtext, appearance));
         }
 
         let conversation_id = self.conversation_id;
@@ -485,9 +485,7 @@ impl TypedActionView for AgentViewEntryBlock {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "Couldn't navigate to conversation.".to_string(),
-                                ),
+                                DismissibleToast::error(i18n::t("ai.conversation.navigate_failed")),
                                 window_id,
                                 ctx,
                             );

@@ -20,8 +20,7 @@ use warpui::{AppContext, Element, Entity, EntityId, SingletonEntity as _};
 
 use super::model_spec_scores::{
     render_model_spec_header, render_model_spec_scores, CostRow, CostRowTooltip,
-    ModelSpecScoresLayout, MODEL_SPECS_DESCRIPTION, MODEL_SPECS_TITLE, REASONING_LEVEL_DESCRIPTION,
-    REASONING_LEVEL_TITLE,
+    ModelSpecScoresLayout,
 };
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
@@ -43,8 +42,6 @@ use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
-
 #[derive(Clone, Debug)]
 pub struct AcceptModel {
     pub id: LLMId,
@@ -63,7 +60,7 @@ impl InlineMenuAction for AcceptModel {
                 key: "enter".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(" to select"),
+            MessageItem::text(i18n::t("terminal.message_bar.to_select")),
             MessageItem::keystroke(if OperatingSystem::get().is_mac() {
                 Keystroke {
                     key: "enter".to_owned(),
@@ -78,7 +75,7 @@ impl InlineMenuAction for AcceptModel {
                     ..Default::default()
                 }
             }),
-            MessageItem::text(" select and save to profile"),
+            MessageItem::text(i18n::t("terminal.message_bar.select_and_save_to_profile")),
         ];
 
         if args.inline_menu_model.tab_configs().len() > 1 {
@@ -87,7 +84,9 @@ impl InlineMenuAction for AcceptModel {
                 shift: true,
                 ..Default::default()
             }));
-            items.push(MessageItem::text(" to cycle tabs"));
+            items.push(MessageItem::text(i18n::t(
+                "terminal.message_bar.to_cycle_tabs",
+            )));
         }
 
         items.push(MessageItem::clickable(
@@ -96,7 +95,7 @@ impl InlineMenuAction for AcceptModel {
                     key: "escape".to_owned(),
                     ..Default::default()
                 }),
-                MessageItem::text(" to dismiss"),
+                MessageItem::text(i18n::t("terminal.message_bar.to_dismiss")),
             ],
             |ctx| {
                 ctx.dispatch_typed_action(
@@ -438,7 +437,10 @@ impl SearchItem for ModelSearchItem {
             let discount_percentage = self.discount_percentage.unwrap_or(0.);
             let chip = Container::new(
                 Text::new_inline(
-                    format!("{}% off!", discount_percentage.round() as u32),
+                    i18n::t("terminal.input.models.discount_off").replace(
+                        "{percent}",
+                        &(discount_percentage.round() as u32).to_string(),
+                    ),
                     appearance.ui_font_family(),
                     font_size,
                 )
@@ -472,9 +474,15 @@ impl SearchItem for ModelSearchItem {
         let theme = appearance.theme();
 
         let (title, description) = if self.reasoning_level.is_some() {
-            (REASONING_LEVEL_TITLE, REASONING_LEVEL_DESCRIPTION)
+            (
+                i18n::t("terminal.model_specs.reasoning_level_title"),
+                i18n::t("terminal.model_specs.reasoning_level_description"),
+            )
         } else {
-            (MODEL_SPECS_TITLE, MODEL_SPECS_DESCRIPTION)
+            (
+                i18n::t("terminal.model_specs.title"),
+                i18n::t("terminal.model_specs.description"),
+            )
         };
         let header = render_model_spec_header(title, description, app);
 
@@ -493,7 +501,7 @@ impl SearchItem for ModelSearchItem {
                     ButtonVariant::Outlined,
                     self.manage_api_key_mouse_state.clone(),
                 )
-                .with_text_label("Manage".to_string())
+                .with_text_label(i18n::t("common.manage"))
                 .with_style(UiComponentStyles {
                     height: Some(24.),
                     padding: Some(Coords {
@@ -515,15 +523,15 @@ impl SearchItem for ModelSearchItem {
                 .finish();
             CostRow::BilledToProvider {
                 label: if self.is_using_bedrock && self.is_auto {
-                    "Inference may use Bedrock"
+                    i18n::t("terminal.model_specs.inference_may_use_bedrock")
                 } else if self.is_using_bedrock {
-                    "Inference via Bedrock"
+                    i18n::t("terminal.model_specs.inference_via_bedrock")
                 } else {
-                    "Inference via API key"
+                    i18n::t("terminal.model_specs.inference_via_api_key")
                 },
                 tooltip: if self.is_using_bedrock && self.is_auto {
                     Some(CostRowTooltip {
-                        text: AUTO_BEDROCK_TOOLTIP,
+                        text: i18n::t("terminal.model_specs.auto_bedrock_tooltip"),
                         mouse_state: self.cost_row_tooltip_mouse_state.clone(),
                     })
                 } else {
@@ -578,13 +586,13 @@ impl SearchItem for ModelSearchItem {
                 FormattedTextFragment::plain_text(format!(
                     "{display_name} is not available for free users. "
                 )),
-                FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
+                FormattedTextFragment::hyperlink(i18n::t("common.upgrade"), upgrade_url),
             ];
 
             if byok_available {
-                text_fragments.push(FormattedTextFragment::plain_text(" or ".to_string()));
+                text_fragments.push(FormattedTextFragment::plain_text(i18n::t("common.or")));
                 text_fragments.push(FormattedTextFragment::hyperlink_action(
-                    "bring your own key",
+                    i18n::t("settings.billing.bring_your_own_key"),
                     WorkspaceAction::ShowSettingsPageWithSearch {
                         search_query: "api".to_string(),
                         section: Some(SettingsSection::WarpAgent),
@@ -659,12 +667,12 @@ impl SearchItem for ModelSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        let mut label = format!("Model: {}", self.display_text);
+        let mut label = i18n::t("terminal.input.a11y.model").replace("{model}", &self.display_text);
         if self.is_selected {
-            label.push_str(" (selected)");
+            label.push_str(&i18n::t("terminal.input.a11y.selected_suffix"));
         }
         if self.is_disabled() {
-            label.push_str(" (disabled)");
+            label.push_str(&i18n::t("terminal.input.a11y.disabled_suffix"));
         }
         label
     }

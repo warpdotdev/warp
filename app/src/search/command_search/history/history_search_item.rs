@@ -156,7 +156,11 @@ impl SearchItem for HistorySearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("History item: {}", self.entry.command)
+        format!(
+            "{}: {}",
+            i18n::t("search.command_search.result.history_item_prefix"),
+            self.entry.command
+        )
     }
 }
 

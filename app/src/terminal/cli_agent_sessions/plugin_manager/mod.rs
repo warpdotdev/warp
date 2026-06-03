@@ -120,14 +120,16 @@ pub(crate) async fn run_cli_command_logged(
                 return Ok(());
             }
             Err(PluginInstallError {
-                message: format!("'{display_cmd}' failed"),
+                message: i18n::t("terminal.plugin_instructions.error.command_failed")
+                    .replace("{command}", &display_cmd),
                 log: log.to_owned(),
             })
         }
         Err(err) => {
             log.push_str(&format!("error: {err}\n"));
             Err(PluginInstallError {
-                message: format!("failed to run '{display_cmd}'"),
+                message: i18n::t("terminal.plugin_instructions.error.command_run_failed")
+                    .replace("{command}", &display_cmd),
                 log: log.clone(),
             })
         }
@@ -182,7 +184,7 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     /// Default returns an error — only agents with `can_auto_install() == true` should override.
     async fn install(&self) -> Result<(), PluginInstallError> {
         Err(PluginInstallError {
-            message: "Auto-install not supported for this agent".to_owned(),
+            message: i18n::t("terminal.plugin_instructions.error.auto_install_not_supported"),
             log: String::new(),
         })
     }
@@ -191,19 +193,19 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     /// Default returns an error — only agents with `can_auto_install() == true` should override.
     async fn update(&self) -> Result<(), PluginInstallError> {
         Err(PluginInstallError {
-            message: "Auto-update not supported for this agent".to_owned(),
+            message: i18n::t("terminal.plugin_instructions.error.auto_update_not_supported"),
             log: String::new(),
         })
     }
 
     /// Toast message shown after a successful auto-install.
-    fn install_success_message(&self) -> &'static str {
-        "Warp plugin installed. Please restart the session to activate."
+    fn install_success_message(&self) -> String {
+        i18n::t("terminal.plugin_instructions.success.installed_restart_session")
     }
 
     /// Toast message shown after a successful auto-update.
-    fn update_success_message(&self) -> &'static str {
-        "Warp plugin updated. Please restart the session to activate."
+    fn update_success_message(&self) -> String {
+        i18n::t("terminal.plugin_instructions.success.updated_restart_session")
     }
 
     /// Manual installation instructions for the modal UI.

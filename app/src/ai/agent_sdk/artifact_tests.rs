@@ -4,6 +4,10 @@ use warp_cli::agent::OutputFormat;
 
 use super::*;
 
+fn use_english_locale() {
+    i18n::set_locale("en");
+}
+
 fn sample_completed_upload() -> CompletedFileArtifactUpload {
     CompletedFileArtifactUpload {
         artifact: sample_artifact_record(),
@@ -94,6 +98,8 @@ fn write_get_output_to_writes_ndjson_output() {
 
 #[test]
 fn write_get_output_to_writes_pretty_output() {
+    use_english_locale();
+
     let mut output = Vec::new();
 
     write_get_output_to(
@@ -111,6 +117,8 @@ fn write_get_output_to_writes_pretty_output() {
 
 #[test]
 fn write_get_output_to_writes_text_output() {
+    use_english_locale();
+
     let mut output = Vec::new();
 
     write_get_output_to(
@@ -128,6 +136,8 @@ fn write_get_output_to_writes_text_output() {
 
 #[test]
 fn write_download_output_to_writes_pretty_output() {
+    use_english_locale();
+
     let artifact = sample_file_download_response();
     let path = std::path::absolute("report.txt").unwrap();
     let output_record = DownloadArtifactOutput::new(&artifact, path.clone());
@@ -228,6 +238,8 @@ fn write_upload_output_to_writes_ndjson_output() {
 
 #[test]
 fn write_upload_output_to_writes_pretty_output() {
+    use_english_locale();
+
     let mut output = Vec::new();
 
     write_upload_output_to(
@@ -245,6 +257,8 @@ fn write_upload_output_to_writes_pretty_output() {
 
 #[test]
 fn write_upload_output_to_writes_text_output() {
+    use_english_locale();
+
     let mut output = Vec::new();
 
     write_upload_output_to(&mut output, &sample_completed_upload(), OutputFormat::Text).unwrap();

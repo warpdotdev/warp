@@ -12,6 +12,10 @@ use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::ids::ServerId;
 
+fn use_english_locale() {
+    i18n::set_locale("en");
+}
+
 fn create_mock_server_metadata() -> ServerMetadata {
     ServerMetadata {
         uid: ServerId::default(),
@@ -117,6 +121,8 @@ fn single_conversation_metadata_returns_the_only_metadata_record() {
 
 #[test]
 fn single_conversation_metadata_errors_when_no_metadata_is_returned() {
+    use_english_locale();
+
     let err = single_conversation_metadata("conversation-123", Vec::new()).unwrap_err();
 
     assert!(err.to_string().contains("Conversation not found"));
@@ -124,6 +130,8 @@ fn single_conversation_metadata_errors_when_no_metadata_is_returned() {
 
 #[test]
 fn ambient_task_id_from_conversation_metadata_requires_cloud_task_metadata() {
+    use_english_locale();
+
     let err = ambient_task_id_from_conversation_metadata(
         "conversation-123",
         create_conversation_metadata("conversation-123", None),
@@ -157,6 +165,8 @@ fn explicit_run_id_wins_over_env_fallback() {
 
 #[test]
 fn invalid_explicit_run_id_errors_even_if_env_fallback_exists() {
+    use_english_locale();
+
     let err = FileArtifactUploadRequest::try_from(UploadArtifactArgs {
         path: PathBuf::from("outputs/report.txt"),
         run_id: Some("not-a-run-id".to_string()),
@@ -232,6 +242,8 @@ fn missing_args_fall_back_to_env_run_id_for_request_association() {
 
 #[test]
 fn missing_args_and_missing_env_return_clear_error() {
+    use_english_locale();
+
     let err = resolve_upload_association_from_sources(None, None, None, None).unwrap_err();
 
     assert!(err
@@ -242,6 +254,8 @@ fn missing_args_and_missing_env_return_clear_error() {
 
 #[test]
 fn invalid_env_run_id_returns_clear_error() {
+    use_english_locale();
+
     let err =
         resolve_upload_association_from_sources(None, None, None, Some("not-a-run-id".to_string()))
             .unwrap_err();

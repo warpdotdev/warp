@@ -71,10 +71,16 @@ impl crate::search::item::SearchItem for SearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Selected {}.", self.launch_config.name)
+        format!(
+            "{} {}.",
+            i18n::t("search.a11y.selected_prefix"),
+            self.launch_config.name
+        )
     }
 
     fn accessibility_help_message(&self) -> Option<String> {
-        Some("Press enter to use this launch configuration.".into())
+        Some(i18n::t(
+            "search.launch_config.press_enter_to_use_launch_configuration",
+        ))
     }
 }

@@ -106,13 +106,12 @@ impl BonusGrantNotificationModel {
 
     fn format_generic_grant_message(grant: &BonusGrant) -> String {
         let scope_text = match grant.scope {
-            BonusGrantScope::User => "account",
-            BonusGrantScope::Workspace(_) => "team",
+            BonusGrantScope::User => i18n::t("workspace.bonus_grant.scope.account"),
+            BonusGrantScope::Workspace(_) => i18n::t("workspace.bonus_grant.scope.team"),
         };
-        format!(
-            "{} Reload Credits have been added to your {}.",
-            grant.request_credits_granted, scope_text
-        )
+        i18n::t("workspace.bonus_grant.reload_credits_added")
+            .replace("{credits}", &grant.request_credits_granted.to_string())
+            .replace("{scope}", &scope_text)
     }
 
     fn create_grant_key(grant: &BonusGrant) -> String {

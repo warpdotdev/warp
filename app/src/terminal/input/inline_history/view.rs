@@ -131,7 +131,7 @@ fn build_tab_configs(is_agent_view: bool) -> Vec<InlineMenuTabConfig<HistoryTab>
     if !is_agent_view {
         return vec![InlineMenuTabConfig {
             id: HistoryTab::All,
-            label: "All".to_string(),
+            label: i18n::t("terminal.inline_history.tab.all"),
             filters: HashSet::new(),
         }];
     }
@@ -139,17 +139,17 @@ fn build_tab_configs(is_agent_view: bool) -> Vec<InlineMenuTabConfig<HistoryTab>
     vec![
         InlineMenuTabConfig {
             id: HistoryTab::All,
-            label: "All".to_string(),
+            label: i18n::t("terminal.inline_history.tab.all"),
             filters: HashSet::new(),
         },
         InlineMenuTabConfig {
             id: HistoryTab::Commands,
-            label: "Commands".to_string(),
+            label: i18n::t("terminal.inline_history.tab.commands"),
             filters: HashSet::from([QueryFilter::Commands]),
         },
         InlineMenuTabConfig {
             id: HistoryTab::Prompts,
-            label: "Prompts".to_string(),
+            label: i18n::t("terminal.inline_history.tab.prompts"),
             filters: HashSet::from([QueryFilter::PromptHistory]),
         },
     ]
@@ -262,7 +262,7 @@ impl InlineHistoryMenuView {
 
         let menu_view = if FeatureFlag::InlineMenuHeaders.is_enabled() {
             let configure_button = ctx.add_view(|_| {
-                ActionButton::new("Configure", ConfigureButtonTheme)
+                ActionButton::new(i18n::t("common.configure"), ConfigureButtonTheme)
                     .with_icon(Icon::Settings)
                     .with_size(ButtonSize::Small)
                     .on_click(|ctx| {
@@ -273,7 +273,7 @@ impl InlineHistoryMenuView {
                     })
             });
             let header_config = InlineMenuHeaderConfig {
-                label: "History".to_string(),
+                label: i18n::t("terminal.inline_history.header"),
                 trailing_element: Some(Box::new(move |_app: &AppContext| {
                     ChildView::new(&configure_button).finish()
                 })),

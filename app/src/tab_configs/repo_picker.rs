@@ -16,9 +16,6 @@ use crate::view_components::{DropdownItem, FilterableDropdown};
 
 const DEFAULT_DROPDOWN_WIDTH: f32 = 380.;
 
-/// Label for the sticky "Add new repo..." footer at the bottom of the picker.
-const ADD_NEW_REPO_LABEL: &str = "+ Add new repo...";
-
 /// A filterable dropdown listing known repos (from `PersistedWorkspace`), with a
 /// sticky "+ Add new repo..." footer that is always visible even when scrolling.
 ///
@@ -112,9 +109,13 @@ impl RepoPicker {
                     let mouse_state_clone = mouse_state.clone();
                     Hoverable::new(mouse_state_clone, move |_| {
                         Container::new(
-                            Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
-                                .with_color(text_color.into())
-                                .finish(),
+                            Text::new_inline(
+                                i18n::t("tab_configs.add_new_repo"),
+                                font_family,
+                                font_size,
+                            )
+                            .with_color(text_color.into())
+                            .finish(),
                         )
                         .with_horizontal_padding(8.)
                         .with_vertical_padding(6.)

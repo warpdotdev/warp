@@ -22,9 +22,6 @@ const VARIABLE_DIVIDER_HEIGHT: f32 = 2.;
 const SECTION_FONT_SIZE: f32 = 16.;
 const BUTTON_HEIGHT: f32 = 32.;
 
-const SAVE_BUTTON_TEXT: &str = "Save";
-const VARIABLES_LABEL_TEXT: &str = "Variables";
-
 /// This file contains components that fixed in the view,
 /// i.e. the trash banner, breadcrumbs, and variables section header
 impl EnvVarCollectionView {
@@ -57,9 +54,9 @@ impl EnvVarCollectionView {
         let mut stack = Stack::new();
 
         let text = if deleted {
-            "You no longer have access to these environment variables"
+            i18n::t("env_vars.no_longer_access")
         } else {
-            "Environment variables were moved to trash"
+            i18n::t("env_vars.moved_to_trash")
         };
         stack.add_child(
             Align::new(
@@ -112,13 +109,11 @@ impl EnvVarCollectionView {
                             )
                             .with_tooltip(move || {
                                 ui_builder
-                                    .tool_tip(
-                                        "Restore environment variables from trash".to_string(),
-                                    )
+                                    .tool_tip(i18n::t("env_vars.restore_from_trash"))
                                     .build()
                                     .finish()
                             })
-                            .with_text_label("Restore".to_string())
+                            .with_text_label(i18n::t("common.restore"))
                             .build()
                             .on_click(|ctx, _, _| {
                                 ctx.dispatch_typed_action(EnvVarCollectionAction::Untrash)
@@ -161,7 +156,7 @@ impl EnvVarCollectionView {
                 2.,
                 appearance
                     .ui_builder()
-                    .span(VARIABLES_LABEL_TEXT.to_string())
+                    .span(i18n::t("env_vars.variables"))
                     .with_style(UiComponentStyles {
                         font_size: Some(SECTION_FONT_SIZE),
                         ..Default::default()
@@ -240,7 +235,7 @@ impl EnvVarCollectionView {
             .with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::TextFirst,
-                    "Load",
+                    i18n::t("env_vars.load"),
                     Icon::TerminalInput.to_warpui_icon(appearance.theme().active_ui_text_color()),
                     MainAxisSize::Min,
                     MainAxisAlignment::SpaceBetween,
@@ -293,7 +288,7 @@ impl EnvVarCollectionView {
                 font_size: Some(14.),
                 ..Default::default()
             })
-            .with_centered_text_label(SAVE_BUTTON_TEXT.to_owned());
+            .with_centered_text_label(i18n::t("common.save"));
 
         if is_save_disabled {
             button = button.disabled();

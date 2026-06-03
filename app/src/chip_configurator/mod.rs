@@ -196,13 +196,13 @@ impl ControlItemRenderer {
             .finish()
     }
 
-    pub(crate) fn display_label(&self) -> &str {
+    pub(crate) fn display_label(&self) -> String {
         if let Some(label) = &self.custom_label {
-            label
+            label.clone()
         } else if let Some(kind) = &self.kind {
-            kind.display_label()
+            kind.display_label().to_string()
         } else {
-            "Unknown"
+            i18n::t("chip_configurator.unknown")
         }
     }
 
@@ -221,7 +221,7 @@ impl ControlItemRenderer {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let font_size = udi_font_size(appearance);
-        let label = self.display_label().to_string();
+        let label = self.display_label();
         let icon = self.display_icon();
         let is_dragging = matches!(drag_state, ChipDragState::Draggable { is_dragging: true });
         let mut hoverable = Hoverable::new(self.tooltip_state_handle.clone(), move |mouse_state| {

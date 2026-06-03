@@ -31,8 +31,11 @@ fn test_editor_display_name() {
         });
 
         app.read(|ctx| {
-            // If there's no known editor, default to "Other user";
-            assert_eq!(&editor_display_name(None, ctx), "Other user");
+            // If there's no known editor, default to the localized generic label.
+            assert_eq!(
+                &editor_display_name(None, ctx),
+                &i18n::t("common.other_user")
+            );
 
             // If the editor doesn't have a profile, default to their email.
             assert_eq!(

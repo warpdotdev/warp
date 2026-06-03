@@ -25,12 +25,16 @@ where
             return Ok(T::default());
         }
         Err(e) => {
-            return Err(
-                anyhow::Error::from(e).context(format!("Failed to read {}", path.display()))
-            );
+            return Err(anyhow::Error::from(e).context(
+                i18n::t("ai.agent_sdk.driver.harness.json.read_failed")
+                    .replace("{path}", &path.display().to_string()),
+            ));
         }
     };
-    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
+    serde_json::from_str(&content).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.parse_failed")
+            .replace("{path}", &path.display().to_string())
+    })
 }
 
 /// Serialize `value` as pretty JSON and write it to `path`, creating parent
@@ -40,20 +44,26 @@ where
 pub(super) fn write_json_file<T>(
     path: &Path,
     value: &T,
-    serialize_error: &'static str,
+    serialize_error: impl Into<String>,
 ) -> Result<()>
 where
     T: Serialize,
 {
+    let serialize_error = serialize_error.into();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            i18n::t("ai.agent_sdk.driver.harness.json.create_dir_failed")
+                .replace("{path}", &parent.display().to_string())
+        })?;
     }
     std::fs::write(
         path,
         serde_json::to_vec_pretty(value).context(serialize_error)?,
     )
-    .with_context(|| format!("Failed to write {}", path.display()))
+    .with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.write_failed")
+            .replace("{path}", &path.display().to_string())
+    })
 }
 
 /// Serialize a slice of JSON values as a JSONL byte string (one value per line).

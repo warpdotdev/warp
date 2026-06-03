@@ -64,14 +64,11 @@ pub enum GeneratedCommandMetadataError {
 impl GeneratedCommandMetadataError {
     pub fn user_facing_message(&self) -> String {
         match self {
-            Self::BadCommand => {
-                "Failed to generate metadata. Please try again with a different command."
-            }
-            Self::AiProviderError => "Something went wrong. Please try again.",
-            Self::RateLimited => "Looks like you're out of AI credits. Please try again later.",
-            Self::Other => "Something went wrong. Please try again.",
+            Self::BadCommand => i18n::t("drive.workflows.ai_assist.bad_command"),
+            Self::AiProviderError => i18n::t("common.something_went_wrong_try_again"),
+            Self::RateLimited => i18n::t("drive.workflows.ai_assist.rate_limited"),
+            Self::Other => i18n::t("common.something_went_wrong_try_again"),
         }
-        .to_string()
     }
 }
 
@@ -108,7 +105,7 @@ impl WorkflowModal {
                                 name: parameter.name,
                                 description: Some(parameter.description),
                                 default_value: Some(parameter.default_value),
-                                arg_type: Default::default()
+                                arg_type: Default::default(),
                             })
                             .collect_vec();
 
@@ -125,10 +122,7 @@ impl WorkflowModal {
                             environment_variables: None,
                         };
 
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::AutoGenerateMetadataSuccess,
-                            ctx
-                        );
+                        send_telemetry_from_ctx!(TelemetryEvent::AutoGenerateMetadataSuccess, ctx);
 
                         modal.populate_missing_field_with_suggestion(workflow, ctx);
                         ctx.notify();
@@ -141,18 +135,27 @@ impl WorkflowModal {
                             if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
                                 let current_user_email =
                                     auth_state.user_email().unwrap_or_default();
-                                let has_admin_permissions = team.has_admin_permissions(&current_user_email);
+                                let has_admin_permissions =
+                                    team.has_admin_permissions(&current_user_email);
                                 if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                                     if has_admin_permissions {
-                                        ctx.emit(WorkflowModalEvent::AiAssistUpgradeError(Some(team.uid), current_user_id));
+                                        ctx.emit(WorkflowModalEvent::AiAssistUpgradeError(
+                                            Some(team.uid),
+                                            current_user_id,
+                                        ));
                                     } else {
-                                        ctx.emit(WorkflowModalEvent::AiAssistError("Looks like you're out of AI credits. Contact a team admin to upgrade for more credits.".to_string()));
+                                        ctx.emit(WorkflowModalEvent::AiAssistError(i18n::t(
+                                            "drive.workflows.ai_assist.rate_limited_contact_admin",
+                                        )));
                                     }
                                 } else {
                                     ctx.emit(WorkflowModalEvent::AiAssistError(message.clone()));
                                 }
                             } else {
-                                ctx.emit(WorkflowModalEvent::AiAssistUpgradeError(None, current_user_id));
+                                ctx.emit(WorkflowModalEvent::AiAssistUpgradeError(
+                                    None,
+                                    current_user_id,
+                                ));
                             }
                         } else {
                             ctx.emit(WorkflowModalEvent::AiAssistError(message.clone()));
@@ -173,7 +176,7 @@ impl WorkflowModal {
                 AIRequestUsageModel::handle(ctx).update(ctx, |request_usage_model, ctx| {
                     request_usage_model.refresh_request_usage_async(ctx);
                 });
-            }
+            },
         );
 
         self.ai_metadata_assist_state = AiAssistState::RequestInFlight;

@@ -256,14 +256,30 @@ pub struct EnvironmentFormCopy {
 impl EnvironmentFormCopy {
     pub fn orchestration_modal() -> Self {
         Self {
-            name_placeholder: "e.g., dev-env",
-            repos_placeholder_authed: "Browse GitHub repos...",
-            repos_placeholder_unauthed: REPOS_PLACEHOLDER_UNAUTHED,
-            docker_image_label: "Docker image",
-            docker_image_placeholder: "e.g., node:20-alpine",
-            description_placeholder: DESCRIPTION_PLACEHOLDER,
-            setup_commands_placeholder: "e.g., node start",
-            setup_commands_helper: "Press Enter or click the submit button to add each command.",
+            name_placeholder: Box::leak(
+                i18n::t("settings.environments.name.placeholder_example").into_boxed_str(),
+            ),
+            repos_placeholder_authed: Box::leak(
+                i18n::t("settings.environments.repos.placeholder_browse").into_boxed_str(),
+            ),
+            repos_placeholder_unauthed: Box::leak(
+                i18n::t("settings.environments.repos.placeholder_unauthed").into_boxed_str(),
+            ),
+            docker_image_label: Box::leak(
+                i18n::t("settings.environments.docker_image.label_short").into_boxed_str(),
+            ),
+            docker_image_placeholder: Box::leak(
+                i18n::t("settings.environments.docker_image.placeholder_short").into_boxed_str(),
+            ),
+            description_placeholder: Box::leak(
+                i18n::t("settings.environments.description.placeholder").into_boxed_str(),
+            ),
+            setup_commands_placeholder: Box::leak(
+                i18n::t("settings.environments.setup_commands.placeholder_short").into_boxed_str(),
+            ),
+            setup_commands_helper: Box::leak(
+                i18n::t("settings.environments.setup_commands.helper_short").into_boxed_str(),
+            ),
             show_description_character_count: false,
         }
     }
@@ -272,14 +288,30 @@ impl EnvironmentFormCopy {
 impl Default for EnvironmentFormCopy {
     fn default() -> Self {
         Self {
-            name_placeholder: "Environment name",
-            repos_placeholder_authed: REPOS_PLACEHOLDER_AUTHED,
-            repos_placeholder_unauthed: REPOS_PLACEHOLDER_UNAUTHED,
-            docker_image_label: "Docker image reference",
-            docker_image_placeholder: "e.g. python:3.11, node:20-alpine",
-            description_placeholder: DESCRIPTION_PLACEHOLDER,
-            setup_commands_placeholder: "e.g. cd my-repo && pip install -r requirements.txt",
-            setup_commands_helper: "Setup commands run independently. Each command runs from the workspace root (/workspace). If a command depends on the previous one, combine them with &&.",
+            name_placeholder: Box::leak(
+                i18n::t("settings.environments.name.placeholder").into_boxed_str(),
+            ),
+            repos_placeholder_authed: Box::leak(
+                i18n::t("settings.environments.repos.placeholder_authed").into_boxed_str(),
+            ),
+            repos_placeholder_unauthed: Box::leak(
+                i18n::t("settings.environments.repos.placeholder_unauthed").into_boxed_str(),
+            ),
+            docker_image_label: Box::leak(
+                i18n::t("settings.environments.docker_image.label").into_boxed_str(),
+            ),
+            docker_image_placeholder: Box::leak(
+                i18n::t("settings.environments.docker_image.placeholder").into_boxed_str(),
+            ),
+            description_placeholder: Box::leak(
+                i18n::t("settings.environments.description.placeholder").into_boxed_str(),
+            ),
+            setup_commands_placeholder: Box::leak(
+                i18n::t("settings.environments.setup_commands.placeholder").into_boxed_str(),
+            ),
+            setup_commands_helper: Box::leak(
+                i18n::t("settings.environments.setup_commands.helper").into_boxed_str(),
+            ),
             show_description_character_count: true,
         }
     }
@@ -361,9 +393,6 @@ pub struct UpdateEnvironmentForm {
 }
 
 const DESCRIPTION_MAX_CHARS: usize = 240;
-const DESCRIPTION_PLACEHOLDER: &str = "e.g., this environment is for all front end focused agents";
-const REPOS_PLACEHOLDER_AUTHED: &str = "Enter repos (owner/repo format)";
-const REPOS_PLACEHOLDER_UNAUTHED: &str = "Paste repo URL(s)";
 const FORM_FIELD_SPACING: f32 = 20.;
 const FORM_LABEL_SPACING: f32 = 6.;
 const FORM_INPUT_HEIGHT: f32 = 36.;
@@ -462,7 +491,7 @@ impl UpdateEnvironmentForm {
 
         // Create buttons
         let submit_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Create", PrimaryTheme)
+            ActionButton::new(i18n::t("settings.environments.button.create"), PrimaryTheme)
                 .with_icon(Icon::Check)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Submit);
@@ -470,15 +499,22 @@ impl UpdateEnvironmentForm {
         });
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete environment", DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Delete);
-                })
+            ActionButton::new(
+                i18n::t("settings.environments.button.delete_environment"),
+                DangerSecondaryTheme,
+            )
+            .with_icon(Icon::Trash)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Delete);
+            })
         });
 
         let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", SecondaryTheme).on_click(|ctx| {
+            ActionButton::new(
+                i18n::t("settings.environments.button.cancel"),
+                SecondaryTheme,
+            )
+            .on_click(|ctx| {
                 ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Cancel);
             })
         });
@@ -831,10 +867,16 @@ impl UpdateEnvironmentForm {
 
     fn update_submit_button_label(&mut self, ctx: &mut ViewContext<Self>) {
         let button_text = match (&self.mode, self.show_header) {
-            (EnvironmentFormMode::Create, true) => "Create",
-            (EnvironmentFormMode::Create, false) => "Create environment",
-            (EnvironmentFormMode::Edit { .. }, true) => "Save",
-            (EnvironmentFormMode::Edit { .. }, false) => "Save environment",
+            (EnvironmentFormMode::Create, true) => i18n::t("settings.environments.button.create"),
+            (EnvironmentFormMode::Create, false) => {
+                i18n::t("settings.environments.button.create_environment")
+            }
+            (EnvironmentFormMode::Edit { .. }, true) => {
+                i18n::t("settings.environments.button.save")
+            }
+            (EnvironmentFormMode::Edit { .. }, false) => {
+                i18n::t("settings.environments.button.save_environment")
+            }
         };
         self.submit_button.update(ctx, |button, ctx| {
             button.set_label(button_text, ctx);
@@ -867,7 +909,7 @@ impl UpdateEnvironmentForm {
                 self.remove_setup_command_mouse_states.clear();
                 // Update button text for Create mode
                 self.submit_button.update(ctx, |button, ctx| {
-                    button.set_label("Create", ctx);
+                    button.set_label(i18n::t("settings.environments.button.create"), ctx);
                 });
             }
             EnvironmentFormInitArgs::Edit {
@@ -908,7 +950,7 @@ impl UpdateEnvironmentForm {
                     .collect();
                 // Update button text for Edit mode
                 self.submit_button.update(ctx, |button, ctx| {
-                    button.set_label("Save", ctx);
+                    button.set_label(i18n::t("settings.environments.button.save"), ctx);
                 });
             }
         }
@@ -1026,7 +1068,10 @@ impl UpdateEnvironmentForm {
                 ..Default::default()
             };
             let mut editor = EditorView::new(options, ctx);
-            editor.set_placeholder_text(DESCRIPTION_PLACEHOLDER, ctx);
+            editor.set_placeholder_text(
+                i18n::t("settings.environments.description.placeholder"),
+                ctx,
+            );
             editor
         })
     }
@@ -1353,18 +1398,14 @@ impl UpdateEnvironmentForm {
                         me.update_repos_input_placeholder(ctx);
                     }
                     Ok(UserGithubInfoResult::Unknown) => {
-                        me.github_dropdown_state.load_error_message = Some(
-                            "Couldn't load GitHub repos. You can paste repo URL(s), or retry."
-                                .to_string(),
-                        );
+                        me.github_dropdown_state.load_error_message =
+                            Some(i18n::t("settings.environments.repos.load_error"));
                         me.update_repos_input_placeholder(ctx);
                     }
                     Err(e) => {
                         debug!("Failed to load GitHub repos: {e}");
-                        me.github_dropdown_state.load_error_message = Some(
-                            "Couldn't load GitHub repos. You can paste repo URL(s), or retry."
-                                .to_string(),
-                        );
+                        me.github_dropdown_state.load_error_message =
+                            Some(i18n::t("settings.environments.repos.load_error"));
                         me.update_repos_input_placeholder(ctx);
                     }
                 }
@@ -1554,7 +1595,8 @@ impl UpdateEnvironmentForm {
                             };
                         }
                         warp_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::UserFacingError(_) => {
-                            let error_message = "Failed to suggest a Docker image".to_string();
+                            let error_message =
+                                i18n::t("settings.environments.suggest_image.failed");
                             send_telemetry_from_ctx!(
                                 CloudAgentTelemetryEvent::ImageSuggestionFailed {
                                     error: error_message.clone(),
@@ -1567,7 +1609,8 @@ impl UpdateEnvironmentForm {
                             };
                         }
                         warp_graphql::queries::suggest_cloud_environment_image::SuggestCloudEnvironmentImageResult::Unknown => {
-                            let error_message = "Unknown response from suggestCloudEnvironmentImage".to_string();
+                            let error_message =
+                                i18n::t("settings.environments.suggest_image.unknown_response");
                             send_telemetry_from_ctx!(
                                 CloudAgentTelemetryEvent::ImageSuggestionFailed {
                                     error: error_message.clone(),
@@ -1581,7 +1624,10 @@ impl UpdateEnvironmentForm {
                         }
                     },
                     Err(e) => {
-                        let error_message = format!("Failed to suggest a Docker image: {}", e);
+                        let error_message = i18n::t(
+                            "settings.environments.suggest_image.failed_with_error",
+                        )
+                        .replace("{error}", &e.to_string());
                         send_telemetry_from_ctx!(
                             CloudAgentTelemetryEvent::ImageSuggestionFailed {
                                 error: error_message.clone(),
@@ -1649,9 +1695,13 @@ impl UpdateEnvironmentForm {
                         theme.active_ui_text_color()
                     };
 
-                    Text::new_inline("Share with team", font_family, font_size)
-                        .with_color(color.into())
-                        .finish()
+                    Text::new_inline(
+                        i18n::t("settings.environments.share_with_team.label"),
+                        font_family,
+                        font_size,
+                    )
+                    .with_color(color.into())
+                    .finish()
                 },
             )
             .with_cursor(Cursor::PointingHand)
@@ -1685,10 +1735,8 @@ impl UpdateEnvironmentForm {
         }
 
         Some(render_warning_box(
-            WarningBoxConfig::new(
-                "Personal environments cannot be used with external integrations or team API keys. For the best experience, use shared environments.",
-            )
-            .with_width(self.field_max_width),
+            WarningBoxConfig::new(i18n::t("settings.environments.share_with_team.warning"))
+                .with_width(self.field_max_width),
             appearance,
         ))
     }
@@ -1731,8 +1779,14 @@ impl UpdateEnvironmentForm {
 
     fn render_header(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let (title, button_handle) = match &self.mode {
-            EnvironmentFormMode::Create => ("Create environment", &self.submit_button),
-            EnvironmentFormMode::Edit { .. } => ("Edit environment", &self.submit_button),
+            EnvironmentFormMode::Create => (
+                i18n::t("settings.environments.title.create"),
+                &self.submit_button,
+            ),
+            EnvironmentFormMode::Edit { .. } => (
+                i18n::t("settings.environments.title.edit"),
+                &self.submit_button,
+            ),
         };
 
         let submit_actions = || self.render_submit_actions(appearance, app, button_handle);
@@ -1741,14 +1795,14 @@ impl UpdateEnvironmentForm {
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(self.render_back_button_and_title(title, appearance))
+            .with_child(self.render_back_button_and_title(&title, appearance))
             .with_child(submit_actions())
             .finish();
 
         let compact_header = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(8.)
-            .with_child(self.render_back_button_and_title(title, appearance))
+            .with_child(self.render_back_button_and_title(&title, appearance))
             .with_child(submit_actions())
             .finish();
 
@@ -1858,7 +1912,7 @@ impl UpdateEnvironmentForm {
             .with_spacing(FORM_LABEL_SPACING);
 
         field.add_child(Self::render_form_label(
-            "Setup command(s)",
+            Box::leak(i18n::t("settings.environments.setup_commands.label").into_boxed_str()),
             false,
             appearance,
         ));
@@ -1929,7 +1983,7 @@ impl UpdateEnvironmentForm {
 
         field.add_child(
             Text::new(
-                "Description",
+                i18n::t("settings.environments.description.label"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -1961,7 +2015,10 @@ impl UpdateEnvironmentForm {
                 .buffer_text(app)
                 .chars()
                 .count();
-            let count_text = format!("{char_count} / {DESCRIPTION_MAX_CHARS} characters");
+            let count_text = format!(
+                "{char_count} / {DESCRIPTION_MAX_CHARS} {}",
+                i18n::t("settings.environments.description.character_count_suffix")
+            );
             field.add_child(
                 Text::new(
                     count_text,
@@ -1992,7 +2049,7 @@ impl UpdateEnvironmentForm {
     fn render_repos_field_label(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         Text::new(
-            "Repo(s)",
+            i18n::t("settings.environments.repos.label"),
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
@@ -2022,7 +2079,7 @@ impl UpdateEnvironmentForm {
                     .with_child(
                         Container::new(
                             Text::new(
-                                "Loading...",
+                                i18n::t("settings.environments.repos.loading"),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -2111,7 +2168,7 @@ impl UpdateEnvironmentForm {
                         )
                         .with_child(
                             Text::new(
-                                "Auth with GitHub",
+                                i18n::t("settings.environments.repos.auth_with_github"),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -2159,7 +2216,7 @@ impl UpdateEnvironmentForm {
             .github_dropdown_state
             .load_error_message
             .clone()
-            .unwrap_or_else(|| "Failed to load GitHub repositories".to_string());
+            .unwrap_or_else(|| i18n::t("settings.environments.repos.load_failed_fallback"));
 
         let mut field = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -2225,7 +2282,7 @@ impl UpdateEnvironmentForm {
                             )
                             .with_child(
                                 Text::new(
-                                    "Retry",
+                                    i18n::t("settings.environments.repos.retry"),
                                     appearance.ui_font_family(),
                                     appearance.ui_font_size(),
                                 )
@@ -2468,7 +2525,7 @@ impl UpdateEnvironmentForm {
     fn render_repo_helper_text_row(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let helper = Text::new(
-            "Type owner/repo and press Enter to add, or select from dropdown.",
+            i18n::t("settings.environments.repos.helper"),
             appearance.ui_font_family(),
             appearance.ui_font_size() * 0.85,
         )
@@ -2494,7 +2551,7 @@ impl UpdateEnvironmentForm {
             // Plain text part
             text_row.add_child(
                 Text::new(
-                    "Missing a repo?",
+                    i18n::t("settings.environments.repos.missing_a_repo"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() * 0.85,
                 )
@@ -2512,7 +2569,7 @@ impl UpdateEnvironmentForm {
                         theme.accent()
                     };
                     Text::new(
-                        "Configure access on GitHub",
+                        i18n::t("settings.environments.repos.configure_access"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size() * 0.85,
                     )
@@ -2681,7 +2738,7 @@ impl UpdateEnvironmentForm {
             content.add_child(
                 Container::new(
                     Text::new(
-                        "No repositories found",
+                        i18n::t("settings.environments.repos.none_found"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -2966,7 +3023,10 @@ impl UpdateEnvironmentForm {
                 let ui_builder = appearance.ui_builder().clone();
                 move || {
                     ui_builder
-                        .tool_tip(format!("Open image at {docker_hub_url}"))
+                        .tool_tip(format!(
+                            "{} {docker_hub_url}",
+                            i18n::t("settings.environments.docker_image.open_image_at")
+                        ))
                         .build()
                         .finish()
                 }
@@ -3090,12 +3150,12 @@ impl UpdateEnvironmentForm {
         let is_disabled = !self.can_suggest_image_for_current_repos();
 
         let button_text = if is_loading {
-            "Generating…"
+            i18n::t("settings.environments.docker_image.suggest_generating")
         } else {
-            "Suggest image"
+            i18n::t("settings.environments.docker_image.suggest_image")
         };
 
-        let tooltip_text = "Warp will suggest a Docker image based on your selected repositories.";
+        let tooltip_text = i18n::t("settings.environments.docker_image.suggest_tooltip");
 
         let button = Hoverable::new(
             self.suggest_image_button_mouse_state.clone(),
@@ -3123,7 +3183,7 @@ impl UpdateEnvironmentForm {
                     .finish();
 
                 let text = Text::new(
-                    button_text,
+                    button_text.clone(),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -3157,7 +3217,7 @@ impl UpdateEnvironmentForm {
                     let tooltip = ConstrainedBox::new(
                         appearance
                             .ui_builder()
-                            .tool_tip(tooltip_text.to_string())
+                            .tool_tip(tooltip_text.clone())
                             .build()
                             .finish(),
                     )
@@ -3214,16 +3274,16 @@ impl UpdateEnvironmentForm {
                 let auth_url_with_next = self.auth_url_with_next(auth_url);
                 let action = UpdateEnvironmentFormAction::OpenUrl(auth_url_with_next);
                 let button = WarningBoxButtonConfig::new(
-                    "Authenticate",
+                    i18n::t("settings.environments.suggest_image.authenticate"),
                     self.suggest_image_auth_button_mouse_state.clone(),
                     move |ctx| {
                         ctx.dispatch_typed_action(action.clone());
                     },
                 );
                 Some(render_warning_box(
-                    WarningBoxConfig::new(
-                        "You need to grant access to your GitHub repos to suggest a Docker image",
-                    )
+                    WarningBoxConfig::new(i18n::t(
+                        "settings.environments.suggest_image.auth_required",
+                    ))
                     .with_width(self.field_max_width)
                     .with_button(button),
                     appearance,
@@ -3248,7 +3308,7 @@ impl UpdateEnvironmentForm {
     ) -> Box<dyn Element> {
         let action = UpdateEnvironmentFormAction::LaunchAgentForSelectedRepos;
         let button = WarningBoxButtonConfig::new(
-            "Launch agent",
+            i18n::t("settings.environments.suggest_image.launch_agent"),
             self.suggest_image_launch_agent_button_mouse_state.clone(),
             move |ctx| {
                 ctx.dispatch_typed_action(action.clone());
@@ -3256,13 +3316,11 @@ impl UpdateEnvironmentForm {
         );
 
         render_warning_box(
-            WarningBoxConfig::new(
-                "We couldn't find a good match. We recommend using a custom Docker image for these repos.",
-            )
-            .with_description(reason)
-            .with_icon(Icon::AlertTriangle)
-            .with_width(self.field_max_width)
-            .with_button(button),
+            WarningBoxConfig::new(i18n::t("settings.environments.suggest_image.no_match"))
+                .with_description(reason)
+                .with_icon(Icon::AlertTriangle)
+                .with_width(self.field_max_width)
+                .with_button(button),
             appearance,
         )
     }
@@ -3522,7 +3580,7 @@ impl View for UpdateEnvironmentForm {
 
         // Form fields
         page.add_child(Self::render_form_field(
-            "Name",
+            Box::leak(i18n::t("settings.environments.name.label").into_boxed_str()),
             true,
             None,
             &self.name_editor,

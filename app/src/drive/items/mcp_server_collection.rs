@@ -26,7 +26,7 @@ impl WarpDriveMCPServerCollection {
 
 impl WarpDriveItem for WarpDriveMCPServerCollection {
     fn display_name(&self) -> Option<String> {
-        Some("MCP Servers".to_string())
+        Some(i18n::t("drive.items.mcp_servers"))
     }
 
     fn metadata(&self) -> Option<&CloudObjectMetadata> {

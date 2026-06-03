@@ -91,7 +91,7 @@ pub trait SectionView {
                 Align::new(
                     appearance
                         .ui_builder()
-                        .wrappable_text(section_name.section_name_string().to_string(), false)
+                        .wrappable_text(section_name.section_name_string(), false)
                         .with_style(UiComponentStyles {
                             font_family_id: Some(appearance.ui_font_family()),
                             font_size: Some(SECTION_HEADER_FONT_SIZE),

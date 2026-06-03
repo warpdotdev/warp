@@ -124,6 +124,10 @@ impl SearchItem for ConversationSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Conversation: {}", self.item.title)
+        format!(
+            "{}: {}",
+            i18n::t("search.ai_context_menu.conversation_prefix"),
+            self.item.title
+        )
     }
 }

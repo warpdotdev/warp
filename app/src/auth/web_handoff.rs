@@ -79,7 +79,8 @@ impl WebHandoffView {
                 self.import_user_from_session_cookie(ctx);
             }
             Err(AuthHandoffError::Unexpected(err)) => {
-                report_error!(anyhow!("Web user handoff failed: {err:?}"));
+                report_error!(anyhow!(i18n::t("auth.errors.web_user_handoff_failed")
+                    .replace("{error}", &format!("{err:?}"))));
                 self.state = HandoffState::Failed;
                 ctx.notify();
             }
@@ -119,8 +120,10 @@ impl View for WebHandoffView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let label = match &self.state {
-            HandoffState::LoadingFromHost | HandoffState::LoadingFromSessionCookie => "Loading...",
-            HandoffState::Failed => "Error authenticating - please refresh the page",
+            HandoffState::LoadingFromHost | HandoffState::LoadingFromSessionCookie => {
+                i18n::t("auth.web_handoff.loading")
+            }
+            HandoffState::Failed => i18n::t("auth.web_handoff.failed"),
         };
 
         LoginErrorModal::new(app)

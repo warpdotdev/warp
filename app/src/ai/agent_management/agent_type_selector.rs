@@ -127,7 +127,7 @@ impl AgentTypeSelector {
         let theme = appearance.theme();
 
         let title = Text::new(
-            "Choose your agent".to_string(),
+            i18n::t("agent_management.agent_type.choose_agent"),
             appearance.ui_font_family(),
             TITLE_FONT_SIZE,
         )
@@ -186,8 +186,8 @@ impl AgentTypeSelector {
         &self,
         index: usize,
         icon: Icon,
-        title: &'static str,
-        description: &'static str,
+        title: String,
+        description: String,
         is_suggested: bool,
         mouse_state: MouseStateHandle,
         action: AgentTypeSelectorAction,
@@ -258,11 +258,14 @@ impl AgentTypeSelector {
                 .with_child(title_text);
 
             if is_suggested {
-                let suggested_text =
-                    Text::new("Suggested".to_string(), font_family, OPTION_DESC_FONT_SIZE)
-                        .with_style(Properties::default().weight(Weight::Medium))
-                        .with_color(badge_text_color)
-                        .finish();
+                let suggested_text = Text::new(
+                    i18n::t("agent_management.agent_type.suggested"),
+                    font_family,
+                    OPTION_DESC_FONT_SIZE,
+                )
+                .with_style(Properties::default().weight(Weight::Medium))
+                .with_color(badge_text_color)
+                .finish();
 
                 let suggested = Container::new(suggested_text)
                     .with_horizontal_padding(8.)
@@ -334,8 +337,8 @@ impl AgentTypeSelector {
         let cloud_agent_option = self.render_option(
             0,
             Icon::OzCloud,
-            "Cloud agent",
-            "Runs autonomously in a cloud environment you choose. Best for parallel or long-running work.",
+            i18n::t("agent_management.agent_type.cloud_agent"),
+            i18n::t("agent_management.agent_type.cloud_agent.desc"),
             true,
             self.cloud_agent_mouse_state.clone(),
             AgentTypeSelectorAction::SelectCloudAgent,
@@ -345,8 +348,8 @@ impl AgentTypeSelector {
         let local_agent_option = self.render_option(
             1,
             Icon::Oz,
-            "Local agent",
-            "Runs on your machine and requires supervision. Best for quick, interactive tasks.",
+            i18n::t("agent_management.agent_type.local_agent"),
+            i18n::t("agent_management.agent_type.local_agent.desc"),
             false,
             self.local_agent_mouse_state.clone(),
             AgentTypeSelectorAction::SelectLocalAgent,

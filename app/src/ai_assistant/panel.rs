@@ -30,7 +30,7 @@ use super::transcript::{Transcript, TranscriptEvent};
 use super::utils::{render_prepared_response_button, render_request_limit_info, TranscriptPart};
 use super::{
     AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AI_ASSISTANT_SVG_PATH,
-    ASK_AI_ASSISTANT_TEXT, PROMPT_CHARACTER_LIMIT,
+    PROMPT_CHARACTER_LIMIT,
 };
 use crate::appearance::Appearance;
 use crate::editor::{
@@ -67,16 +67,6 @@ const LOGO_SIZE: f32 = 20.;
 const BODY_FONT_SIZE: f32 = 13.;
 const TITLE_FONT_SIZE: f32 = 16.;
 const ZERO_STATE_HELP_TEXT_FONT_SIZE: f32 = 12.;
-
-const ZERO_STATE_HELP_TEXT: &str = "Shift + ctrl + space a block or text selection to ask Warp AI.";
-const SCRIPT_ZERO_STATE_PROMPT: &str = "Write a script to connect to an AWS EC2 instance.";
-const GIT_ZERO_STATE_PROMPT: &str = "How do I undo the most recent commits in git?";
-const FILES_ZERO_STATE_PROMPT: &str = "How do I find all files containing specific text?";
-
-// The placeholder texts are prepended with a space to give them cushion from the cursor.
-const INIT_PLACEHOLDER_TEXT: &str = " Ask a question...";
-const FOLLOWUP_PLACEHOLDER_TEXT: &str = " Type a response or click one above...";
-const RESTART_BUTTON_TEXT: &str = "Restart";
 
 const ASK_AI_BLOCK_INPUT_LIMIT: usize = 100;
 
@@ -131,7 +121,10 @@ pub enum AIAssistantAction {
     ClosePanel,
     ResetContext,
     CopyTranscript,
-    PreparedPrompt(&'static str),
+    PreparedPrompt {
+        prompt: String,
+        telemetry_prompt: &'static str,
+    },
     ClickedUrl(HyperlinkUrl),
     CopyAnswerToClipboard(Arc<String>),
     FocusTerminalInput,
@@ -196,7 +189,10 @@ impl AIAssistantPanelView {
             })
         };
         editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(INIT_PLACEHOLDER_TEXT, ctx)
+            editor.set_placeholder_text(
+                format!(" {}", i18n::t("ai_assistant.placeholder.ask_question")),
+                ctx,
+            )
         });
         ctx.subscribe_to_view(&editor, |me, _, event, ctx| {
             me.handle_editor_event(event, ctx);
@@ -563,7 +559,10 @@ impl AIAssistantPanelView {
             RequestsEvent::RequestFinished { .. } => {
                 self.editor.update(ctx, |editor, ctx| {
                     editor.clear_buffer_and_reset_undo_stack(ctx);
-                    editor.set_placeholder_text(FOLLOWUP_PLACEHOLDER_TEXT, ctx);
+                    editor.set_placeholder_text(
+                        format!(" {}", i18n::t("ai_assistant.placeholder.followup")),
+                        ctx,
+                    );
                 });
                 self.transcript_view.update(ctx, |transcript_view, ctx| {
                     transcript_view.scroll_to_bottom_of_transcript(ctx);
@@ -631,7 +630,10 @@ impl AIAssistantPanelView {
         }
 
         self.editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text(INIT_PLACEHOLDER_TEXT, ctx);
+            editor.set_placeholder_text(
+                format!(" {}", i18n::t("ai_assistant.placeholder.ask_question")),
+                ctx,
+            );
         });
 
         self.requests_model.update(ctx, |requests_model, ctx| {
@@ -653,17 +655,20 @@ impl AIAssistantPanelView {
         let mut result = String::new();
         let time_now = Local::now();
 
-        result.push_str(&format!(
-            "## Warp AI Transcript ({})\n\n",
-            time_now.format("%x %l:%M %p")
-        ));
+        result.push_str(
+            &i18n::t("ai_assistant.transcript.title")
+                .replace("{time}", &time_now.format("%x %l:%M %p").to_string()),
+        );
 
         for part in transcript {
-            result.push_str(&format!("Prompt: {}\n\n", part.raw_user_prompt().trim()));
-            result.push_str(&format!(
-                "Warp AI: {}\n\n",
-                part.raw_assistant_answer().trim()
-            ));
+            result.push_str(
+                &i18n::t("ai_assistant.transcript.prompt")
+                    .replace("{text}", part.raw_user_prompt().trim()),
+            );
+            result.push_str(
+                &i18n::t("ai_assistant.transcript.answer")
+                    .replace("{text}", part.raw_assistant_answer().trim()),
+            );
         }
 
         ctx.clipboard()
@@ -781,7 +786,7 @@ impl AIAssistantPanelView {
                 ..Default::default()
             };
             ui_builder
-                .tool_tip("Copy transcript to clipboard".to_owned())
+                .tool_tip(i18n::t("ai_assistant.copy_transcript_tooltip"))
                 .with_style(tool_tip_style)
                 .build()
                 .finish()
@@ -823,7 +828,7 @@ impl AIAssistantPanelView {
                 Some(hover_style),
                 Some(hover_style),
             )
-            .with_text_label(RESTART_BUTTON_TEXT.to_owned())
+            .with_text_label(i18n::t("common.restart"))
             .build()
             .on_click(move |ctx, _, _| ctx.dispatch_typed_action(AIAssistantAction::ResetContext))
             .with_cursor(Cursor::PointingHand)
@@ -839,7 +844,7 @@ impl AIAssistantPanelView {
             .with_children([
                 Container::new(
                     Text::new_inline(
-                        "Character limit exceeded.",
+                        i18n::t("ai_assistant.character_limit_exceeded"),
                         appearance.ui_font_family(),
                         BODY_FONT_SIZE,
                     )
@@ -903,9 +908,13 @@ impl AIAssistantPanelView {
             )
             .with_child(
                 Container::new(
-                    Text::new_inline(ASK_AI_ASSISTANT_TEXT, appearance.ui_font_family(), 14.)
-                        .with_color(sub_text_color)
-                        .finish(),
+                    Text::new_inline(
+                        i18n::t("ai_assistant.ask_warp_ai"),
+                        appearance.ui_font_family(),
+                        14.,
+                    )
+                    .with_color(sub_text_color)
+                    .finish(),
                 )
                 .with_margin_top(8.)
                 .finish(),
@@ -918,7 +927,8 @@ impl AIAssistantPanelView {
                     self.mouse_state_handles.git_zero_state_prompt.clone(),
                     Some(300.),
                     None,
-                    GIT_ZERO_STATE_PROMPT,
+                    i18n::t("ai_assistant.prompt.undo_recent_commits"),
+                    "How do I undo the most recent commits in git?",
                 ))
                 .with_margin_top(20.)
                 .with_margin_bottom(10.)
@@ -928,7 +938,8 @@ impl AIAssistantPanelView {
                     self.mouse_state_handles.files_zero_state_prompt.clone(),
                     Some(300.),
                     None,
-                    FILES_ZERO_STATE_PROMPT,
+                    i18n::t("ai_assistant.prompt.find_files_containing_text"),
+                    "How do I find all files containing specific text?",
                 ))
                 .with_margin_bottom(10.)
                 .finish(),
@@ -937,7 +948,8 @@ impl AIAssistantPanelView {
                     self.mouse_state_handles.script_zero_state_prompt.clone(),
                     Some(300.),
                     None,
-                    SCRIPT_ZERO_STATE_PROMPT,
+                    i18n::t("ai_assistant.prompt.connect_aws_ec2"),
+                    "Write a script to connect to an AWS EC2 instance.",
                 ))
                 .finish(),
             ]);
@@ -966,7 +978,7 @@ impl AIAssistantPanelView {
                             1.,
                             appearance
                                 .ui_builder()
-                                .wrappable_text(ZERO_STATE_HELP_TEXT.to_string(), true)
+                                .wrappable_text(i18n::t("ai_assistant.zero_state_help"), true)
                                 .with_style(UiComponentStyles {
                                     font_family_id: Some(appearance.ui_font_family()),
                                     font_size: Some(ZERO_STATE_HELP_TEXT_FONT_SIZE),
@@ -1040,9 +1052,17 @@ impl TypedActionView for AIAssistantPanelView {
             ClosePanel => {
                 ctx.emit(AIAssistantPanelEvent::ClosePanel);
             }
-            PreparedPrompt(prompt) => {
-                self.issue_request(prompt.to_string(), ctx);
-                send_telemetry_from_ctx!(TelemetryEvent::UsedWarpAIPreparedPrompt { prompt }, ctx);
+            PreparedPrompt {
+                prompt,
+                telemetry_prompt,
+            } => {
+                self.issue_request(prompt.clone(), ctx);
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::UsedWarpAIPreparedPrompt {
+                        prompt: telemetry_prompt
+                    },
+                    ctx
+                );
             }
             ClickedUrl(url) => {
                 ctx.open_url(&url.url);

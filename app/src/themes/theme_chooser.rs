@@ -45,7 +45,6 @@ use crate::workspace::PANEL_HEADER_HEIGHT;
 use crate::{report_if_error, send_telemetry_from_ctx};
 
 // All units in px
-const THEME_CHOOSER_TITLE: &str = "Themes";
 const CLOSE_BUTTON_MARGIN_RIGHT: f32 = 6.;
 const TITLE_FONT_SIZE: f32 = 16.;
 const TITLE_MARGIN: f32 = 12.;
@@ -115,13 +114,13 @@ impl ThemeChooserMode {
         let hint_text = match self {
             ThemeChooserMode::SystemAgnostic => appearance
                 .ui_builder()
-                .paragraph("Change your current theme.".to_string()),
+                .paragraph(i18n::t("themes.chooser.hint.current")),
             ThemeChooserMode::SystemLight => appearance
                 .ui_builder()
-                .paragraph("Pick a theme for when your system is in light mode.".to_string()),
+                .paragraph(i18n::t("themes.chooser.hint.light")),
             ThemeChooserMode::SystemDark => appearance
                 .ui_builder()
-                .paragraph("Pick a theme for when your system is in dark mode.".to_string()),
+                .paragraph(i18n::t("themes.chooser.hint.dark")),
         };
         hint_text
             .build()
@@ -636,7 +635,7 @@ impl ThemeChooser {
                     Align::new(
                         appearance
                             .ui_builder()
-                            .span(THEME_CHOOSER_TITLE.to_string())
+                            .span(i18n::t("themes.chooser.title"))
                             .with_style(UiComponentStyles {
                                 font_family_id: Some(appearance.ui_font_family()),
                                 font_size: Some(TITLE_FONT_SIZE),
@@ -742,7 +741,7 @@ impl ThemeChooser {
                 .with_child(
                     appearance
                         .ui_builder()
-                        .span("No matching themes!".to_string())
+                        .span(i18n::t("themes.chooser.no_matching_themes"))
                         .build()
                         .finish(),
                 )
@@ -839,9 +838,9 @@ impl View for ThemeChooser {
 
     fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-                "Theme chooser. Unfortunately, theme chooser window isn't compatible with screen readers yet.",
-                "Press escape to close.",
-                WarpA11yRole::WindowRole,
+            i18n::t("themes.chooser.a11y.description"),
+            i18n::t("themes.chooser.a11y.close_hint"),
+            WarpA11yRole::WindowRole,
         ))
     }
 

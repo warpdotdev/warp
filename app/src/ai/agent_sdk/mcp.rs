@@ -60,7 +60,10 @@ struct MCPServerInfo {
 
 impl TableFormat for MCPServerInfo {
     fn header() -> Vec<Cell> {
-        vec![Cell::new("UUID"), Cell::new("Name")]
+        vec![
+            Cell::new(i18n::t("ai.agent_sdk.mcp.table.uuid")),
+            Cell::new(i18n::t("ai.agent_sdk.mcp.table.name")),
+        ]
     }
 
     fn row(&self) -> Vec<Cell> {

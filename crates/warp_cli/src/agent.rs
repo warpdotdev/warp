@@ -48,8 +48,16 @@ pub enum Prompt {
 impl fmt::Display for Prompt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Prompt::PlainText(text) => write!(f, "Prompt: {text}"),
-            Prompt::SavedPrompt(id) => write!(f, "Saved Prompt ID: {id}"),
+            Prompt::PlainText(text) => write!(
+                f,
+                "{}",
+                i18n::t("warp_cli.agent.prompt.plain_text").replace("{text}", text)
+            ),
+            Prompt::SavedPrompt(id) => write!(
+                f,
+                "{}",
+                i18n::t("warp_cli.agent.prompt.saved_prompt_id").replace("{id}", id)
+            ),
         }
     }
 }

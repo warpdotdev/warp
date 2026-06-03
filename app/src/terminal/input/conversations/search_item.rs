@@ -172,6 +172,6 @@ impl SearchItem for ConversationSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Conversation: {}", self.entry.display.title)
+        i18n::t("terminal.input.a11y.conversation").replace("{title}", &self.entry.display.title)
     }
 }

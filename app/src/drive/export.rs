@@ -230,12 +230,12 @@ impl ExportManager {
         if is_bulk && self.exports.is_empty() {
             ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
                 let link_label = if cfg!(target_os = "macos") {
-                    "Open in Finder"
+                    i18n::t("drive.export.open_in_finder")
                 } else {
-                    "Open in folder"
+                    i18n::t("drive.export.open_in_folder")
                 };
 
-                let mut toast_link = ToastLink::new(link_label.to_string());
+                let mut toast_link = ToastLink::new(link_label);
                 if let Ok(path) = path {
                     // The path to open in the bulk case is one level up from the export dir.
                     let root_dir = path.parent().unwrap_or(path.as_path()).to_path_buf();
@@ -243,7 +243,7 @@ impl ExportManager {
                         .with_onclick_action(WorkspaceAction::OpenInExplorer { path: root_dir });
                 }
                 toast_stack.add_ephemeral_toast(
-                    DismissibleToast::success("Finished exporting objects".to_string())
+                    DismissibleToast::success(i18n::t("drive.export.finished"))
                         .with_link(toast_link),
                     window_id,
                     ctx,
@@ -315,7 +315,7 @@ impl ExportManager {
         };
 
         let name = if name.is_empty() {
-            "Untitled".to_string()
+            i18n::t("common.untitled")
         } else {
             safe_filename(&name)
         };
@@ -372,8 +372,8 @@ impl ExportManager {
         let window_id = export.remove().window_id;
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             let message = match id.display_name(ctx) {
-                Some(name) => format!("Failed to export {name}"),
-                None => "Export failed".to_string(),
+                Some(name) => i18n::t("drive.export.failed_named").replace("{name}", &name),
+                None => i18n::t("drive.export.failed"),
             };
             toast_stack.add_persistent_toast(DismissibleToast::error(message), window_id, ctx);
         });
@@ -393,19 +393,19 @@ impl ExportManager {
         if !export.get().is_bulk {
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 let message = match export.key().display_name(ctx) {
-                    Some(name) => format!("Exported {name}"),
-                    None => "Exported object".to_string(),
+                    Some(name) => i18n::t("drive.export.exported_named").replace("{name}", &name),
+                    None => i18n::t("drive.export.exported_object"),
                 };
 
                 let link_label = if cfg!(target_os = "macos") {
-                    "Open in Finder"
+                    i18n::t("drive.export.open_in_finder")
                 } else {
-                    "Open in folder"
+                    i18n::t("drive.export.open_in_folder")
                 };
 
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::success(message).with_link(
-                        ToastLink::new(link_label.to_string()).with_onclick_action(
+                        ToastLink::new(link_label).with_onclick_action(
                             WorkspaceAction::OpenInExplorer { path: root_path },
                         ),
                     ),
@@ -450,7 +450,7 @@ impl ExportId {
             .map(|object| {
                 let mut name = object.display_name();
                 if name.is_empty() {
-                    name.push_str("Untitled")
+                    name.push_str(&i18n::t("common.untitled"))
                 }
                 name
             })

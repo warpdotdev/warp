@@ -258,7 +258,11 @@ impl SearchItem for WorkflowSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Workflow: {}", self.workflow_data().name())
+        format!(
+            "{}: {}",
+            i18n::t("search.command_search.result.workflow_prefix"),
+            self.workflow_data().name()
+        )
     }
 }
 

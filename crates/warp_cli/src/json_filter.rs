@@ -71,7 +71,9 @@ pub fn parse_jq_filter(src: &str) -> Result<JqFilter, String> {
                 .iter()
                 .map(|report| FileReportsDisp::new(report).to_string())
                 .collect::<String>();
-            format!("invalid jq filter `{src}`:\n{detail}")
+            i18n::t("warp_cli.error.invalid_jq_filter")
+                .replace("{src}", src)
+                .replace("{detail}", &detail)
         })?;
     Ok(JqFilter(Arc::new(compiled)))
 }

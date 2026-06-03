@@ -260,7 +260,8 @@ pub fn render_prepared_response_button(
     mouse_state_handle: MouseStateHandle,
     width: Option<f32>,
     right_left_padding: Option<f32>,
-    prompt: &'static str,
+    prompt: String,
+    telemetry_prompt: &'static str,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let default_button_styles = UiComponentStyles {
@@ -299,11 +300,14 @@ pub fn render_prepared_response_button(
             Some(hovered_and_clicked_styles),
             Some(hovered_and_clicked_styles),
         )
-        .with_centered_text_label(prompt.to_string())
+        .with_centered_text_label(prompt.clone())
         .build()
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(AIAssistantAction::PreparedPrompt(prompt))
+            ctx.dispatch_typed_action(AIAssistantAction::PreparedPrompt {
+                prompt: prompt.clone(),
+                telemetry_prompt,
+            })
         })
         .finish()
 }
@@ -328,7 +332,9 @@ pub fn render_request_limit_info(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(
             Text::new_inline(
-                format!("Credits used: {num_requests_used} / {request_limit}.",),
+                i18n::t("ai_assistant.credits.used")
+                    .replace("{used}", &num_requests_used.to_string())
+                    .replace("{limit}", &request_limit.to_string()),
                 appearance.ui_font_family(),
                 REQUEST_LIMIT_INFO_FONT_SIZE,
             )
@@ -369,7 +375,8 @@ pub fn render_request_limit_info(
         row.add_child(
             Container::new(
                 Text::new_inline(
-                    format!("{next_refresh_time} until refresh."),
+                    i18n::t("ai_assistant.credits.until_refresh")
+                        .replace("{time}", &next_refresh_time),
                     appearance.ui_font_family(),
                     REQUEST_LIMIT_INFO_FONT_SIZE,
                 )

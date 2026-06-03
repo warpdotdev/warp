@@ -43,11 +43,11 @@ pub enum ResourceCenterFooterItem {
 }
 
 impl ResourceCenterFooterItem {
-    pub fn ui_label(&self) -> &'static str {
+    pub fn ui_label(&self) -> String {
         match self {
-            ResourceCenterFooterItem::Docs => "Docs",
-            ResourceCenterFooterItem::Slack => "Slack",
-            ResourceCenterFooterItem::Feedback => "Feedback",
+            ResourceCenterFooterItem::Docs => i18n::t("resource_center.footer.docs"),
+            ResourceCenterFooterItem::Slack => i18n::t("resource_center.footer.slack"),
+            ResourceCenterFooterItem::Feedback => i18n::t("resource_center.footer.feedback"),
         }
     }
 
@@ -327,12 +327,14 @@ impl ResourceCenterView {
         let current_page = self.page_views.get(self.current_view_index).map(|x| x.page);
 
         let header_text = match current_page {
-            Some(ResourceCenterPage::Keybindings) => "Keyboard Shortcuts".to_string(),
+            Some(ResourceCenterPage::Keybindings) => {
+                i18n::t("resource_center.header.keyboard_shortcuts")
+            }
             _ => {
                 if FeatureFlag::AvatarInTabBar.is_enabled() {
                     String::new()
                 } else {
-                    "Warp Essentials".to_string()
+                    i18n::t("resource_center.header.warp_essentials")
                 }
             }
         };
@@ -428,7 +430,7 @@ impl ResourceCenterView {
         let button = appearance
             .ui_builder()
             .button(ButtonVariant::Text, mouse_state)
-            .with_text_label(item.ui_label().to_string())
+            .with_text_label(item.ui_label())
             .with_style(
                 UiComponentStyles::default().set_padding(Coords::default().left(SCROLLBAR_OFFSET)),
             )

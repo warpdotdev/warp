@@ -54,7 +54,7 @@ impl GridHighlightedLink {
         }
     }
 
-    pub fn tooltip_text(&self) -> &'static str {
+    pub fn tooltip_text(&self) -> String {
         match &self {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(file_link)
@@ -64,11 +64,11 @@ impl GridHighlightedLink {
                     .map(|path| path.is_dir())
                     .unwrap_or(false) =>
             {
-                "Open folder"
+                i18n::t("terminal.link_detection.open_folder")
             }
             #[cfg(feature = "local_fs")]
-            GridHighlightedLink::File(_) => "Open file",
-            GridHighlightedLink::Url(_) => "Open link",
+            GridHighlightedLink::File(_) => i18n::t("terminal.link_detection.open_file"),
+            GridHighlightedLink::Url(_) => i18n::t("terminal.link_detection.open_link"),
         }
     }
 }
@@ -147,15 +147,15 @@ pub enum RichContentLink {
 }
 
 impl RichContentLink {
-    pub fn tooltip_text(&self) -> &'static str {
+    pub fn tooltip_text(&self) -> String {
         match &self {
             #[cfg(feature = "local_fs")]
             RichContentLink::FilePath { absolute_path, .. } if absolute_path.is_dir() => {
-                "Open folder"
+                i18n::t("terminal.link_detection.open_folder")
             }
             #[cfg(feature = "local_fs")]
-            RichContentLink::FilePath { .. } => "Open file",
-            RichContentLink::Url(_) => "Open link",
+            RichContentLink::FilePath { .. } => i18n::t("terminal.link_detection.open_file"),
+            RichContentLink::Url(_) => i18n::t("terminal.link_detection.open_link"),
         }
     }
 }

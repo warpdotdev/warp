@@ -94,6 +94,10 @@ impl SearchItem for ExternalSecretSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Secret: {}", &self.external_secret.get_display_name())
+        format!(
+            "{}: {}",
+            i18n::t("search.external_secrets.secret_prefix"),
+            &self.external_secret.get_display_name()
+        )
     }
 }

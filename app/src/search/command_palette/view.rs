@@ -279,7 +279,7 @@ impl View {
             SearchBar::new(
                 mixer.clone(),
                 search_bar_state.clone(),
-                "Search for a command",
+                i18n::t("search.command_palette.placeholder"),
                 Self::create_query_result_renderer,
                 ctx,
             )
@@ -291,7 +291,7 @@ impl View {
         });
 
         let placeholder_element = QueryResultRenderer::new(
-            MatchedBinding::placeholder("No results found".into()).into(),
+            MatchedBinding::placeholder(i18n::t("search.no_results")).into(),
             "command_palette:no_results".into(),
             |_, _, _| {},
             *styles::QUERY_RESULT_RENDERER_STYLES,
@@ -835,10 +835,9 @@ impl View {
                     if let Some(window_id) = window_id {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "Cannot switch conversations while agent is monitoring a command."
-                                        .to_string(),
-                                ),
+                                DismissibleToast::error(i18n::t(
+                                    "search.command_palette.cannot_switch_conversations",
+                                )),
                                 window_id,
                                 ctx,
                             );
@@ -976,9 +975,9 @@ impl View {
                 if can_start_new_conversation {
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "Cannot start a new conversation while agent is monitoring a command.".to_string(),
-                            ),
+                            DismissibleToast::error(i18n::t(
+                                "search.command_palette.cannot_start_conversation",
+                            )),
                             window_id,
                             ctx,
                         );

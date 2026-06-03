@@ -22,11 +22,15 @@ const PROVIDER_BUTTON_ICON_SIZE: f32 = 14.;
 const PROVIDER_BUTTON_ICON_TEXT_GAP: f32 = 8.;
 
 /// Text to use as a label throughout the app for user interactions that will attach selected
-/// block(s) or text selections to a new AI query.
-pub static ATTACH_AS_AGENT_MODE_CONTEXT_TEXT: LazyLock<&'static str> =
-    LazyLock::new(|| "Attach as agent context");
+/// block(s) or text selections to a new AI query. Resolved at call time so it tracks the active
+/// locale when the language is switched live.
+pub fn attach_as_agent_mode_context_text() -> String {
+    i18n::t("ai.agent_mode.attach_as_context")
+}
 
 /// Label we use for the the command palette action to create a new local Oz agent pane.
+/// Kept as the English source string: it is consumed as an `EditableBinding` description, which is
+/// localized centrally by slugifying the description (`keybinding.description.new_agent_pane`).
 pub static NEW_AGENT_PANE_LABEL: LazyLock<&'static str> = LazyLock::new(|| "New Agent Pane");
 
 /// Claude/Anthropic brand color (official brand orange #D97757).
@@ -78,7 +82,7 @@ pub fn render_ai_follow_up_icon(
             let tooltip_background = appearance.theme().tooltip_background();
             let tool_tip = appearance
                 .ui_builder()
-                .tool_tip("Follow up with existing conversation".to_owned())
+                .tool_tip(i18n::t("ai.conversation.follow_up_existing_tooltip"))
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     background: Some(warpui::elements::Fill::Solid(tooltip_background)),
@@ -147,12 +151,12 @@ pub fn format_credits(credits: f32) -> String {
     if credits.fract() < 0.1 {
         let whole = credits.trunc() as i32;
         if whole == 1 {
-            format!("{whole} credit")
+            i18n::t("ai.usage.credit_one").replace("{count}", &whole.to_string())
         } else {
-            format!("{whole} credits")
+            i18n::t("ai.usage.credit_other").replace("{count}", &whole.to_string())
         }
     } else {
-        format!("{credits:.1} credits")
+        i18n::t("ai.usage.credit_other").replace("{count}", &format!("{credits:.1}"))
     }
 }
 

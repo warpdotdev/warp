@@ -79,9 +79,17 @@ impl SearchItem for FileSearchItem {
 
     fn accessibility_label(&self) -> String {
         if self.is_directory {
-            format!("Directory: {}", self.path.display())
+            format!(
+                "{}: {}",
+                i18n::t("search.ai_context_menu.directory_prefix"),
+                self.path.display()
+            )
         } else {
-            format!("File: {}", self.path.display())
+            format!(
+                "{}: {}",
+                i18n::t("search.ai_context_menu.file_prefix"),
+                self.path.display()
+            )
         }
     }
 }

@@ -45,10 +45,10 @@ impl ProviderCommandRunner {
             if provider_type.allowed_in_team_context()
                 && provider_type.allowed_in_personal_context()
             {
-                return Err(anyhow::anyhow!(
-                    "Provider '{}' must be setup for either a team or personal account",
-                    provider_type.slug()
-                ));
+                return Err(anyhow::anyhow!(i18n::t(
+                    "ai.agent_sdk.provider.scope_required"
+                )
+                .replace("{provider}", &provider_type.slug())));
             }
             use_team_auth = provider_type.allowed_in_team_context();
         } else if personal {
@@ -61,7 +61,9 @@ impl ProviderCommandRunner {
             let team_uid = match UserWorkspaces::as_ref(ctx).current_team_uid() {
                 Some(uid) => uid,
                 None => {
-                    return Err(anyhow::anyhow!("User is not on a team"));
+                    return Err(anyhow::anyhow!(i18n::t(
+                        "ai.agent_sdk.provider.user_not_on_team"
+                    )));
                 }
             };
             format!("{server_url}/oauth/connect/{slug}?principalType=team&principalId={team_uid}")
@@ -69,7 +71,12 @@ impl ProviderCommandRunner {
             format!("{server_url}/oauth/connect/{slug}")
         };
 
-        println!("To authenticate {slug}, open this URL in your browser: {url}");
+        println!(
+            "{}",
+            i18n::t("ai.agent_sdk.provider.authenticate_open_url")
+                .replace("{provider}", &slug)
+                .replace("{url}", &url)
+        );
 
         // Open the URL in the default browser
         ctx.open_url(&url);
@@ -103,7 +110,7 @@ impl ProviderCommandRunner {
                 }
 
                 let allowed_str = allowed_for.join(", ");
-                let status = "❌ Not Connected".to_string(); // TODO(bens): get this from gql
+                let status = i18n::t("ai.agent_sdk.provider.status.not_connected"); // TODO(bens): get this from gql
 
                 ProviderInfo {
                     name,
@@ -139,10 +146,10 @@ struct ProviderInfo {
 impl TableFormat for ProviderInfo {
     fn header() -> Vec<Cell> {
         vec![
-            Cell::new("NAME"),
-            Cell::new("SLUG"),
-            Cell::new("ALLOWED FOR"),
-            Cell::new("STATUS"),
+            Cell::new(i18n::t("ai.agent_sdk.provider.table.name")),
+            Cell::new(i18n::t("ai.agent_sdk.provider.table.slug")),
+            Cell::new(i18n::t("ai.agent_sdk.provider.table.allowed_for")),
+            Cell::new(i18n::t("ai.agent_sdk.provider.table.status")),
         ]
     }
 

@@ -59,14 +59,14 @@ pub(crate) struct RemoveTabConfigConfirmationDialog {
 impl RemoveTabConfigConfirmationDialog {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let cancel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+            ActionButton::new(i18n::t("common.cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(RemoveTabConfigConfirmationAction::Cancel);
             })
         });
 
         let enter_keystroke = Keystroke::parse("enter").expect("Valid keystroke");
         let confirm_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Remove", DangerPrimaryTheme)
+            ActionButton::new(i18n::t("common.remove"), DangerPrimaryTheme)
                 .with_keybinding(KeystrokeSource::Fixed(enter_keystroke), ctx)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RemoveTabConfigConfirmationAction::Confirm);
@@ -107,13 +107,11 @@ impl View for RemoveTabConfigConfirmationDialog {
             .with_margin_right(12.)
             .finish();
 
-        let title = format!("Remove '{}'?", self.config_name);
+        let title = i18n::t("tab_configs.remove.title").replace("{name}", &self.config_name);
 
         let dialog = Dialog::new(
             title,
-            Some(
-                "This tab config will be permanently deleted. This action cannot be undone.".into(),
-            ),
+            Some(i18n::t("tab_configs.remove.description")),
             UiComponentStyles {
                 width: Some(DIALOG_WIDTH),
                 ..dialog_styles(appearance)

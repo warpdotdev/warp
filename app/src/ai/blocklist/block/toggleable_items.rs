@@ -175,7 +175,7 @@ impl<T: 'static> View for ToggleableItemsView<T> {
                     .finish();
 
                 let hint_text = Span::new(
-                    "to toggle selection",
+                    i18n::t("common.to_toggle_selection"),
                     UiComponentStyles {
                         margin: Some(Coords::default().left(6.)),
                         ..hint_styles

@@ -34,13 +34,13 @@ pub enum HeaderToolbarItemKind {
 }
 
 impl HeaderToolbarItemKind {
-    pub fn display_label(&self) -> &'static str {
+    pub fn display_label(&self) -> String {
         match self {
-            Self::TabsPanel => "Tabs Panel",
-            Self::ToolsPanel => "Tools Panel",
-            Self::AgentManagement => "Agent Management",
-            Self::CodeReview => "Code Review",
-            Self::NotificationsMailbox => "Notifications",
+            Self::TabsPanel => i18n::t("workspace.toolbar.item.tabs_panel"),
+            Self::ToolsPanel => i18n::t("workspace.toolbar.item.tools_panel"),
+            Self::AgentManagement => i18n::t("workspace.toolbar.item.agent_management"),
+            Self::CodeReview => i18n::t("workspace.toolbar.item.code_review"),
+            Self::NotificationsMailbox => i18n::t("workspace.toolbar.item.notifications"),
         }
     }
 

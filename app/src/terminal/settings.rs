@@ -93,7 +93,7 @@ define_settings_group!(TerminalSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.use_audible_bell",
-        description: "Whether to play an audible bell sound on terminal bell events.",
+        description_key: "settings.schema.terminal.use_audible_bell.description",
     },
     spacing_mode: Spacing {
         type: SpacingMode,
@@ -102,7 +102,7 @@ define_settings_group!(TerminalSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "appearance.spacing",
-        description: "Controls the spacing between terminal blocks.",
+        description_key: "settings.schema.appearance.spacing.description",
     }
     maximum_grid_size: MaximumGridSize {
         type: usize,
@@ -111,7 +111,7 @@ define_settings_group!(TerminalSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.maximum_grid_size",
-        description: "The maximum number of rows in the terminal grid.",
+        description_key: "settings.schema.terminal.maximum_grid_size.description",
     },
     alt_screen_padding: AltScreenPadding {
         type: AltScreenPaddingMode,
@@ -121,7 +121,7 @@ define_settings_group!(TerminalSettings, settings: [
         private: false,
         toml_path: "appearance.full_screen_apps.alt_screen_padding",
         max_table_depth: 0,
-        description: "Controls padding around full-screen terminal applications.",
+        description_key: "settings.schema.appearance.full_screen_apps.alt_screen_padding.description",
     },
     // This field should not be referenced directly to check zero state block visibility -- use
     // the `should_show_zero_state_block()` getter, which also considers global AI enablement.
@@ -132,7 +132,7 @@ define_settings_group!(TerminalSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.show_terminal_zero_state_block",
-        description: "Whether to show the AI zero-state block in new terminal sessions.",
+        description_key: "settings.schema.terminal.show_terminal_zero_state_block.description",
     },
     // Opt-in toggle for running terminal find on a background thread. Only consulted on
     // channels where `FeatureFlag::AsyncFind` is off; channels with the flag on force the
@@ -144,7 +144,7 @@ define_settings_group!(TerminalSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "experimental.async_find_enabled",
-        description: "Use an improved implementation of find to keep the UI responsive while searching for matches on large outputs.",
+        description_key: "settings.schema.experimental.async_find_enabled.description",
     },
 ]);
 

@@ -23,7 +23,7 @@ use crate::editor::{
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::SearchMixer;
 use crate::search::result_renderer::{QueryResultIndex, QueryResultRenderer};
-use crate::search::QueryFilter;
+use crate::search::{query_filter_display_name, query_filter_placeholder_text, QueryFilter};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
@@ -114,7 +114,7 @@ pub struct SearchBar<T: Action + Clone> {
     mixer: ModelHandle<SearchMixer<T>>,
     /// The placeholder text that is rendered in the search bar when no query has been run or
     /// filters have been applied.
-    placeholder_text: &'static str,
+    placeholder_text: String,
     create_query_result_renderer_fn: CreateQueryResultRendererFn<T>,
     /// Font family to use when rendering the editor and query filters. If `None` the monospace font
     /// family is used.
@@ -339,7 +339,7 @@ impl<T: Action + Clone> SearchBar<T> {
     pub fn new(
         mixer: ModelHandle<SearchMixer<T>>,
         state: ModelHandle<SearchBarState<T>>,
-        placeholder_text: &'static str,
+        placeholder_text: impl Into<String>,
         create_query_result_renderer_fn: CreateQueryResultRendererFn<T>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -366,7 +366,7 @@ impl<T: Action + Clone> SearchBar<T> {
         let me = Self {
             editor_handle,
             mixer,
-            placeholder_text,
+            placeholder_text: placeholder_text.into(),
             state,
             create_query_result_renderer_fn,
             font_family_override: None,
@@ -690,7 +690,11 @@ impl<T: Action + Clone> SearchBar<T> {
         if let Some(loading_filters) = self.mixer.as_ref(ctx).loading_query_filters() {
             for loading_filter in loading_filters.into_iter() {
                 ctx.emit_a11y_content(AccessibilityContent::new_without_help(
-                    format!("Loading {} suggestions", loading_filter.display_name()),
+                    format!(
+                        "{} {}",
+                        i18n::t("search.a11y.loading_suggestions_prefix"),
+                        query_filter_display_name(loading_filter)
+                    ),
                     WarpA11yRole::MenuItemRole,
                 ));
             }
@@ -700,7 +704,7 @@ impl<T: Action + Clone> SearchBar<T> {
 
         if let Some((.., data_source_err)) = self.mixer.as_ref(ctx).first_data_source_error() {
             ctx.emit_a11y_content(AccessibilityContent::new(
-                "Error finding results",
+                i18n::t("search.a11y.error_finding_results"),
                 data_source_err.user_facing_error(),
                 WarpA11yRole::MenuItemRole,
             ));
@@ -708,7 +712,11 @@ impl<T: Action + Clone> SearchBar<T> {
         }
 
         if let Some(selected_result) = self.state.as_ref(ctx).selected_result() {
-            let a11y_content_text = format!("Selected {}", selected_result.accessibility_label(),);
+            let a11y_content_text = format!(
+                "{} {}",
+                i18n::t("search.a11y.selected_prefix"),
+                selected_result.accessibility_label(),
+            );
             let a11y_content = match selected_result.accessibility_help_message() {
                 None => AccessibilityContent::new_without_help(
                     a11y_content_text,
@@ -774,10 +782,10 @@ impl<T: Action + Clone> SearchBar<T> {
                 // Set the appropriate placeholder text if the editor buffer is empty.
                 match self.state.as_ref(ctx).query_filter {
                     Some(filter) => {
-                        editor.set_placeholder_text(filter.placeholder_text(), ctx);
+                        editor.set_placeholder_text(query_filter_placeholder_text(filter), ctx);
                     }
                     None => {
-                        editor.set_placeholder_text(self.placeholder_text, ctx);
+                        editor.set_placeholder_text(self.placeholder_text.clone(), ctx);
                     }
                 }
             }

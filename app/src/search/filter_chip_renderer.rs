@@ -7,7 +7,7 @@ use warpui::platform::Cursor;
 use warpui::{Element, EventContext};
 
 use crate::appearance::Appearance;
-use crate::search::QueryFilter;
+use crate::search::{query_filter_display_name, QueryFilter};
 
 /// Trait to render a filter chip.
 pub trait FilterChipRenderer {
@@ -80,14 +80,18 @@ impl FilterChipRenderer for QueryFilter {
             }
 
             flex.add_child(
-                Text::new_inline(self.display_name(), appearance.ui_font_family(), font_size)
-                    .with_color(
-                        appearance
-                            .theme()
-                            .main_text_color(appearance.theme().surface_2())
-                            .into_solid(),
-                    )
-                    .finish(),
+                Text::new_inline(
+                    query_filter_display_name(*self),
+                    appearance.ui_font_family(),
+                    font_size,
+                )
+                .with_color(
+                    appearance
+                        .theme()
+                        .main_text_color(appearance.theme().surface_2())
+                        .into_solid(),
+                )
+                .finish(),
             );
 
             Container::new(flex.finish())

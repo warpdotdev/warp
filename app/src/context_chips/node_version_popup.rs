@@ -73,7 +73,7 @@ impl NodeVersionPopupView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let install_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Install nvm", SecondaryTheme)
+            ActionButton::new(i18n::t("node_version.install_nvm"), SecondaryTheme)
                 .with_icon(icons::Icon::Terminal)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(NodeVersionPopupAction::InstallNvm);
@@ -177,7 +177,7 @@ impl NodeVersionPopupView {
 
         col.add_child(
             Text::new(
-                "Install nvm to enable version switching",
+                i18n::t("context_chips.node.install_nvm_title"),
                 styles.ui_font_family,
                 styles.detail_font_size + 2.,
             )
@@ -189,7 +189,7 @@ impl NodeVersionPopupView {
         col.add_child(
             Container::new(
                 Text::new(
-                    "This menu helps you switch between Node.js versions — but it requires nvm to be installed.",
+                    i18n::t("context_chips.node.install_nvm_description"),
                     styles.ui_font_family,
                     styles.detail_font_size,
                 )
@@ -238,7 +238,7 @@ impl NodeVersionPopupView {
         // Heading
         col.add_child(
             Text::new(
-                "No node versions installed",
+                i18n::t("context_chips.node.no_versions_installed"),
                 styles.ui_font_family,
                 styles.detail_font_size + 2.,
             )
@@ -251,7 +251,7 @@ impl NodeVersionPopupView {
         col.add_child(
             Container::new(
                 Text::new(
-                    "Try installing versions with nvm",
+                    i18n::t("context_chips.node.try_installing_with_nvm"),
                     styles.ui_font_family,
                     styles.detail_font_size,
                 )
@@ -282,10 +282,14 @@ impl NodeVersionPopupView {
 
         col.add_child(
             Container::new(
-                Text::new("Installed", styles.ui_font_family, styles.detail_font_size)
-                    .with_style(Properties::default())
-                    .with_color(styles.secondary_text_color)
-                    .finish(),
+                Text::new(
+                    i18n::t("common.installed"),
+                    styles.ui_font_family,
+                    styles.detail_font_size,
+                )
+                .with_style(Properties::default())
+                .with_color(styles.secondary_text_color)
+                .finish(),
             )
             .with_horizontal_padding(12.)
             .finish(),

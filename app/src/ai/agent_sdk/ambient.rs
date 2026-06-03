@@ -232,11 +232,15 @@ impl AmbientAgentRunner {
     }
     fn run_agent(&self, args: RunCloudArgs, ctx: &mut ModelContext<Self>) -> anyhow::Result<()> {
         if !FeatureFlag::AmbientAgentsCommandLine.is_enabled() {
-            return Err(anyhow::anyhow!("Unsupported feature"));
+            return Err(anyhow::anyhow!(i18n::t(
+                "ai.agent_sdk.ambient.unsupported_feature"
+            )));
         }
         let skill_enabled = FeatureFlag::OzPlatformSkills.is_enabled();
         if args.skill.is_some() && !skill_enabled {
-            return Err(anyhow::anyhow!("unexpected argument '--skill' found"));
+            return Err(anyhow::anyhow!(i18n::t(
+                "ai.agent_sdk.ambient.unexpected_skill_arg"
+            )));
         }
 
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
@@ -257,7 +261,7 @@ impl AmbientAgentRunner {
                 || args.conversation.is_some();
             if !has_prompt_source {
                 super::report_fatal_error(
-                    anyhow::anyhow!("Either --prompt, --skill, or --conversation must be provided"),
+                    anyhow::anyhow!(i18n::t("ai.agent_sdk.ambient.missing_prompt_source")),
                     ctx,
                 );
                 return;
@@ -275,7 +279,11 @@ impl AmbientAgentRunner {
                         Ok(server_id) => server_id.into(),
                         Err(err) => {
                             super::report_fatal_error(
-                                anyhow::anyhow!("Failed to parse saved prompt ID '{id}': {err}"),
+                                anyhow::anyhow!(i18n::t(
+                                    "ai.agent_sdk.ambient.saved_prompt_parse_failed"
+                                )
+                                .replace("{id}", &id)
+                                .replace("{error}", &err.to_string())),
                                 ctx,
                             );
                             return;
@@ -290,7 +298,10 @@ impl AmbientAgentRunner {
                             Some(prompt_text) => Some(prompt_text.to_string()),
                             None => {
                                 super::report_fatal_error(
-                                    anyhow::anyhow!("'{id}' is not a saved prompt"),
+                                    anyhow::anyhow!(i18n::t(
+                                        "ai.agent_sdk.ambient.saved_prompt_not_prompt"
+                                    )
+                                    .replace("{id}", &id)),
                                     ctx,
                                 );
                                 return;
@@ -298,7 +309,10 @@ impl AmbientAgentRunner {
                         },
                         None => {
                             super::report_fatal_error(
-                                anyhow::anyhow!("Saved prompt with ID '{id}' not found"),
+                                anyhow::anyhow!(i18n::t(
+                                    "ai.agent_sdk.ambient.saved_prompt_not_found"
+                                )
+                                .replace("{id}", &id)),
                                 ctx,
                             );
                             return;
@@ -323,11 +337,9 @@ impl AmbientAgentRunner {
             // This ensures users don't have to go through env selection if attachment validation fails
             if args.attachment_paths.len() > MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY {
                 super::report_fatal_error(
-                    anyhow::anyhow!(
-                        "Too many attachments. Maximum {} attachments allowed, but {} were provided.",
-                        MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY,
-                        args.attachment_paths.len()
-                    ),
+                    anyhow::anyhow!(i18n::t("ai.agent_sdk.ambient.too_many_attachments")
+                        .replace("{max}", &MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY.to_string())
+                        .replace("{count}", &args.attachment_paths.len().to_string())),
                     ctx,
                 );
                 return;
@@ -354,7 +366,9 @@ impl AmbientAgentRunner {
             } else {
                 if !args.attachment_paths.is_empty() {
                     super::report_fatal_error(
-                        anyhow::anyhow!("Attachment upload is not enabled"),
+                        anyhow::anyhow!(i18n::t(
+                            "ai.agent_sdk.ambient.attachment_upload_not_enabled"
+                        )),
                         ctx,
                     );
                     return;
@@ -375,9 +389,9 @@ impl AmbientAgentRunner {
             let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
             {
                 Ok(EnvironmentChoice::None) => {
-                    eprintln!("Agent will run without an environment.");
+                    eprintln!("{}", i18n::t("ai.agent_sdk.ambient.without_environment"));
                     None
-                },
+                }
                 Ok(EnvironmentChoice::Environment { id, .. }) => Some(id),
                 Err(ResolveConfigurationError::Canceled) => {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -499,7 +513,11 @@ impl AmbientAgentRunner {
             let oz_root_url = ChannelState::oz_root_url();
             let ai_client_clone = ai_client.clone();
             let spawn_future = async move {
-                let mut stream = Box::pin(spawn_task(request, ai_client_clone, Some(TASK_STATUS_POLLING_DURATION)));
+                let mut stream = Box::pin(spawn_task(
+                    request,
+                    ai_client_clone,
+                    Some(TASK_STATUS_POLLING_DURATION),
+                ));
                 let mut session_join_info = None;
                 let mut spawned_task_id = None;
 
@@ -507,14 +525,29 @@ impl AmbientAgentRunner {
                     match event_result {
                         Ok(event) => match event {
                             AmbientAgentEvent::TaskSpawned { task_id, .. } => {
-                                println!("Spawned ambient agent with run ID: {task_id}");
-                                println!("View run: {oz_root_url}/runs/{task_id}");
+                                println!(
+                                    "{}",
+                                    i18n::t("ai.agent_sdk.ambient.spawned")
+                                        .replace("{id}", &task_id.to_string())
+                                );
+                                println!(
+                                    "{}",
+                                    i18n::t("ai.agent_sdk.ambient.view_run")
+                                        .replace("{url}", &format!("{oz_root_url}/runs/{task_id}"))
+                                );
                                 spawned_task_id = Some(task_id);
                             }
                             AmbientAgentEvent::AtCapacity => {
-                                println!("Concurrent cloud agent limit reached. This agent run will begin when one of your current cloud runs completes.");
+                                println!(
+                                    "{}",
+                                    i18n::t("ai.agent_sdk.ambient.concurrent_limit_reached")
+                                );
                                 if let Some(url) = &upgrade_link {
-                                    println!("To increase your concurrent agent limit, upgrade your plan: {}", url);
+                                    println!(
+                                        "{}",
+                                        i18n::t("ai.agent_sdk.ambient.upgrade_plan")
+                                            .replace("{url}", url)
+                                    );
                                 }
                             }
                             AmbientAgentEvent::StateChanged {
@@ -527,25 +560,51 @@ impl AmbientAgentRunner {
                                         | AmbientAgentTaskState::Succeeded
                                 ) || state.is_failure_like()
                                 {
-                                    println!("Agent state: {:?}", state);
+                                    println!(
+                                        "{}",
+                                        i18n::t("ai.agent_sdk.ambient.agent_state")
+                                            .replace("{state}", &format!("{state:?}"))
+                                    );
                                 }
                                 if state.is_failure_like() {
                                     if let Some(msg) = status_message {
-                                        println!("Error: {}", msg.message);
+                                        println!(
+                                            "{}",
+                                            i18n::t("ai.agent_sdk.ambient.error")
+                                                .replace("{message}", &msg.message)
+                                        );
                                     } else {
-                                        println!("Run failed with no error message");
+                                        println!(
+                                            "{}",
+                                            i18n::t("ai.agent_sdk.ambient.failed_no_error_message")
+                                        );
                                     }
                                 }
                             }
                             AmbientAgentEvent::SessionStarted {
                                 session_join_info: info,
                             } => {
-                                println!("View agent session: {}", info.session_link);
+                                println!(
+                                    "{}",
+                                    i18n::t("ai.agent_sdk.ambient.view_session")
+                                        .replace("{url}", &info.session_link)
+                                );
                                 session_join_info = Some(info);
                             }
                             AmbientAgentEvent::TimedOut => {
-                                let task_id_str = spawned_task_id.as_ref().map_or_else(|| "unknown".to_string(), |id| id.to_string());
-                                println!("Agent session with run ID {task_id_str} is not ready after {}s. Check for a sharing link in the ambient agent management panel. See https://docs.warp.dev/agent-platform/cloud-agents/managing-cloud-agents for details.", TASK_STATUS_POLLING_DURATION.as_secs());
+                                let task_id_str = spawned_task_id.as_ref().map_or_else(
+                                    || i18n::t("ai.agent_sdk.ambient.unknown"),
+                                    |id| id.to_string(),
+                                );
+                                println!(
+                                    "{}",
+                                    i18n::t("ai.agent_sdk.ambient.session_not_ready")
+                                        .replace("{id}", &task_id_str)
+                                        .replace(
+                                            "{seconds}",
+                                            &TASK_STATUS_POLLING_DURATION.as_secs().to_string(),
+                                        )
+                                );
                             }
                         },
                         Err(err) => {
@@ -814,14 +873,18 @@ impl AmbientAgentRunner {
     /// Print runs in a beautifully formatted ASCII table with card-style layout.
     fn print_tasks_table(tasks: &[AmbientAgentTask]) {
         if tasks.is_empty() {
-            println!("No runs found.");
+            println!("{}", i18n::t("ai.agent_sdk.ambient.no_runs_found"));
             return;
         }
 
         if tasks.len() == 1 {
-            println!("\nAgent Run:");
+            println!("\n{}", i18n::t("ai.agent_sdk.ambient.heading.run"));
         } else {
-            println!("\nAgent Runs ({}):", tasks.len());
+            println!(
+                "\n{}",
+                i18n::t("ai.agent_sdk.ambient.heading.runs")
+                    .replace("{count}", &tasks.len().to_string())
+            );
         }
 
         let oz_root_url = ChannelState::oz_root_url();
@@ -840,8 +903,9 @@ impl AmbientAgentRunner {
 
             // Title (wrapped, single cell)
             if !task.title.is_empty() {
+                let title_label = i18n::t("ai.agent_sdk.ambient.label.title");
                 let title_cell = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-                    "Title",
+                    &title_label,
                     &task.title,
                     MAX_LINE_WIDTH,
                 );
@@ -849,24 +913,31 @@ impl AmbientAgentRunner {
             }
 
             if let Some(executor) = task.executor_display_name() {
-                table.add_row(vec![format!("Executed as: {executor}")]);
+                table
+                    .add_row(vec![i18n::t("ai.agent_sdk.ambient.executed_as")
+                        .replace("{executor}", &executor)]);
             }
 
             // Agent config snapshot (if available)
             if let Some(config) = task.agent_config_snapshot.as_ref() {
                 let config_str =
                     serde_json::to_string_pretty(config).unwrap_or_else(|_| format!("{config:?}"));
-                table.add_row(vec![format!("Config:\n{config_str}")]);
+                table.add_row(vec![
+                    i18n::t("ai.agent_sdk.ambient.config").replace("{config}", &config_str)
+                ]);
             }
 
             // Created time
             let created_formatted = format_approx_duration_from_now_utc(task.created_at);
-            table.add_row(vec![format!("Created: {}", created_formatted)]);
+            table.add_row(vec![
+                i18n::t("ai.agent_sdk.ambient.created").replace("{time}", &created_formatted)
+            ]);
 
             // Status message (if available) - single multi-line cell
             if let Some(status_msg) = &task.status_message {
+                let status_label = i18n::t("ai.agent_sdk.ambient.label.status");
                 let status_cell = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-                    "Status",
+                    &status_label,
                     &status_msg.message,
                     MAX_LINE_WIDTH,
                 );
@@ -881,7 +952,8 @@ impl AmbientAgentRunner {
 
             // Session link (if available)
             if let Some(session_join_info) = SessionJoinInfo::from_task(task) {
-                table.add_row(vec![format!("Session: {}", session_join_info.session_link)]);
+                table.add_row(vec![i18n::t("ai.agent_sdk.ambient.session")
+                    .replace("{url}", &session_join_info.session_link)]);
             }
 
             println!("{table}");
@@ -890,7 +962,7 @@ impl AmbientAgentRunner {
 
     /// Format artifacts for display.
     fn format_artifacts(artifacts: &[Artifact]) -> String {
-        let mut lines = vec!["Artifacts:".to_string()];
+        let mut lines = vec![i18n::t("ai.agent_sdk.ambient.artifacts")];
 
         for artifact in artifacts {
             match artifact {
@@ -902,25 +974,51 @@ impl AmbientAgentRunner {
                     ..
                 } => {
                     let pr_display = match (repo, number) {
-                        (Some(repo), Some(num)) => format!("  PR: {} #{}", repo, num),
-                        _ => "  PR:".to_string(),
+                        (Some(repo), Some(num)) => {
+                            format!(
+                                "  {}",
+                                i18n::t("ai.agent_sdk.ambient.artifact.pr_with_repo")
+                                    .replace("{repo}", repo)
+                                    .replace("{number}", &num.to_string())
+                            )
+                        }
+                        _ => format!("  {}", i18n::t("ai.agent_sdk.ambient.artifact.pr")),
                     };
                     lines.push(pr_display);
-                    lines.push(format!("    Branch: {}", branch));
-                    lines.push(format!("    Link: {}", url));
+                    lines.push(format!(
+                        "    {}",
+                        i18n::t("ai.agent_sdk.ambient.artifact.branch").replace("{branch}", branch)
+                    ));
+                    lines.push(format!(
+                        "    {}",
+                        i18n::t("ai.agent_sdk.ambient.artifact.link").replace("{url}", url)
+                    ));
                 }
                 Artifact::Plan {
                     notebook_uid,
                     title,
                     ..
                 } => {
-                    let plan_title = title.as_deref().unwrap_or("Untitled Plan");
-                    lines.push(format!("  Plan: {}", plan_title));
+                    let plan_title = title
+                        .as_deref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| i18n::t("ai.agent_sdk.ambient.artifact.untitled_plan"));
+                    lines.push(format!(
+                        "  {}",
+                        i18n::t("ai.agent_sdk.ambient.artifact.plan")
+                            .replace("{title}", &plan_title)
+                    ));
                     if let Some(id) = notebook_uid {
                         lines.push(format!(
-                            "    Link: {}/drive/notebook/{}",
-                            ChannelState::server_root_url(),
-                            id
+                            "    {}",
+                            i18n::t("ai.agent_sdk.ambient.artifact.link").replace(
+                                "{url}",
+                                &format!(
+                                    "{}/drive/notebook/{}",
+                                    ChannelState::server_root_url(),
+                                    id
+                                ),
+                            )
                         ));
                     }
                 }
@@ -929,8 +1027,16 @@ impl AmbientAgentRunner {
                     description,
                     ..
                 } => {
-                    let desc = description.as_deref().unwrap_or("No description");
-                    lines.push(format!("  Screenshot: {} ({})", artifact_uid, desc));
+                    let desc = description
+                        .as_deref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| i18n::t("ai.agent_sdk.ambient.artifact.no_description"));
+                    lines.push(format!(
+                        "  {}",
+                        i18n::t("ai.agent_sdk.ambient.artifact.screenshot")
+                            .replace("{uid}", artifact_uid)
+                            .replace("{description}", &desc)
+                    ));
                 }
                 Artifact::File {
                     filename,
@@ -939,10 +1045,20 @@ impl AmbientAgentRunner {
                     ..
                 } => {
                     let label = super::super::artifacts::file_button_label(filename, filepath);
-                    lines.push(format!("  File: {}", label));
-                    lines.push(format!("    Path: {}", filepath));
+                    lines.push(format!(
+                        "  {}",
+                        i18n::t("ai.agent_sdk.ambient.artifact.file").replace("{label}", &label)
+                    ));
+                    lines.push(format!(
+                        "    {}",
+                        i18n::t("ai.agent_sdk.ambient.artifact.path").replace("{path}", filepath)
+                    ));
                     if let Some(description) = description {
-                        lines.push(format!("    Description: {}", description));
+                        lines.push(format!(
+                            "    {}",
+                            i18n::t("ai.agent_sdk.ambient.artifact.description")
+                                .replace("{description}", description)
+                        ));
                     }
                 }
             }
@@ -977,9 +1093,9 @@ fn ensure_stream_output_format(output_format: OutputFormat) -> anyhow::Result<()
         return Ok(());
     }
 
-    Err(anyhow!(
-        "Streaming commands require `--output-format ndjson`"
-    ))
+    Err(anyhow!(i18n::t(
+        "ai.agent_sdk.ambient.streaming_requires_ndjson"
+    )))
 }
 
 fn stream_retry_backoff(failures: usize) -> Duration {
@@ -992,7 +1108,9 @@ fn stream_retry_backoff(failures: usize) -> Duration {
 fn write_stream_record<T: Serialize>(record: &T) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout();
     super::output::write_json_line(record, &mut stdout)?;
-    stdout.flush().context("unable to flush stdout")?;
+    stdout
+        .flush()
+        .context(i18n::t("ai.agent_sdk.ambient.flush_stdout_failed"))?;
     Ok(())
 }
 
@@ -1002,12 +1120,15 @@ fn task_id_from_run_id(run_id: &str) -> Option<AmbientAgentTaskId> {
 
 fn task_id_from_oz_run_id_env() -> anyhow::Result<Option<AmbientAgentTaskId>> {
     match std::env::var(warp_cli::OZ_RUN_ID_ENV) {
-        Ok(run_id) => parse_ambient_task_id(&run_id, "Invalid OZ_RUN_ID").map(Some),
+        Ok(run_id) => {
+            let prefix = i18n::t("ai.agent_sdk.ambient.invalid_oz_run_id");
+            parse_ambient_task_id(&run_id, &prefix).map(Some)
+        }
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(anyhow!(
-            "{} is set but is not valid Unicode",
-            warp_cli::OZ_RUN_ID_ENV
-        )),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(anyhow!(i18n::t("ai.agent_sdk.ambient.env_not_unicode")
+                .replace("{env}", warp_cli::OZ_RUN_ID_ENV)))
+        }
     }
 }
 
@@ -1039,10 +1160,13 @@ impl SendAgentMessageLogContext {
     }
 
     fn error_context(&self) -> String {
-        format!(
-            "Failed to send agent message (sender_run_id={:?}, task_id={:?}, target_agent_ids={:?})",
-            self.sender_run_id, self.task_id, self.target_agent_ids
-        )
+        let sender_run_id = format!("{:?}", self.sender_run_id);
+        let task_id = format!("{:?}", self.task_id);
+        let target_agent_ids = format!("{:?}", self.target_agent_ids);
+        i18n::t("ai.agent_sdk.ambient.message.send_failed_context")
+            .replace("{sender_run_id}", &sender_run_id)
+            .replace("{task_id}", &task_id)
+            .replace("{target_agent_ids}", &target_agent_ids)
     }
 
     fn log_start(&self) {
@@ -1109,7 +1233,10 @@ async fn watch_messages_forever(
             Ok(stream) => {
                 if !initial_connect {
                     eprintln!(
-                        "Reconnected message watch for run {run_id} at sequence {last_seen_sequence}."
+                        "{}",
+                        i18n::t("ai.agent_sdk.ambient.message.watch.reconnected")
+                            .replace("{run_id}", &run_id)
+                            .replace("{sequence}", &last_seen_sequence.to_string())
                     );
                 }
                 initial_connect = false;
@@ -1118,14 +1245,18 @@ async fn watch_messages_forever(
             }
             Err(err) => {
                 if initial_connect {
-                    return Err(err.context("Failed to open agent event stream"));
+                    return Err(
+                        err.context(i18n::t("ai.agent_sdk.ambient.message.watch.open_failed"))
+                    );
                 }
 
                 failures += 1;
                 let backoff = stream_retry_backoff(failures);
                 eprintln!(
-                    "Message watch reconnect failed: {err:#}. Retrying in {}s.",
-                    backoff.as_secs()
+                    "{}",
+                    i18n::t("ai.agent_sdk.ambient.message.watch.reconnect_failed")
+                        .replace("{error}", &format!("{err:#}"))
+                        .replace("{seconds}", &backoff.as_secs().to_string())
                 );
                 Timer::after(backoff).await;
                 continue;
@@ -1139,7 +1270,13 @@ async fn watch_messages_forever(
                     let event = match serde_json::from_str::<AgentRunEvent>(&message.data) {
                         Ok(event) => event,
                         Err(err) => {
-                            eprintln!("Skipping malformed agent event payload: {err}");
+                            eprintln!(
+                                "{}",
+                                i18n::t(
+                                    "ai.agent_sdk.ambient.message.watch.malformed_event_payload"
+                                )
+                                .replace("{error}", &err.to_string())
+                            );
                             continue;
                         }
                     };
@@ -1155,8 +1292,9 @@ async fn watch_messages_forever(
 
                     let Some(message_id) = event.ref_id.clone() else {
                         eprintln!(
-                            "Skipping new_message event without ref_id at sequence {}.",
-                            event.sequence
+                            "{}",
+                            i18n::t("ai.agent_sdk.ambient.message.watch.missing_ref_id")
+                                .replace("{sequence}", &event.sequence.to_string())
                         );
                         last_seen_sequence = event.sequence;
                         continue;
@@ -1175,8 +1313,11 @@ async fn watch_messages_forever(
                             failures += 1;
                             let backoff = stream_retry_backoff(failures);
                             eprintln!(
-                                "Failed to hydrate message {message_id}: {err:#}. Retrying in {}s.",
-                                backoff.as_secs()
+                                "{}",
+                                i18n::t("ai.agent_sdk.ambient.message.watch.hydrate_failed")
+                                    .replace("{message_id}", &message_id)
+                                    .replace("{error}", &format!("{err:#}"))
+                                    .replace("{seconds}", &backoff.as_secs().to_string())
                             );
                             Timer::after(backoff).await;
                             break;
@@ -1198,8 +1339,10 @@ async fn watch_messages_forever(
                     failures += 1;
                     let backoff = stream_retry_backoff(failures);
                     eprintln!(
-                        "Message watch disconnected: {err}. Retrying in {}s.",
-                        backoff.as_secs()
+                        "{}",
+                        i18n::t("ai.agent_sdk.ambient.message.watch.disconnected")
+                            .replace("{error}", &err.to_string())
+                            .replace("{seconds}", &backoff.as_secs().to_string())
                     );
                     Timer::after(backoff).await;
                     break;
@@ -1208,8 +1351,9 @@ async fn watch_messages_forever(
                     failures += 1;
                     let backoff = stream_retry_backoff(failures);
                     eprintln!(
-                        "Message watch stream closed. Reconnecting in {}s.",
-                        backoff.as_secs()
+                        "{}",
+                        i18n::t("ai.agent_sdk.ambient.message.watch.closed")
+                            .replace("{seconds}", &backoff.as_secs().to_string())
                     );
                     Timer::after(backoff).await;
                     break;
@@ -1241,11 +1385,16 @@ where
         OutputFormat::Pretty | OutputFormat::Text => {
             writeln!(
                 &mut output,
-                "Sent {} message(s).",
-                response.message_ids.len()
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.sent_count")
+                    .replace("{count}", &response.message_ids.len().to_string())
             )?;
             if !response.message_ids.is_empty() {
-                writeln!(&mut output, "Message IDs:")?;
+                writeln!(
+                    &mut output,
+                    "{}",
+                    i18n::t("ai.agent_sdk.ambient.message.ids")
+                )?;
                 for message_id in &response.message_ids {
                     writeln!(&mut output, "- {message_id}")?;
                 }
@@ -1275,22 +1424,52 @@ where
         OutputFormat::Json => super::output::write_json(response, &mut output),
         OutputFormat::Ndjson => super::output::write_json_line(response, &mut output),
         OutputFormat::Pretty | OutputFormat::Text => {
-            writeln!(&mut output, "Message ID: {}", response.message_id)?;
-            writeln!(&mut output, "From: {}", response.sender_run_id)?;
-            writeln!(&mut output, "Subject: {}", response.subject)?;
-            writeln!(&mut output, "Sent At: {}", response.sent_at)?;
             writeln!(
                 &mut output,
-                "Delivered At: {}",
-                format_optional_timestamp(response.delivered_at.as_deref())
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.message_id")
+                    .replace("{id}", &response.message_id)
             )?;
             writeln!(
                 &mut output,
-                "Read At: {}",
-                format_optional_timestamp(response.read_at.as_deref())
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.from")
+                    .replace("{from}", &response.sender_run_id)
+            )?;
+            writeln!(
+                &mut output,
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.subject")
+                    .replace("{subject}", &response.subject)
+            )?;
+            writeln!(
+                &mut output,
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.sent_at")
+                    .replace("{sent_at}", &response.sent_at)
+            )?;
+            writeln!(
+                &mut output,
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.delivered_at").replace(
+                    "{delivered_at}",
+                    format_optional_timestamp(response.delivered_at.as_deref())
+                )
+            )?;
+            writeln!(
+                &mut output,
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.read_at").replace(
+                    "{read_at}",
+                    format_optional_timestamp(response.read_at.as_deref())
+                )
             )?;
             writeln!(&mut output)?;
-            writeln!(&mut output, "Body:")?;
+            writeln!(
+                &mut output,
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.body")
+            )?;
             writeln!(&mut output, "{}", response.body)?;
             Ok(())
         }
@@ -1322,7 +1501,12 @@ where
         OutputFormat::Json => super::output::write_json(&result, &mut output),
         OutputFormat::Ndjson => super::output::write_json_line(&result, &mut output),
         OutputFormat::Pretty | OutputFormat::Text => {
-            writeln!(&mut output, "Marked message delivered: {message_id}")?;
+            writeln!(
+                &mut output,
+                "{}",
+                i18n::t("ai.agent_sdk.ambient.message.marked_delivered")
+                    .replace("{id}", message_id)
+            )?;
             Ok(())
         }
     }
@@ -1331,12 +1515,12 @@ where
 impl super::output::TableFormat for AgentMessageHeader {
     fn header() -> Vec<Cell> {
         vec![
-            Cell::new("MESSAGE ID"),
-            Cell::new("FROM"),
-            Cell::new("SUBJECT"),
-            Cell::new("SENT AT"),
-            Cell::new("DELIVERED AT"),
-            Cell::new("READ AT"),
+            Cell::new(i18n::t("ai.agent_sdk.ambient.message.table.message_id")),
+            Cell::new(i18n::t("ai.agent_sdk.ambient.message.table.from")),
+            Cell::new(i18n::t("ai.agent_sdk.ambient.message.table.subject")),
+            Cell::new(i18n::t("ai.agent_sdk.ambient.message.table.sent_at")),
+            Cell::new(i18n::t("ai.agent_sdk.ambient.message.table.delivered_at")),
+            Cell::new(i18n::t("ai.agent_sdk.ambient.message.table.read_at")),
         ]
     }
 

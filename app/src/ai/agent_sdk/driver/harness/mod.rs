@@ -563,14 +563,18 @@ pub(super) fn write_temp_file(
         .suffix(suffix)
         .tempfile()
         .map_err(|e| {
-            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
-                "Failed to create temp file '{prefix}': {e}"
-            ))
+            AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(i18n::t(
+                "ai.agent_sdk.driver.harness.create_temp_file_failed"
+            )
+            .replace("{prefix}", prefix)
+            .replace("{error}", &e.to_string())))
         })?;
     file.write_all(content.as_bytes()).map_err(|e| {
-        AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(
-            "Failed to write temp file '{prefix}': {e}"
-        ))
+        AgentDriverError::ConfigBuildFailed(anyhow::anyhow!(i18n::t(
+            "ai.agent_sdk.driver.harness.write_temp_file_failed"
+        )
+        .replace("{prefix}", prefix)
+        .replace("{error}", &e.to_string())))
     })?;
     Ok(file)
 }
@@ -586,12 +590,14 @@ pub(crate) async fn upload_block_snapshot(
         .get_block_snapshot_upload_target(&conversation_id)
         .await
         .with_context(|| {
-            format!("Unable to get block upload slot for conversation {conversation_id}")
+            i18n::t("ai.agent_sdk.driver.harness.get_block_upload_slot_failed")
+                .replace("{conversation_id}", &conversation_id.to_string())
         })?;
 
-    let body = block
-        .to_json()
-        .with_context(|| format!("Unable to serialize block for conversation {conversation_id}"))?;
+    let body = block.to_json().with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.serialize_block_failed")
+            .replace("{conversation_id}", &conversation_id.to_string())
+    })?;
 
     upload_to_target(client.http_client(), &target, body).await
 }
@@ -610,7 +616,7 @@ pub(super) async fn upload_current_block_snapshot(
     let snapshot = foreground
         .spawn(move |_, ctx| td.as_ref(ctx).block_snapshot(&block_id, ctx))
         .await
-        .map_err(|_| anyhow::anyhow!("Agent driver dropped"))?;
+        .map_err(|_| anyhow::anyhow!(i18n::t("ai.agent_sdk.driver.harness.driver_dropped")))?;
     match snapshot {
         Some(block) => upload_block_snapshot(client, conversation_id, block).await,
         None => {

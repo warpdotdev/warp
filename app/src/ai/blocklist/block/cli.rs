@@ -52,14 +52,7 @@ use crate::ai::agent::{
     AIAgentActionType, AIAgentInput, AIAgentOutput, AIAgentOutputMessageType, AIAgentPtyWriteMode,
     AIAgentText, AIAgentTextSection, CancellationReason, ProgrammingLanguage, WebSearchStatus,
 };
-use crate::ai::blocklist::block::view_impl::common::{
-    render_query_text, UserQueryProps, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
-    BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
-    BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
-    LOAD_OUTPUT_MESSAGE_FOR_FILE_GLOB, LOAD_OUTPUT_MESSAGE_FOR_GREP,
-    LOAD_OUTPUT_MESSAGE_FOR_READING_FILES, LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE,
-    LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH,
-};
+use crate::ai::blocklist::block::view_impl::common::{render_query_text, UserQueryProps};
 use crate::ai::blocklist::block::TextLocation;
 use crate::ai::blocklist::code_block::CodeSnippetButtonHandles;
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
@@ -122,7 +115,6 @@ lazy_static! {
 const HAS_PENDING_CLI_ACTION_CONTEXT_KEY: &str = "HasPendingCLIAgentAction";
 const HAS_PENDING_NON_TRANSFER_CONTROL_ACTION_CONTEXT_KEY: &str =
     "HasPendingNonTransferControlCLIAgentAction";
-const BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL: &str = "Agent is asking you to take control.";
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -234,7 +226,7 @@ impl CLISubagentView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let allow_button = CompactibleSplitActionButton::new(
-            "Allow".to_string(),
+            i18n::t("common.allow"),
             Some(KeystrokeSource::Fixed(ACCEPT_KEYSTROKE.clone())),
             ButtonSize::Small,
             CLISubagentAction::ExecuteBlockedAction,
@@ -246,7 +238,7 @@ impl CLISubagentView {
         );
 
         let reject_button = CompactibleActionButton::new(
-            "Refine".to_string(),
+            i18n::t("common.refine"),
             Some(KeystrokeSource::Fixed(REJECT_KEYSTROKE.clone())),
             ButtonSize::Small,
             CLISubagentAction::RejectBlockedAction {
@@ -258,7 +250,7 @@ impl CLISubagentView {
         );
 
         let take_over_button = CompactibleActionButton::new(
-            "Take over".to_string(),
+            i18n::t("ai.command.take_over"),
             Some(KeystrokeSource::Binding(
                 SET_INPUT_MODE_TERMINAL_ACTION_NAME,
             )),
@@ -271,7 +263,7 @@ impl CLISubagentView {
             ctx,
         );
         let transfer_control_button = CompactibleActionButton::new(
-            "Take control".to_string(),
+            i18n::t("ai.command.take_control"),
             Some(KeystrokeSource::Binding(
                 SET_INPUT_MODE_TERMINAL_ACTION_NAME,
             )),
@@ -293,11 +285,11 @@ impl CLISubagentView {
         allow_menu.update(ctx, |menu, ctx| {
             menu.set_items(
                 vec![
-                    MenuItemFields::new("Accept".to_string())
+                    MenuItemFields::new(i18n::t("ai.command.accept"))
                         .with_key_shortcut_label(Some(ACCEPT_KEYSTROKE.displayed()))
                         .with_on_select_action(CLISubagentAction::ExecuteBlockedAction)
                         .into_item(),
-                    MenuItemFields::new("Auto-approve".to_string())
+                    MenuItemFields::new(i18n::t("ai.command.auto_approve"))
                         .with_key_shortcut_label(Some(AUTO_APPROVE_KEYSTROKE.displayed()))
                         .with_on_select_action(CLISubagentAction::ExecuteAndAutoApprove)
                         .into_item(),
@@ -1269,8 +1261,7 @@ impl View for CLISubagentView {
             AIAgentActionType::WriteToLongRunningShellCommand { input, mode, .. } => {
                 Some(render_blocked_action(
                     BlockedActionProps {
-                        header: BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND
-                            .to_string(),
+                        header: i18n::t("ai.blocked.write_to_running_command"),
                         description: Some(render_write_to_pty_input(
                             WriteToPtyInputProps {
                                 input: input.clone(),
@@ -1304,7 +1295,7 @@ impl View for CLISubagentView {
             AIAgentActionType::TransferShellCommandControlToUser { ref reason } => {
                 Some(render_blocked_action(
                     BlockedActionProps {
-                        header: BLOCKED_ACTION_MESSAGE_FOR_TRANSFER_CONTROL.to_string(),
+                        header: i18n::t("ai.cli.agent_asking_take_control"),
                         description: Some(render_transfer_control_reason(reason, app)),
                         is_allow_menu_open: false,
                         allow_menu: None,
@@ -1424,7 +1415,7 @@ impl TypedActionView for CLISubagentView {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success(String::from("Copied to clipboard")),
+                        DismissibleToast::success(i18n::t("common.copied_to_clipboard")),
                         window_id,
                         ctx,
                     );
@@ -1520,12 +1511,10 @@ fn should_show_read_files_speedbump(app: &AppContext) -> bool {
 
 fn get_action_loading_text(action: AIAgentActionType) -> Option<String> {
     match action {
-        AIAgentActionType::SearchCodebase(_) => {
-            Some(LOAD_OUTPUT_MESSAGE_FOR_SEARCH_CODEBASE.to_string())
-        }
-        AIAgentActionType::ReadFiles(_) => Some(LOAD_OUTPUT_MESSAGE_FOR_READING_FILES.to_string()),
-        AIAgentActionType::Grep { .. } => Some(LOAD_OUTPUT_MESSAGE_FOR_GREP.to_string()),
-        AIAgentActionType::FileGlobV2 { .. } => Some(LOAD_OUTPUT_MESSAGE_FOR_FILE_GLOB.to_string()),
+        AIAgentActionType::SearchCodebase(_) => Some(i18n::t("ai.loading.searching_codebase")),
+        AIAgentActionType::ReadFiles(_) => Some(i18n::t("ai.loading.reading_files")),
+        AIAgentActionType::Grep { .. } => Some(i18n::t("ai.loading.grepping")),
+        AIAgentActionType::FileGlobV2 { .. } => Some(i18n::t("ai.loading.finding_files")),
         _ => None,
     }
 }
@@ -1584,9 +1573,9 @@ fn render_web_search(query: Option<String>, app: &AppContext) -> Box<dyn Element
     let theme = appearance.theme();
 
     let text = if let Some(q) = query {
-        format!("Searching the web for \"{q}\"")
+        i18n::t("ai.loading.searching_web_for").replace("{query}", &q)
     } else {
-        LOAD_OUTPUT_MESSAGE_FOR_WEB_SEARCH.to_string()
+        i18n::t("ai.loading.searching_web")
     };
 
     let icon = Container::new(
@@ -1798,7 +1787,7 @@ fn render_permissions_speedbump(
 
     let checkbox_text = appearance
         .ui_builder()
-        .span("Always allow")
+        .span(i18n::t("ai.block.always_allow"))
         .with_style(UiComponentStyles {
             font_color: Some(font_color),
             font_size: Some(font_size),
@@ -1811,7 +1800,10 @@ fn render_permissions_speedbump(
 
     let formatted_text = FormattedTextElement::new(
         FormattedText::new([FormattedTextLine::Line(vec![
-            FormattedTextFragment::hyperlink("Manage Agent permissions", "Settings > AI"),
+            FormattedTextFragment::hyperlink(
+                i18n::t("ai.command.manage_agent_permissions"),
+                "Settings > AI",
+            ),
         ])]),
         font_size,
         font_family,
@@ -1876,16 +1868,12 @@ fn render_transfer_control_reason(reason: &str, app: &AppContext) -> Box<dyn Ele
 fn get_blocked_action_header(action: AIAgentActionType) -> Option<String> {
     match action {
         AIAgentActionType::WriteToLongRunningShellCommand { .. } => {
-            Some(BLOCKED_ACTION_MESSAGE_FOR_WRITE_TO_LONG_RUNNING_SHELL_COMMAND.to_string())
+            Some(i18n::t("ai.blocked.write_to_running_command"))
         }
-        AIAgentActionType::ReadFiles(..) => {
-            Some(BLOCKED_ACTION_MESSAGE_FOR_READING_FILES.to_string())
-        }
-        AIAgentActionType::SearchCodebase(..) => {
-            Some(BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE.to_string())
-        }
+        AIAgentActionType::ReadFiles(..) => Some(i18n::t("ai.blocked.reading_files")),
+        AIAgentActionType::SearchCodebase(..) => Some(i18n::t("ai.blocked.searching_codebase")),
         AIAgentActionType::Grep { .. } | AIAgentActionType::FileGlobV2 { .. } => {
-            Some(BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB.to_string())
+            Some(i18n::t("ai.blocked.grep_or_file_glob"))
         }
         _ => None,
     }

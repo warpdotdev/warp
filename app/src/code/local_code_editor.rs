@@ -1833,7 +1833,7 @@ impl LocalCodeEditorView {
                         Shrinkable::new(
                             1.,
                             Text::new_inline(
-                                "Add as context",
+                                i18n::t("code.editor.add_as_context"),
                                 appearance.ui_font_family(),
                                 appearance.ui_font_size(),
                             )
@@ -1950,10 +1950,10 @@ impl LocalCodeEditorView {
     /// Creates menu items for the context menu
     fn context_menu_items(&self) -> Vec<MenuItem<LocalCodeEditorAction>> {
         vec![
-            MenuItemFields::new("Go to definition")
+            MenuItemFields::new(i18n::t("code.editor.go_to_definition"))
                 .with_on_select_action(LocalCodeEditorAction::GotoDefinition)
                 .into_item(),
-            MenuItemFields::new("Find references")
+            MenuItemFields::new(i18n::t("code.editor.find_references"))
                 .with_on_select_action(LocalCodeEditorAction::FindReferences)
                 .into_item(),
         ]
@@ -2114,12 +2114,12 @@ impl DiffViewer for LocalCodeEditorView {
             .diff()
             .as_ref(ctx)
             .base()
-            .ok_or_else(|| "Missing base content".to_string())?
+            .ok_or_else(|| i18n::t("code.inline_diff.missing_base_content"))?
             .to_string();
 
         let file_id = self
             .file_id()
-            .ok_or_else(|| "Missing file_id".to_string())?;
+            .ok_or_else(|| i18n::t("code.local_code_editor.missing_file_id"))?;
 
         let buffer_version = self.editor.as_ref(ctx).version(ctx);
 
@@ -2127,7 +2127,10 @@ impl DiffViewer for LocalCodeEditorView {
             .update(ctx, |model, ctx| {
                 model.save(file_id, base_content, buffer_version, ctx)
             })
-            .map_err(|e| format!("Failed to save file: {e:?}"))
+            .map_err(|e| {
+                i18n::t("code.local_code_editor.failed_save_file")
+                    .replace("{error}", &format!("{e:?}"))
+            })
     }
 }
 
@@ -2383,7 +2386,7 @@ pub fn render_unsaved_changes_banner(
             Shrinkable::new(
                 1.,
                 Text::new(
-                    "This file has saved changes that are not reflected here.",
+                    i18n::t("code.editor.saved_changes_not_reflected"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -2401,7 +2404,7 @@ pub fn render_unsaved_changes_banner(
             appearance
                 .ui_builder()
                 .button(ButtonVariant::Text, discard_mouse_state)
-                .with_text_label("Discard this version".into())
+                .with_text_label(i18n::t("code.editor.discard_this_version"))
                 .with_style(UiComponentStyles {
                     height: Some(24.),
                     padding: Some(Coords {
@@ -2423,7 +2426,7 @@ pub fn render_unsaved_changes_banner(
                 appearance
                     .ui_builder()
                     .button(ButtonVariant::Outlined, overwrite_mouse_state)
-                    .with_text_label("Overwrite".into())
+                    .with_text_label(i18n::t("code.editor.overwrite"))
                     .with_style(UiComponentStyles {
                         font_color: Some(appearance.theme().active_ui_text_color().into()),
                         ..Default::default()
@@ -2480,7 +2483,7 @@ pub fn render_remote_disconnected_banner(appearance: &Appearance) -> Box<dyn Ele
             Shrinkable::new(
                 1.,
                 Text::new(
-                    "Remote host disconnected. You will not be able to see updates and save changes.",
+                    i18n::t("code.editor.remote_host_disconnected"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )

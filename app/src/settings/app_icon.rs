@@ -130,6 +130,6 @@ define_settings_group!(AppIconSettings, settings: [
         private: false,
         storage_key: "AppIcon",
         toml_path: "appearance.icon.app_icon",
-        description: "The app icon displayed in the dock.",
+        description_key: "settings.schema.appearance.icon.app_icon.description",
     },
 ]);

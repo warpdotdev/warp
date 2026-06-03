@@ -44,7 +44,7 @@ pub(crate) async fn fetch_and_download_attachments(
     let attachments = ai_client
         .get_task_attachments(task_id.clone())
         .await
-        .context("Failed to fetch task attachments")?;
+        .context(i18n::t("ai.agent_sdk.driver.attachments.fetch_task_failed"))?;
 
     log::info!("Fetched {} task attachments", attachments.len());
 
@@ -83,16 +83,18 @@ pub(crate) async fn fetch_and_download_handoff_snapshot_attachments(
     let attachments = ai_client
         .get_handoff_snapshot_attachments(&task_id)
         .await
-        .context("Failed to fetch handoff snapshot attachments")?;
+        .context(i18n::t(
+            "ai.agent_sdk.driver.attachments.fetch_handoff_failed",
+        ))?;
 
     if attachments.is_empty() {
         return Ok(None);
     }
 
     let handoff_dir = attachments_dir.join("handoff");
-    fs::create_dir_all(&handoff_dir)
-        .await
-        .context("Failed to create handoff attachments directory")?;
+    fs::create_dir_all(&handoff_dir).await.context(i18n::t(
+        "ai.agent_sdk.driver.attachments.create_handoff_dir_failed",
+    ))?;
 
     let attempts = attachments.len();
     let download_futures = attachments.into_iter().map(|attachment| {
@@ -144,7 +146,7 @@ async fn download_and_write_attachments(
 ) -> anyhow::Result<()> {
     fs::create_dir_all(attachment_dir)
         .await
-        .context("Failed to create attachments directory")?;
+        .context(i18n::t("ai.agent_sdk.driver.attachments.create_dir_failed"))?;
     log::info!(
         "Created attachments directory at: {}",
         attachment_dir.display()
@@ -181,7 +183,13 @@ async fn download_task_attachment(
     let safe_filename = Path::new(&attachment.filename)
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| anyhow::anyhow!("Invalid filename for file_id={}", attachment.file_id))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}",
+                i18n::t("ai.agent_sdk.driver.attachments.invalid_filename")
+                    .replace("{file_id}", &attachment.file_id)
+            )
+        })?
         .to_string();
 
     let file_path = attachment_dir.join(&safe_filename);
@@ -227,11 +235,9 @@ async fn download_attachment(
 ) -> anyhow::Result<()> {
     let operation = format!("download attachment '{}'", file_path.display());
     with_bounded_retry(&operation, || async {
-        let response = http_client
-            .get(download_url)
-            .send()
-            .await
-            .context("Failed to send download request")?;
+        let response = http_client.get(download_url).send().await.context(i18n::t(
+            "ai.agent_sdk.driver.attachments.send_download_request_failed",
+        ))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -240,19 +246,23 @@ async fn download_attachment(
                 status: status.as_u16(),
                 body: body.clone(),
             })
-            .context(format!("Download failed with status {status}: {body}")));
+            .context(
+                i18n::t("ai.agent_sdk.driver.attachments.download_status_failed")
+                    .replace("{status}", &status.to_string())
+                    .replace("{body}", &body),
+            ));
         }
 
         // Stream the response body directly to disk instead of buffering the full payload
         // in memory.
-        let mut file = fs::File::create(file_path)
-            .await
-            .context("Failed to create file")?;
+        let mut file = fs::File::create(file_path).await.context(i18n::t(
+            "ai.agent_sdk.driver.attachments.create_file_failed",
+        ))?;
         let mut response_stream =
             StreamReader::new(response.bytes_stream().map_err(std::io::Error::other));
         tokio::io::copy(&mut response_stream, &mut file)
             .await
-            .context("Failed to write file")?;
+            .context(i18n::t("ai.agent_sdk.driver.attachments.write_file_failed"))?;
 
         Ok(())
     })
@@ -268,8 +278,10 @@ pub fn process_attachment(
 ) -> anyhow::Result<AttachmentInput> {
     let file_bytes = std::fs::read(attachment_path).map_err(|e| {
         anyhow::anyhow!(
-            "Failed to read attachment file '{}': {e}",
-            attachment_path.display()
+            "{}",
+            i18n::t("ai.agent_sdk.driver.attachments.read_attachment_file_failed")
+                .replace("{path}", &attachment_path.display().to_string())
+                .replace("{error}", &e.to_string())
         )
     })?;
 
@@ -289,8 +301,13 @@ pub fn process_attachment(
 
     if file_bytes.len() > MAX_ATTACHMENT_SIZE_BYTES {
         return Err(anyhow::anyhow!(
-            "File is too large ({}MB). Maximum size is 10MB.",
-            file_bytes.len() / (1024 * 1024)
+            "{}",
+            i18n::t("ai.agent_sdk.driver.attachments.file_too_large")
+                .replace("{size_mb}", &(file_bytes.len() / (1024 * 1024)).to_string())
+                .replace(
+                    "{max_mb}",
+                    &(MAX_ATTACHMENT_SIZE_BYTES / (1024 * 1024)).to_string()
+                )
         ));
     }
 

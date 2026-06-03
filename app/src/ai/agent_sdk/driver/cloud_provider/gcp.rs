@@ -36,7 +36,9 @@ impl GcpCloudProvider {
         };
 
         let credentials = GcpCredentials::federated(run_id, &federation_config)
-            .context("Failed to prepare GCP federation credentials")
+            .context(i18n::t(
+                "ai.agent_sdk.driver.cloud_provider.gcp.prepare_credentials_failed",
+            ))
             .map_err(|error| CloudProviderSetupError::new(Self::PROVIDER_NAME, error))?;
 
         Ok(Self { credentials })
@@ -52,7 +54,9 @@ impl CloudProvider for GcpCloudProvider {
         Box::pin(async move {
             self.credentials
                 .cleanup()
-                .context("Failed to remove GCP credential files")
+                .context(i18n::t(
+                    "ai.agent_sdk.driver.cloud_provider.gcp.remove_credentials_failed",
+                ))
                 .map_err(|err| CloudProviderSetupError::new(Self::PROVIDER_NAME, err))
         })
     }

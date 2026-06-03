@@ -24,7 +24,10 @@ pub fn print_integrations(graphql_output: &SimpleIntegrationsOutput, output_form
     let integrations = &graphql_output.integrations;
 
     if integrations.is_empty() {
-        println!("No integrations found.");
+        println!(
+            "{}",
+            i18n::t("ai.agent_sdk.integration.no_integrations_found")
+        );
         return;
     }
 
@@ -40,9 +43,15 @@ pub fn print_integrations(graphql_output: &SimpleIntegrationsOutput, output_form
         OutputFormat::Pretty | OutputFormat::Text => {
             // Use the existing card-style layout for pretty/text output
             if integrations.len() == 1 {
-                println!("\nIntegration:");
+                println!(
+                    "\n{}",
+                    i18n::t("ai.agent_sdk.integration.heading.integration")
+                );
             } else {
-                println!("\nIntegrations:");
+                println!(
+                    "\n{}",
+                    i18n::t("ai.agent_sdk.integration.heading.integrations")
+                );
             }
 
             for integration in integrations {
@@ -159,10 +168,11 @@ fn print_integration_card(integration: &SimpleIntegration) {
 
     // Row 2: Status: <emoji> Status description
     let emoji = status_emoji(integration.connection_status);
-    let explanation = status_explanation(integration.connection_status);
+    let explanation = localized_status_explanation(integration.connection_status);
     let status_text = format!("{emoji} {explanation}");
+    let status_label = i18n::t("ai.agent_sdk.integration.label.status");
     let status_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-        "Status",
+        &status_label,
         &status_text,
         MAX_LINE_WIDTH,
     );
@@ -173,10 +183,11 @@ fn print_integration_card(integration: &SimpleIntegration) {
         Some(ListedSimpleIntegrationConfig {
             environment_uid, ..
         }) if !environment_uid.is_empty() => environment_uid.clone(),
-        _ => "(none)".to_string(),
+        _ => i18n::t("ai.agent_sdk.integration.none"),
     };
+    let environment_label = i18n::t("ai.agent_sdk.integration.label.environment");
     let env_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-        "Environment",
+        &environment_label,
         &env_value,
         MAX_LINE_WIDTH,
     );
@@ -185,8 +196,9 @@ fn print_integration_card(integration: &SimpleIntegration) {
     // Model row (only if present).
     if let Some(ListedSimpleIntegrationConfig { model_id, .. }) = &integration.integration_config {
         if !model_id.is_empty() {
+            let model_label = i18n::t("ai.agent_sdk.integration.label.model");
             let model_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-                "Model",
+                &model_label,
                 model_id,
                 MAX_LINE_WIDTH,
             );
@@ -198,8 +210,9 @@ fn print_integration_card(integration: &SimpleIntegration) {
     if let Some(ListedSimpleIntegrationConfig { base_prompt, .. }) = &integration.integration_config
     {
         if !base_prompt.is_empty() {
+            let base_prompt_label = i18n::t("ai.agent_sdk.integration.label.base_prompt");
             let base_prompt_row = crate::ai::agent_sdk::text_layout::render_labeled_wrapped_field(
-                "Base prompt",
+                &base_prompt_label,
                 base_prompt,
                 MAX_LINE_WIDTH,
             );
@@ -211,7 +224,8 @@ fn print_integration_card(integration: &SimpleIntegration) {
     if let Some(config) = &integration.integration_config {
         let lines = mcp_server_display_lines(config);
         if !lines.is_empty() {
-            let row = render_labeled_wrapped_lines("MCP servers", &lines, MAX_LINE_WIDTH);
+            let mcp_servers_label = i18n::t("ai.agent_sdk.integration.label.mcp_servers");
+            let row = render_labeled_wrapped_lines(&mcp_servers_label, &lines, MAX_LINE_WIDTH);
             table.add_row(vec![row]);
         }
     }
@@ -221,7 +235,8 @@ fn print_integration_card(integration: &SimpleIntegration) {
     if let Some(created) = integration.created_at {
         let dt = created.utc();
         let formatted = format_approx_duration_from_now_utc(dt);
-        created_updated.push_str(&format!("Created: {formatted}"));
+        created_updated
+            .push_str(&i18n::t("ai.agent_sdk.integration.created").replace("{time}", &formatted));
     }
     if let Some(updated) = integration.updated_at {
         let dt = updated.utc();
@@ -229,7 +244,8 @@ fn print_integration_card(integration: &SimpleIntegration) {
         if !created_updated.is_empty() {
             created_updated.push_str(" | ");
         }
-        created_updated.push_str(&format!("Updated: {formatted}"));
+        created_updated
+            .push_str(&i18n::t("ai.agent_sdk.integration.updated").replace("{time}", &formatted));
     }
     if !created_updated.is_empty() {
         let wrapped =
@@ -265,6 +281,26 @@ fn status_explanation(status: SimpleIntegrationConnectionStatus) -> &'static str
             "Integration is configured but currently disabled."
         }
         SimpleIntegrationConnectionStatus::Active => "Integration is connected and enabled.",
+    }
+}
+
+fn localized_status_explanation(status: SimpleIntegrationConnectionStatus) -> String {
+    match status {
+        SimpleIntegrationConnectionStatus::NotConnected => {
+            i18n::t("ai.agent_sdk.integration.status.not_connected")
+        }
+        SimpleIntegrationConnectionStatus::ConnectionError => {
+            i18n::t("ai.agent_sdk.integration.status.connection_error")
+        }
+        SimpleIntegrationConnectionStatus::IntegrationNotConfigured => {
+            i18n::t("ai.agent_sdk.integration.status.not_configured")
+        }
+        SimpleIntegrationConnectionStatus::NotEnabled => {
+            i18n::t("ai.agent_sdk.integration.status.not_enabled")
+        }
+        SimpleIntegrationConnectionStatus::Active => {
+            i18n::t("ai.agent_sdk.integration.status.active")
+        }
     }
 }
 
@@ -334,12 +370,12 @@ impl IntegrationInfo {
 impl TableFormat for IntegrationInfo {
     fn header() -> Vec<Cell> {
         vec![
-            Cell::new("Provider"),
-            Cell::new("Description"),
-            Cell::new("Status"),
-            Cell::new("Environment"),
-            Cell::new("Created"),
-            Cell::new("Updated"),
+            Cell::new(i18n::t("ai.agent_sdk.integration.table.provider")),
+            Cell::new(i18n::t("ai.agent_sdk.integration.table.description")),
+            Cell::new(i18n::t("ai.agent_sdk.integration.table.status")),
+            Cell::new(i18n::t("ai.agent_sdk.integration.table.environment")),
+            Cell::new(i18n::t("ai.agent_sdk.integration.table.created")),
+            Cell::new(i18n::t("ai.agent_sdk.integration.table.updated")),
         ]
     }
 
@@ -348,7 +384,11 @@ impl TableFormat for IntegrationInfo {
             Cell::new(&self.provider),
             Cell::new(&self.description),
             Cell::new(&self.status),
-            Cell::new(self.environment_uid.as_deref().unwrap_or("(none)")),
+            Cell::new(
+                self.environment_uid
+                    .clone()
+                    .unwrap_or_else(|| i18n::t("ai.agent_sdk.integration.none")),
+            ),
             Cell::new(&self.created_at_formatted),
             Cell::new(&self.updated_at_formatted),
         ]

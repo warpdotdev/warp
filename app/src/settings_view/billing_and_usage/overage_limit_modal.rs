@@ -151,11 +151,11 @@ impl SpendingLimitModal {
 
     fn error_text(&self) -> Option<String> {
         match self.input_error_state {
-            Some(SpendingLimitModalInputErrorState::InvalidNumberFormat) => {
-                Some("Please enter a valid currency amount".to_string())
-            }
+            Some(SpendingLimitModalInputErrorState::InvalidNumberFormat) => Some(i18n::t(
+                "settings.billing.overage_modal.error_invalid_amount",
+            )),
             Some(SpendingLimitModalInputErrorState::NumberOutOfRange) => {
-                Some("Please enter a price between $0.01 and $10,000,000".to_string())
+                Some(i18n::t("settings.billing.overage_modal.error_out_of_range"))
             }
             None => None,
         }
@@ -195,7 +195,7 @@ impl View for SpendingLimitModal {
         let theme = appearance.theme();
 
         let description_text = Text::new(
-            "Warp will prevent use of premium models when this dollar limit is reached. Resets on a monthly basis.",
+            i18n::t("settings.billing.overage_modal.description"),
             appearance.ui_font_family(),
             14.,
         )
@@ -203,7 +203,7 @@ impl View for SpendingLimitModal {
         .finish();
 
         let additional_note_text = Text::new(
-            "Note that AI credits made near your chosen limit may exceed it by a few dollars.",
+            i18n::t("settings.billing.overage_modal.additional_note"),
             appearance.ui_font_family(),
             12.,
         )
@@ -263,7 +263,7 @@ impl View for SpendingLimitModal {
                 ButtonVariant::Accent,
                 self.update_button_mouse_state.clone(),
             )
-            .with_text_label("Update".to_string())
+            .with_text_label(i18n::t("settings.billing.overage_modal.update_button"))
             .with_style(button_style);
 
         if self.input_error_state.is_some() {
@@ -278,7 +278,7 @@ impl View for SpendingLimitModal {
                         ButtonVariant::Secondary,
                         self.cancel_button_mouse_state.clone(),
                     )
-                    .with_text_label("Cancel".to_string())
+                    .with_text_label(i18n::t("settings.billing.overage_modal.cancel_button"))
                     .with_style(button_style)
                     .build()
                     .on_click(|ctx, _, _| {

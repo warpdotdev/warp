@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use indexmap::IndexMap;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
@@ -57,20 +55,24 @@ use crate::view_components::action_button::{
 };
 use crate::workspace::view::right_panel::ReviewDestination;
 
-/// Header text for the outdated section when there is exactly one outdated comment.
-const OUTDATED_SECTION_HEADER_SINGULAR: &str = "1 comment will be omitted because it is outdated.";
-/// Header text format for the outdated section when there are multiple outdated comments.
-/// Use with `format!` to insert the count.
-const OUTDATED_SECTION_HEADER_PLURAL_FMT: &str =
-    " comments will be omitted because they are outdated.";
-
 /// Returns the header text for the outdated section based on the number of outdated comments.
-fn outdated_section_header_text(count: usize) -> Cow<'static, str> {
+fn outdated_section_header_text(count: usize) -> String {
     if count == 1 {
-        Cow::Borrowed(OUTDATED_SECTION_HEADER_SINGULAR)
+        i18n::t("code_review.comments.outdated_omitted.singular")
     } else {
-        Cow::Owned(format!("{count}{OUTDATED_SECTION_HEADER_PLURAL_FMT}"))
+        i18n::t("code_review.comments.outdated_omitted.plural")
+            .replace("{count}", &count.to_string())
     }
+}
+
+fn comment_count_label(count: usize, outdated_only: bool) -> String {
+    let key = match (outdated_only, count == 1) {
+        (true, true) => "code_review.comments.button.outdated_singular",
+        (true, false) => "code_review.comments.button.outdated_plural",
+        (false, true) => "code_review.comments.button.singular",
+        (false, false) => "code_review.comments.button.plural",
+    };
+    i18n::t(key).replace("{count}", &count.to_string())
 }
 
 /// Convert markdown text to HTML using the editor's buffer serialization.
@@ -203,7 +205,7 @@ impl CommentListView {
         let menu = ctx.add_view(|_| Menu::new());
 
         let comments_button = ctx.add_view(|_| {
-            ActionButton::new("1 Comment", CustomSecondaryActionTheme)
+            ActionButton::new(comment_count_label(1, false), CustomSecondaryActionTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CommentListAction::ToggleCollapsed);
@@ -245,24 +247,12 @@ impl CommentListView {
                 .count();
 
             if non_outdated_count == 0 && total_count > 0 {
-                format!(
-                    "{} outdated comment{}",
-                    total_count,
-                    if total_count == 1 { "" } else { "s" }
-                )
+                comment_count_label(total_count, true)
             } else {
-                format!(
-                    "{} comment{}",
-                    non_outdated_count,
-                    if non_outdated_count == 1 { "" } else { "s" }
-                )
+                comment_count_label(non_outdated_count, false)
             }
         } else {
-            format!(
-                "{} comment{}",
-                total_count,
-                if total_count == 1 { "" } else { "s" }
-            )
+            comment_count_label(total_count, false)
         };
 
         self.comments_button
@@ -297,8 +287,7 @@ impl CommentListView {
             sendable_comments > 0,
             ai_available,
             ai_enabled,
-        )
-        .into_owned();
+        );
 
         CommentListDebugState {
             review_destination: self.review_destination.clone(),
@@ -804,7 +793,8 @@ impl CommentListView {
             .finish();
 
             let outdated_text = Text::new(
-                format!("{outdated_count} outdated"),
+                i18n::t("code_review.comments.outdated_count")
+                    .replace("{count}", &outdated_count.to_string()),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -879,7 +869,7 @@ impl CommentListView {
                     ButtonVariant::Text,
                     self.view_state.cancel_button_mouse_state.clone(),
                 )
-                .with_text_label("Cancel".to_string())
+                .with_text_label(i18n::t("common.cancel"))
                 .build()
                 .finish(),
         )
@@ -903,25 +893,29 @@ impl CommentListView {
         has_sendable_comments: bool,
         ai_available: bool,
         ai_enabled: bool,
-    ) -> Cow<'static, str> {
+    ) -> String {
         if let ReviewDestination::Cli(agent) = destination {
             if !has_sendable_comments {
-                Cow::Borrowed("No non-outdated comments to send")
+                i18n::t("code_review.comments.no_sendable_comments")
             } else {
                 let cmd = agent.command_prefix();
-                let label = if cmd.is_empty() { "CLI agent" } else { cmd };
-                Cow::Owned(format!("Send diff comments to {label}"))
+                let label = if cmd.is_empty() {
+                    i18n::t("code_review.comments.cli_agent")
+                } else {
+                    cmd.to_string()
+                };
+                i18n::t("code_review.comments.send_to_destination").replace("{label}", &label)
             }
         } else if !ai_enabled {
-            Cow::Borrowed("AI must be enabled to send comments to Agent")
+            i18n::t("code_review.comments.ai_must_be_enabled")
         } else if !ai_available {
-            Cow::Borrowed("Agent code review requires AI credits")
+            i18n::t("code_review.comments.requires_ai_credits")
         } else if matches!(destination, ReviewDestination::None) {
-            Cow::Borrowed("All terminals are busy")
+            i18n::t("code_review.comments.all_terminals_busy")
         } else if !has_sendable_comments {
-            Cow::Borrowed("No non-outdated comments to send")
+            i18n::t("code_review.comments.no_sendable_comments")
         } else {
-            Cow::Borrowed("Send diff comments to Agent")
+            i18n::t("code_review.comments.send_to_agent.tooltip")
         }
     }
 
@@ -946,7 +940,7 @@ impl CommentListView {
 
         let tooltip = appearance
             .ui_builder()
-            .tool_tip(tooltip_text.into_owned())
+            .tool_tip(tooltip_text)
             .build()
             .finish();
 
@@ -956,7 +950,7 @@ impl CommentListView {
                 ButtonVariant::Accent,
                 self.view_state.submit_button_mouse_state.clone(),
             )
-            .with_text_label("Send to Agent".to_string())
+            .with_text_label(i18n::t("code_review.comments.send_to_agent.button"))
             .with_tooltip(|| tooltip)
             .with_tooltip_position(ButtonTooltipPosition::AboveLeft);
 
@@ -1065,19 +1059,21 @@ impl CommentListView {
         html_url: Option<&str>,
         appearance: &Appearance,
     ) -> Vec<MenuItem<CommentListAction>> {
-        let mut items = vec![MenuItemFields::new("Copy text")
-            .with_icon(Icon::Copy)
-            .with_on_select_action(CommentListAction::CopyCommentText)
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new(i18n::t("code_review.comments.copy_text"))
+                .with_icon(Icon::Copy)
+                .with_on_select_action(CommentListAction::CopyCommentText)
+                .into_item(),
+        ];
 
-        let mut edit_item = MenuItemFields::new("Edit")
+        let mut edit_item = MenuItemFields::new(i18n::t("code_review.comments.edit"))
             .with_icon(Icon::Pencil)
             .with_on_select_action(CommentListAction::EditComment);
         if is_file_level || is_outdated {
             let tooltip_text = if is_file_level {
-                "File-level comments currently can't be edited."
+                i18n::t("code_review.comments.file_level_cannot_edit")
             } else {
-                "Outdated comments can't be edited."
+                i18n::t("code_review.comments.outdated_cannot_edit")
             };
             edit_item = edit_item.with_disabled(true).with_tooltip(tooltip_text);
         }
@@ -1085,7 +1081,7 @@ impl CommentListView {
 
         if let Some(url) = html_url {
             items.push(
-                MenuItemFields::new("View in GitHub")
+                MenuItemFields::new(i18n::t("code_review.comments.view_in_github"))
                     .with_icon(Icon::Github)
                     .with_on_select_action(CommentListAction::ViewInGitHub {
                         url: url.to_string(),
@@ -1095,7 +1091,7 @@ impl CommentListView {
         }
 
         items.push(
-            MenuItemFields::new("Remove")
+            MenuItemFields::new(i18n::t("code_review.comments.remove"))
                 .with_icon(Icon::Trash)
                 .with_override_text_color(Fill::Solid(appearance.theme().ansi_fg_red()))
                 .with_override_icon_color(Fill::Solid(appearance.theme().ansi_fg_red()))

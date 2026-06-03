@@ -146,7 +146,11 @@ impl SearchItem for ProjectSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Project: {}", self.name)
+        format!(
+            "{}: {}",
+            i18n::t("search.command_search.result.project_prefix"),
+            self.name
+        )
     }
 
     fn dedup_key(&self) -> Option<String> {

@@ -14,7 +14,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "warp_drive.sorting_choice",
-        description: "The sort order for items in Warp Drive.",
+        description_key: "settings.schema.warp_drive.sorting_choice.description",
     },
     sharing_onboarding_block_shown: WarpDriveSharingOnboardingBlockShown {
         type: bool,
@@ -31,7 +31,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "warp_drive.enabled",
-        description: "Whether Warp Drive is enabled.",
+        description_key: "settings.schema.warp_drive.enabled.description",
     },
 ]);
 

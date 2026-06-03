@@ -23,7 +23,7 @@ impl FileTreeItem {
                     .path
                     .file_name()
                     .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| String::from("File"));
+                    .unwrap_or_else(|| i18n::t("code.file_tree.file"));
 
                 let icon_from_file_path =
                     icon_from_file_path(metadata.path.as_str(), appearance).map(ImageOrIcon::Image);
@@ -48,7 +48,7 @@ impl FileTreeItem {
                     .path
                     .file_name()
                     .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| String::from("Folder"));
+                    .unwrap_or_else(|| i18n::t("code.file_tree.folder"));
                 RenderState {
                     display_name,
                     icon: ImageOrIcon::Icon(Icon::Folder),

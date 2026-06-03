@@ -17,9 +17,9 @@ impl FromStr for ProcessHandle {
     type Err = String;
 
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let pid = raw
-            .parse::<isize>()
-            .map_err(|e| format!("invalid parent handle: {e}"))?;
+        let pid = raw.parse::<isize>().map_err(|e| {
+            i18n::t("warp_cli.error.invalid_parent_handle").replace("{error}", &e.to_string())
+        })?;
         Ok(Self(pid))
     }
 }

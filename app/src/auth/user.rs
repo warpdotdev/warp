@@ -48,7 +48,9 @@ impl TryFrom<warp_graphql::mutations::create_anonymous_user::AnonymousUserType>
             warp_graphql::mutations::create_anonymous_user::AnonymousUserType::NativeClientAnonymousUserFeatureGated => Ok(AnonymousUserType::NativeClientAnonymousUserFeatureGated),
             warp_graphql::mutations::create_anonymous_user::AnonymousUserType::WebClientAnonymousUser => Ok(AnonymousUserType::WebClientAnonymousUser),
             warp_graphql::mutations::create_anonymous_user::AnonymousUserType::Other(_) => {
-                Err(anyhow!("could not convert unknown anonymous user type"))
+                Err(anyhow!(i18n::t(
+                    "auth.errors.unknown_anonymous_user_type"
+                )))
             },
         }
     }

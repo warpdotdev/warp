@@ -16,6 +16,10 @@ pub struct SettingSchemaEntry {
     /// User-facing description of what this setting does.
     pub description: &'static str,
 
+    /// i18n key for the user-facing description, when the description is
+    /// provided by a locale catalog rather than an inline fallback string.
+    pub description_key: Option<&'static str>,
+
     /// The TOML section path (everything before the last segment of toml_path).
     pub hierarchy: Option<&'static str>,
 
@@ -53,6 +57,7 @@ macro_rules! submit_schema_entry {
     (
         private: $private:expr,
         description: $desc:expr,
+        description_key: $desc_key:expr,
         toml_path_value: $toml_path:expr,
         fallback_storage_key: $fallback_key:expr,
         supported_platforms: $plat:expr,
@@ -71,6 +76,7 @@ macro_rules! submit_schema_entry {
                     KEY
                 },
                 description: $desc,
+                description_key: $desc_key,
                 hierarchy: {
                     const HIER: Option<&str> = match $toml_path {
                         Some(path) => $crate::toml_path_hierarchy(path),
@@ -106,6 +112,17 @@ macro_rules! _schema_default_description {
     };
     ($desc:literal) => {
         $desc
+    };
+}
+
+/// Helper: produces an optional schema description i18n key.
+#[macro_export]
+macro_rules! _schema_default_description_key {
+    () => {
+        None
+    };
+    ($desc_key:literal) => {
+        Some($desc_key)
     };
 }
 

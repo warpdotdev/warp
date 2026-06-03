@@ -38,9 +38,6 @@ use crate::terminal::CLIAgent;
 use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const CHILD_AGENT_GITHUB_AUTH_REQUIRED_BLOCKED_ACTION: &str =
-    "GitHub authentication required before starting the child agent.";
-
 impl TerminalView {
     fn active_ambient_agent_conversation_id(&self, ctx: &AppContext) -> Option<AIConversationId> {
         self.agent_view_controller
@@ -290,8 +287,9 @@ impl TerminalView {
                 if self.active_ambient_agent_conversation_is_child(ctx) {
                     self.update_active_ambient_agent_conversation_status(
                         ConversationStatus::Blocked {
-                            blocked_action: CHILD_AGENT_GITHUB_AUTH_REQUIRED_BLOCKED_ACTION
-                                .to_string(),
+                            blocked_action: i18n::t(
+                                "terminal.ambient_agent.status.child_github_auth_required",
+                            ),
                         },
                         None,
                         ctx,
@@ -899,7 +897,7 @@ impl TerminalView {
             let message = progress.setup_status_text();
 
             render_cloud_mode_loading_screen(
-                message,
+                &message,
                 appearance,
                 &ui_state.loading_shimmer_handle,
                 &ui_state.tip_model,

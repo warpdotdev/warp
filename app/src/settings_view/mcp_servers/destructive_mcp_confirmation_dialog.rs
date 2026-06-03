@@ -56,24 +56,30 @@ impl From<&DestructiveMCPConfirmationDialogVariant>
 {
     fn from(variant: &DestructiveMCPConfirmationDialogVariant) -> Self {
         match *variant {
-            DestructiveMCPConfirmationDialogVariant::DeleteLocal => DestructiveMCPConfirmationDialogDisplayOptions::new(
-                "Delete MCP server?".to_string(),
-                "This will uninstall and remove this MCP server from all your devices.".to_string(),
-                "Delete MCP".to_string(),
-                "Cancel".to_string(),
-            ),
-            DestructiveMCPConfirmationDialogVariant::DeleteShared => DestructiveMCPConfirmationDialogDisplayOptions::new(
-                "Delete shared MCP server?".to_string(),
-                "This will not only delete this MCP server for yourself, but also uninstall and remove this MCP server from Warp and across all of your teammates' devices.".to_string(),
-                "Delete MCP".to_string(),
-                "Cancel".to_string(),
-            ),
-            DestructiveMCPConfirmationDialogVariant::Unshare => DestructiveMCPConfirmationDialogDisplayOptions::new(
-                "Remove shared MCP server from team?".to_string(),
-                "This will uninstall and remove this MCP server from Warp and across all of your teammates' devices.".to_string(),
-                "Remove from team".to_string(),
-                "Cancel".to_string(),
-            ),
+            DestructiveMCPConfirmationDialogVariant::DeleteLocal => {
+                DestructiveMCPConfirmationDialogDisplayOptions::new(
+                    i18n::t("settings.mcp.confirm.delete_local.title"),
+                    i18n::t("settings.mcp.confirm.delete_local.description"),
+                    i18n::t("settings.mcp.button.delete_mcp"),
+                    i18n::t("common.cancel"),
+                )
+            }
+            DestructiveMCPConfirmationDialogVariant::DeleteShared => {
+                DestructiveMCPConfirmationDialogDisplayOptions::new(
+                    i18n::t("settings.mcp.confirm.delete_shared.title"),
+                    i18n::t("settings.mcp.confirm.delete_shared.description"),
+                    i18n::t("settings.mcp.button.delete_mcp"),
+                    i18n::t("common.cancel"),
+                )
+            }
+            DestructiveMCPConfirmationDialogVariant::Unshare => {
+                DestructiveMCPConfirmationDialogDisplayOptions::new(
+                    i18n::t("settings.mcp.confirm.unshare.title"),
+                    i18n::t("settings.mcp.confirm.unshare.description"),
+                    i18n::t("settings.mcp.button.remove_from_team"),
+                    i18n::t("common.cancel"),
+                )
+            }
         }
     }
 }

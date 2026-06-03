@@ -43,7 +43,7 @@ impl RewindSearchItem {
     pub fn new_current() -> Self {
         Self {
             exchange_id: None,
-            query_text: "Current".to_string(),
+            query_text: i18n::t("common.current"),
             file_changes: FileChangesInfo::default(),
             query_match_result: None,
             score: OrderedFloat(0.0),
@@ -141,7 +141,7 @@ impl SearchItem for RewindSearchItem {
         let changes_element: Box<dyn Element> = if self.is_current {
             // "Current" item shows "No code to be restored"
             Text::new_inline(
-                "No code to be restored".to_string(),
+                i18n::t("terminal.rewind.no_code_to_restore"),
                 appearance.ui_font_family(),
                 secondary_font_size,
             )
@@ -174,7 +174,7 @@ impl SearchItem for RewindSearchItem {
             row.finish()
         } else {
             Text::new_inline(
-                "No code to be restored".to_string(),
+                i18n::t("terminal.rewind.no_code_to_restore"),
                 appearance.ui_font_family(),
                 secondary_font_size,
             )
@@ -218,14 +218,14 @@ impl SearchItem for RewindSearchItem {
 
     fn accessibility_label(&self) -> String {
         if self.is_current {
-            "Current state (no rewind)".to_string()
+            i18n::t("terminal.input.rewind.current_state")
         } else if self.has_code_changes() {
-            format!(
-                "Rewind to: {} (+{} -{})",
-                self.query_text, self.file_changes.lines_added, self.file_changes.lines_removed
-            )
+            i18n::t("terminal.input.rewind.with_changes")
+                .replace("{query}", &self.query_text)
+                .replace("{added}", &self.file_changes.lines_added.to_string())
+                .replace("{removed}", &self.file_changes.lines_removed.to_string())
         } else {
-            format!("Rewind to: {} (no code changes)", self.query_text)
+            i18n::t("terminal.input.rewind.no_code_changes").replace("{query}", &self.query_text)
         }
     }
 }

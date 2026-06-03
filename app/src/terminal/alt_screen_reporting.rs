@@ -9,7 +9,7 @@ define_settings_group!(AltScreenReporting, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.mouse_reporting_enabled",
-        description: "Whether to forward mouse events to full-screen terminal applications.",
+        description_key: "settings.schema.terminal.mouse_reporting_enabled.description",
     },
     scroll_reporting_enabled: ScrollReportingEnabled {
         type: bool,
@@ -18,7 +18,7 @@ define_settings_group!(AltScreenReporting, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.scroll_reporting_enabled",
-        description: "Whether to forward scroll events to full-screen terminal applications.",
+        description_key: "settings.schema.terminal.scroll_reporting_enabled.description",
     },
     focus_reporting_enabled: FocusReportingEnabled {
         type: bool,
@@ -27,6 +27,6 @@ define_settings_group!(AltScreenReporting, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.focus_reporting_enabled",
-        description: "Whether to forward focus and blur events to full-screen terminal applications.",
+        description_key: "settings.schema.terminal.focus_reporting_enabled.description",
     },
 ]);

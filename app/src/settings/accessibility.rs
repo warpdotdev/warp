@@ -11,6 +11,6 @@ define_settings_group!(AccessibilitySettings, settings: [
         private: false,
         storage_key: "AccessibilityVerbosity",
         toml_path: "accessibility.accessibility_verbosity",
-        description: "The verbosity level for screen reader announcements.",
+        description_key: "settings.schema.accessibility.accessibility_verbosity.description",
     }
 ]);

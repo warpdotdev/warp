@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -14,11 +15,9 @@ mod gcp;
 
 pub(crate) type Result<T> = std::result::Result<T, CloudProviderSetupError>;
 
-#[derive(Debug, thiserror::Error)]
-#[error("{provider_name} setup failed")]
+#[derive(Debug)]
 pub(crate) struct CloudProviderSetupError {
     provider_name: &'static str,
-    #[source]
     source: Error,
 }
 
@@ -28,6 +27,23 @@ impl CloudProviderSetupError {
             provider_name,
             source: source.into(),
         }
+    }
+}
+
+impl fmt::Display for CloudProviderSetupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            i18n::t("ai.agent_sdk.driver.cloud_provider.setup_failed")
+                .replace("{provider_name}", self.provider_name)
+        )
+    }
+}
+
+impl std::error::Error for CloudProviderSetupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
     }
 }
 

@@ -42,7 +42,6 @@ use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
-const GENERATING_TITLE_PLACEHOLDER: &str = "Generating title...";
 const ORCHESTRATION_COLLAPSED_MAX_HEIGHT: f32 = 200.;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OrchestrationParticipant {
@@ -56,16 +55,17 @@ struct OrchestrationParticipant {
 impl OrchestrationParticipant {
     fn orchestrator() -> Self {
         Self {
-            display_name: "Orchestrator".to_string(),
+            display_name: i18n::t("ai.orchestration.orchestrator"),
             avatar: OrchestrationAvatar::Orchestrator,
             conversation_id: None,
         }
     }
 
     fn unknown_child() -> Self {
+        let display_name = i18n::t("ai.orchestration.unknown_agent");
         Self {
-            display_name: "Unknown agent".to_string(),
-            avatar: OrchestrationAvatar::agent("Unknown agent".to_string()),
+            display_name: display_name.clone(),
+            avatar: OrchestrationAvatar::agent(display_name),
             conversation_id: None,
         }
     }
@@ -458,7 +458,9 @@ pub(super) fn render_send_message(
                 );
             }
             SendMessageToAgentResult::Error(error) => {
-                let label = format!("Failed to send message to {recipients}: {error}");
+                let label = i18n::t("ai.orchestration.send_message_failed")
+                    .replace("{recipients}", &recipients)
+                    .replace("{error}", error);
                 let status_icon = inline_action_icons::red_x_icon(appearance).finish();
                 return render_requested_action_row_for_text(
                     label.into(),
@@ -475,7 +477,8 @@ pub(super) fn render_send_message(
                 .finish();
             }
             SendMessageToAgentResult::Cancelled => {
-                let label = format!("Send message to {recipients} cancelled.");
+                let label = i18n::t("ai.orchestration.send_message_cancelled")
+                    .replace("{recipients}", &recipients);
                 let status_icon = inline_action_icons::cancelled_icon(appearance).finish();
                 return render_requested_action_row_for_text(
                     label.into(),
@@ -501,7 +504,7 @@ pub(super) fn render_send_message(
         || status.as_ref().is_some_and(|s| s.is_queued());
 
     let label_fragments = vec![
-        FormattedTextFragment::plain_text("Sending message to "),
+        FormattedTextFragment::plain_text(i18n::t("ai.orchestration.sending_message_to")),
         FormattedTextFragment::bold(&recipients),
         FormattedTextFragment::plain_text(format!(": {subject}")),
     ];
@@ -578,7 +581,7 @@ pub(super) fn render_start_agent(
         let (label_fragments, status_icon) = match result {
             StartAgentResult::Success { .. } => (
                 vec![
-                    FormattedTextFragment::plain_text("Started agent "),
+                    FormattedTextFragment::plain_text(i18n::t("ai.orchestration.started_agent")),
                     FormattedTextFragment::bold(name),
                     FormattedTextFragment::plain_text(start_agent_success_suffix(execution_mode)),
                 ],
@@ -596,7 +599,9 @@ pub(super) fn render_start_agent(
                 vec![
                     FormattedTextFragment::plain_text(start_agent_cancelled_prefix(execution_mode)),
                     FormattedTextFragment::bold(name),
-                    FormattedTextFragment::plain_text(" cancelled."),
+                    FormattedTextFragment::plain_text(i18n::t(
+                        "ai.orchestration.agent_cancelled_suffix",
+                    )),
                 ],
                 inline_action_icons::cancelled_icon(appearance).finish(),
             ),
@@ -725,31 +730,35 @@ pub(super) fn render_start_agent(
         .finish()
 }
 
-fn start_agent_success_suffix(execution_mode: &StartAgentExecutionMode) -> &'static str {
+fn start_agent_success_suffix(execution_mode: &StartAgentExecutionMode) -> String {
     match execution_mode {
-        StartAgentExecutionMode::Local { .. } => " locally.",
-        StartAgentExecutionMode::Remote { .. } => " remotely.",
+        StartAgentExecutionMode::Local { .. } => i18n::t("ai.orchestration.started_locally_suffix"),
+        StartAgentExecutionMode::Remote { .. } => {
+            i18n::t("ai.orchestration.started_remotely_suffix")
+        }
     }
 }
 
-fn start_agent_error_prefix(execution_mode: &StartAgentExecutionMode) -> &'static str {
+fn start_agent_error_prefix(execution_mode: &StartAgentExecutionMode) -> String {
     match execution_mode {
-        StartAgentExecutionMode::Local { .. } => "Failed to start agent ",
-        StartAgentExecutionMode::Remote { .. } => "Failed to start remote agent ",
+        StartAgentExecutionMode::Local { .. } => i18n::t("ai.orchestration.failed_to_start_agent"),
+        StartAgentExecutionMode::Remote { .. } => {
+            i18n::t("ai.orchestration.failed_to_start_remote_agent")
+        }
     }
 }
 
-fn start_agent_cancelled_prefix(execution_mode: &StartAgentExecutionMode) -> &'static str {
+fn start_agent_cancelled_prefix(execution_mode: &StartAgentExecutionMode) -> String {
     match execution_mode {
-        StartAgentExecutionMode::Local { .. } => "Start agent ",
-        StartAgentExecutionMode::Remote { .. } => "Start remote agent ",
+        StartAgentExecutionMode::Local { .. } => i18n::t("ai.orchestration.start_agent"),
+        StartAgentExecutionMode::Remote { .. } => i18n::t("ai.orchestration.start_remote_agent"),
     }
 }
 
-fn start_agent_in_progress_prefix(execution_mode: &StartAgentExecutionMode) -> &'static str {
+fn start_agent_in_progress_prefix(execution_mode: &StartAgentExecutionMode) -> String {
     match execution_mode {
-        StartAgentExecutionMode::Local { .. } => "Starting agent ",
-        StartAgentExecutionMode::Remote { .. } => "Starting remote agent ",
+        StartAgentExecutionMode::Local { .. } => i18n::t("ai.orchestration.starting_agent"),
+        StartAgentExecutionMode::Remote { .. } => i18n::t("ai.orchestration.starting_remote_agent"),
     }
 }
 
@@ -826,7 +835,7 @@ fn available_conversation_title_for_id(
         Some(title) if conversation.initial_query().as_deref() != Some(title.as_str()) => {
             Some(title)
         }
-        _ => Some(GENERATING_TITLE_PLACEHOLDER.to_string()),
+        _ => Some(i18n::t("ai.orchestration.generating_title")),
     }
 }
 

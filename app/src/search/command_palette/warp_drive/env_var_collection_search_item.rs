@@ -63,7 +63,7 @@ impl SearchItem for EnvVarCollectionSearchItem {
                 .string_model
                 .title
                 .clone()
-                .unwrap_or("Untitled".to_owned())
+                .unwrap_or_else(|| i18n::t("search.untitled"))
                 .to_owned(),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
@@ -164,13 +164,14 @@ impl SearchItem for EnvVarCollectionSearchItem {
 
     fn accessibility_label(&self) -> String {
         format!(
-            "Environment Variables: {}",
+            "{}: {}",
+            i18n::t("search.warp_drive.environment_variables"),
             self.cloud_env_var_collection
                 .model()
                 .string_model
                 .title
                 .clone()
-                .unwrap_or("Untitled".to_owned())
+                .unwrap_or_else(|| i18n::t("search.untitled"))
         )
     }
 }

@@ -207,9 +207,9 @@ where
     .with_tooltip(move || {
         ui_builder
             .tool_tip(if is_sidebar_expanded {
-                "Hide file navigation".to_owned()
+                i18n::t("code_review.file_nav.hide")
             } else {
-                "Show file navigation".to_owned()
+                i18n::t("code_review.file_nav.show")
             })
             .build()
             .finish()
@@ -267,17 +267,15 @@ const CODE_REVIEW_EDITOR_LINE_HEIGHT_RATIO: f32 = 1.4;
 /// Extra scroll buffer (in pixels) added when scrolling to a line that has a comment editor below it.
 const COMMENT_EDITOR_SCROLL_BUFFER: f32 = 200.0;
 
-pub const CODE_REVIEW_TOOLTIP_TEXT: &str = "View changes";
-const REMOTE_TEXT: &str = "Diffs only work for local workspaces.";
-const DISABLED_TEXT: &str = "Diffs only work for git repositories.";
-const WSL_TEXT: &str = "Diffs don't currently work in WSL.";
+pub fn code_review_tooltip_text() -> String {
+    i18n::t("code_review.view_changes")
+}
 
 pub fn get_discard_button_disabled_tooltip(git_operation_blocked: bool) -> String {
     if git_operation_blocked {
-        "Cannot discard changes while a git operation (merge, rebase, etc.) is in progress"
-            .to_string()
+        i18n::t("code_review.discard.disabled_git_operation")
     } else {
-        "No changes to discard".to_string()
+        i18n::t("code_review.discard.no_changes")
     }
 }
 
@@ -285,13 +283,13 @@ pub fn get_discard_button_disabled_tooltip(git_operation_blocked: bool) -> Strin
 /// live shortcut for `code_review:toggle_file_navigation` when one is bound.
 fn file_nav_button_tooltip(is_sidebar_expanded: bool, app: &AppContext) -> String {
     let label = if is_sidebar_expanded {
-        "Hide file navigation"
+        i18n::t("code_review.file_nav.hide")
     } else {
-        "Show file navigation"
+        i18n::t("code_review.file_nav.show")
     };
     match keybinding_name_to_display_string("code_review:toggle_file_navigation", app) {
         Some(shortcut) => format!("{label} ({shortcut})"),
-        None => label.to_string(),
+        None => label,
     }
 }
 
@@ -471,26 +469,38 @@ impl DiscardOperationType {
     pub fn title(&self) -> String {
         match self {
             DiscardOperationType::AllUncommittedChanges => {
-                "Discard uncommitted changes?".to_string()
+                i18n::t("code_review.discard.title.all_uncommitted")
             }
             DiscardOperationType::FileUncommittedChanges => {
-                "Discard all uncommitted changes to file?".to_string()
+                i18n::t("code_review.discard.title.file_uncommitted")
             }
-            DiscardOperationType::AllChangesAgainstBranch(_) => "Discard all changes?".to_string(),
+            DiscardOperationType::AllChangesAgainstBranch(_) => {
+                i18n::t("code_review.discard.title.all_changes")
+            }
             DiscardOperationType::FileChangesAgainstBranch(_) => {
-                "Discard all changes to file?".to_string()
+                i18n::t("code_review.discard.title.file_changes")
             }
         }
     }
 
     pub fn description(&self) -> Option<String> {
         match self {
-            DiscardOperationType::AllUncommittedChanges => Some("You're about to discard all local changes that haven't been committed.".to_string()),
-            DiscardOperationType::FileUncommittedChanges => Some("This will restore this file to the last committed version and discard local edits.".to_string()),
-            DiscardOperationType::AllChangesAgainstBranch(None) => Some("You're about to discard all committed and uncommitted changes.".to_string()),
-            DiscardOperationType::FileChangesAgainstBranch(None) => Some("This will restore this file to the main branch version and discard all committed and uncommitted edits.".to_string()),
-            DiscardOperationType::AllChangesAgainstBranch(Some(_)) => Some("You're about to discard all committed and uncommitted changes.".to_string()),
-            DiscardOperationType::FileChangesAgainstBranch(Some(branch)) => Some(format!("This will reset this file to the {branch} branch version and discard all committed and uncommitted edits.")),
+            DiscardOperationType::AllUncommittedChanges => {
+                Some(i18n::t("code_review.discard.description.all_uncommitted"))
+            }
+            DiscardOperationType::FileUncommittedChanges => {
+                Some(i18n::t("code_review.discard.description.file_uncommitted"))
+            }
+            DiscardOperationType::AllChangesAgainstBranch(_) => {
+                Some(i18n::t("code_review.discard.description.all_changes"))
+            }
+            DiscardOperationType::FileChangesAgainstBranch(None) => {
+                Some(i18n::t("code_review.discard.description.file_changes_main"))
+            }
+            DiscardOperationType::FileChangesAgainstBranch(Some(branch)) => Some(
+                i18n::t("code_review.discard.description.file_changes_branch")
+                    .replace("{branch}", branch),
+            ),
         }
     }
 
@@ -1105,7 +1115,7 @@ impl CodeReviewView {
         let maximize_button = ctx.add_typed_action_view(move |_| {
             // Since the view isn't part of a pane group yet, default to not-maximized. The button will be updated
             //when focus state changes.
-            let (icon, tooltip_text) = (Icon::Maximize, "Maximize");
+            let (icon, tooltip_text) = (Icon::Maximize, i18n::t("code_review.maximize"));
 
             ActionButton::new("", NakedTheme)
                 .with_icon(icon)
@@ -1134,7 +1144,7 @@ impl CodeReviewView {
         });
 
         let git_primary_action_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Commit", SecondaryTheme)
+            ActionButton::new(i18n::t("code_review.git.commit"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .with_icon(Icon::GitCommit)
                 .with_adjoined_side(AdjoinedSide::Right)
@@ -1175,7 +1185,7 @@ impl CodeReviewView {
 
         let undo_action_button = ctx.add_typed_action_view(move |ctx| {
             let keybinding = custom_tag_to_keystroke(CustomAction::Undo.into());
-            let mut action_button = ActionButton::new("Undo", NakedTheme)
+            let mut action_button = ActionButton::new(i18n::t("code_review.undo"), NakedTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(move |ctx| {
                     ctx.dispatch_typed_action(WorkspaceAction::UndoRevertInCodeReviewPane {
@@ -1192,12 +1202,15 @@ impl CodeReviewView {
         });
 
         let discard_confirm_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Discard changes", DangerPrimaryTheme)
-                .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ConfirmDiscardFile))
+            ActionButton::new(
+                i18n::t("code_review.discard.confirm_button"),
+                DangerPrimaryTheme,
+            )
+            .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ConfirmDiscardFile))
         });
 
         let discard_cancel_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+            ActionButton::new(i18n::t("common.cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(CodeReviewAction::CancelDiscardFile);
             })
         });
@@ -1265,9 +1278,9 @@ impl CodeReviewView {
         let header = CodeReviewHeader::new();
 
         let init_project_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Initialize codebase", NakedTheme)
+            ActionButton::new(i18n::t("code_review.init_codebase"), NakedTheme)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("Enables codebase indexing and WARP.md")
+                .with_tooltip(i18n::t("code_review.init_codebase.tooltip"))
                 .with_tooltip_alignment(TooltipAlignment::Center)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CodeReviewAction::InitProjectForCurrentDirectory)
@@ -1276,9 +1289,9 @@ impl CodeReviewView {
 
         #[cfg(not(target_family = "wasm"))]
         let open_repository_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Open repository", NakedTheme)
+            ActionButton::new(i18n::t("code_review.open_repository"), NakedTheme)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("Navigate to a repo and initialize it for coding")
+                .with_tooltip(i18n::t("code_review.open_repository.tooltip"))
                 .with_tooltip_alignment(TooltipAlignment::Center)
                 .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenRepository))
         });
@@ -1392,9 +1405,9 @@ impl CodeReviewView {
 
         let is_maximized = focus_handle.is_maximized(ctx);
         let (icon, tooltip) = if is_maximized {
-            (Icon::Minimize, "Restore")
+            (Icon::Minimize, i18n::t("code_review.restore"))
         } else {
-            (Icon::Maximize, "Maximize")
+            (Icon::Maximize, i18n::t("code_review.maximize"))
         };
 
         self.maximize_button.update(ctx, |button, ctx| {
@@ -1467,7 +1480,7 @@ impl CodeReviewView {
 
         // 1. Always add "Uncommitted changes" first.
         targets.push(DiffTarget::new(
-            "Uncommitted changes",
+            i18n::t("code_review.diff_target.uncommitted_changes"),
             DiffMode::Head,
             matches!(current_mode, DiffMode::Head),
         ));
@@ -2562,7 +2575,7 @@ impl CodeReviewView {
         let discard_tooltip_text = if git_operation_blocked {
             get_discard_button_disabled_tooltip(git_operation_blocked)
         } else {
-            "Discard changes".to_string()
+            i18n::t("code_review.discard.confirm_button")
         };
 
         let mut file_states = vec![];
@@ -2613,7 +2626,7 @@ impl CodeReviewView {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::LinkExternal)
                     .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Open file")
+                    .with_tooltip(i18n::t("code_review.open_file"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
                             path: open_tab_path.clone(),
@@ -2650,7 +2663,7 @@ impl CodeReviewView {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Paperclip)
                     .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Add file diff as context")
+                    .with_tooltip(i18n::t("code_review.add_file_diff_context"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(CodeReviewAction::AddDiffSetAsContext(
                             DiffSetScope::File(context_path.clone()),
@@ -2663,7 +2676,7 @@ impl CodeReviewView {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Copy)
                     .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Copy file path")
+                    .with_tooltip(i18n::t("code_review.copy_file_path"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(CodeReviewAction::CopyFilePath(copy_path.clone()))
                     })
@@ -3636,7 +3649,7 @@ impl CodeReviewView {
     fn render_placeholder_header(appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
 
-        let header_text = "Loading open changes...";
+        let header_text = i18n::t("code_review.loading_open_changes");
         let loading_icon = Icon::Loading
             .to_warpui_icon(warp_core::ui::theme::Fill::Solid(
                 internal_colors::neutral_6(theme),
@@ -3790,7 +3803,7 @@ impl CodeReviewView {
             )
             .with_child(
                 Text::new(
-                    "Error loading diffs",
+                    i18n::t("code_review.error_loading_diffs"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() + 2.,
                 )
@@ -3833,7 +3846,7 @@ impl CodeReviewView {
                         )
                         .with_text_and_icon_label(TextAndIcon::new(
                             TextAndIconAlignment::IconFirst,
-                            " Retry".to_string(),
+                            format!(" {}", i18n::t("code_review.retry")),
                             Icon::Refresh.to_warpui_icon(warp_core::ui::theme::Fill::Solid(
                                 theme.main_text_color(theme.background()).into(),
                             )),
@@ -3871,7 +3884,7 @@ impl CodeReviewView {
 
     pub fn render_no_repo_found_state(
         appearance: &Appearance,
-        message: &'static str,
+        message: String,
         open_repo_button: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -3898,7 +3911,7 @@ impl CodeReviewView {
             )
             .with_child(
                 Text::new(
-                    "Cannot detect diffs for this folder",
+                    i18n::t("code_review.no_repo.title"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size() + 2.,
                 )
@@ -3939,21 +3952,33 @@ impl CodeReviewView {
         appearance: &Appearance,
         open_repo_button: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
-        Self::render_no_repo_found_state(appearance, REMOTE_TEXT, open_repo_button)
+        Self::render_no_repo_found_state(
+            appearance,
+            i18n::t("code_review.no_repo.remote"),
+            open_repo_button,
+        )
     }
 
     pub fn render_wsl_state(
         appearance: &Appearance,
         open_repo_button: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
-        Self::render_no_repo_found_state(appearance, WSL_TEXT, open_repo_button)
+        Self::render_no_repo_found_state(
+            appearance,
+            i18n::t("code_review.no_repo.wsl"),
+            open_repo_button,
+        )
     }
 
     pub fn render_not_repo_state(
         appearance: &Appearance,
         open_repo_button: Option<Box<dyn Element>>,
     ) -> Box<dyn Element> {
-        Self::render_no_repo_found_state(appearance, DISABLED_TEXT, open_repo_button)
+        Self::render_no_repo_found_state(
+            appearance,
+            i18n::t("code_review.no_repo.disabled"),
+            open_repo_button,
+        )
     }
 
     fn render_loaded_state(
@@ -4039,15 +4064,19 @@ impl CodeReviewView {
                 .finish(),
             )
             .with_child(
-                Text::new("No open changes", appearance.ui_font_family(), 16.)
-                    .with_style(Properties::default().weight(Weight::Semibold))
-                    .with_color(theme.main_text_color(theme.surface_2()).into())
-                    .finish(),
+                Text::new(
+                    i18n::t("code_review.no_changes.title"),
+                    appearance.ui_font_family(),
+                    16.,
+                )
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .finish(),
             )
             .with_child(
                 Container::new(
                     Text::new(
-                        "As you or the Agent make changes, you'll be able to track them here.",
+                        i18n::t("code_review.no_changes.description"),
                         appearance.ui_font_family(),
                         14.,
                     )
@@ -4090,7 +4119,8 @@ impl CodeReviewView {
                         zero_state_column.add_child(
                             Container::new(
                                 Text::new(
-                                    format!("Repo is initialized with a {file_name} file."),
+                                    i18n::t("code_review.no_changes.repo_initialized")
+                                        .replace("{file_name}", file_name),
                                     appearance.ui_font_family(),
                                     12.,
                                 )
@@ -4237,7 +4267,8 @@ impl CodeReviewView {
 
                 self.clear_review_comments(ctx);
                 ToastStack::handle(ctx).update(ctx, |stack, ctx| {
-                    let toast = DismissibleToast::default("Comments sent to agent".into());
+                    let toast =
+                        DismissibleToast::default(i18n::t("code_review.comments.sent_to_agent"));
                     stack.add_ephemeral_toast(toast, self.window_id, ctx);
                 });
                 ctx.emit(CodeReviewViewEvent::ReviewSubmitted);
@@ -4245,7 +4276,7 @@ impl CodeReviewView {
             }
             ReviewSubmissionResult::Error => {
                 log::error!("Failed to submit review comments");
-                let error_message = "Could not submit comments to the agent".to_string();
+                let error_message = i18n::t("code_review.comments.submit_error");
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast = DismissibleToast::error(error_message);
                     toast_stack.add_ephemeral_toast(toast, self.window_id, ctx);
@@ -4908,8 +4939,8 @@ impl CodeReviewView {
             if editor_state.has_unsaved_changes(app) {
                 let save_keystroke = Keystroke::parse("cmdorctrl-s").unwrap_or_default();
                 let save_shortcut = save_keystroke.displayed();
-                let tooltip_text =
-                    format!("This file has unsaved changes. {save_shortcut} to save");
+                let tooltip_text = i18n::t("code_review.unsaved_file.tooltip")
+                    .replace("{shortcut}", &save_shortcut);
                 render_unsaved_circle_with_tooltip(
                     editor_state.unsaved_changes_mouse_state(),
                     tooltip_text,
@@ -5145,7 +5176,7 @@ impl CodeReviewView {
         if diff_size == DiffSize::Unrenderable {
             return Self::styled_file_content_container(
                 Text::new(
-                    "Diff is too large to render",
+                    i18n::t("code_review.file_content.diff_too_large"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5158,7 +5189,7 @@ impl CodeReviewView {
         if file.file_diff.is_binary {
             Self::styled_file_content_container(
                 Text::new(
-                    "Binary file - no diff available",
+                    i18n::t("code_review.file_content.binary"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5169,7 +5200,7 @@ impl CodeReviewView {
         } else if file.file_diff.status.is_renamed() && file.file_diff.is_empty() {
             Self::styled_file_content_container(
                 Text::new(
-                    "File renamed without changes",
+                    i18n::t("code_review.file_content.renamed_without_changes"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5180,7 +5211,7 @@ impl CodeReviewView {
         } else if file.file_diff.status.is_new_file() && file.file_diff.is_empty() {
             Self::styled_file_content_container(
                 Text::new(
-                    "New empty file",
+                    i18n::t("code_review.file_content.new_empty_file"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5210,7 +5241,7 @@ impl CodeReviewView {
         } else {
             Self::styled_file_content_container(
                 Text::new(
-                    "Unable to load file content",
+                    i18n::t("code_review.file_content.unable_to_load"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )
@@ -5302,7 +5333,7 @@ impl CodeReviewView {
 
         if self.discard_dialog_state.discard_file_paths.is_empty() {
             return Text::new(
-                "No file selected",
+                i18n::t("code_review.discard.no_file_selected"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -5317,7 +5348,7 @@ impl CodeReviewView {
 
         let CodeReviewViewState::Loaded(loaded) = self.state() else {
             return Text::new(
-                "No files to discard",
+                i18n::t("code_review.discard.no_files_to_discard"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -5445,8 +5476,10 @@ impl CodeReviewView {
                     )
                     .check(self.discard_dialog_state.stash_changes_enabled)
                     .with_label(
-                        appearance.ui_builder().span("Stash changes").with_style(
-                            UiComponentStyles {
+                        appearance
+                            .ui_builder()
+                            .span(i18n::t("code_review.discard.stash_changes"))
+                            .with_style(UiComponentStyles {
                                 font_size: Some(appearance.ui_font_size()),
                                 font_color: Some(
                                     appearance
@@ -5455,8 +5488,7 @@ impl CodeReviewView {
                                         .into(),
                                 ),
                                 ..Default::default()
-                            },
-                        ),
+                            }),
                     )
                     .build()
                     .on_click(|ctx, _, _| {
@@ -5586,9 +5618,9 @@ impl CodeReviewView {
 
                 let toast_id = self.revert_hunk_toast_id(ctx);
                 crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = crate::view_components::DismissibleToast::default(
-                        "Diff removed".to_string(),
-                    )
+                    let toast = crate::view_components::DismissibleToast::default(i18n::t(
+                        "code_review.diff_removed",
+                    ))
                     .with_object_id(toast_id)
                     .with_action_button(self.undo_action_button.clone());
                     toast_stack.add_ephemeral_toast(toast, self.window_id, ctx);
@@ -5688,9 +5720,9 @@ impl CodeReviewView {
             if is_long_running {
                 let toast_id = self.attach_context_not_allowed_toast_id(ctx);
                 crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = crate::view_components::DismissibleToast::default(
-                        "Cannot attach context when terminal is running".to_string(),
-                    )
+                    let toast = crate::view_components::DismissibleToast::default(i18n::t(
+                        "code_review.cannot_attach_context_terminal_running",
+                    ))
                     .with_object_id(toast_id);
                     toast_stack.add_ephemeral_toast(toast, self.window_id, ctx);
                 });
@@ -5800,9 +5832,9 @@ impl CodeReviewView {
             if !is_input_box_visible {
                 let toast_id = self.attach_diff_not_allowed_toast_id(ctx);
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::default(
-                        "Cannot attach diff while input is not available".to_string(),
-                    )
+                    let toast = DismissibleToast::default(i18n::t(
+                        "code_review.add_context.input_unavailable",
+                    ))
                     .with_object_id(toast_id);
                     toast_stack.add_ephemeral_toast(toast, self.window_id, ctx);
                 });
@@ -6514,10 +6546,13 @@ impl CodeReviewView {
             PrimaryGitActionMode::Commit => {
                 let disabled = !self.has_uncommitted_changes(ctx);
                 self.git_primary_action_button.update(ctx, |button, ctx| {
-                    button.set_label("Commit", ctx);
+                    button.set_label(i18n::t("code_review.git.commit"), ctx);
                     button.set_icon(Some(Icon::GitCommit), ctx);
                     button.set_disabled(disabled, ctx);
-                    button.set_tooltip(disabled.then_some("No changes to commit"), ctx);
+                    button.set_tooltip(
+                        disabled.then(|| i18n::t("code_review.git.no_changes_to_commit")),
+                        ctx,
+                    );
                     button.set_on_click(
                         |ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenCommitDialog),
                         ctx,
@@ -6526,12 +6561,15 @@ impl CodeReviewView {
                 });
                 self.git_operations_chevron.update(ctx, |button, ctx| {
                     button.set_disabled(disabled, ctx);
-                    button.set_tooltip(disabled.then_some("No git actions available"), ctx);
+                    button.set_tooltip(
+                        disabled.then(|| i18n::t("code_review.git.no_actions_available")),
+                        ctx,
+                    );
                 });
             }
             PrimaryGitActionMode::Push => {
                 self.git_primary_action_button.update(ctx, |button, ctx| {
-                    button.set_label("Push", ctx);
+                    button.set_label(i18n::t("code_review.git.push"), ctx);
                     button.set_icon(Some(Icon::ArrowUp), ctx);
                     button.set_disabled(false, ctx);
                     button.clear_tooltip(ctx);
@@ -6547,7 +6585,7 @@ impl CodeReviewView {
             }
             PrimaryGitActionMode::CreatePr => {
                 self.git_primary_action_button.update(ctx, |button, ctx| {
-                    button.set_label("Create PR", ctx);
+                    button.set_label(i18n::t("code_review.git.create_pr"), ctx);
                     button.set_icon(Some(Icon::Github), ctx);
                     button.set_disabled(false, ctx);
                     button.clear_tooltip(ctx);
@@ -6570,7 +6608,8 @@ impl CodeReviewView {
                         button.set_icon(Some(Icon::Github), ctx);
                         button.set_disabled(is_pr_info_refreshing, ctx);
                         button.set_tooltip(
-                            is_pr_info_refreshing.then_some("Refreshing PR info"),
+                            is_pr_info_refreshing
+                                .then(|| i18n::t("code_review.git.refreshing_pr_info")),
                             ctx,
                         );
                         button.set_on_click(
@@ -6585,7 +6624,7 @@ impl CodeReviewView {
             }
             PrimaryGitActionMode::Publish => {
                 self.git_primary_action_button.update(ctx, |button, ctx| {
-                    button.set_label("Publish", ctx);
+                    button.set_label(i18n::t("code_review.git.publish"), ctx);
                     button.set_icon(Some(Icon::UploadCloud), ctx);
                     button.set_disabled(false, ctx);
                     button.clear_tooltip(ctx);
@@ -6605,7 +6644,7 @@ impl CodeReviewView {
     /// only the disabled state flips across modes (enabled in Commit mode,
     /// disabled in Push mode where there's nothing to commit).
     fn commit_menu_item(disabled: bool) -> MenuItem<CodeReviewAction> {
-        MenuItemFields::new("Commit")
+        MenuItemFields::new(i18n::t("code_review.git.commit"))
             .with_icon(Icon::GitCommit)
             .with_on_select_action(CodeReviewAction::OpenCommitDialog)
             .with_disabled(disabled)
@@ -6617,13 +6656,13 @@ impl CodeReviewView {
     /// sets the upstream).
     fn push_or_publish_menu_item(has_upstream: bool, disabled: bool) -> MenuItem<CodeReviewAction> {
         if has_upstream {
-            MenuItemFields::new("Push")
+            MenuItemFields::new(i18n::t("code_review.git.push"))
                 .with_icon(Icon::ArrowUp)
                 .with_on_select_action(CodeReviewAction::OpenPushDialog)
                 .with_disabled(disabled)
                 .into_item()
         } else {
-            MenuItemFields::new("Publish")
+            MenuItemFields::new(i18n::t("code_review.git.publish"))
                 .with_icon(Icon::UploadCloud)
                 .with_on_select_action(CodeReviewAction::PublishBranch)
                 .with_disabled(disabled)
@@ -6648,7 +6687,7 @@ impl CodeReviewView {
             let is_on_main = diff_state.is_on_main_branch(app);
             let has_upstream = diff_state.upstream_ref(app).is_some();
             let upstream_differs_from_main = diff_state.upstream_differs_from_main(app);
-            MenuItemFields::new("Create PR")
+            MenuItemFields::new(i18n::t("code_review.git.create_pr"))
                 .with_icon(Icon::Github)
                 .with_on_select_action(CodeReviewAction::OpenCreatePrDialog)
                 .with_disabled(
@@ -6722,7 +6761,7 @@ impl CodeReviewView {
 
         if FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
             items.push(
-                MenuItemFields::new("Add diff set as context")
+                MenuItemFields::new(i18n::t("code_review.add_diff_set_context"))
                     .with_icon(Icon::Paperclip)
                     .with_on_select_action(CodeReviewAction::AddDiffSetAsContext(DiffSetScope::All))
                     .into_item(),
@@ -6730,9 +6769,12 @@ impl CodeReviewView {
         }
 
         let (comment_label, comment_icon) = if self.get_existing_diffset_comment(ctx).is_some() {
-            ("Show saved comment", Icon::MessageText)
+            (
+                i18n::t("code_review.comments.show_saved"),
+                Icon::MessageText,
+            )
         } else {
-            ("Add comment", Icon::MessagePlusSquare)
+            (i18n::t("code_review.comments.add"), Icon::MessagePlusSquare)
         };
 
         items.push(
@@ -6757,7 +6799,7 @@ impl CodeReviewView {
         let is_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         if is_ai_enabled && FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
             items.push(
-                MenuItemFields::new("Add diff set as context")
+                MenuItemFields::new(i18n::t("code_review.add_diff_set_context"))
                     .with_icon(Icon::Paperclip)
                     .with_on_select_action(CodeReviewAction::AddDiffSetAsContext(DiffSetScope::All))
                     .into_item(),
@@ -6767,9 +6809,12 @@ impl CodeReviewView {
         if FeatureFlag::FileAndDiffSetComments.is_enabled() && has_changes {
             let (comment_label, comment_icon) = if self.get_existing_diffset_comment(ctx).is_some()
             {
-                ("Show saved comment", Icon::MessageText)
+                (
+                    i18n::t("code_review.comments.show_saved"),
+                    Icon::MessageText,
+                )
             } else {
-                ("Add comment", Icon::MessagePlusSquare)
+                (i18n::t("code_review.comments.add"), Icon::MessagePlusSquare)
             };
 
             items.push(
@@ -6782,7 +6827,7 @@ impl CodeReviewView {
 
         if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() && has_changes {
             items.push(
-                MenuItemFields::new("Discard all")
+                MenuItemFields::new(i18n::t("code_review.discard.all"))
                     .with_icon(Icon::ReverseLeft)
                     .with_on_select_action(CodeReviewAction::ShowDiscardConfirmDialog(None))
                     .into_item(),
@@ -7608,7 +7653,7 @@ impl BackingView for CodeReviewView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Reviewing code changes")
+        view::HeaderContent::simple(i18n::t("code_review.header.reviewing_changes"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, ctx: &mut ViewContext<Self>) {

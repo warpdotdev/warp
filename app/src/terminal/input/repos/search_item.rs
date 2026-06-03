@@ -191,6 +191,7 @@ impl SearchItem for RepoSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Indexed repository: {}", self.display_name)
+        i18n::t("terminal.input.a11y.indexed_repository")
+            .replace("{repository}", &self.display_name)
     }
 }

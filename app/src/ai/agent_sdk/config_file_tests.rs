@@ -7,6 +7,10 @@ use warp_cli::mcp::MCPSpec;
 
 use crate::ai::ambient_agents::AgentConfigSnapshot;
 
+fn use_english_locale() {
+    i18n::set_locale("en");
+}
+
 fn write_temp(suffix: &str, contents: &str) -> tempfile::NamedTempFile {
     let mut file = tempfile::Builder::new().suffix(suffix).tempfile().unwrap();
     file.write_all(contents.as_bytes()).unwrap();
@@ -54,6 +58,8 @@ mcp_servers:
 
 #[test]
 fn unknown_keys_are_rejected() {
+    use_english_locale();
+
     let contents = json!({
         "model_id": "gpt-4o",
         "typo_model": "oops"
@@ -68,6 +74,8 @@ fn unknown_keys_are_rejected() {
 
 #[test]
 fn mcp_must_be_under_mcp_servers_key() {
+    use_english_locale();
+
     let contents = json!({
         "model_id": "gpt-4o",
         "mcpServers": { "s": { "command": "npx", "args": [] } }

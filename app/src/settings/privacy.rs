@@ -96,7 +96,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         private: false,
         storage_key: "TelemetryEnabled",
         toml_path: "privacy.telemetry_enabled",
-        description: "Whether anonymous usage telemetry is collected.",
+        description_key: "settings.schema.privacy.telemetry_enabled.description",
     },
     is_crash_reporting_enabled: IsCrashReportingEnabled {
         type: bool,
@@ -106,7 +106,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         private: false,
         storage_key: "CrashReportingEnabled",
         toml_path: "privacy.crash_reporting_enabled",
-        description: "Whether crash reports are sent.",
+        description_key: "settings.schema.privacy.crash_reporting_enabled.description",
     },
     is_cloud_conversation_storage_enabled: IsCloudConversationStorageEnabled {
         type: bool,
@@ -116,7 +116,7 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         private: false,
         storage_key: "CloudConversationStorageEnabled",
         toml_path: "agents.cloud_conversation_storage_enabled",
-        description: "Whether conversations are stored in the cloud.",
+        description_key: "settings.schema.agents.cloud_conversation_storage_enabled.description",
     },
 ]);
 
@@ -127,7 +127,7 @@ maybe_define_setting!(CustomSecretRegexList, group: PrivacySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
     private: false,
     toml_path: "privacy.custom_secret_regex_list",
-    description: "Custom regex patterns for detecting and redacting secrets.",
+    description_key: "settings.schema.privacy.custom_secret_regex_list.description",
 });
 
 maybe_define_setting!(HasInitializedDefaultSecretRegexes, group: PrivacySettings, {

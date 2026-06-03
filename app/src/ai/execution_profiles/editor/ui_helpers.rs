@@ -12,7 +12,10 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity, ViewHandle};
 
 use super::{ExecutionProfileEditorView, ExecutionProfileEditorViewAction};
-use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission};
+use crate::ai::execution_profiles::{
+    AIExecutionProfile, ActionPermission, AskUserQuestionPermission, ComputerUsePermission,
+    RunAgentsPermission, WriteToPtyPermission,
+};
 use crate::editor::EditorView;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
@@ -62,8 +65,81 @@ fn nice_step(raw: f64) -> f64 {
 
 use crate::settings_view::{render_input_list, render_separator, InputListItem};
 
-pub const WORKSPACE_OVERRIDE_TOOLTIP_MESSAGE: &str =
-    "This option is enforced by your organization's settings and cannot be customized.";
+fn action_permission_description(permission: ActionPermission) -> String {
+    match permission {
+        ActionPermission::AgentDecides | ActionPermission::Unknown => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.agent_decides")
+        }
+        ActionPermission::AlwaysAllow => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.always_allow")
+        }
+        ActionPermission::AlwaysAsk => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.always_ask")
+        }
+    }
+}
+
+fn write_to_pty_permission_description(permission: WriteToPtyPermission) -> String {
+    match permission {
+        WriteToPtyPermission::AlwaysAllow => {
+            action_permission_description(ActionPermission::AlwaysAllow)
+        }
+        WriteToPtyPermission::AskOnFirstWrite => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.write_to_pty.ask_on_first_write")
+        }
+        WriteToPtyPermission::AlwaysAsk => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.write_to_pty.always_ask")
+        }
+        WriteToPtyPermission::Unknown => action_permission_description(ActionPermission::Unknown),
+    }
+}
+
+fn computer_use_permission_description(permission: ComputerUsePermission) -> String {
+    match permission {
+        ComputerUsePermission::Never => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.computer_use.never")
+        }
+        ComputerUsePermission::AlwaysAsk => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.computer_use.always_ask")
+        }
+        ComputerUsePermission::AlwaysAllow => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.computer_use.always_allow")
+        }
+        ComputerUsePermission::Unknown => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.unknown")
+        }
+    }
+}
+
+fn ask_user_question_permission_description(permission: AskUserQuestionPermission) -> String {
+    match permission {
+        AskUserQuestionPermission::AskExceptInAutoApprove
+        | AskUserQuestionPermission::Unknown => i18n::t(
+            "ai.execution_profiles.editor.permission_desc.ask_user_question.ask_unless_auto_approve",
+        ),
+        AskUserQuestionPermission::Never => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.ask_user_question.never")
+        }
+        AskUserQuestionPermission::AlwaysAsk => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.ask_user_question.always_ask")
+        }
+    }
+}
+
+fn run_agents_permission_description(permission: RunAgentsPermission) -> String {
+    match permission {
+        RunAgentsPermission::NeverAllow | RunAgentsPermission::Unknown => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.run_agents.never")
+        }
+        RunAgentsPermission::AlwaysAllow => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.run_agents.always_allow")
+        }
+        RunAgentsPermission::AlwaysAsk => {
+            i18n::t("ai.execution_profiles.editor.permission_desc.run_agents.always_ask")
+        }
+    }
+}
+
 pub fn render_header_section(
     appearance: &Appearance,
     profile_name_editor: &ViewHandle<EditorView>,
@@ -87,7 +163,7 @@ pub fn render_header_section(
 
     if is_default_profile {
         column.add_child(render_info_section(
-            "Default profile name cannot be changed.",
+            &i18n::t("ai.execution_profiles.editor.default_profile_name_locked"),
             None,
             appearance,
         ));
@@ -99,17 +175,25 @@ pub fn render_header_section(
 }
 
 fn render_header_title(appearance: &Appearance) -> Box<dyn Element> {
-    Text::new_inline("Edit Profile", appearance.ui_font_family(), 16.)
-        .with_style(Properties::default().weight(Weight::Bold))
-        .with_color(appearance.theme().active_ui_text_color().into())
-        .finish()
+    Text::new_inline(
+        i18n::t("ai.execution_profiles.editor.edit_profile"),
+        appearance.ui_font_family(),
+        16.,
+    )
+    .with_style(Properties::default().weight(Weight::Bold))
+    .with_color(appearance.theme().active_ui_text_color().into())
+    .finish()
 }
 
 fn render_header_name_label(appearance: &Appearance) -> Box<dyn Element> {
     Container::new(
-        Text::new("Name", appearance.ui_font_family(), 13.)
-            .with_color(appearance.theme().active_ui_text_color().into())
-            .finish(),
+        Text::new(
+            i18n::t("ai.execution_profiles.editor.name_label"),
+            appearance.ui_font_family(),
+            13.,
+        )
+        .with_color(appearance.theme().active_ui_text_color().into())
+        .finish(),
     )
     .with_margin_top(16.)
     .finish()
@@ -252,11 +336,14 @@ pub fn render_models_section(
 ) -> Box<dyn Element> {
     let mut column = Flex::column()
         .with_child(render_separator(appearance))
-        .with_child(render_section_label("MODELS", appearance))
+        .with_child(render_section_label(
+            &i18n::t("ai.execution_profiles.editor.models_section"),
+            appearance,
+        ))
         .with_child(render_filterable_dropdown_row(
             appearance,
-            "Base model",
-            "This model serves as the primary engine behind the agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
+            &i18n::t("ai.execution_profiles.editor.base_model.label"),
+            &i18n::t("ai.execution_profiles.editor.base_model.desc"),
             &view.base_model_dropdown,
         ));
 
@@ -266,16 +353,16 @@ pub fn render_models_section(
 
     column = column.with_child(render_filterable_dropdown_row(
         appearance,
-        "Full terminal use model",
-        "The model used when the agent operates inside interactive terminal applications like database shells, debuggers, REPLs, or dev servers—reading live output and writing commands to the PTY.",
+        &i18n::t("ai.execution_profiles.editor.full_terminal_use_model.label"),
+        &i18n::t("ai.execution_profiles.editor.full_terminal_use_model.desc"),
         &view.full_terminal_use_model_dropdown,
     ));
 
     if FeatureFlag::LocalComputerUse.is_enabled() {
         column.add_child(render_filterable_dropdown_row(
             appearance,
-            "Computer use model",
-            "The model used when the agent takes control of your computer to interact with graphical applications through mouse movements, clicks, and keyboard input.",
+            &i18n::t("ai.execution_profiles.editor.computer_use_model.label"),
+            &i18n::t("ai.execution_profiles.editor.computer_use_model.desc"),
             &view.computer_use_model_dropdown,
         ));
     }
@@ -305,7 +392,7 @@ fn render_context_window_row(
     let max = cw.max;
 
     let label = Text::new(
-        "Context window".to_string(),
+        i18n::t("ai.execution_profiles.editor.context_window.label"),
         appearance.ui_font_family(),
         13.,
     )
@@ -314,7 +401,7 @@ fn render_context_window_row(
     let min_label_text = min.separate_with_commas();
     let max_label_text = max.separate_with_commas();
     let desc = Text::new(
-        "The base model's working memory — how many tokens of your conversation, code, and documents it can consider at once. Larger windows enable longer conversations and more coherent responses over bigger codebases, at the cost of higher latency and compute usage.".to_string(),
+        i18n::t("ai.execution_profiles.editor.context_window.desc"),
         appearance.ui_font_family(),
         11.,
     )
@@ -437,13 +524,16 @@ pub fn render_permissions_section(
     let ai_settings = AISettings::as_ref(app);
     let mut column = Flex::column().with_children([
         render_separator(appearance),
-        render_section_label("PERMISSIONS", appearance),
+        render_section_label(
+            &i18n::t("ai.execution_profiles.editor.permissions_section"),
+            appearance,
+        ),
         render_permission_row(
             appearance,
             Icon::Code2,
-            "Apply code diffs",
+            &i18n::t("ai.execution_profiles.editor.permission.apply_code_diffs"),
             &view.apply_code_diffs_dropdown,
-            profile_data.apply_code_diffs.description(),
+            &action_permission_description(profile_data.apply_code_diffs),
             !ai_settings.is_code_diffs_permissions_editable(app),
             view.tooltip_mouse_state_handles
                 .apply_code_diffs_tooltip_mouse_state
@@ -452,9 +542,9 @@ pub fn render_permissions_section(
         render_permission_row(
             appearance,
             Icon::Notebook,
-            "Read files",
+            &i18n::t("ai.execution_profiles.editor.permission.read_files"),
             &view.read_files_dropdown,
-            profile_data.read_files.description(),
+            &action_permission_description(profile_data.read_files),
             !ai_settings.is_read_files_permissions_editable(app),
             view.tooltip_mouse_state_handles
                 .read_files_tooltip_mouse_state
@@ -476,9 +566,9 @@ pub fn render_permissions_section(
     column.add_child(render_permission_row(
         appearance,
         Icon::Terminal,
-        "Execute commands",
+        &i18n::t("ai.execution_profiles.editor.permission.execute_commands"),
         &view.execute_commands_dropdown,
-        profile_data.execute_commands.description(),
+        &action_permission_description(profile_data.execute_commands),
         !ai_settings.is_execute_commands_permissions_editable(app),
         view.tooltip_mouse_state_handles
             .execute_commands_tooltip_mouse_state
@@ -513,9 +603,9 @@ pub fn render_permissions_section(
     column.add_child(render_permission_row(
         appearance,
         Icon::Workflow,
-        "Interact with running commands",
+        &i18n::t("ai.execution_profiles.editor.permission.interact_with_running_commands"),
         &view.write_to_pty_dropdown,
-        profile_data.write_to_pty.description(),
+        &write_to_pty_permission_description(profile_data.write_to_pty),
         !ai_settings.is_write_to_pty_permissions_editable(app),
         view.tooltip_mouse_state_handles
             .write_to_pty_tooltip_mouse_state
@@ -526,9 +616,9 @@ pub fn render_permissions_section(
         column.add_child(render_permission_row(
             appearance,
             Icon::Laptop,
-            "Computer use",
+            &i18n::t("ai.execution_profiles.editor.permission.computer_use"),
             &view.computer_use_dropdown,
-            profile_data.computer_use.description(),
+            &computer_use_permission_description(profile_data.computer_use),
             !ai_settings.is_computer_use_permissions_editable(app),
             view.tooltip_mouse_state_handles
                 .computer_use_tooltip_mouse_state
@@ -539,9 +629,9 @@ pub fn render_permissions_section(
     column.add_child(render_permission_row(
         appearance,
         Icon::MessageText,
-        "Ask questions",
+        &i18n::t("ai.execution_profiles.editor.permission.ask_questions"),
         &view.ask_user_question_dropdown,
-        profile_data.ask_user_question.description(),
+        &ask_user_question_permission_description(profile_data.ask_user_question),
         !ai_settings.is_ask_user_question_permissions_editable(app),
         view.tooltip_mouse_state_handles
             .ask_user_question_tooltip_mouse_state
@@ -550,9 +640,9 @@ pub fn render_permissions_section(
     column.add_child(render_permission_row(
         appearance,
         Icon::Atom,
-        "Run orchestrated agents",
+        &i18n::t("ai.execution_profiles.editor.permission.run_orchestrated_agents"),
         &view.run_agents_dropdown,
-        profile_data.run_agents.description(),
+        &run_agents_permission_description(profile_data.run_agents),
         !ai_settings.is_run_agents_permissions_editable(app),
         view.tooltip_mouse_state_handles
             .run_agents_tooltip_mouse_state
@@ -562,9 +652,9 @@ pub fn render_permissions_section(
     column.add_child(render_permission_row(
         appearance,
         Icon::Dataflow,
-        "Call MCP servers",
+        &i18n::t("ai.execution_profiles.editor.permission.call_mcp_servers"),
         &view.call_mcp_servers_dropdown,
-        profile_data.mcp_permissions.description(),
+        &action_permission_description(profile_data.mcp_permissions),
         !ai_settings.is_mcp_permission_editable(app), // Use MCP override for this permission
         view.tooltip_mouse_state_handles
             .call_mcp_servers_tooltip_mouse_state
@@ -709,8 +799,8 @@ fn render_directory_allowlist_section(
     let is_editable = ai_settings.is_directory_allowlist_editable(app);
 
     render_list_section(
-        "Directory allowlist",
-        "Give the agent file access to certain directories.",
+        &i18n::t("ai.execution_profiles.editor.directory_allowlist.label"),
+        &i18n::t("ai.execution_profiles.editor.directory_allowlist.desc"),
         &profile_data.directory_allowlist,
         &view.directory_allowlist_mouse_state_handles,
         Some(&view.directory_allowlist_editor),
@@ -734,8 +824,8 @@ fn render_command_allowlist_section(
     let is_editable = ai_settings.is_command_allowlist_editable(app);
 
     render_list_section(
-        "Command allowlist",
-        "Regular expressions to match commands that can be automatically executed by Oz.",
+        &i18n::t("ai.execution_profiles.editor.command_allowlist.label"),
+        &i18n::t("ai.execution_profiles.editor.command_allowlist.desc"),
         &profile_data.command_allowlist,
         &view.command_allowlist_mouse_state_handles,
         Some(&view.command_allowlist_editor),
@@ -800,8 +890,8 @@ fn render_command_denylist_section(
     );
 
     let mut column = Flex::column().with_child(create_section_header(
-        "Command denylist",
-        "Regular expressions to match commands that Oz should always ask permission to execute.",
+        &i18n::t("ai.execution_profiles.editor.command_denylist.label"),
+        &i18n::t("ai.execution_profiles.editor.command_denylist.desc"),
         appearance,
     ));
     column = column.with_child(list);
@@ -814,7 +904,10 @@ fn render_command_denylist_section(
 fn display_mcp_name(uuid: &Uuid, app: &AppContext) -> String {
     TemplatableMCPServerManager::get_mcp_name(uuid, app).unwrap_or({
         log::warn!("Expected a name for MCP server {uuid} but could not find one.");
-        format!("MCP Server {uuid}")
+        format!(
+            "{} {uuid}",
+            i18n::t("ai.execution_profiles.editor.mcp_server_fallback")
+        )
     })
 }
 
@@ -828,8 +921,8 @@ fn render_mcp_allowlist_section(
     let is_editable = ai_settings.is_mcp_permission_editable(app);
 
     render_list_section(
-        "MCP allowlist",
-        "MCP servers that are allowed to be called by Oz.",
+        &i18n::t("ai.execution_profiles.editor.mcp_allowlist.label"),
+        &i18n::t("ai.execution_profiles.editor.mcp_allowlist.desc"),
         &profile_data.mcp_allowlist,
         &view.mcp_allowlist_mouse_state_handles,
         None,
@@ -854,8 +947,8 @@ fn render_mcp_denylist_section(
     let is_editable = ai_settings.is_mcp_permission_editable(app);
 
     render_list_section(
-        "MCP denylist",
-        "MCP servers that are not allowed to be called by Oz.",
+        &i18n::t("ai.execution_profiles.editor.mcp_denylist.label"),
+        &i18n::t("ai.execution_profiles.editor.mcp_denylist.desc"),
         &profile_data.mcp_denylist,
         &view.mcp_denylist_mouse_state_handles,
         None,
@@ -889,7 +982,7 @@ pub fn render_plan_auto_sync_toggle(
     .finish();
 
     let label_elem = Text::new(
-        "Plan auto-sync".to_string(),
+        i18n::t("ai.execution_profiles.editor.plan_auto_sync.label"),
         appearance.ui_font_family(),
         13.,
     )
@@ -897,8 +990,7 @@ pub fn render_plan_auto_sync_toggle(
     .finish();
 
     let desc_elem = Text::new(
-        "The plans this agent creates will be automatically added and synced to Warp Drive."
-            .to_string(),
+        i18n::t("ai.execution_profiles.editor.plan_auto_sync.desc"),
         appearance.ui_font_family(),
         11.,
     )
@@ -963,7 +1055,7 @@ pub fn render_web_search_toggle(
     .finish();
 
     let label_elem = Text::new(
-        "Call web tools".to_string(),
+        i18n::t("ai.execution_profiles.editor.web_search.label"),
         appearance.ui_font_family(),
         13.,
     )
@@ -971,7 +1063,7 @@ pub fn render_web_search_toggle(
     .finish();
 
     let desc_elem = Text::new(
-        "The agent may use web search when helpful for completing tasks.".to_string(),
+        i18n::t("ai.execution_profiles.editor.web_search.desc"),
         appearance.ui_font_family(),
         11.,
     )
@@ -1027,7 +1119,9 @@ pub fn wrap_disabled_with_workspace_override_tooltip(
         if state.is_hovered() {
             let tooltip = appearance
                 .ui_builder()
-                .tool_tip(WORKSPACE_OVERRIDE_TOOLTIP_MESSAGE.to_string())
+                .tool_tip(i18n::t(
+                    "ai.execution_profiles.editor.workspace_override_tooltip",
+                ))
                 .build()
                 .finish();
 

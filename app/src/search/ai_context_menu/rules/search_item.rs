@@ -170,10 +170,10 @@ impl SearchItem for RuleSearchItem {
             if !name.is_empty() {
                 name.clone()
             } else {
-                "Rule".to_string()
+                i18n::t("search.ai_context_menu.rule_prefix")
             }
         } else {
-            "Rule".to_string()
+            i18n::t("search.ai_context_menu.rule_prefix")
         };
 
         // Create title element
@@ -226,6 +226,10 @@ impl SearchItem for RuleSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Rule: {}", self.rule_content)
+        format!(
+            "{}: {}",
+            i18n::t("search.ai_context_menu.rule_prefix"),
+            self.rule_content
+        )
     }
 }

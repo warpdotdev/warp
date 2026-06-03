@@ -424,19 +424,19 @@ pub fn init(app: &mut AppContext) {
 
     app.register_fixed_bindings([
         FixedBinding::empty(
-            "Hide All Windows",
+            i18n::t("root_view.binding.hide_all_windows"),
             RootViewAction::ShowOrHideNonQuakeModeWindows,
             id!("RootView") & id!(flags::ACTIVATION_HOTKEY_FLAG),
         ),
         FixedBinding::empty(
-            "Show Dedicated Hotkey Window",
+            i18n::t("root_view.binding.show_dedicated_hotkey_window"),
             RootViewAction::ToggleQuakeModeWindow,
             id!("RootView")
                 & id!(flags::QUAKE_MODE_ENABLED_CONTEXT_FLAG)
                 & !id!(flags::QUAKE_WINDOW_OPEN_FLAG),
         ),
         FixedBinding::empty(
-            "Hide Dedicated Hotkey Window",
+            i18n::t("root_view.binding.hide_dedicated_hotkey_window"),
             RootViewAction::ToggleQuakeModeWindow,
             id!("RootView")
                 & id!(flags::QUAKE_MODE_ENABLED_CONTEXT_FLAG)
@@ -448,7 +448,7 @@ pub fn init(app: &mut AppContext) {
         // Register a binding to toggle fullscreen on Linux and Windows.
         EditableBinding::new(
             "root_view:toggle_fullscreen",
-            "Toggle fullscreen",
+            i18n::t("root_view.binding.toggle_fullscreen"),
             RootViewAction::ToggleFullscreen,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
@@ -897,7 +897,7 @@ fn create_environment(arg: &CreateEnvironmentArg, ctx: &mut AppContext) {
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(&i18n::t("root_view.create_environment"), ctx);
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -930,7 +930,7 @@ fn create_environment_and_run(arg: &CreateEnvironmentArg, ctx: &mut AppContext) 
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(&i18n::t("root_view.create_environment"), ctx);
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -1055,7 +1055,7 @@ fn open_warp_drive_object(arg: &OpenWarpDriveObjectArgs, ctx: &mut AppContext) {
 
 fn display_object_missing_error_in_window(window_id: WindowId, ctx: &mut AppContext) {
     crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-        let toast = DismissibleToast::error(String::from("Resource not found or access denied"));
+        let toast = DismissibleToast::error(i18n::t("root_view.resource_not_found"));
         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
     });
 }
@@ -2675,7 +2675,7 @@ impl RootView {
                 workspace
                     .active_tab_pane_group()
                     .update(ctx, |pane_group, ctx| {
-                        pane_group.set_title("Create Environment", ctx);
+                        pane_group.set_title(&i18n::t("root_view.create_environment"), ctx);
 
                         if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                             terminal_view.update(ctx, |_, ctx| {
@@ -2720,7 +2720,7 @@ impl RootView {
             workspace
                 .active_tab_pane_group()
                 .update(ctx, |pane_group, ctx| {
-                    pane_group.set_title("Create Environment", ctx);
+                    pane_group.set_title(&i18n::t("root_view.create_environment"), ctx);
 
                     if let Some(terminal_view) = pane_group.active_session_view(ctx) {
                         terminal_view.update(ctx, |_, ctx| {

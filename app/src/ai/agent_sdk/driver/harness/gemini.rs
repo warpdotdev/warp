@@ -199,7 +199,12 @@ impl HarnessRunner for GeminiHarnessRunner {
                 });
             })
             .await
-            .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /quit"))
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    i18n::t("ai.agent_sdk.driver.harness.driver_dropped_while_sending")
+                        .replace("{command}", "/quit")
+                )
+            })
     }
 
     async fn save_conversation(
@@ -249,8 +254,8 @@ fn prepare_gemini_environment_config(
     working_dir: &Path,
     system_prompt: Option<&str>,
 ) -> Result<()> {
-    let home_dir =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
+    let home_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!(i18n::t("ai.agent_sdk.driver.harness.home_dir_missing")))?;
     let gemini_dir = home_dir.join(GEMINI_CONFIG_DIR);
     prepare_gemini_settings(
         &gemini_dir.join(GEMINI_SETTINGS_FILE_NAME),
@@ -263,10 +268,8 @@ fn prepare_gemini_environment_config(
     if let Some(prompt) = system_prompt {
         let prompt_path = gemini_dir.join(GEMINI_SYSTEM_PROMPT_FILE_NAME);
         std::fs::write(&prompt_path, prompt).with_context(|| {
-            format!(
-                "Failed to write Gemini system prompt to {}",
-                prompt_path.display()
-            )
+            i18n::t("ai.agent_sdk.driver.harness.gemini.write_system_prompt_failed")
+                .replace("{path}", &prompt_path.display().to_string())
         })?;
     }
     Ok(())
@@ -292,7 +295,7 @@ fn prepare_gemini_settings(settings_path: &Path, has_system_prompt: bool) -> Res
     write_json_file(
         settings_path,
         &settings,
-        "Failed to serialize Gemini settings",
+        i18n::t("ai.agent_sdk.driver.harness.gemini.serialize_settings_failed"),
     )
 }
 
@@ -305,7 +308,7 @@ fn prepare_gemini_trusted_folders(trusted_path: &Path, working_dir: &Path) -> Re
     write_json_file(
         trusted_path,
         &trusted,
-        "Failed to serialize Gemini trusted folders",
+        i18n::t("ai.agent_sdk.driver.harness.gemini.serialize_trusted_folders_failed"),
     )
 }
 

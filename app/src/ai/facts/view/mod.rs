@@ -31,8 +31,6 @@ mod style;
 use rule::*;
 use rule_editor::*;
 
-const OFFLINE_TEXT: &str = "You are offline. Some rules will be read only.";
-
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
 pub enum AIFactPage {
     #[default]
@@ -76,7 +74,8 @@ pub struct AIFactView {
 
 impl AIFactView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(HEADER_TEXT));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(i18n::t("ai.rules.header")));
 
         let rule_view = ctx.add_typed_action_view(RuleView::new);
         ctx.subscribe_to_view(&rule_view, |me, _, event, ctx| {
@@ -209,7 +208,7 @@ impl AIFactView {
                         Container::new(
                             appearance
                                 .ui_builder()
-                                .wrappable_text(OFFLINE_TEXT, true)
+                                .wrappable_text(i18n::t("ai.rules.offline_banner"), true)
                                 .build()
                                 .finish(),
                         )
@@ -325,7 +324,7 @@ impl BackingView for AIFactView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple(HEADER_TEXT)
+        view::HeaderContent::simple(i18n::t("ai.rules.header"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

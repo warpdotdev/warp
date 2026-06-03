@@ -384,10 +384,14 @@ impl BillingCycleUsageSectionView {
             .with_main_axis_size(MainAxisSize::Max);
 
         row.add_child(
-            Text::new_inline("Usage", appearance.ui_font_family(), HEADER_FONT_SIZE)
-                .with_style(Properties::default().weight(Weight::Bold))
-                .with_color(theme.active_ui_text_color().into())
-                .finish(),
+            Text::new_inline(
+                i18n::t("settings.billing.usage_header"),
+                appearance.ui_font_family(),
+                HEADER_FONT_SIZE,
+            )
+            .with_style(Properties::default().weight(Weight::Bold))
+            .with_color(theme.active_ui_text_color().into())
+            .finish(),
         );
 
         let mut right_side = Flex::row()
@@ -449,7 +453,7 @@ impl BillingCycleUsageSectionView {
         let theme = appearance.theme();
         let reset_str = AIRequestUsageModel::as_ref(app)
             .next_refresh_time_local()
-            .format("Resets %b %d, %-I:%M %p")
+            .format(&i18n::t("settings.billing.resets_at"))
             .to_string();
         Some(
             Text::new_inline(
@@ -737,28 +741,28 @@ fn visibility_cta_for(
 ) -> Option<(&'static str, &'static str, BillingCycleUsageAction, Icon)> {
     match granularity {
         UsageVisibilityGranularity::OwnOnly => Some((
-            "Upgrade to Build",
-            "to see team-level credit usage.",
+            Box::leak(i18n::t("settings.billing.cta_upgrade_build_link").into_boxed_str()),
+            Box::leak(i18n::t("settings.billing.cta_upgrade_build_copy").into_boxed_str()),
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::TeamAggregate => Some((
-            "Upgrade to Business",
-            "to see per-user credit attribution.",
+            Box::leak(i18n::t("settings.billing.cta_upgrade_business_link").into_boxed_str()),
+            Box::leak(i18n::t("settings.billing.cta_upgrade_business_copy").into_boxed_str()),
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         UsageVisibilityGranularity::PerUserTotals => Some((
-            "Upgrade to Enterprise",
-            "to see fine-grained credit attribution and set per-user spend limits.",
+            Box::leak(i18n::t("settings.billing.cta_upgrade_enterprise_link").into_boxed_str()),
+            Box::leak(i18n::t("settings.billing.cta_upgrade_enterprise_copy").into_boxed_str()),
             BillingCycleUsageAction::OpenUpgrade,
             Icon::ArrowCircleBrokenUp,
         )),
         // FullBreakdown viewers already have full visibility; nudge them to
         // the admin panel where per-user spend limits actually get configured.
         UsageVisibilityGranularity::FullBreakdown => Some((
-            "Open the admin panel",
-            "to set per-user spend limits.",
+            Box::leak(i18n::t("settings.billing.cta_admin_panel_link").into_boxed_str()),
+            Box::leak(i18n::t("settings.billing.cta_admin_panel_copy").into_boxed_str()),
             BillingCycleUsageAction::OpenAdminPanel,
             Icon::Users,
         )),
@@ -767,11 +771,26 @@ fn visibility_cta_for(
 
 fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static str) {
     match cost_type {
-        AiCreditsUsageAndCostType::BaseLimit => (BASE_CREDITS_DOT_COLOR, "Base"),
-        AiCreditsUsageAndCostType::BonusGrant => (BONUS_CREDITS_DOT_COLOR, "Add-ons"),
-        AiCreditsUsageAndCostType::Payg => (PAYG_CREDITS_DOT_COLOR, "Pay-as-you-go"),
-        AiCreditsUsageAndCostType::AmbientBonusGrant => (AMBIENT_CREDITS_DOT_COLOR, "Cloud-only"),
-        AiCreditsUsageAndCostType::Aggregate => (AGGREGATE_CREDITS_DOT_COLOR, "Combined"),
+        AiCreditsUsageAndCostType::BaseLimit => (
+            BASE_CREDITS_DOT_COLOR,
+            Box::leak(i18n::t("settings.billing.legend_base").into_boxed_str()),
+        ),
+        AiCreditsUsageAndCostType::BonusGrant => (
+            BONUS_CREDITS_DOT_COLOR,
+            Box::leak(i18n::t("settings.billing.legend_addons").into_boxed_str()),
+        ),
+        AiCreditsUsageAndCostType::Payg => (
+            PAYG_CREDITS_DOT_COLOR,
+            Box::leak(i18n::t("settings.billing.legend_payg").into_boxed_str()),
+        ),
+        AiCreditsUsageAndCostType::AmbientBonusGrant => (
+            AMBIENT_CREDITS_DOT_COLOR,
+            Box::leak(i18n::t("settings.billing.legend_cloud_only").into_boxed_str()),
+        ),
+        AiCreditsUsageAndCostType::Aggregate => (
+            AGGREGATE_CREDITS_DOT_COLOR,
+            Box::leak(i18n::t("settings.billing.legend_combined").into_boxed_str()),
+        ),
         AiCreditsUsageAndCostType::Other(_) => (BASE_CREDITS_DOT_COLOR, ""),
     }
 }
@@ -779,8 +798,7 @@ fn legend_style_for(cost_type: AiCreditsUsageAndCostType) -> (ColorU, &'static s
 fn render_aggregate_legend_tooltip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let text = Text::new_inline(
-        "Other team members' usage across add-on, pay-as-you-go, and cloud-only credits."
-            .to_string(),
+        i18n::t("settings.billing.aggregate_tooltip"),
         appearance.ui_font_family(),
         12.,
     )

@@ -42,7 +42,9 @@ impl AwsCloudProvider {
             .prefix(&format!("oz_aws_oidc_{run_id}_"))
             .suffix(".token")
             .tempfile()
-            .context("Failed to create temporary AWS OIDC token file")
+            .context(i18n::t(
+                "ai.agent_sdk.driver.cloud_provider.aws.create_token_file_failed",
+            ))
             .map_err(|error| CloudProviderSetupError::new(Self::PROVIDER_NAME, error))?;
 
         Ok(Self {
@@ -111,6 +113,9 @@ impl CloudProvider for AwsCloudProvider {
             // 2. Write the token to the pre-created temporary file.
             async_fs::write(&token_file_path, token.token.as_bytes())
                 .await
+                .context(i18n::t(
+                    "ai.agent_sdk.driver.cloud_provider.aws.write_token_file_failed",
+                ))
                 .map_err(|err| CloudProviderSetupError::new(Self::PROVIDER_NAME, err))?;
 
             safe_info!(
@@ -126,7 +131,9 @@ impl CloudProvider for AwsCloudProvider {
             let Self { token_file, .. } = *self;
             token_file
                 .close()
-                .context("Failed to remove AWS OIDC token file")
+                .context(i18n::t(
+                    "ai.agent_sdk.driver.cloud_provider.aws.remove_token_file_failed",
+                ))
                 .map_err(|err| CloudProviderSetupError::new(Self::PROVIDER_NAME, err))
         })
     }

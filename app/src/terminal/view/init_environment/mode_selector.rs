@@ -129,7 +129,7 @@ impl EnvironmentSetupModeSelector {
         let theme = appearance.theme();
 
         let title = Text::new(
-            "Choose how you'd like to set up your environment".to_string(),
+            i18n::t("terminal.init_environment.mode.title"),
             appearance.ui_font_family(),
             TITLE_FONT_SIZE,
         )
@@ -188,8 +188,8 @@ impl EnvironmentSetupModeSelector {
         &self,
         index: usize,
         icon: Icon,
-        title: &'static str,
-        description: &'static str,
+        title: String,
+        description: String,
         is_suggested: bool,
         mouse_state: MouseStateHandle,
         action: EnvironmentSetupModeSelectorAction,
@@ -251,7 +251,7 @@ impl EnvironmentSetupModeSelector {
                 .with_border(Border::all(1.).with_border_color(avatar_border))
                 .finish();
 
-            let title_text = Text::new(title.to_string(), font_family, OPTION_TITLE_FONT_SIZE)
+            let title_text = Text::new(title.clone(), font_family, OPTION_TITLE_FONT_SIZE)
                 .with_style(Properties::default().weight(Weight::Semibold))
                 .with_color(active_text.into())
                 .finish();
@@ -262,11 +262,14 @@ impl EnvironmentSetupModeSelector {
                 .with_child(title_text);
 
             if is_suggested {
-                let suggested_text =
-                    Text::new("Suggested".to_string(), font_family, OPTION_DESC_FONT_SIZE)
-                        .with_style(Properties::default().weight(Weight::Medium))
-                        .with_color(badge_text_color)
-                        .finish();
+                let suggested_text = Text::new(
+                    i18n::t("common.suggested"),
+                    font_family,
+                    OPTION_DESC_FONT_SIZE,
+                )
+                .with_style(Properties::default().weight(Weight::Medium))
+                .with_color(badge_text_color)
+                .finish();
 
                 let suggested = Container::new(suggested_text)
                     .with_horizontal_padding(8.)
@@ -280,7 +283,7 @@ impl EnvironmentSetupModeSelector {
             }
 
             let description_text =
-                Text::new(description.to_string(), font_family, OPTION_DESC_FONT_SIZE)
+                Text::new(description.clone(), font_family, OPTION_DESC_FONT_SIZE)
                     .with_style(Properties::default().weight(Weight::Normal))
                     .with_color(nonactive_text.into())
                     .soft_wrap(true)
@@ -339,8 +342,8 @@ impl EnvironmentSetupModeSelector {
         let remote_github_option = self.render_option(
             0,
             Icon::Github,
-            "Quick setup",
-            "Select the GitHub repositories you'd like to work with and we'll suggest a base image and config",
+            i18n::t("terminal.init_environment.mode.quick_setup.title"),
+            i18n::t("terminal.init_environment.mode.quick_setup.description"),
             true,
             self.remote_github_mouse_state.clone(),
             EnvironmentSetupModeSelectorAction::SelectRemoteGitHub,
@@ -350,8 +353,8 @@ impl EnvironmentSetupModeSelector {
         let local_repos_option = self.render_option(
             1,
             Icon::Terminal,
-            "Use the agent",
-            "Choose a locally set up project and we'll help you set up an environment based on it",
+            i18n::t("terminal.init_environment.mode.use_agent.title"),
+            i18n::t("terminal.init_environment.mode.use_agent.description"),
             false,
             self.local_repos_mouse_state.clone(),
             EnvironmentSetupModeSelectorAction::SelectLocalRepositories,

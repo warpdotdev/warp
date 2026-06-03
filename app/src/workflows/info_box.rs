@@ -60,8 +60,6 @@ const ENV_VAR_HORIZONTAL_MARGIN: f32 = 20.;
 const ENV_VAR_RIGHT_ELEMENT_VERTICAL_MARGIN: f32 = 5.;
 const ENV_VAR_SPAN_VERTICAL_MARGIN: f32 = 15.;
 const ENV_VAR_BUTTON_HEIGHT: f32 = 30.;
-const ENV_VAR_SPAN: &str = "Environment variables";
-const NEW_ENV_VAR_BUTTON_LABEL: &str = "New environment variables";
 
 /// Scale factor the title should be from the user's current font size.
 const TITLE_FONT_SIZE_SCALE_FACTOR: f32 = 1.12;
@@ -252,9 +250,9 @@ impl WorkflowsMoreInfoView {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let label = if cloud_workflow.model().data.is_agent_mode_workflow() {
-            "Edit prompt"
+            i18n::t("workflows.info.edit_prompt")
         } else {
-            "Edit workflow"
+            i18n::t("workflows.info.edit_workflow")
         };
         let workflow = cloud_workflow.clone();
         render_hoverable_card_button(
@@ -438,7 +436,7 @@ impl WorkflowsMoreInfoView {
             .with_child(
                 Container::new(
                     Text::new_inline(
-                        "Command edited.",
+                        i18n::t("workflows.info.command_edited"),
                         appearance.ui_font_family(),
                         appearance.monospace_font_size(),
                     )
@@ -460,7 +458,7 @@ impl WorkflowsMoreInfoView {
                         ButtonVariant::Text,
                         self.button_mouse_states.reset_command.clone(),
                     )
-                    .with_centered_text_label(String::from("Reset"))
+                    .with_centered_text_label(i18n::t("common.reset"))
                     .with_style(UiComponentStyles {
                         font_family_id: Some(appearance.ui_font_family()),
                         font_size: Some(appearance.monospace_font_size()),
@@ -503,7 +501,7 @@ impl WorkflowsMoreInfoView {
                     1.,
                     Container::new(
                         Text::new_inline(
-                            "to cycle parameters",
+                            i18n::t("workflows.info.cycle_parameters"),
                             appearance.ui_font_family(),
                             appearance.monospace_font_size(),
                         )
@@ -537,7 +535,7 @@ impl WorkflowsMoreInfoView {
         let workflow = self.workflow.as_workflow().to_owned();
         render_hoverable_card_button(
             icons::Icon::Workflow,
-            Some("Save as workflow".to_string()),
+            Some(i18n::t("workflows.info.save_as_workflow")),
             self.button_mouse_states.save_as_workflow.clone(),
             move |ctx, _, _| {
                 ctx.dispatch_typed_action(TerminalAction::OpenWorkflowModalForAIWorkflow(
@@ -569,7 +567,7 @@ impl WorkflowsMoreInfoView {
             Align::new(
                 appearance
                     .ui_builder()
-                    .span(ENV_VAR_SPAN.to_string())
+                    .span(i18n::t("workflows.arguments.environment_variables"))
                     .with_style(UiComponentStyles {
                         font_size: Some(ENV_VAR_SPAN_FONT_SIZE),
                         ..Default::default()
@@ -596,7 +594,9 @@ impl WorkflowsMoreInfoView {
                             ButtonVariant::Secondary,
                             self.button_mouse_states.add_env_var_collection.clone(),
                         )
-                        .with_centered_text_label(NEW_ENV_VAR_BUTTON_LABEL.to_owned())
+                        .with_centered_text_label(i18n::t(
+                            "workflows.arguments.new_environment_variables",
+                        ))
                         .build()
                         .on_click(|ctx, _, _| {
                             // Create envvars in personal drive for max extensibility (can be moved
@@ -1008,7 +1008,7 @@ impl WorkflowsMoreInfoView {
             appearance
                 .ui_builder()
                 .link(
-                    "View Context".into(),
+                    i18n::t("workflows.info.view_context"),
                     Some(workflow_source),
                     None,
                     self.button_mouse_states.view_context.clone(),

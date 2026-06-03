@@ -9,6 +9,6 @@ define_settings_group!(AliasExpansionSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.input.alias_expansion_enabled",
-        description: "Whether shell alias expansion is enabled in the input.",
+        description_key: "settings.schema.terminal.input.alias_expansion_enabled.description",
     },
 ]);

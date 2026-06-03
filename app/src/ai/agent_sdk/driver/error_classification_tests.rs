@@ -4,12 +4,22 @@ use super::classify_driver_error;
 use crate::ai::agent_sdk::driver::terminal::ShareSessionError;
 use crate::ai::agent_sdk::driver::AgentDriverError;
 
+fn classify_driver_error_en(
+    error: &AgentDriverError,
+) -> (
+    AgentTaskState,
+    crate::server::server_api::ai::TaskStatusUpdate,
+) {
+    i18n::set_locale("en");
+    classify_driver_error(error)
+}
+
 fn assert_state_and_code(
     error: AgentDriverError,
     expected_state: AgentTaskState,
     expected_code: Option<PlatformErrorCode>,
 ) {
-    let (state, update) = classify_driver_error(&error);
+    let (state, update) = classify_driver_error_en(&error);
     assert_eq!(state, expected_state, "unexpected state for {error}");
     assert_eq!(
         update.error_code, expected_code,
@@ -39,7 +49,7 @@ fn terminal_unavailable_is_error_with_internal() {
 
 #[test]
 fn not_logged_in_is_error_with_auth_required() {
-    let (state, update) = classify_driver_error(&AgentDriverError::NotLoggedIn);
+    let (state, update) = classify_driver_error_en(&AgentDriverError::NotLoggedIn);
     assert_eq!(state, AgentTaskState::Error);
     assert_eq!(
         update.error_code,
@@ -101,11 +111,12 @@ fn environment_not_found_is_failed_with_resource_not_found() {
 
 #[test]
 fn conversation_harness_mismatch_is_failed_with_env_setup() {
-    let (state, update) = classify_driver_error(&AgentDriverError::ConversationHarnessMismatch {
-        conversation_id: "conv-123".into(),
-        expected: "claude".into(),
-        got: "oz".into(),
-    });
+    let (state, update) =
+        classify_driver_error_en(&AgentDriverError::ConversationHarnessMismatch {
+            conversation_id: "conv-123".into(),
+            expected: "claude".into(),
+            got: "oz".into(),
+        });
     assert_eq!(state, AgentTaskState::Failed);
     assert_eq!(
         update.error_code,
@@ -118,7 +129,7 @@ fn conversation_harness_mismatch_is_failed_with_env_setup() {
 #[test]
 fn conversation_resume_state_missing_is_failed_with_resource_not_found() {
     let (state, update) =
-        classify_driver_error(&AgentDriverError::ConversationResumeStateMissing {
+        classify_driver_error_en(&AgentDriverError::ConversationResumeStateMissing {
             harness: "claude".into(),
             conversation_id: "conv-123".into(),
         });
@@ -132,7 +143,7 @@ fn conversation_resume_state_missing_is_failed_with_resource_not_found() {
 
 #[test]
 fn share_session_disabled_gets_feature_not_available() {
-    let (state, update) = classify_driver_error(&AgentDriverError::ShareSessionFailed {
+    let (state, update) = classify_driver_error_en(&AgentDriverError::ShareSessionFailed {
         error: ShareSessionError::Disabled,
     });
     assert_eq!(state, AgentTaskState::Error);
@@ -146,7 +157,7 @@ fn share_session_disabled_gets_feature_not_available() {
 
 #[test]
 fn share_session_timeout_gets_internal_error() {
-    let (state, update) = classify_driver_error(&AgentDriverError::ShareSessionFailed {
+    let (state, update) = classify_driver_error_en(&AgentDriverError::ShareSessionFailed {
         error: ShareSessionError::Timeout,
     });
     assert_eq!(state, AgentTaskState::Error);
@@ -156,7 +167,7 @@ fn share_session_timeout_gets_internal_error() {
 
 #[test]
 fn share_session_failed_includes_reason() {
-    let (state, update) = classify_driver_error(&AgentDriverError::ShareSessionFailed {
+    let (state, update) = classify_driver_error_en(&AgentDriverError::ShareSessionFailed {
         error: ShareSessionError::Failed("server rejected".into()),
     });
     assert_eq!(state, AgentTaskState::Error);
@@ -167,7 +178,7 @@ fn share_session_failed_includes_reason() {
 
 #[test]
 fn conversation_cancelled_is_cancelled() {
-    let (state, update) = classify_driver_error(&AgentDriverError::ConversationCancelled {
+    let (state, update) = classify_driver_error_en(&AgentDriverError::ConversationCancelled {
         reason: crate::ai::agent::CancellationReason::ManuallyCancelled,
     });
     assert_eq!(state, AgentTaskState::Cancelled);
@@ -176,7 +187,7 @@ fn conversation_cancelled_is_cancelled() {
 
 #[test]
 fn conversation_blocked_is_blocked() {
-    let (state, update) = classify_driver_error(&AgentDriverError::ConversationBlocked {
+    let (state, update) = classify_driver_error_en(&AgentDriverError::ConversationBlocked {
         blocked_action: "rm -rf /".into(),
     });
     assert_eq!(state, AgentTaskState::Blocked);
@@ -187,7 +198,7 @@ fn conversation_blocked_is_blocked() {
 
 #[test]
 fn harness_auth_check_failed_is_failed_with_auth_required() {
-    let (state, update) = classify_driver_error(&AgentDriverError::HarnessAuthCheckFailed {
+    let (state, update) = classify_driver_error_en(&AgentDriverError::HarnessAuthCheckFailed {
         harness: "claude".into(),
         detail: "exit code 1".into(),
     });
@@ -204,11 +215,12 @@ fn harness_auth_check_failed_is_failed_with_auth_required() {
 
 #[test]
 fn harness_runtime_failure_detected_is_failed_with_auth_required() {
-    let (state, update) = classify_driver_error(&AgentDriverError::HarnessRuntimeFailureDetected {
-        harness: "claude".into(),
-        pattern: "credit balance is too low".into(),
-        excerpt: "Error: Your credit balance is too low to make this request.".into(),
-    });
+    let (state, update) =
+        classify_driver_error_en(&AgentDriverError::HarnessRuntimeFailureDetected {
+            harness: "claude".into(),
+            pattern: "credit balance is too low".into(),
+            excerpt: "Error: Your credit balance is too low to make this request.".into(),
+        });
     assert_eq!(state, AgentTaskState::Failed);
     assert_eq!(
         update.error_code,

@@ -20,7 +20,7 @@ use {anyhow, warp_multi_agent_api as maa_api};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentActionId;
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::ai_document_view::default_planning_document_title;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::appearance::Appearance;
@@ -738,10 +738,12 @@ impl AIDocumentModel {
             log::info!(
                 "Creating document {id} from persisted SQLite content (conversation not restored)"
             );
-            let title = persisted_title.unwrap_or(DEFAULT_PLANNING_DOCUMENT_TITLE);
+            let title = persisted_title
+                .map(str::to_string)
+                .unwrap_or_else(default_planning_document_title);
             self.create_document_internal(
                 id,
-                title,
+                &title,
                 persisted_content,
                 AIDocumentUpdateSource::Restoration,
                 // We don't have the conversation ID this is for - this is free floating and not connected to any conversation

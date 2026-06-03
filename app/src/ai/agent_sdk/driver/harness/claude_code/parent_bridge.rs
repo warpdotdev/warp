@@ -302,10 +302,14 @@ pub(super) fn parent_bridge_surfaced_message_path(
 }
 
 pub(super) fn ensure_parent_bridge_state_dir(state_dir: &Path) -> Result<()> {
-    fs::create_dir_all(parent_bridge_staged_dir(state_dir))
-        .with_context(|| format!("Failed to create {}", state_dir.display()))?;
-    fs::create_dir_all(parent_bridge_surfaced_dir(state_dir))
-        .with_context(|| format!("Failed to create {}", state_dir.display()))?;
+    fs::create_dir_all(parent_bridge_staged_dir(state_dir)).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.create_dir_failed")
+            .replace("{path}", &state_dir.display().to_string())
+    })?;
+    fs::create_dir_all(parent_bridge_surfaced_dir(state_dir)).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.create_dir_failed")
+            .replace("{path}", &state_dir.display().to_string())
+    })?;
     Ok(())
 }
 
@@ -316,9 +320,15 @@ pub(super) fn read_parent_bridge_event_cursor(state_dir: &Path) -> Result<i64> {
     }
 
     let cursor = serde_json::from_slice::<MessageBridgeEventCursor>(
-        &fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?,
+        &fs::read(&path).with_context(|| {
+            i18n::t("ai.agent_sdk.driver.harness.json.read_failed")
+                .replace("{path}", &path.display().to_string())
+        })?,
     )
-    .with_context(|| format!("Failed to parse {}", path.display()))?;
+    .with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.parse_failed")
+            .replace("{path}", &path.display().to_string())
+    })?;
     Ok(cursor.since_sequence)
 }
 
@@ -406,7 +416,10 @@ fn parent_bridge_sorted_message_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     }
 
     let mut paths = fs::read_dir(dir)
-        .with_context(|| format!("Failed to read {}", dir.display()))?
+        .with_context(|| {
+            i18n::t("ai.agent_sdk.driver.harness.json.read_failed")
+                .replace("{path}", &dir.display().to_string())
+        })?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
         .collect::<Vec<_>>();
@@ -419,9 +432,15 @@ fn parent_bridge_message_records(dir: &Path) -> Result<Vec<(PathBuf, MessageBrid
         .into_iter()
         .map(|path| {
             let record = serde_json::from_slice::<MessageBridgeMessageRecord>(
-                &fs::read(&path).with_context(|| format!("Failed to read {}", path.display()))?,
+                &fs::read(&path).with_context(|| {
+                    i18n::t("ai.agent_sdk.driver.harness.json.read_failed")
+                        .replace("{path}", &path.display().to_string())
+                })?,
             )
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
+            .with_context(|| {
+                i18n::t("ai.agent_sdk.driver.harness.json.parse_failed")
+                    .replace("{path}", &path.display().to_string())
+            })?;
             Ok((path, record))
         })
         .collect()
@@ -516,9 +535,10 @@ fn remove_file_if_exists(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => {
-            Err(anyhow::Error::from(err).context(format!("Failed to remove {}", path.display())))
-        }
+        Err(err) => Err(anyhow::Error::from(err).context(
+            i18n::t("ai.agent_sdk.driver.harness.parent_bridge.remove_file_failed")
+                .replace("{path}", &path.display().to_string()),
+        )),
     }
 }
 
@@ -533,7 +553,10 @@ async fn hydrate_parent_bridge_message_record(
     let message = hydrator
         .read_message_with_timeout(&record.message_id)
         .await
-        .with_context(|| format!("Failed to read lead-agent message {}", record.message_id))?;
+        .with_context(|| {
+            i18n::t("ai.agent_sdk.driver.harness.parent_bridge.read_lead_agent_message_failed")
+                .replace("{message_id}", &record.message_id)
+        })?;
     Ok(MessageBridgeMessageRecord {
         sequence: record.sequence,
         message_id: message.message_id,
@@ -733,28 +756,44 @@ fn write_parent_bridge_json_atomically<T: Serialize>(path: &Path, value: &T) -> 
 
 fn write_parent_bridge_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
     let Some(parent) = path.parent() else {
-        return Err(anyhow!("{} has no parent directory", path.display()));
+        return Err(anyhow!(i18n::t(
+            "ai.agent_sdk.driver.harness.parent_bridge.no_parent_dir"
+        )
+        .replace("{path}", &path.display().to_string())));
     };
-    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
+    fs::create_dir_all(parent).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.create_dir_failed")
+            .replace("{path}", &parent.display().to_string())
+    })?;
 
     let prefix = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("parent-bridge");
-    let mut temp_file = NamedTempFile::new_in(parent)
-        .with_context(|| format!("Failed to create temp file for {}", path.display()))?;
-    temp_file
-        .write_all(bytes)
-        .with_context(|| format!("Failed to write temp file for {}", path.display()))?;
-    temp_file
-        .flush()
-        .with_context(|| format!("Failed to flush temp file for {}", path.display()))?;
+    let mut temp_file = NamedTempFile::new_in(parent).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.parent_bridge.create_temp_file_failed")
+            .replace("{path}", &path.display().to_string())
+    })?;
+    temp_file.write_all(bytes).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.parent_bridge.write_temp_file_failed")
+            .replace("{path}", &path.display().to_string())
+    })?;
+    temp_file.flush().with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.parent_bridge.flush_temp_file_failed")
+            .replace("{path}", &path.display().to_string())
+    })?;
     temp_file
         .persist(path)
         .map(|_| ())
         .map_err(|err| {
-            anyhow::Error::from(err.error).context(format!("Failed to write {}", path.display()))
+            anyhow::Error::from(err.error).context(
+                i18n::t("ai.agent_sdk.driver.harness.json.write_failed")
+                    .replace("{path}", &path.display().to_string()),
+            )
         })
-        .with_context(|| format!("Failed to persist temporary {prefix} file"))?;
+        .with_context(|| {
+            i18n::t("ai.agent_sdk.driver.harness.parent_bridge.persist_temp_file_failed")
+                .replace("{prefix}", prefix)
+        })?;
     Ok(())
 }

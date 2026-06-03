@@ -45,7 +45,7 @@ impl ProfilesCommandRunner {
                     let name = profile.data().display_name().to_string();
                     let id = match profile.sync_id() {
                         Some(SyncId::ServerId(server_id)) => server_id.to_string(),
-                        _ => "Unsynced".to_string(),
+                        _ => i18n::t("ai.agent_sdk.profiles.unsynced"),
                     };
                     ProfileInfo { id, name }
                 })
@@ -72,7 +72,10 @@ struct ProfileInfo {
 
 impl TableFormat for ProfileInfo {
     fn header() -> Vec<Cell> {
-        vec![Cell::new("ID"), Cell::new("Name")]
+        vec![
+            Cell::new(i18n::t("ai.agent_sdk.profiles.table.id")),
+            Cell::new(i18n::t("ai.agent_sdk.profiles.table.name")),
+        ]
     }
 
     fn row(&self) -> Vec<Cell> {

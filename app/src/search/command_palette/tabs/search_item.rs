@@ -54,7 +54,9 @@ impl SearchItemTrait for SearchItem {
         let appearance = Appearance::as_ref(app);
 
         let title_text = Text::new_inline(
-            format!("[Tab {}] {}", self.tab.tab_index, self.tab.title),
+            i18n::t("search.command_palette.tabs.title_with_index")
+                .replace("{index}", &self.tab.tab_index.to_string())
+                .replace("{title}", &self.tab.title),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
@@ -99,12 +101,18 @@ impl SearchItemTrait for SearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Selected tab: {}.", self.tab.title)
+        format!(
+            "{} {}: {}.",
+            i18n::t("search.a11y.selected_prefix"),
+            i18n::t("search.tabs.tab"),
+            self.tab.title
+        )
     }
 
     fn accessibility_help_message(&self) -> Option<String> {
         Some(format!(
-            "Press enter to navigate to tab: {}.",
+            "{}: {}.",
+            i18n::t("search.tabs.press_enter_to_navigate"),
             self.tab.title
         ))
     }

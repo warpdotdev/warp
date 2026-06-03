@@ -117,46 +117,51 @@ impl fmt::Display for LegacyToTemplatableMCPConversionError {
 fn error_to_user_message(error: &rmcp::RmcpError) -> String {
     match error {
         rmcp::RmcpError::ClientInitialize(err) => {
-            format!("Failed to initialize client: {}", err)
+            i18n::t("ai.mcp.templatable_manager.error.client_initialize")
+                .replace("{error}", &err.to_string())
         }
         rmcp::RmcpError::ServerInitialize(err) => {
-            format!("Failed to initialize server: {}", err)
+            i18n::t("ai.mcp.templatable_manager.error.server_initialize")
+                .replace("{error}", &err.to_string())
         }
         rmcp::RmcpError::TransportCreation { error, .. } => {
-            format!("Failed to establish connection: {}", error)
+            i18n::t("ai.mcp.templatable_manager.error.transport_creation")
+                .replace("{error}", &error.to_string())
         }
         rmcp::RmcpError::Runtime(err) => {
-            format!("Runtime error: {}", err)
+            i18n::t("ai.mcp.templatable_manager.error.runtime").replace("{error}", &err.to_string())
         }
         rmcp::RmcpError::Service(err) => match err {
             rmcp::ServiceError::McpError(_) => {
-                "Server returned an error. Please check server logs for details.".to_string()
+                i18n::t("ai.mcp.templatable_manager.error.server_returned_error")
             }
             rmcp::ServiceError::TransportSend(_) => {
-                "Failed to send data to server. Connection may have been lost.".to_string()
+                i18n::t("ai.mcp.templatable_manager.error.transport_send")
             }
             rmcp::ServiceError::TransportClosed => {
-                "Connection closed unexpectedly. The server may have crashed.".to_string()
+                i18n::t("ai.mcp.templatable_manager.error.transport_closed")
             }
             rmcp::ServiceError::UnexpectedResponse => {
-                "Server sent an unexpected response. The server may be incompatible.".to_string()
+                i18n::t("ai.mcp.templatable_manager.error.unexpected_response")
             }
-            rmcp::ServiceError::Cancelled { reason } => format!(
-                "Operation was cancelled with reason: {}",
-                reason.clone().unwrap_or("Unknown reason".to_string())
-            ),
-            rmcp::ServiceError::Timeout { timeout } => {
-                format!(
-                    "Connection timed out after {} seconds. The server may be unresponsive.",
-                    timeout.as_secs()
+            rmcp::ServiceError::Cancelled { reason } => {
+                i18n::t("ai.mcp.templatable_manager.error.cancelled").replace(
+                    "{reason}",
+                    &reason.clone().unwrap_or_else(|| {
+                        i18n::t("ai.mcp.templatable_manager.error.unknown_reason")
+                    }),
                 )
             }
-            _ => format!("Service error: {}", err),
+            rmcp::ServiceError::Timeout { timeout } => {
+                i18n::t("ai.mcp.templatable_manager.error.timeout")
+                    .replace("{seconds}", &timeout.as_secs().to_string())
+            }
+            _ => i18n::t("ai.mcp.templatable_manager.error.service")
+                .replace("{error}", &err.to_string()),
         },
         // The enum is marked as non-exhaustive, so we need a catch-all.
-        _ => {
-            format!("Error: {error}")
-        }
+        _ => i18n::t("ai.mcp.templatable_manager.error.generic")
+            .replace("{error}", &error.to_string()),
     }
 }
 
@@ -717,7 +722,9 @@ impl TemplatableMCPServerManager {
                     if mode.is_reconnect() {
                         self.notify_reconnect_waiters(
                             installation_uuid,
-                            Err("Template contains no servers".to_string()),
+                            Err(i18n::t(
+                                "ai.mcp.templatable_manager.error.template_contains_no_servers",
+                            )),
                         );
                     }
                     return;
@@ -731,7 +738,10 @@ impl TemplatableMCPServerManager {
                 if mode.is_reconnect() {
                     self.notify_reconnect_waiters(
                         installation_uuid,
-                        Err(format!("Failed to parse MCP server: {err:#}")),
+                        Err(
+                            i18n::t("ai.mcp.templatable_manager.error.parse_server_failed")
+                                .replace("{error}", &format!("{err:#}")),
+                        ),
                     );
                 }
                 return;
@@ -753,10 +763,9 @@ impl TemplatableMCPServerManager {
                 if let Some(window_id) = WindowManager::as_ref(ctx).active_window() {
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "PATH required to launch MCP server. Please open a new terminal session to autopopulate PATH."
-                                    .to_string(),
-                            ),
+                            DismissibleToast::error(i18n::t(
+                                "ai.mcp.path_required_to_launch_server",
+                            )),
                             window_id,
                             ctx,
                         );
@@ -766,7 +775,9 @@ impl TemplatableMCPServerManager {
                 if mode.is_reconnect() {
                     self.notify_reconnect_waiters(
                         installation_uuid,
-                        Err("PATH not available".to_string()),
+                        Err(i18n::t(
+                            "ai.mcp.templatable_manager.error.path_not_available",
+                        )),
                     );
                 }
                 return;
@@ -1600,7 +1611,9 @@ impl TemplatableMCPServerManager {
         else {
             self.notify_reconnect_waiters(
                 installation_uuid,
-                Err("Installation not found".to_string()),
+                Err(i18n::t(
+                    "ai.mcp.templatable_manager.error.installation_not_found",
+                )),
             );
             return;
         };
@@ -1990,7 +2003,9 @@ async fn determine_transport(
 
     fn unexpected_error(status: reqwest::StatusCode) -> rmcp::RmcpError {
         rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(format!(
-            "Unexpected status code: {status}"
+            "{}",
+            i18n::t("ai.mcp.templatable_manager.error.unexpected_status_code")
+                .replace("{status}", &status.to_string())
         ))
     }
     match send_initialize_request(url, headers, None).await? {
@@ -1999,7 +2014,7 @@ async fn determine_transport(
         StatusCode::UNAUTHORIZED => {
             if !FeatureFlag::McpOauth.is_enabled() {
                 return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
-                    "Server requires authentication, which is not yet supported.".to_string(),
+                    i18n::t("ai.mcp.templatable_manager.error.auth_not_supported"),
                 ));
             }
 
@@ -2023,9 +2038,10 @@ async fn determine_transport(
                         if let Some(active_window_id) = ctx.windows().active_window() {
                             ToastStack::handle(ctx).update(ctx, |stack, ctx| {
                                 stack.add_ephemeral_toast(
-                                    DismissibleToast::default(format!(
-                                        "Successfully authenticated {server_name} MCP server"
-                                    )),
+                                    DismissibleToast::default(
+                                        i18n::t("ai.mcp.templatable_manager.auth_success_toast")
+                                            .replace("{server_name}", &server_name),
+                                    ),
                                     active_window_id,
                                     ctx,
                                 );

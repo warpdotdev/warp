@@ -441,14 +441,18 @@ impl TypedActionView for Omnibar {
                 .style_toggle_a11y(BufferTextStyle::InlineCode),
             OmnibarAction::ConvertBlock(style) => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
-                    format!("Convert to {}", BlockType::from(style).label()),
+                    i18n::t("notebooks.a11y.convert_to")
+                        .replace("{block_type}", &BlockType::from(style).label()),
                     WarpA11yRole::UserAction,
                 ))
             }
             OmnibarAction::OpenLinkEditor => ActionAccessibilityContent::from_debug(),
-            OmnibarAction::UnstyleLink => ActionAccessibilityContent::Custom(
-                AccessibilityContent::new_without_help("Remove link", WarpA11yRole::UserAction),
-            ),
+            OmnibarAction::UnstyleLink => {
+                ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
+                    i18n::t("notebooks.a11y.remove_link"),
+                    WarpA11yRole::UserAction,
+                ))
+            }
         }
     }
 }

@@ -94,7 +94,7 @@ impl ContentSectionView {
                 appearance
                     .ui_builder()
                     .link(
-                        item.button_label.to_string(),
+                        i18n::t(item.button_label),
                         Some(item.url.into()),
                         None,
                         mouse_state_handle,
@@ -125,7 +125,7 @@ impl ContentSectionView {
             Container::new(
                 appearance
                     .ui_builder()
-                    .wrappable_text(item.title.to_string(), true)
+                    .wrappable_text(i18n::t(item.title), true)
                     .with_style(UiComponentStyles {
                         font_size: Some(DESCRIPTION_FONT_SIZE),
                         ..Default::default()
@@ -142,7 +142,7 @@ impl ContentSectionView {
             Container::new(
                 appearance
                     .ui_builder()
-                    .wrappable_text(item.description.to_string(), true)
+                    .wrappable_text(i18n::t(item.description), true)
                     .with_style(UiComponentStyles {
                         font_size: Some(DESCRIPTION_FONT_SIZE),
                         font_color: Some(ColorU::from(

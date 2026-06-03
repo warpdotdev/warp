@@ -19,11 +19,6 @@ use crate::server::telemetry::SharingDialogSource;
 use crate::ui_components::buttons::{icon_button, icon_button_with_color};
 use crate::ui_components::icons::Icon;
 
-const UNSHARABLE_CONVERSATION_TOOLTIP: &str =
-    "This conversation cannot be shared because it is not \
-    stored in the cloud.\nTo sync to cloud and share, enable the setting under Settings > Privacy, \
-    and then make another request.";
-
 /// Pane header component for sharing the pane contents.
 pub struct SharedPaneContent {
     sharing_dialog: ViewHandle<SharingDialog>,
@@ -196,16 +191,16 @@ impl<P: BackingView> PaneHeader<P> {
                 (
                     Icon::Share,
                     false,
-                    UNSHARABLE_CONVERSATION_TOOLTIP.to_string(),
+                    i18n::t("pane_group.header.unsharable_conversation_tooltip"),
                 )
             } else if editability.can_edit() {
                 (
                     Icon::Share,
                     self.open_overlay == OpenOverlay::SharingDialog,
-                    "Share".to_string(),
+                    i18n::t("common.share"),
                 )
             } else {
-                (Icon::Link, false, "Copy link".to_string())
+                (Icon::Link, false, i18n::t("common.copy_link"))
             };
 
         let ui_builder = appearance.ui_builder().clone();
@@ -259,9 +254,10 @@ impl<P: BackingView> PaneHeader<P> {
         element.add_child(primary_button);
 
         if !editability.can_edit() {
-            let mut tooltip_text = String::from("Read-only");
+            let mut tooltip_text = i18n::t("pane_group.header.read_only");
             if matches!(editability, ContentEditability::RequiresLogin) {
-                tooltip_text.push_str(". Sign in to edit");
+                tooltip_text.push_str(". ");
+                tooltip_text.push_str(&i18n::t("common.sign_in_to_edit"));
             }
 
             let ui_builder = appearance.ui_builder().clone();

@@ -1,8 +1,6 @@
-use std::collections::HashSet;
-use std::sync::LazyLock;
-
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use pathfinder_color::ColorU;
+use std::collections::HashSet;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
@@ -72,22 +70,21 @@ pub enum InlineModelSelectorEvent {
     Dismissed,
 }
 
-static TAB_CONFIGS: LazyLock<Vec<InlineMenuTabConfig<InlineModelSelectorTab>>> =
-    LazyLock::new(|| {
-        let mut configs = vec![InlineMenuTabConfig {
-            id: InlineModelSelectorTab::BaseAgent,
-            label: "Base".to_string(),
-            filters: HashSet::from([QueryFilter::BaseModels]),
-        }];
-        if FeatureFlag::InlineMenuHeaders.is_enabled() {
-            configs.push(InlineMenuTabConfig {
-                id: InlineModelSelectorTab::FullTerminalUse,
-                label: "Full Terminal Use".to_string(),
-                filters: HashSet::from([QueryFilter::FullTerminalUseModels]),
-            });
-        }
-        configs
-    });
+fn build_tab_configs() -> Vec<InlineMenuTabConfig<InlineModelSelectorTab>> {
+    let mut configs = vec![InlineMenuTabConfig {
+        id: InlineModelSelectorTab::BaseAgent,
+        label: i18n::t("terminal.model_selector.tab.base"),
+        filters: HashSet::from([QueryFilter::BaseModels]),
+    }];
+    if FeatureFlag::InlineMenuHeaders.is_enabled() {
+        configs.push(InlineMenuTabConfig {
+            id: InlineModelSelectorTab::FullTerminalUse,
+            label: i18n::t("terminal.model_selector.tab.full_terminal_use"),
+            filters: HashSet::from([QueryFilter::FullTerminalUseModels]),
+        });
+    }
+    configs
+}
 
 struct TabSwitchSelection {
     model_id: Option<LLMId>,
@@ -119,7 +116,7 @@ impl InlineModelSelectorView {
     ) -> Self {
         let data_source = ctx.add_model(|_| ModelSelectorDataSource::new(terminal_view_id));
 
-        let tab_configs = TAB_CONFIGS.clone();
+        let tab_configs = build_tab_configs();
         let initial_filters = tab_configs
             .first()
             .map(|config| config.filters.clone())
@@ -142,15 +139,18 @@ impl InlineModelSelectorView {
 
         let menu_view = if FeatureFlag::InlineMenuHeaders.is_enabled() {
             let manage_defaults_button = ctx.add_view(|_| {
-                ActionButton::new("Manage defaults", ManageDefaultsTheme)
-                    .with_icon(Icon::Settings)
-                    .with_size(ButtonSize::Small)
-                    .on_click(|ctx| {
-                        ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                            search_query: String::new(),
-                            section: Some(SettingsSection::WarpAgent),
-                        });
-                    })
+                ActionButton::new(
+                    i18n::t("terminal.model_selector.manage_defaults"),
+                    ManageDefaultsTheme,
+                )
+                .with_icon(Icon::Settings)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
+                        search_query: String::new(),
+                        section: Some(SettingsSection::WarpAgent),
+                    });
+                })
             });
             let header_config = InlineMenuHeaderConfig {
                 label: "/model".to_string(),
@@ -186,11 +186,15 @@ impl InlineModelSelectorView {
                     let is_cli_agent_in_control_or_tagged_in =
                         cli_ctrl.as_ref(app).is_agent_in_control_or_tagged_in();
                     let message = match active_tab {
-                        InlineModelSelectorTab::FullTerminalUse if main_agent_in_progress && !is_cli_agent_in_control_or_tagged_in => {
-                            Some("You're using the base agent. Full terminal use models only apply to the full terminal use agent.")
+                        InlineModelSelectorTab::FullTerminalUse
+                            if main_agent_in_progress && !is_cli_agent_in_control_or_tagged_in =>
+                        {
+                            Some(i18n::t("terminal.input.models.base_agent_warning"))
                         }
-                        InlineModelSelectorTab::BaseAgent if is_cli_agent_in_control_or_tagged_in => {
-                            Some("You're using the full terminal use agent. Base models only apply to the base agent.")
+                        InlineModelSelectorTab::BaseAgent
+                            if is_cli_agent_in_control_or_tagged_in =>
+                        {
+                            Some(i18n::t("terminal.input.models.full_terminal_use_warning"))
                         }
                         _ => None,
                     };

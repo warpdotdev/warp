@@ -23,7 +23,7 @@ impl InlineMenuAction for SelectRewindPoint {
                 key: "enter".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text("rewind"),
+            MessageItem::text(i18n::t("terminal.input.rewind.action")),
         ];
 
         items.extend(default_navigation_message_items(&args));

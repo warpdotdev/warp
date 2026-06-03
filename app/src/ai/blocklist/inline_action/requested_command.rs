@@ -69,23 +69,6 @@ use crate::view_components::compactible_split_action_button::CompactibleSplitAct
 /// For horizontal padding, use [`INLINE_ACTION_HORIZONTAL_PADDING`] for consistency.
 pub const REQUESTED_COMMAND_BODY_VERTICAL_PADDING: f32 = 16.;
 
-const REQUESTED_COMMAND_REJECT_LABEL: &str = "Reject";
-const REQUESTED_COMMAND_ACCEPT_LABEL: &str = "Run";
-const REQUESTED_COMMAND_EDIT_LABEL: &str = "Edit";
-const REQUESTED_COMMAND_MINIMIZE_LABEL: &str = "Done";
-
-const LOADING_MESSAGE: &str = "Generating command...";
-const COMMAND_WAITING_FOR_USER_MESSAGE: &str = "OK if I run this command and read the output?";
-const MCP_TOOL_WAITING_FOR_USER_MESSAGE: &str = "OK if I call this MCP tool?";
-const MONITORING_COMMAND_MESSAGE: &str = "Agent is monitoring command...";
-const AGENT_NEEDS_INPUT_MESSAGE: &str = "Agent needs your input to continue";
-const USER_TOOK_CONTROL_COMMAND_MESSAGE: &str = "User is in control.";
-const USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE: &str = "Paused agent. User is in control.";
-const AGENT_REQUESTED_USER_TAKE_CONTROL_COMMAND_MESSAGE: &str = "User in control";
-const AGENT_ERRORED_COMMAND_MESSAGE: &str = "Agent ran into an issue. Take over control.";
-pub const VIEWING_COMMAND_DETAIL_MESSAGE: &str = "Viewing command detail";
-const VIEWING_MCP_TOOL_DETAIL_MESSAGE: &str = "Viewing MCP tool call detail";
-
 const EDIT_COMMAND_ACTION_NAME: &str = "requested_command:edit";
 
 const EDIT_MODE_OPEN_KEYMAP_CONTEXT: &str = "RequestedCommandViewEditModeOpen";
@@ -150,7 +133,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         EDIT_COMMAND_ACTION_NAME,
-        "Edit requested command",
+        i18n::t("ai.requested_command.edit_requested_command"),
         RequestedCommandViewAction::OpenEditMode,
     )
     .with_key_binding(cmd_or_ctrl_shift("e"))
@@ -261,7 +244,7 @@ impl RequestedCommandView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let cancel_button = CompactibleActionButton::new(
-            REQUESTED_COMMAND_REJECT_LABEL.to_string(),
+            i18n::t("common.reject"),
             Some(KeystrokeSource::Fixed(
                 CANCEL_REQUESTED_COMMAND_KEYSTROKE.clone(),
             )),
@@ -274,7 +257,7 @@ impl RequestedCommandView {
 
         let position_id_prefix = format!("{action_id:?}");
         let accept_and_autoexecute_split_button = CompactibleSplitActionButton::new(
-            REQUESTED_COMMAND_ACCEPT_LABEL.to_string(),
+            i18n::t("common.run"),
             Some(KeystrokeSource::Fixed(
                 ENTER_ACCEPT_REQUESTED_COMMAND_KEYSTROKE.clone(),
             )),
@@ -290,7 +273,7 @@ impl RequestedCommandView {
         );
 
         let edit_button = CompactibleActionButton::new(
-            REQUESTED_COMMAND_EDIT_LABEL.to_string(),
+            i18n::t("common.edit"),
             Some(KeystrokeSource::Binding(EDIT_COMMAND_ACTION_NAME)),
             ButtonSize::InlineActionHeader,
             RequestedCommandViewAction::OpenEditMode,
@@ -300,7 +283,7 @@ impl RequestedCommandView {
         );
 
         let minimize_button = CompactibleActionButton::new(
-            REQUESTED_COMMAND_MINIMIZE_LABEL.to_string(),
+            i18n::t("common.done"),
             Some(KeystrokeSource::Fixed(
                 MINIMIZE_REQUESTED_COMMAND_KEYSTROKE.clone(),
             )),
@@ -594,16 +577,15 @@ impl RequestedCommandView {
             .map(|k| k.displayed())
             .unwrap_or_default();
 
-            let accept_item = MenuItemFields::new_with_label(
-                REQUESTED_COMMAND_ACCEPT_LABEL,
-                accept_keystroke.as_str(),
-            )
-            .with_on_select_action(RequestedCommandViewAction::Accept)
-            .into_item();
+            let accept_item =
+                MenuItemFields::new_with_label(i18n::t("common.run"), accept_keystroke)
+                    .with_on_select_action(RequestedCommandViewAction::Accept)
+                    .into_item();
 
-            let auto_item = MenuItemFields::new_with_label("Auto-approve", auto_keystroke.as_str())
-                .with_on_select_action(RequestedCommandViewAction::AcceptAndAutoExecute)
-                .into_item();
+            let auto_item =
+                MenuItemFields::new_with_label(i18n::t("ai.command.auto_approve"), auto_keystroke)
+                    .with_on_select_action(RequestedCommandViewAction::AcceptAndAutoExecute)
+                    .into_item();
 
             self.accept_split_button_menu.update(ctx, |menu, ctx| {
                 menu.set_items(vec![accept_item, auto_item], ctx);
@@ -651,7 +633,7 @@ impl RequestedCommandView {
                 citations_padding,
                 app,
             )
-            .map(|citation| ("Copied from", citation))
+            .map(|citation| (i18n::t("ai.requested_command.copied_from"), citation))
         } else {
             // Otherwise, we render all the citations (if any) and mention that the command was derived from them.
             render_citation_chips(
@@ -661,7 +643,7 @@ impl RequestedCommandView {
                 citations_padding,
                 app,
             )
-            .map(|citations| ("Derived from", citations))
+            .map(|citations| (i18n::t("ai.requested_command.derived_from"), citations))
         };
 
         let citations_footer = citations_footer_props.map(|(prefix, suffix)| {
@@ -702,7 +684,7 @@ impl RequestedCommandView {
             ) if show_for_action_id == &self.action_id => {
                 *shown.lock() = true;
                 Some(render_autonomy_checkbox_setting_speedbump_footer(
-                    "Always allow Oz to execute read-only commands (relies on model)",
+                    i18n::t("ai.output.always_allow_oz_read_only_commands"),
                     *checked,
                     AIBlockAction::ToggleAutoexecuteReadonlyCommandsSpeedbumpCheckbox,
                     self.autoexecute_readonly_commands_speedbump_checkbox_handle
@@ -759,7 +741,7 @@ impl RequestedCommandView {
                 )
                 .with_child(
                     Text::new(
-                        "Your profile is set to always ask for permission to execute commands.",
+                        i18n::t("ai.requested_command.always_ask_permission"),
                         appearance.ui_font_family(),
                         font_size,
                     )
@@ -774,7 +756,8 @@ impl RequestedCommandView {
                             appearance
                                 .ui_builder()
                                 .link(
-                                    "Manage command execution setting".into(),
+                                    i18n::t("ai.requested_command.manage_command_execution_setting")
+                                        .into(),
                                     None,
                                     Some(Box::new(move |ctx| {
                                         ctx.dispatch_typed_action(
@@ -1029,8 +1012,12 @@ impl RequestedCommandView {
             }
             Some(AIActionStatus::Blocked) => {
                 title = match &self.action_type {
-                    RequestedActionViewType::Command => COMMAND_WAITING_FOR_USER_MESSAGE.into(),
-                    RequestedActionViewType::McpTool => MCP_TOOL_WAITING_FOR_USER_MESSAGE.into(),
+                    RequestedActionViewType::Command => {
+                        i18n::t("ai.requested_command.ok_run_command").into()
+                    }
+                    RequestedActionViewType::McpTool => {
+                        i18n::t("ai.requested_command.ok_call_mcp_tool").into()
+                    }
                 };
             }
             Some(AIActionStatus::RunningAsync) | Some(AIActionStatus::Finished(..))
@@ -1050,11 +1037,12 @@ impl RequestedCommandView {
                                         );
 
                                     if is_errored {
-                                        AGENT_ERRORED_COMMAND_MESSAGE.into()
+                                        i18n::t("ai.requested_command.agent_error_take_over").into()
                                     } else if *is_blocked {
-                                        AGENT_NEEDS_INPUT_MESSAGE.into()
+                                        i18n::t("ai.requested_command.agent_needs_input").into()
                                     } else {
-                                        MONITORING_COMMAND_MESSAGE.into()
+                                        i18n::t("ai.requested_command.agent_monitoring_command")
+                                            .into()
                                     }
                                 }
                                 LongRunningCommandControlState::User { reason } => {
@@ -1062,15 +1050,17 @@ impl RequestedCommandView {
                                 }
                             }
                         } else {
-                            VIEWING_COMMAND_DETAIL_MESSAGE.into()
+                            i18n::t("ai.requested_command.viewing_command_detail").into()
                         }
                     }
-                    RequestedActionViewType::McpTool => VIEWING_MCP_TOOL_DETAIL_MESSAGE.into(),
+                    RequestedActionViewType::McpTool => {
+                        i18n::t("ai.requested_command.viewing_mcp_tool_detail").into()
+                    }
                 };
             }
             None => {
                 if self.block_model.status(app).is_streaming() {
-                    title = LOADING_MESSAGE.into();
+                    title = i18n::t("ai.requested_command.generating_command").into();
 
                     if !self
                         .block_model
@@ -1091,7 +1081,7 @@ impl RequestedCommandView {
                     // mid-flight.
                     let title_str = self.get_header_title_text();
                     title = if title_str.trim().is_empty() {
-                        LOADING_MESSAGE.into()
+                        i18n::t("ai.requested_command.generating_command").into()
                     } else {
                         title_str.into()
                     };
@@ -1110,7 +1100,7 @@ impl RequestedCommandView {
                 // Show cancelled command loading message when the command was cancelled during generation,
                 // and then restored with an empty title as a result.
                 if title.is_empty() {
-                    title = LOADING_MESSAGE.into();
+                    title = i18n::t("ai.requested_command.generating_command").into();
                     font_color_override = Some(blended_colors::text_disabled(
                         appearance.theme(),
                         appearance.theme().surface_2(),
@@ -1313,14 +1303,12 @@ impl RequestedCommandView {
     }
 }
 
-pub(crate) fn header_message_for_user_take_over_reason(
-    reason: &UserTakeOverReason,
-) -> &'static str {
+pub(crate) fn header_message_for_user_take_over_reason(reason: &UserTakeOverReason) -> String {
     match reason {
-        UserTakeOverReason::Manual => USER_TOOK_CONTROL_COMMAND_MESSAGE,
-        UserTakeOverReason::Stop => USER_STOPPED_CLI_SUBAGENT_COMMAND_MESSAGE,
+        UserTakeOverReason::Manual => i18n::t("ai.requested_command.user_in_control"),
+        UserTakeOverReason::Stop => i18n::t("ai.requested_command.paused_agent_user_in_control"),
         UserTakeOverReason::TransferFromAgent { .. } => {
-            AGENT_REQUESTED_USER_TAKE_CONTROL_COMMAND_MESSAGE
+            i18n::t("ai.requested_command.user_in_control_short")
         }
     }
 }
@@ -1437,13 +1425,17 @@ impl View for RequestedCommandView {
                 // If we have a result, show the JSON response.
                 let result_text = match result {
                     CallMCPToolResult::Success { result } => serde_json::to_string_pretty(result)
-                        .unwrap_or_else(|_| "Error formatting JSON".to_string()),
+                        .unwrap_or_else(|_| i18n::t("ai.requested_command.error_formatting_json")),
                     CallMCPToolResult::Error(error) => {
-                        format!("Error: {error}")
+                        i18n::t("ai.requested_command.error_prefix").replace("{error}", error)
                     }
-                    CallMCPToolResult::Cancelled => "Tool call was cancelled".to_string(),
+                    CallMCPToolResult::Cancelled => {
+                        i18n::t("ai.requested_command.tool_call_cancelled")
+                    }
                 };
-                format!("{command_text}\n\nResponse: {result_text}")
+                i18n::t("ai.requested_command.response_with_result")
+                    .replace("{command}", command_text)
+                    .replace("{result}", &result_text)
             } else if self.is_header_expanded {
                 command_text.to_string()
             } else {

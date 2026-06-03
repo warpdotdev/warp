@@ -726,7 +726,7 @@ impl CommandBinding {
     pub fn new(name: String, description: String, trigger: Option<Keystroke>) -> Self {
         CommandBinding {
             name,
-            description: BindingDescription::new(description),
+            description: localize_binding_description(&BindingDescription::new(description)),
             trigger,
             action: None,
             group: None,
@@ -783,11 +783,66 @@ impl CommandBinding {
 }
 
 fn materialize_description(desc: &BindingDescription, ctx: &AppContext) -> BindingDescription {
-    if desc.has_dynamic_override() {
+    let description = if desc.has_dynamic_override() {
         desc.materialized(ctx)
     } else {
         desc.clone()
+    };
+
+    localize_binding_description(&description)
+}
+
+fn localize_binding_description(desc: &BindingDescription) -> BindingDescription {
+    let default = desc.in_context(DescriptionContext::Default);
+    let mac_menu = desc.in_context(MAC_MENUS_CONTEXT);
+
+    let localized_default = localize_binding_description_text(default);
+    let localized_mac_menu = localize_binding_description_text(mac_menu);
+
+    let mut localized = BindingDescription::new_preserve_case(localized_default.clone());
+    if mac_menu != default || localized_mac_menu != localized_default {
+        localized = localized.with_custom_description(MAC_MENUS_CONTEXT, localized_mac_menu);
     }
+
+    localized
+}
+
+fn localize_binding_description_text(description: &str) -> String {
+    if i18n::current_locale() == i18n::FALLBACK_LOCALE {
+        return description.to_string();
+    }
+
+    let slug = binding_description_i18n_slug(description);
+    for prefix in ["keybinding.description.", "app_menu.action."] {
+        let key = format!("{prefix}{slug}");
+        let localized = i18n::t(&key);
+        if localized != key {
+            return localized;
+        }
+    }
+
+    description.to_string()
+}
+
+fn binding_description_i18n_slug(description: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_separator = true;
+
+    for ch in description.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if !last_was_separator {
+            slug.push('_');
+            last_was_separator = true;
+        }
+    }
+
+    while slug.ends_with('_') {
+        slug.pop();
+    }
+
+    slug
 }
 
 /// Possible groups a Binding can be part of. The string representation (produced in

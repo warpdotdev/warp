@@ -494,11 +494,10 @@ fn render_header(
     let appearance = Appearance::handle(app).as_ref(app);
     let theme = appearance.theme();
 
-    // "Showing X references" title
     let title_text = if total_refs == 1 {
-        "Showing 1 reference".to_string()
+        i18n::t("code.find_references.showing_singular")
     } else {
-        format!("Showing {total_refs} references")
+        i18n::t("code.find_references.showing_plural").replace("{count}", &total_refs.to_string())
     };
 
     let title = Align::new(
@@ -644,7 +643,7 @@ fn render_reference_entry(
             } else {
                 // Show loading indicator when line_content is None
                 Text::new_inline(
-                    "Loading...",
+                    i18n::t("common.loading"),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )

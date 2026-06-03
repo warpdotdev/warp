@@ -240,9 +240,10 @@ impl Requests {
                             cache_request_limit_info(request_limit_info, ctx);
                             model.request_limit_info = request_limit_info;
                             let next_time = if let Some(next_refresh_time) = model.serialized_time_until_refresh() {
-                                format!("after {next_refresh_time}")
+                                i18n::t("ai_assistant.requests.retry_after")
+                                    .replace("{time}", &next_refresh_time)
                             } else {
-                                String::from("later")
+                                i18n::t("ai_assistant.requests.retry_later")
                             };
 
                             let auth_state = AuthStateProvider::as_ref(ctx).get();
@@ -252,17 +253,23 @@ impl Requests {
                                 if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                                     if has_admin_permissions {
                                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
-                                        format!("It seems you're out of credits. Please try again {next_time}.\n\n[Upgrade]({upgrade_url}) for more credits.")
+                                        i18n::t("ai_assistant.requests.out_of_credits_upgrade")
+                                            .replace("{next_time}", &next_time)
+                                            .replace("{upgrade_url}", &upgrade_url)
                                     } else {
-                                        format!("It seems you're out of credits. Please try again {next_time}.\n\nContact a team admin to upgrade for more credits.")
+                                        i18n::t("ai_assistant.requests.out_of_credits_contact_admin")
+                                            .replace("{next_time}", &next_time)
                                     }
                                 } else {
-                                    format!("It seems you're out of credits. Please try again {next_time}.")
+                                    i18n::t("ai_assistant.requests.out_of_credits")
+                                        .replace("{next_time}", &next_time)
                                 }
                             } else {
                                 let user_id = auth_state.user_id().unwrap_or_default();
                                 let upgrade_url = UserWorkspaces::upgrade_link(user_id);
-                                format!("It seems you're out of credits. Please try again {next_time}.\n\n[Upgrade]({upgrade_url}) for more credits.")
+                                i18n::t("ai_assistant.requests.out_of_credits_upgrade")
+                                    .replace("{next_time}", &next_time)
+                                    .replace("{upgrade_url}", &upgrade_url)
                             };
                             let response_in_markdown = markdown_segments_from_text(
                                 transcript_part_index,
@@ -400,11 +407,26 @@ impl Requests {
                 let num_hours = num_minutes / 60;
                 let num_days = num_hours / 24;
                 let remaining_text = if num_days > 0 {
-                    format!("{num_days} days")
+                    if num_days == 1 {
+                        i18n::t("ai_assistant.requests.duration.day")
+                    } else {
+                        i18n::t("ai_assistant.requests.duration.days")
+                            .replace("{count}", &num_days.to_string())
+                    }
                 } else if num_hours > 0 {
-                    format!("{num_hours} hours")
+                    if num_hours == 1 {
+                        i18n::t("ai_assistant.requests.duration.hour")
+                    } else {
+                        i18n::t("ai_assistant.requests.duration.hours")
+                            .replace("{count}", &num_hours.to_string())
+                    }
                 } else {
-                    format!("{num_minutes} minutes")
+                    if num_minutes == 1 {
+                        i18n::t("ai_assistant.requests.duration.minute")
+                    } else {
+                        i18n::t("ai_assistant.requests.duration.minutes")
+                            .replace("{count}", &num_minutes.to_string())
+                    }
                 };
                 Some(remaining_text)
             }

@@ -29,9 +29,6 @@ use crate::ui_components::icons::Icon as UIIcon;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 use crate::workflows::{AIWorkflowOrigin, WorkflowSource, WorkflowType};
 
-const OPEN_WARP_AI_ITEM_BODY_TEXT: &str = "Ask Warp AI for command suggestions";
-const TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT: &str = "Translate into shell command using Warp AI";
-
 #[derive(Clone, Debug)]
 pub enum WarpAISearchItem {
     /// Translates the query within command search.
@@ -42,10 +39,10 @@ pub enum WarpAISearchItem {
 }
 
 impl WarpAISearchItem {
-    fn item_body_text(&self) -> &'static str {
+    fn item_body_text(&self) -> String {
         match self {
-            WarpAISearchItem::Translate => TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT,
-            WarpAISearchItem::Open => OPEN_WARP_AI_ITEM_BODY_TEXT,
+            WarpAISearchItem::Translate => i18n::t("search.command_search.warp_ai.translate_body"),
+            WarpAISearchItem::Open => i18n::t("search.command_search.warp_ai.open_body"),
         }
     }
 }
@@ -133,7 +130,11 @@ impl SearchItem for WarpAISearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Warp AI: {}", self.item_body_text())
+        format!(
+            "{}: {}",
+            i18n::t("search.command_search.warp_ai.prefix"),
+            self.item_body_text()
+        )
     }
 }
 
@@ -235,12 +236,11 @@ impl AsyncDataSource for WarpAIDataSource {
 impl DataSourceRunError for GenerateCommandsFromNaturalLanguageError {
     fn user_facing_error(&self) -> String {
         match self {
-            Self::BadPrompt => "No results found. Please try again with a more specific query.",
-            Self::AiProviderError => "Something went wrong. Please try again.",
-            Self::RateLimited => "Looks like you're out of AI credits. Please try again later.",
-            Self::Other => "Something went wrong. Please try again.",
+            Self::BadPrompt => i18n::t("search.command_search.warp_ai.error.bad_prompt"),
+            Self::AiProviderError => i18n::t("search.command_search.warp_ai.error.provider_error"),
+            Self::RateLimited => i18n::t("search.command_search.warp_ai.error.rate_limited"),
+            Self::Other => i18n::t("search.command_search.warp_ai.error.provider_error"),
         }
-        .to_string()
     }
 
     fn telemetry_payload(&self) -> serde_json::Value {

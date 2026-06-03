@@ -944,8 +944,7 @@ impl Action {
                 if let Err(err) = open_docker_container(url, ctx) {
                     if let Some(window_id) = primary_window_id {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                            let toast =
-                                DismissibleToast::error("Custom URI is invalid.".to_owned());
+                            let toast = DismissibleToast::error(i18n::t("uri.custom_uri_invalid"));
                             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                         });
                     }
@@ -1145,8 +1144,8 @@ impl Action {
             | Self::FocusCloudMode
             | Self::AutoHandoffToCloud { .. } => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
-                title: "New tab created".to_owned(),
-                description: "Go to Warp to see your new tab.".to_owned(),
+                title: i18n::t("uri.new_tab_created"),
+                description: i18n::t("uri.new_tab_created.description"),
             }),
             Self::NewWindow => W::Nothing,
         }
@@ -1191,7 +1190,10 @@ pub fn handle_incoming_uri(url: &Url, ctx: &mut AppContext) {
         Err(e) => {
             if let Some(window_id) = primary_window_id {
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::error(format!("Custom URI is invalid: {e:?}"));
+                    let toast = DismissibleToast::error(
+                        i18n::t("uri.custom_uri_invalid_with_error")
+                            .replace("{error}", &format!("{e:?}")),
+                    );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
             }

@@ -9,10 +9,9 @@ const MAX_DESCRIPTION_LENGTH: usize = 240;
 fn validate_description(s: &str) -> Result<String, String> {
     let len = s.chars().count();
     if len > MAX_DESCRIPTION_LENGTH {
-        Err(format!(
-            "Description must be at most {} characters (got {})",
-            MAX_DESCRIPTION_LENGTH, len
-        ))
+        Err(i18n::t("warp_cli.environment.error.description_too_long")
+            .replace("{max}", &MAX_DESCRIPTION_LENGTH.to_string())
+            .replace("{len}", &len.to_string()))
     } else {
         Ok(s.to_string())
     }

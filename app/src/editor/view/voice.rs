@@ -68,9 +68,9 @@ impl EditorView {
         ctx: &mut ViewContext<EditorView>,
     ) -> ViewHandle<FeaturePopup> {
         let voice_new_feature_popup = ctx.add_typed_action_view(|_| {
-            FeaturePopup::new_feature(NewFeaturePopupLabel::FromString(
-                "Try Voice Input".to_string(),
-            ))
+            FeaturePopup::new_feature(NewFeaturePopupLabel::FromString(i18n::t(
+                "editor.voice.try_voice_input",
+            )))
         });
 
         ctx.subscribe_to_view(&voice_new_feature_popup, |_me, _, event, ctx| {
@@ -263,7 +263,8 @@ impl EditorView {
                     .as_ref(ctx)
                     .can_request_voice()
                 {
-                    self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx);
+                    let message = i18n::t("editor.voice.limit_hit");
+                    self.voice_error_toast(&message, ctx);
                     return false;
                 }
 
@@ -325,13 +326,10 @@ impl EditorView {
                         AISettings::handle(ctx).update(ctx, |settings, ctx| {
                             if let Some(toggle_key) = settings.maybe_setup_first_time_voice(ctx) {
                                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                                    let toast = crate::view_components::DismissibleToast::success(
-                                        format!(
-                                            "Voice input is enabled. You can also press and hold the `{}` key to activate voice input (configure in Settings > AI > Voice)",
-                                            toggle_key.display_name()
-                                        )
-                                            .to_string(),
-                                    );
+                                    let message = i18n::t("editor.voice.enabled_with_key")
+                                        .replace("{key}", toggle_key.display_name());
+                                    let toast =
+                                        crate::view_components::DismissibleToast::success(message);
                                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                                 });
                             }
@@ -356,8 +354,8 @@ impl EditorView {
     fn show_microphone_access_toast(ctx: &mut ViewContext<Self>) {
         let active_window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, move |toast_stack, ctx| {
-            let mut toast = crate::view_components::DismissibleToast::error(String::from(
-                "Failed to start voice input (you may need to enable Microphone access)",
+            let mut toast = crate::view_components::DismissibleToast::error(i18n::t(
+                "editor.voice.start_failed_microphone",
             ));
             // Set an id so the toast is shown at most once.
             toast = toast.with_object_id(MICROPHONE_ACCESS_ERROR_ID.to_string());
@@ -497,11 +495,13 @@ impl EditorView {
             }
             Err(e) => match e {
                 TranscribeError::QuotaLimit => {
-                    self.voice_error_toast(super::VOICE_LIMIT_HIT_TOAST_TEXT, ctx)
+                    let message = i18n::t("editor.voice.limit_hit");
+                    self.voice_error_toast(&message, ctx)
                 }
                 _ => {
                     log::error!("Failed to transcribe voice input: {e:?}");
-                    self.voice_error_toast(super::VOICE_ERROR_TOAST_TEXT, ctx)
+                    let message = i18n::t("editor.voice.error");
+                    self.voice_error_toast(&message, ctx)
                 }
             },
         }
@@ -529,14 +529,12 @@ impl EditorView {
 
         let modifier_key = AISettings::handle(app).as_ref(app).voice_input_toggle_key;
         let tooltip_text = if mic_access_denied {
-            "Voice transcription is disabled because Microphone access was not granted.".to_string()
+            i18n::t("editor.voice.tooltip_microphone_denied")
         } else if modifier_key == VoiceInputToggleKey::None {
-            "Voice transcription".to_string()
+            i18n::t("editor.voice.tooltip")
         } else {
-            format!(
-                "Voice transcription (hold `{}` key)",
-                modifier_key.display_name().to_lowercase()
-            )
+            i18n::t("editor.voice.tooltip_with_key")
+                .replace("{key}", &modifier_key.display_name().to_lowercase())
         };
 
         Box::new(move || {

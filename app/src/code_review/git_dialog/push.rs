@@ -58,11 +58,11 @@ pub(super) fn new_state(publish: bool, commits: Vec<Commit>) -> PushState {
     }
 }
 
-pub(super) fn confirm_label(publish: bool) -> &'static str {
+pub(super) fn confirm_label(publish: bool) -> String {
     if publish {
-        "Publish"
+        i18n::t("code_review.git.publish")
     } else {
-        "Push"
+        i18n::t("code_review.git.push")
     }
 }
 
@@ -74,11 +74,11 @@ pub(super) fn confirm_icon(publish: bool) -> Icon {
     }
 }
 
-fn loading_label(publish: bool) -> &'static str {
+fn loading_label(publish: bool) -> String {
     if publish {
-        "Publishing…"
+        i18n::t("code_review.git.publish.loading")
     } else {
-        "Pushing…"
+        i18n::t("code_review.git.push.loading")
     }
 }
 
@@ -155,9 +155,9 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
             match result {
                 Ok(_) => {
                     let toast_msg = if publish {
-                        "Branch successfully published."
+                        i18n::t("code_review.git.publish.success")
                     } else {
-                        "Changes successfully pushed."
+                        i18n::t("code_review.git.push.success")
                     };
                     show_toast(toast_msg, ctx);
                 }
@@ -209,7 +209,7 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Included commits",
+        i18n::t("code_review.git.included_commits"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -232,13 +232,13 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
         .finish();
 
         let stats_text = format!(
-            "{} {}",
-            commit.files_changed,
-            if commit.files_changed == 1 {
-                "file"
+            "{}",
+            i18n::t(if commit.files_changed == 1 {
+                "code_review.git.files.singular"
             } else {
-                "files"
-            },
+                "code_review.git.files.plural"
+            })
+            .replace("{count}", &commit.files_changed.to_string()),
         );
 
         let mut stats_row = Flex::row()
@@ -336,7 +336,7 @@ fn render_commits_section(state: &PushState, appearance: &Appearance) -> Box<dyn
             } else {
                 let loading = Container::new(
                     Text::new(
-                        "Loading…",
+                        i18n::t("code_review.git.loading"),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )

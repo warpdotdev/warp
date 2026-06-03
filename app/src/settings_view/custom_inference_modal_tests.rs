@@ -1,5 +1,10 @@
 use super::*;
 
+fn assert_url_error(url: &str, key: &str) {
+    i18n::set_locale("en");
+    assert_eq!(validate_url(url), Err(i18n::t(key)));
+}
+
 #[test]
 fn validate_url_accepts_https_with_host() {
     assert!(validate_url("https://api.example.com/v1").is_ok());
@@ -9,41 +14,44 @@ fn validate_url_accepts_https_with_host() {
 
 #[test]
 fn validate_url_rejects_http() {
-    assert_eq!(
-        validate_url("http://api.example.com/v1"),
-        Err("URL must use HTTPS")
+    assert_url_error(
+        "http://api.example.com/v1",
+        "settings.custom_inference.error.url_https_required",
     );
-    assert_eq!(
-        validate_url("http://example.com"),
-        Err("URL must use HTTPS")
+    assert_url_error(
+        "http://example.com",
+        "settings.custom_inference.error.url_https_required",
     );
 }
 
 #[test]
 fn validate_url_rejects_ftp_and_other_schemes() {
-    assert_eq!(
-        validate_url("ftp://files.example.com"),
-        Err("URL must use HTTPS")
+    assert_url_error(
+        "ftp://files.example.com",
+        "settings.custom_inference.error.url_https_required",
     );
-    assert_eq!(
-        validate_url("file:///etc/passwd"),
-        Err("URL must use HTTPS")
+    assert_url_error(
+        "file:///etc/passwd",
+        "settings.custom_inference.error.url_https_required",
     );
-    assert_eq!(
-        validate_url("ws://socket.example.com"),
-        Err("URL must use HTTPS")
+    assert_url_error(
+        "ws://socket.example.com",
+        "settings.custom_inference.error.url_https_required",
     );
 }
 
 #[test]
 fn validate_url_rejects_malformed_strings() {
-    assert_eq!(validate_url("not a url"), Err("Invalid URL"));
-    assert_eq!(validate_url("https://"), Err("Invalid URL"));
+    assert_url_error("not a url", "settings.custom_inference.error.invalid_url");
+    assert_url_error("https://", "settings.custom_inference.error.invalid_url");
 }
 
 #[test]
 fn validate_url_rejects_empty_host() {
-    assert_eq!(validate_url("https://?query=1"), Err("Invalid URL"));
+    assert_url_error(
+        "https://?query=1",
+        "settings.custom_inference.error.invalid_url",
+    );
 }
 
 #[test]
@@ -58,19 +66,22 @@ fn validate_url_allows_whitespace_only() {
 
 #[test]
 fn validate_url_rejects_localhost_and_private_ips() {
-    let error = Err("URL must not use a local or private host");
-    assert_eq!(validate_url("https://localhost:8080"), error);
-    assert_eq!(validate_url("https://127.0.0.1/v1"), error);
-    assert_eq!(validate_url("https://0.0.0.0/v1"), error);
-    assert_eq!(validate_url("https://10.0.0.1/v1"), error);
-    assert_eq!(validate_url("https://172.16.0.1/v1"), error);
-    assert_eq!(validate_url("https://192.168.0.1/v1"), error);
-    assert_eq!(validate_url("https://169.254.0.1/v1"), error);
-    assert_eq!(validate_url("https://[::1]/v1"), error);
-    assert_eq!(validate_url("https://[::]/v1"), error);
-    assert_eq!(validate_url("https://[fc00::1]/v1"), error);
-    assert_eq!(validate_url("https://[fe80::1]/v1"), error);
-    assert_eq!(validate_url("https://[::ffff:192.168.0.1]/v1"), error);
+    for url in [
+        "https://localhost:8080",
+        "https://127.0.0.1/v1",
+        "https://0.0.0.0/v1",
+        "https://10.0.0.1/v1",
+        "https://172.16.0.1/v1",
+        "https://192.168.0.1/v1",
+        "https://169.254.0.1/v1",
+        "https://[::1]/v1",
+        "https://[::]/v1",
+        "https://[fc00::1]/v1",
+        "https://[fe80::1]/v1",
+        "https://[::ffff:192.168.0.1]/v1",
+    ] {
+        assert_url_error(url, "settings.custom_inference.error.url_restricted_host");
+    }
 }
 
 #[test]

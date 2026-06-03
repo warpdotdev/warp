@@ -620,7 +620,7 @@ impl AuthManager {
 
             Err(err) => {
                 report_error!(
-                    anyhow!(err).context("Encountered an error trying to create anonymous users")
+                    anyhow!(err).context(i18n::t("auth.errors.create_anonymous_user_failed"))
                 );
                 ctx.emit(AuthManagerEvent::CreateAnonymousUserFailed);
             }

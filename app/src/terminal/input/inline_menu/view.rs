@@ -515,7 +515,7 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> InlineMenuView<A, T> {
             state_handles: Default::default(),
             weak_handle: ctx.handle(),
             header_config: InlineMenuHeaderConfig {
-                label: A::MENU_TYPE.display_label().to_string(),
+                label: A::MENU_TYPE.display_label(),
                 trailing_element: None,
             },
             banner_fn: None,
@@ -1037,9 +1037,9 @@ impl<A: InlineMenuAction, T: 'static + Send + Sync> View for InlineMenuView<A, T
         let content: Box<dyn Element>;
         if self.result_renderers.is_empty() {
             content = if self.mixer.as_ref(app).is_loading() {
-                self.render_no_results_state("Loading...".into(), app)
+                self.render_no_results_state(i18n::t("common.loading"), app)
             } else {
-                self.render_no_results_state("No results".into(), app)
+                self.render_no_results_state(i18n::t("terminal.input.no_results"), app)
             };
         } else {
             let results_list = self.render_results_list(app);

@@ -126,10 +126,13 @@ pub fn render_lsp_selector_block(
     );
 
     let title_element = Span::new(
-        "Would you like to enable available language support for this codebase? This will give you smarter code navigation and inline error checking.",
+        i18n::t("terminal.init_project.lsp.multiple_prompt"),
         UiComponentStyles {
             font_family_id: Some(appearance.ui_font_family()),
-            font_color: Some(blended_colors::text_main(appearance.theme(), header_background)),
+            font_color: Some(blended_colors::text_main(
+                appearance.theme(),
+                header_background,
+            )),
             font_size: Some(appearance.monospace_font_size()),
             ..Default::default()
         },
@@ -159,7 +162,7 @@ pub fn render_lsp_selector_block(
     let skip_button = appearance
         .ui_builder()
         .button(ButtonVariant::Text, skip_mouse_state.clone())
-        .with_text_label("Skip for now".to_string())
+        .with_text_label(i18n::t("terminal.init_project.skip_for_now"))
         .build()
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action(InitProjectBlockAction::SkipLanguageServers);
@@ -172,9 +175,9 @@ pub fn render_lsp_selector_block(
     let any_needs_download = selected_items.iter().any(|info| !info.is_installed);
 
     let enable_label = if any_needs_download {
-        "Install and enable"
+        i18n::t("terminal.init_project.lsp.install_and_enable")
     } else {
-        "Enable language support"
+        i18n::t("terminal.init_project.lsp.enable_language_support")
     };
 
     // Create keyboard shortcut for Enter

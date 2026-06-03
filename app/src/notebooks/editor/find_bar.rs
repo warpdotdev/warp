@@ -27,10 +27,7 @@ use super::view::{EditorViewEvent, RichTextEditorView};
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::ui_components::icons::Icon;
-use crate::view_components::find::{
-    CASE_SENSITIVE_LABEL, CASE_SENSITIVE_TOOLTIP, FIND_BAR_WIDTH, REGEX_TOGGLE_LABEL,
-    REGEX_TOGGLE_TOOLTIP,
-};
+use crate::view_components::find::{CASE_SENSITIVE_LABEL, FIND_BAR_WIDTH, REGEX_TOGGLE_LABEL};
 
 /// View for the find bar within a notebook.
 pub struct FindBar {
@@ -187,7 +184,7 @@ impl FindBar {
         if searcher.has_query() {
             let match_count = searcher.match_count();
             let text = if match_count == 0 {
-                "No matches".to_string()
+                i18n::t("common.no_matches")
             } else {
                 let mut text = String::new();
                 match searcher.selected_match() {
@@ -411,7 +408,7 @@ impl View for FindBar {
                 ),
                 self.render_toggle_button(
                     REGEX_TOGGLE_LABEL,
-                    REGEX_TOGGLE_TOOLTIP,
+                    &i18n::t("find.regex_toggle_tooltip"),
                     FindBarAction::ToggleRegex,
                     searcher.is_regex(),
                     self.button_handles.regex_toggle.clone(),
@@ -420,7 +417,7 @@ impl View for FindBar {
                 ),
                 self.render_toggle_button(
                     CASE_SENSITIVE_LABEL,
-                    CASE_SENSITIVE_TOOLTIP,
+                    &i18n::t("find.case_sensitive_tooltip"),
                     FindBarAction::ToggleCaseSensitive,
                     searcher.is_case_sensitive(),
                     self.button_handles.case_sensitive_toggle.clone(),
@@ -535,21 +532,21 @@ impl TypedActionView for FindBar {
         let text = match action {
             FindBarAction::ToggleRegex => {
                 if self.searcher.as_ref(ctx).is_regex() {
-                    "Enable regex search"
+                    i18n::t("find.a11y.enable_regex_search")
                 } else {
-                    "Disable regex search"
+                    i18n::t("find.a11y.disable_regex_search")
                 }
             }
             FindBarAction::ToggleCaseSensitive => {
                 if self.searcher.as_ref(ctx).is_case_sensitive() {
-                    "Enable case-sensitive search"
+                    i18n::t("find.a11y.enable_case_sensitive_search")
                 } else {
-                    "Disable case-sensitive search"
+                    i18n::t("find.a11y.disable_case_sensitive_search")
                 }
             }
-            FindBarAction::FocusNextMatch => "Focus next match",
-            FindBarAction::FocusPreviousMatch => "Focus previous match",
-            FindBarAction::Close => "Close find bar",
+            FindBarAction::FocusNextMatch => i18n::t("find.a11y.focus_next_match"),
+            FindBarAction::FocusPreviousMatch => i18n::t("find.a11y.focus_previous_match"),
+            FindBarAction::Close => i18n::t("find.a11y.close_find_bar"),
         };
         Some(AccessibilityContent::new_without_help(
             text,

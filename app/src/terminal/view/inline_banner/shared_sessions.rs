@@ -31,8 +31,11 @@ fn render_inline_shared_session_banner(
 
     let today = Local::now();
     let is_today = datetime.year() == today.year() && datetime.ordinal() == today.ordinal();
+    let is_zh = i18n::current_locale().starts_with("zh");
     let day_str = if is_today {
-        String::from("Today")
+        i18n::t("terminal.inline_banner.shared_session.today")
+    } else if is_zh {
+        format!("{}月{}日", datetime.month(), datetime.day())
     } else {
         // Formatted as "Month Day", e.g. "October 10".
         datetime.format("%B %e").to_string()
@@ -40,8 +43,16 @@ fn render_inline_shared_session_banner(
 
     // TODO: look into using the OS's locale to format the time according
     // to user's preferences.
-    let time_str = datetime.format("%l:%M%P").to_string();
-    let datetime_str = format!("{day_str}, {time_str}");
+    let time_str = if is_zh {
+        datetime.format("%H:%M").to_string()
+    } else {
+        datetime.format("%l:%M%P").to_string()
+    };
+    let datetime_str = if is_zh {
+        format!("{day_str} {time_str}")
+    } else {
+        format!("{day_str}, {time_str}")
+    };
 
     let pill = Container::new(
         Flex::row()
@@ -99,13 +110,13 @@ pub fn render_inline_shared_session_started_banner(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let label = if is_shared_ambient_agent_session {
-        "Environment started"
+        i18n::t("terminal.inline_banner.shared_session.environment_started")
     } else if is_remote_control {
-        "Remote control active"
+        i18n::t("terminal.inline_banner.shared_session.remote_control_active")
     } else {
-        "Sharing started"
+        i18n::t("terminal.inline_banner.shared_session.sharing_started")
     };
-    render_inline_shared_session_banner(is_active, label.to_string(), started_at, appearance)
+    render_inline_shared_session_banner(is_active, label, started_at, appearance)
 }
 
 pub fn render_inline_shared_session_ended_banner(
@@ -115,11 +126,11 @@ pub fn render_inline_shared_session_ended_banner(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let label = if is_shared_ambient_agent_session {
-        "Environment ended"
+        i18n::t("terminal.inline_banner.shared_session.environment_ended")
     } else if is_remote_control {
-        "Remote control stopped"
+        i18n::t("terminal.inline_banner.shared_session.remote_control_stopped")
     } else {
-        "Sharing ended"
+        i18n::t("terminal.inline_banner.shared_session.sharing_ended")
     };
-    render_inline_shared_session_banner(false, label.to_string(), ended_at, appearance)
+    render_inline_shared_session_banner(false, label, ended_at, appearance)
 }

@@ -50,7 +50,6 @@ pub enum InstallOrigin {
     Deeplink,
 }
 
-const PAGE_TITLE_TEXT: &str = "MCP Servers";
 #[derive(Debug, Default, Copy, Clone)]
 pub enum MCPServersSettingsPage {
     #[default]
@@ -102,7 +101,9 @@ impl MCPServersSettingsPageView {
         Self {
             page: PageType::new_monolith(
                 MCPServersSettingsWidget::default(),
-                Some(PAGE_TITLE_TEXT),
+                Some(Box::leak(
+                    i18n::t("settings.mcp.page.title").into_boxed_str(),
+                )),
                 true,
             ),
             current_page: MCPServersSettingsPage::default(),
@@ -148,8 +149,8 @@ impl MCPServersSettingsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         let message = match server_name {
-            Some(name) => format!("Successfully logged out of {name} MCP server"),
-            None => "Successfully logged out of MCP server".to_string(),
+            Some(name) => i18n::t("settings.mcp.toast.logged_out_named").replace("{name}", &name),
+            None => i18n::t("settings.mcp.toast.logged_out"),
         };
         match item_id {
             ServerCardItemId::TemplatableMCP(_) => {
@@ -315,10 +316,7 @@ impl MCPServersSettingsPageView {
             log::warn!(
                 "Ignoring MCP deeplink autoinstall for '{autoinstall_param}': installation modal already open"
             );
-            self.add_error_toast(
-                "Finish the current MCP install before opening another install link.".to_string(),
-                ctx,
-            );
+            self.add_error_toast(i18n::t("settings.mcp.error.finish_install_first"), ctx);
             return;
         }
 
@@ -331,7 +329,10 @@ impl MCPServersSettingsPageView {
             log::warn!(
                 "Unrecognized autoinstall value '{autoinstall_param}': no matching gallery item found"
             );
-            self.add_error_toast(format!("Unknown MCP server '{autoinstall_param}'"), ctx);
+            self.add_error_toast(
+                i18n::t("settings.mcp.error.unknown_server").replace("{name}", autoinstall_param),
+                ctx,
+            );
             return;
         };
 
@@ -359,7 +360,8 @@ impl MCPServersSettingsPageView {
             // gallery entry cannot be turned into a valid template. Surface the
             // failure to the user rather than silently returning.
             self.add_error_toast(
-                format!("MCP server '{gallery_title}' cannot be installed from this link."),
+                i18n::t("settings.mcp.error.cannot_install_from_link")
+                    .replace("{name}", &gallery_title),
                 ctx,
             );
             return;

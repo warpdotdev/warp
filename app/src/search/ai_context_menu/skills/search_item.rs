@@ -129,6 +129,10 @@ impl SearchItem for SkillSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Skill: {}", self.name)
+        format!(
+            "{}: {}",
+            i18n::t("search.ai_context_menu.skill_prefix"),
+            self.name
+        )
     }
 }

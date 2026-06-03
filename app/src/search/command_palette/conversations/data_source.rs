@@ -27,11 +27,13 @@ enum ConversationSection {
 }
 
 impl ConversationSection {
-    fn title(&self) -> &'static str {
+    fn title(&self) -> String {
         match self {
-            ConversationSection::ActivePane => "Active pane conversations",
-            ConversationSection::OtherActive => "Other active conversations",
-            ConversationSection::Past => "Past conversations",
+            ConversationSection::ActivePane => i18n::t("search.conversations.section.active_pane"),
+            ConversationSection::OtherActive => {
+                i18n::t("search.conversations.section.other_active")
+            }
+            ConversationSection::Past => i18n::t("search.conversations.section.past"),
         }
     }
 

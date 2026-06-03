@@ -4174,6 +4174,16 @@ impl std::fmt::Display for ConversationStatus {
 }
 
 impl ConversationStatus {
+    pub fn localized_label(&self) -> String {
+        match self {
+            ConversationStatus::InProgress => i18n::t("ai.conversation_status.in_progress"),
+            ConversationStatus::Success => i18n::t("ai.conversation_status.done"),
+            ConversationStatus::Error => i18n::t("ai.conversation_status.error"),
+            ConversationStatus::Cancelled => i18n::t("ai.conversation_status.cancelled"),
+            ConversationStatus::Blocked { .. } => i18n::t("ai.conversation_status.blocked"),
+        }
+    }
+
     pub fn render_icon(&self, appearance: &Appearance) -> warpui::elements::Icon {
         match self {
             ConversationStatus::InProgress => in_progress_icon(appearance),

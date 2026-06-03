@@ -64,6 +64,14 @@ impl SettingsUmbrella {
         // rendered, so this just seeds a sensible default.
         let text_color = appearance.theme().nonactive_ui_text_color();
 
+        // Map the umbrella's English label to its localized counterpart.
+        let localized_label = match self.label {
+            "Agents" => i18n::t("settings.nav.umbrella.agents"),
+            "Code" => i18n::t("settings.nav.umbrella.code"),
+            "Cloud platform" => i18n::t("settings.nav.umbrella.cloud_platform"),
+            other => other.to_string(),
+        };
+
         // Use a single full-width text button with a text+icon label so the
         // text label aligns with other top-level settings items and the
         // chevron sits flush-right — while the whole button area receives the
@@ -73,7 +81,7 @@ impl SettingsUmbrella {
             .button(ButtonVariant::Text, self.button_state_handle.clone())
             .with_text_and_icon_label(TextAndIcon::new(
                 TextAndIconAlignment::TextFirst,
-                self.label.to_string(),
+                localized_label,
                 chevron_icon.to_warpui_icon(text_color),
                 MainAxisSize::Max,
                 MainAxisAlignment::SpaceBetween,
@@ -99,7 +107,7 @@ impl SettingsUmbrella {
         let section = self.subpages.get(index)?;
         let mouse_state = self.subpage_button_states.get(index)?.clone();
 
-        let label = section.to_string() + &match_data.to_string();
+        let label = section.nav_label() + &match_data.to_string();
 
         let hoverable = appearance
             .ui_builder()

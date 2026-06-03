@@ -3,8 +3,13 @@ use warpui::App;
 
 use super::{ObjectAction, ObjectActionSubtype, ObjectActionType, ObjectActions};
 
+fn use_english_locale() {
+    i18n::set_locale("en");
+}
+
 #[test]
 fn test_object_actions_daily() {
+    use_english_locale();
     App::test((), |mut app| async move {
         let actions: Vec<ObjectAction> = vec![
             ObjectAction {
@@ -91,6 +96,7 @@ fn test_object_actions_daily() {
 
 #[test]
 fn test_object_actions_rollup_weekly() {
+    use_english_locale();
     App::test((), |mut app| async move {
         let actions: Vec<ObjectAction> = vec![
             ObjectAction {
@@ -177,6 +183,7 @@ fn test_object_actions_rollup_weekly() {
 
 #[test]
 fn test_object_actions_rollup_monthly() {
+    use_english_locale();
     App::test((), |mut app| async move {
         let actions: Vec<ObjectAction> = vec![
             ObjectAction {
@@ -274,6 +281,7 @@ fn test_object_actions_rollup_monthly() {
 
 #[test]
 fn test_object_actions_rollup_yearly() {
+    use_english_locale();
     App::test((), |mut app| async move {
         let actions: Vec<ObjectAction> = vec![
             ObjectAction {
@@ -371,6 +379,7 @@ fn test_object_actions_rollup_yearly() {
 
 #[test]
 fn test_object_actions_rollup_out_of_date_bundle() {
+    use_english_locale();
     App::test((), |mut app| async move {
         let actions: Vec<ObjectAction> = vec![
             ObjectAction {
@@ -468,6 +477,7 @@ fn test_object_actions_rollup_out_of_date_bundle() {
 
 #[test]
 fn test_object_actions_rollup_none() {
+    use_english_locale();
     App::test((), |mut app| async move {
         let actions: Vec<ObjectAction> = vec![
             ObjectAction {

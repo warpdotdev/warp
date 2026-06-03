@@ -4,5 +4,9 @@ use chrono::{DateTime, Utc};
 pub(crate) fn parse_rfc3339(s: &str) -> Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| format!("invalid RFC 3339 timestamp '{s}': {e}"))
+        .map_err(|e| {
+            i18n::t("warp_cli.error.invalid_rfc3339")
+                .replace("{value}", s)
+                .replace("{error}", &e.to_string())
+        })
 }

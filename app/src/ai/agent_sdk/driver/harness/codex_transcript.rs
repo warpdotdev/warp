@@ -90,7 +90,9 @@ pub(crate) fn codex_sessions_root() -> anyhow::Result<PathBuf> {
         PathBuf::from(dir)
     } else {
         dirs::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(i18n::t("ai.agent_sdk.driver.harness.home_dir_missing"))
+            })?
             .join(CODEX_HOME_DIRNAME)
     };
     Ok(home.join(CODEX_SESSIONS_SUBDIR))
@@ -174,8 +176,10 @@ pub(crate) fn write_envelope(
         .join(format!("{:04}", timestamp.year()))
         .join(format!("{:02}", timestamp.month()))
         .join(format!("{:02}", timestamp.day()));
-    fs::create_dir_all(&day_dir)
-        .with_context(|| format!("Failed to create {}", day_dir.display()))?;
+    fs::create_dir_all(&day_dir).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.create_dir_failed")
+            .replace("{path}", &day_dir.display().to_string())
+    })?;
     // Codex's filename format: `[year]-[month]-[day]T[hour]-[minute]-[second]`
     // (codex `rollout/src/recorder.rs::precompute_log_file_info`).
     let date_str = timestamp.format("%Y-%m-%dT%H-%M-%S").to_string();
@@ -183,8 +187,10 @@ pub(crate) fn write_envelope(
         "rollout-{date_str}-{session_id}.jsonl",
         session_id = envelope.session_id
     ));
-    fs::write(&file_path, entries_to_jsonl(&envelope.entries)?)
-        .with_context(|| format!("Failed to write {}", file_path.display()))?;
+    fs::write(&file_path, entries_to_jsonl(&envelope.entries)?).with_context(|| {
+        i18n::t("ai.agent_sdk.driver.harness.json.write_failed")
+            .replace("{path}", &file_path.display().to_string())
+    })?;
     Ok(file_path)
 }
 

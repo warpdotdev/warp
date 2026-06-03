@@ -36,7 +36,10 @@ impl TryFrom<UploadArtifactArgs> for FileArtifactUploadRequest {
 
     fn try_from(value: UploadArtifactArgs) -> Result<Self> {
         let run_id = match value.run_id {
-            Some(run_id) => Some(parse_run_id(&run_id, "Invalid run ID")?),
+            Some(run_id) => Some(parse_run_id(
+                &run_id,
+                &i18n::t("ai.agent_sdk.common.invalid_run_id"),
+            )?),
             None => None,
         };
 
@@ -122,8 +125,9 @@ impl FileArtifactUploader {
         let uploaded_artifact = self
             .confirm_upload(create_response.artifact.artifact_uid, checksum)
             .await?;
-        let size_bytes = i64::try_from(artifact.file_size)
-            .context("Artifact file size exceeds supported range")?;
+        let size_bytes = i64::try_from(artifact.file_size).context(i18n::t(
+            "ai.agent_sdk.artifact_upload.file_size_out_of_range",
+        ))?;
 
         Ok(CompletedFileArtifactUpload {
             artifact: uploaded_artifact,
@@ -154,7 +158,7 @@ impl FileArtifactUploader {
                 size_bytes: artifact.graphql_size_bytes(),
             })
             .await
-            .context("Failed to create file artifact upload target")
+            .context(i18n::t("ai.agent_sdk.artifact_upload.create_target_failed"))
     }
 
     async fn upload_artifact_bytes(
@@ -178,7 +182,7 @@ impl FileArtifactUploader {
         self.ai_client
             .confirm_file_artifact_upload(artifact_uid, checksum)
             .await
-            .context("Failed to confirm file artifact upload")
+            .context(i18n::t("ai.agent_sdk.artifact_upload.confirm_failed"))
     }
 
     pub(crate) async fn resolve_upload_association(
@@ -211,18 +215,14 @@ impl FileArtifactUploader {
             .list_ai_conversation_metadata(Some(vec![conversation_id.as_str().to_string()]))
             .await
             .with_context(|| {
-                format!(
-                    "Failed to load conversation '{}' to resolve artifact upload headers",
-                    conversation_id.as_str()
-                )
+                i18n::t("ai.agent_sdk.artifact_upload.load_conversation_failed")
+                    .replace("{conversation_id}", conversation_id.as_str())
             })?;
 
         let metadata = single_conversation_metadata(conversation_id.as_str(), metadata)
             .with_context(|| {
-                format!(
-                    "Failed to load conversation '{}' to resolve artifact upload headers",
-                    conversation_id.as_str()
-                )
+                i18n::t("ai.agent_sdk.artifact_upload.load_conversation_failed")
+                    .replace("{conversation_id}", conversation_id.as_str())
             })?;
 
         ambient_task_id_from_conversation_metadata(conversation_id.as_str(), metadata)
@@ -234,16 +234,21 @@ fn normalize_artifact_filepath(path: &Path) -> String {
 }
 
 fn file_size_and_prefix_for_path(path: &Path, max_bytes: usize) -> Result<(u64, Vec<u8>)> {
-    let mut file = File::open(path)
-        .with_context(|| format!("Failed to open artifact file '{}'", path.display()))?;
+    let path_display = path.display().to_string();
+    let mut file = File::open(path).with_context(|| {
+        i18n::t("ai.agent_sdk.artifact_upload.open_file_failed").replace("{path}", &path_display)
+    })?;
     let file_size = file
         .metadata()
-        .with_context(|| format!("Failed to stat artifact file '{}'", path.display()))?
+        .with_context(|| {
+            i18n::t("ai.agent_sdk.artifact_upload.stat_file_failed")
+                .replace("{path}", &path_display)
+        })?
         .len();
     let mut bytes = vec![0; max_bytes];
-    let bytes_read = file
-        .read(&mut bytes)
-        .with_context(|| format!("Failed to read artifact file '{}'", path.display()))?;
+    let bytes_read = file.read(&mut bytes).with_context(|| {
+        i18n::t("ai.agent_sdk.artifact_upload.read_file_failed").replace("{path}", &path_display)
+    })?;
     bytes.truncate(bytes_read);
     Ok((file_size, bytes))
 }
@@ -269,9 +274,16 @@ fn single_conversation_metadata(
     mut metadata: Vec<ServerAIConversationMetadata>,
 ) -> Result<ServerAIConversationMetadata> {
     match metadata.len() {
-        0 => bail!("Conversation not found"),
+        0 => bail!(
+            "{}",
+            i18n::t("ai.agent_sdk.artifact_upload.conversation_not_found")
+        ),
         1 => Ok(metadata.pop().expect("metadata length checked")),
-        _ => bail!("Multiple conversations found for '{conversation_id}'"),
+        _ => bail!(
+            "{}",
+            i18n::t("ai.agent_sdk.artifact_upload.multiple_conversations_found")
+                .replace("{conversation_id}", conversation_id)
+        ),
     }
 }
 
@@ -280,7 +292,11 @@ fn ambient_task_id_from_conversation_metadata(
     metadata: ServerAIConversationMetadata,
 ) -> Result<AmbientAgentTaskId> {
     metadata.ambient_agent_task_id.ok_or_else(|| {
-        anyhow!("Conversation '{conversation_id}' is not backed by a cloud agent task")
+        anyhow!(
+            "{}",
+            i18n::t("ai.agent_sdk.artifact_upload.conversation_missing_cloud_task")
+                .replace("{conversation_id}", conversation_id)
+        )
     })
 }
 
@@ -293,17 +309,25 @@ fn load_env_run_id() -> Result<Option<String>> {
         Ok(run_id) => Ok(Some(run_id)),
         Err(env::VarError::NotPresent) => Ok(None),
         Err(env::VarError::NotUnicode(_)) => Err(anyhow!(
-            "{OZ_RUN_ID_ENV_VAR} is set but is not valid Unicode"
+            "{}",
+            i18n::t("ai.agent_sdk.artifact_upload.env_var_not_unicode")
+                .replace("{env_var}", OZ_RUN_ID_ENV_VAR)
         )),
     }
 }
 
 fn resolve_env_run_id(env_run_id: Option<String>) -> Result<AmbientAgentTaskId> {
     let Some(run_id) = env_run_id else {
-        bail!("{OZ_RUN_ID_ENV_VAR} is not set");
+        bail!(
+            "{}",
+            i18n::t("ai.agent_sdk.artifact_upload.env_var_not_set")
+                .replace("{env_var}", OZ_RUN_ID_ENV_VAR)
+        );
     };
 
-    parse_run_id(&run_id, "Invalid OZ_RUN_ID")
+    let prefix = i18n::t("ai.agent_sdk.artifact_upload.invalid_env_run_id")
+        .replace("{env_var}", OZ_RUN_ID_ENV_VAR);
+    parse_run_id(&run_id, &prefix)
 }
 
 fn resolve_upload_association_from_sources(
@@ -327,9 +351,12 @@ fn resolve_upload_association_from_sources(
     }
 
     if let Some(conversation_id) = explicit_conversation_id {
-        match conversation_task_id
-            .ok_or_else(|| anyhow!("conversation resolution should be provided"))?
-        {
+        match conversation_task_id.ok_or_else(|| {
+            anyhow!(
+                "{}",
+                i18n::t("ai.agent_sdk.artifact_upload.conversation_resolution_required")
+            )
+        })? {
             Ok(ambient_task_id) => {
                 return Ok(ResolvedUploadAssociation {
                     conversation_id: Some(conversation_id),
@@ -354,8 +381,14 @@ fn resolve_upload_association_from_sources(
                 };
 
                 return Err(anyhow!(
-                    "Failed to resolve artifact upload association for conversation '{}': {conversation_err}; also failed to use {OZ_RUN_ID_ENV_VAR}: {env_err}",
-                    conversation_id.as_str()
+                    "{}",
+                    i18n::t(
+                        "ai.agent_sdk.artifact_upload.resolve_association_for_conversation_failed"
+                    )
+                    .replace("{conversation_id}", conversation_id.as_str())
+                    .replace("{conversation_err}", &conversation_err.to_string())
+                    .replace("{env_var}", OZ_RUN_ID_ENV_VAR)
+                    .replace("{env_err}", &env_err.to_string())
                 ));
             }
         }
@@ -363,7 +396,10 @@ fn resolve_upload_association_from_sources(
 
     let ambient_task_id = resolve_env_run_id(env_run_id).map_err(|env_err| {
         anyhow!(
-            "Failed to resolve artifact upload association: no usable --run-id or --conversation-id was provided, and {OZ_RUN_ID_ENV_VAR}: {env_err}"
+            "{}",
+            i18n::t("ai.agent_sdk.artifact_upload.resolve_association_failed")
+                .replace("{env_var}", OZ_RUN_ID_ENV_VAR)
+                .replace("{env_err}", &env_err.to_string())
         )
     })?;
 

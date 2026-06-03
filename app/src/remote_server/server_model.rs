@@ -914,7 +914,8 @@ impl ServerModel {
                         );
                         not_enabled_codebase_index_status(repo_path.to_string_lossy().to_string())
                     } else if !manager.can_create_new_indices() {
-                        let failure_message = "Cannot index remote codebase because the maximum number of codebase indexes has been reached.".to_string();
+                        let failure_message =
+                            i18n::t("remote_server.codebase_index.max_indices_reached");
                         log::warn!(
                             "[Remote codebase indexing] Daemon cannot start IndexCodebase: repo_path={} reason={failure_message}",
                             repo_path.display()
@@ -927,8 +928,7 @@ impl ServerModel {
                         Self::current_codebase_index_status_or_queued(manager, repo_path, ctx)
                     } else {
                         let failure_message =
-                            "Cannot index remote codebase because indexing did not start."
-                                .to_string();
+                            i18n::t("remote_server.codebase_index.indexing_not_started");
                         log::warn!(
                             "[Remote codebase indexing] Daemon cannot start IndexCodebase: repo_path={} reason={failure_message}",
                             repo_path.display()
@@ -1007,8 +1007,7 @@ impl ServerModel {
                 |_, repo_path, _| {
                     unavailable_codebase_index_status(
                         repo_path.to_string_lossy().to_string(),
-                        "Cannot resync remote codebase because it has not been indexed."
-                            .to_string(),
+                        i18n::t("remote_server.codebase_index.resync_not_indexed"),
                     )
                 },
                 ctx,

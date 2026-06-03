@@ -314,7 +314,10 @@ impl DiffViewer for InlineDiffView {
                     .update(_ctx, |file_model, ctx| {
                         file_model.delete(file_id, version, ctx)
                     })
-                    .map_err(|e| format!("Failed to delete file: {e:?}"))?;
+                    .map_err(|e| {
+                        i18n::t("code.inline_diff.failed_delete_file")
+                            .replace("{error}", &format!("{e:?}"))
+                    })?;
                 return Ok(());
             }
 
@@ -327,7 +330,7 @@ impl DiffViewer for InlineDiffView {
                 .diff()
                 .as_ref(_ctx)
                 .base()
-                .ok_or_else(|| "Missing base content".to_string())?
+                .ok_or_else(|| i18n::t("code.inline_diff.missing_base_content"))?
                 .to_string();
 
             let version = self.editor.as_ref(_ctx).version(_ctx);
@@ -335,7 +338,10 @@ impl DiffViewer for InlineDiffView {
                 .update(_ctx, |file_model, ctx| {
                     file_model.save(file_id, base_content, version, ctx)
                 })
-                .map_err(|e| format!("Failed to save file: {e:?}"))?;
+                .map_err(|e| {
+                    i18n::t("code.inline_diff.failed_save_file")
+                        .replace("{error}", &format!("{e:?}"))
+                })?;
         }
 
         Ok(())

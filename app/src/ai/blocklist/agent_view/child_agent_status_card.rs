@@ -194,8 +194,11 @@ impl View for ChildAgentStatusCard {
                 continue;
             }
 
-            let agent_name = child.agent_name().unwrap_or("Agent").to_string();
-            let title = child.title().unwrap_or_else(|| "Untitled".to_string());
+            let agent_name = child
+                .agent_name()
+                .map(|agent_name| agent_name.to_string())
+                .unwrap_or_else(|| i18n::t("common.agent"));
+            let title = child.title().unwrap_or_else(|| i18n::t("common.untitled"));
             let status_icon = child
                 .status()
                 .status_icon_and_color(appearance.theme(), StatusColorStyle::Standard);

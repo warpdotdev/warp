@@ -11,7 +11,7 @@ define_settings_group!(UndoCloseSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.undo_close.enabled",
-        description: "Whether the undo close feature is enabled.",
+        description_key: "settings.schema.general.undo_close.enabled.description",
     },
     grace_period: UndoCloseGracePeriod {
         type: Duration,
@@ -20,6 +20,6 @@ define_settings_group!(UndoCloseSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.undo_close.grace_period",
-        description: "How long after closing a tab you can still undo the close.",
+        description_key: "settings.schema.general.undo_close.grace_period.description",
     },
 ]);

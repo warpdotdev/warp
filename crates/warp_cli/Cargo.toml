@@ -11,6 +11,7 @@ chrono.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 cfg-if = { workspace = true }
 humantime.workspace = true
+i18n.workspace = true
 jaq-all.workspace = true
 serde = { workspace = true, features = ["derive"] }
 url = { workspace = true, features = ["serde"] }

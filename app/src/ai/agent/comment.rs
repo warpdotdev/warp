@@ -45,7 +45,7 @@ impl ReviewComment {
                 .head_title
                 .as_ref()
                 .cloned()
-                .unwrap_or_else(|| "Review Comment".to_string()),
+                .unwrap_or_else(|| i18n::t("code_review.comments.review_comment")),
         }
     }
 }

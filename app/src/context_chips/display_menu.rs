@@ -315,9 +315,13 @@ impl DisplayChipMenu {
                     };
                     let mut editor = EditorView::new(options, ctx);
                     let placeholder_text = match chip_menu_type {
-                        ChipMenuType::Directories => "Search directories...",
-                        ChipMenuType::Branches => "Search branches...",
-                        ChipMenuType::Environments => "Search environments...",
+                        ChipMenuType::Directories => {
+                            i18n::t("context_chips.menu.search_directories")
+                        }
+                        ChipMenuType::Branches => i18n::t("context_chips.menu.search_branches"),
+                        ChipMenuType::Environments => {
+                            i18n::t("context_chips.menu.search_environments")
+                        }
                         ChipMenuType::CodeReview => {
                             unreachable!("search input should not be constructed")
                         }
@@ -650,7 +654,7 @@ impl DisplayChipMenu {
             .map(|repo| repo.repo.clone())
             .collect::<Vec<_>>();
         let repos_text = if repo_names.is_empty() {
-            "(none)".to_string()
+            i18n::t("context_chips.environment.none")
         } else {
             repo_names.join(", ")
         };
@@ -875,15 +879,25 @@ impl DisplayChipMenu {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(row(
                 Icon::Globe4,
-                "Name:",
+                &i18n::t("context_chips.environment.name"),
                 value_text(data.name.clone()),
                 false,
             ))
-            .with_child(row(Icon::Hash, "ID:", id_value, false))
-            .with_child(row(Icon::Docker, "Image:", image_value, false))
+            .with_child(row(
+                Icon::Hash,
+                &i18n::t("context_chips.environment.id"),
+                id_value,
+                false,
+            ))
+            .with_child(row(
+                Icon::Docker,
+                &i18n::t("context_chips.environment.image"),
+                image_value,
+                false,
+            ))
             .with_child(row(
                 Icon::Github,
-                "Repos:",
+                &i18n::t("context_chips.environment.repos"),
                 value_text(data.repos_text.clone()),
                 true,
             ))
@@ -1069,7 +1083,7 @@ impl DisplayChipMenu {
                 let (label, font_size, horizontal_padding, vertical_padding, text_color) =
                     match self.chip_menu_type {
                         ChipMenuType::Environments => (
-                            "No results",
+                            i18n::t("context_chips.menu.no_results"),
                             ENV_MENU_ITEM_FONT_SIZE,
                             ENV_MENU_ITEM_HORIZONTAL_PADDING,
                             ENV_MENU_ITEM_VERTICAL_PADDING,
@@ -1078,7 +1092,7 @@ impl DisplayChipMenu {
                         ChipMenuType::Directories
                         | ChipMenuType::Branches
                         | ChipMenuType::CodeReview => (
-                            "No results found",
+                            i18n::t("context_chips.menu.no_results_found"),
                             appearance.ui_font_size(),
                             LABEL_HORIZONTAL_PADDING,
                             LABEL_VERTICAL_PADDING * 2.0,

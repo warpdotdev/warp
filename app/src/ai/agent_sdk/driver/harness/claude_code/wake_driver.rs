@@ -157,14 +157,21 @@ impl ClaudeHarness {
                 },
             )
             .await
-            .with_context(|| format!("Failed to resolve Claude wake prompt for task {task_id}"))?;
+            .with_context(|| {
+                i18n::t("ai.agent_sdk.driver.harness.claude.wake.resolve_prompt_failed")
+                    .replace("{task_id}", &task_id.to_string())
+            })?;
         let bytes = server_api
             .fetch_transcript_for_task(&task_id)
             .await
-            .with_context(|| format!("Failed to fetch Claude transcript for task {task_id}"))?;
+            .with_context(|| {
+                i18n::t("ai.agent_sdk.driver.harness.claude.wake.fetch_transcript_failed")
+                    .replace("{task_id}", &task_id.to_string())
+            })?;
         let envelope: ClaudeTranscriptEnvelope =
             serde_json::from_slice(&bytes).with_context(|| {
-                format!("Failed to deserialize Claude transcript for wake task {task_id}")
+                i18n::t("ai.agent_sdk.driver.harness.claude.wake.deserialize_transcript_failed")
+                    .replace("{task_id}", &task_id.to_string())
             })?;
         let wake_prompt = match resolved.resumption_prompt {
             Some(resumption_prompt) if !resumption_prompt.is_empty() => {
@@ -192,13 +199,17 @@ impl ClaudeHarness {
         wake_message: Option<AgentMessageEventMetadata>,
     ) -> Result<String> {
         let working_dir = working_dir.unwrap_or_else(|| remote.envelope.cwd.clone());
-        prepare_claude_environment_config(&working_dir, &HashMap::new())
-            .context("Failed to prepare Claude environment for wake")?;
+        prepare_claude_environment_config(&working_dir, &HashMap::new()).context(i18n::t(
+            "ai.agent_sdk.driver.harness.claude.wake.prepare_environment_failed",
+        ))?;
 
         remote.envelope.cwd = working_dir.clone();
-        let config_root = claude_config_dir().context("Failed to resolve Claude config dir")?;
-        write_envelope(&remote.envelope, &config_root)
-            .context("Failed to rehydrate Claude transcript for wake")?;
+        let config_root = claude_config_dir().context(i18n::t(
+            "ai.agent_sdk.driver.harness.claude.resolve_config_dir_failed",
+        ))?;
+        write_envelope(&remote.envelope, &config_root).context(i18n::t(
+            "ai.agent_sdk.driver.harness.claude.wake.rehydrate_transcript_failed",
+        ))?;
         if let Err(error) = write_session_index_entry(remote.session_id, &working_dir, &config_root)
         {
             log::warn!("Failed to update Claude sessions-index.json for wake: {error:#}");
@@ -214,8 +225,10 @@ impl ClaudeHarness {
         )
         .await?;
         let prompt_path = state_dir.join(CLAUDE_WAKE_PROMPT_FILE_NAME);
-        std::fs::write(&prompt_path, remote.wake_prompt.as_bytes())
-            .with_context(|| format!("Failed to write {}", prompt_path.display()))?;
+        std::fs::write(&prompt_path, remote.wake_prompt.as_bytes()).with_context(|| {
+            i18n::t("ai.agent_sdk.driver.harness.json.write_failed")
+                .replace("{path}", &prompt_path.display().to_string())
+        })?;
 
         let command = claude_command(
             CLIAgent::Claude.command_prefix(),

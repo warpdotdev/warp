@@ -100,7 +100,9 @@ impl AuthRedirectPayload {
     /// must be of format {scheme}://auth/desktop_redirect?refresh_token={token}.
     pub fn from_url(url: Url) -> Result<Self> {
         if url.host_str() != Some(AUTH_URL_HOST) {
-            return Err(anyhow!("Received URL with unexpected host: {} ", url));
+            return Err(anyhow!(
+                i18n::t("auth.errors.redirect_url_unexpected_host").replace("{url}", url.as_str())
+            ));
         }
         let query_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
         if let Some(token) = query_params.get(AUTH_URL_REFRESH_TOKEN_QUERY_PARAM) {
@@ -117,10 +119,10 @@ impl AuthRedirectPayload {
                 state: query_params.get(AUTH_URL_STATE_QUERY_PARAM).cloned(),
             })
         } else {
-            Err(anyhow!(
-                "Received URL without refresh token query param: {}",
-                url
-            ))
+            Err(anyhow!(i18n::t(
+                "auth.errors.redirect_url_missing_refresh_token"
+            )
+            .replace("{url}", url.as_str())))
         }
     }
 

@@ -23,14 +23,12 @@ pub enum OzLaunchSlide {
 
 impl Slide for OzLaunchSlide {
     fn modal_title(&self) -> String {
-        "Introducing Oz".to_string()
+        i18n::t("workspace.oz_launch.modal_title")
     }
 
     fn modal_subtext_paragraphs(&self) -> Vec<FormattedTextLine> {
         vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
-                "Infinitely scalable coding agent — run in local sessions or in the cloud.",
-            ),
+            FormattedTextFragment::plain_text(i18n::t("workspace.oz_launch.description")),
         ])]
     }
 
@@ -56,34 +54,36 @@ impl Slide for OzLaunchSlide {
         }
     }
 
-    fn display_text(&self) -> Option<&'static str> {
+    fn display_text(&self) -> Option<String> {
         Some(match self {
-            OzLaunchSlide::CloudAgents => "Cloud agents",
-            OzLaunchSlide::AgentAutomations => "Agent automations",
-            OzLaunchSlide::AgentManagement => "Agent management",
-            OzLaunchSlide::LaunchCredits => "A little gift",
+            OzLaunchSlide::CloudAgents => i18n::t("workspace.oz_launch.slide.cloud_agents"),
+            OzLaunchSlide::AgentAutomations => {
+                i18n::t("workspace.oz_launch.slide.agent_automations")
+            }
+            OzLaunchSlide::AgentManagement => i18n::t("workspace.oz_launch.slide.agent_management"),
+            OzLaunchSlide::LaunchCredits => i18n::t("workspace.oz_launch.slide.gift"),
         })
     }
 
-    fn short_label(&self) -> &'static str {
+    fn short_label(&self) -> String {
         match self {
-            OzLaunchSlide::CloudAgents => "Cloud agents",
-            OzLaunchSlide::AgentAutomations => "Agent automations",
-            OzLaunchSlide::AgentManagement => "Agent management",
-            OzLaunchSlide::LaunchCredits => "Launch credits",
+            OzLaunchSlide::CloudAgents => i18n::t("workspace.oz_launch.slide.cloud_agents"),
+            OzLaunchSlide::AgentAutomations => {
+                i18n::t("workspace.oz_launch.slide.agent_automations")
+            }
+            OzLaunchSlide::AgentManagement => i18n::t("workspace.oz_launch.slide.agent_management"),
+            OzLaunchSlide::LaunchCredits => i18n::t("workspace.oz_launch.slide.launch_credits"),
         }
     }
 
-    fn title(&self) -> &'static str {
+    fn title(&self) -> String {
         match self {
-            OzLaunchSlide::CloudAgents => "Break out of your laptop with cloud agents",
+            OzLaunchSlide::CloudAgents => i18n::t("workspace.oz_launch.cloud_agents.title"),
             OzLaunchSlide::AgentAutomations => {
-                "Orchestrate agents, turning Skills into automations"
+                i18n::t("workspace.oz_launch.agent_automations.title")
             }
-            OzLaunchSlide::AgentManagement => "Track local and cloud agents seamlessly",
-            OzLaunchSlide::LaunchCredits => {
-                "1,000 free cloud agent credits when you upgrade to Warp Build"
-            }
+            OzLaunchSlide::AgentManagement => i18n::t("workspace.oz_launch.agent_management.title"),
+            OzLaunchSlide::LaunchCredits => i18n::t("workspace.oz_launch.launch_credits.title"),
         }
     }
 
@@ -91,20 +91,16 @@ impl Slide for OzLaunchSlide {
         None
     }
 
-    fn content(&self) -> &'static str {
+    fn content(&self) -> String {
         match self {
-            OzLaunchSlide::CloudAgents => {
-                "Use cloud agents to run many agents in parallel, keep agents working when you close your laptop, or start agents programmatically. Plus, you can check on their work through the web."
-            }
+            OzLaunchSlide::CloudAgents => i18n::t("workspace.oz_launch.cloud_agents.content"),
             OzLaunchSlide::AgentAutomations => {
-                "Oz agents can be defined using the standard Skills format. You can use the built in scheduler to setup agents to run autonomously at set intervals, or use the Oz SDK or API to programmatically start and manage Oz agents."
+                i18n::t("workspace.oz_launch.agent_automations.content")
             }
             OzLaunchSlide::AgentManagement => {
-                "View all of your agents across local and cloud sessions in the Warp app or at [oz.warp.dev](https://oz.warp.dev). Join live agent sessions, continue tasks locally, and steer agents with one click."
+                i18n::t("workspace.oz_launch.agent_management.content")
             }
-            OzLaunchSlide::LaunchCredits => {
-                "Upgrade to Build this month and receive 1,000 extra credits to try using Oz. Credits are only eligible for Oz runs in Warp-hosted cloud environments."
-            }
+            OzLaunchSlide::LaunchCredits => i18n::t("workspace.oz_launch.launch_credits.content"),
         }
     }
 
@@ -141,29 +137,37 @@ impl Slide for OzLaunchSlide {
             | OzLaunchSlide::AgentAutomations
             | OzLaunchSlide::AgentManagement => {
                 let next = self.next().expect("Non-final slides should have a next");
-                CTAButton::next_slide(next, format!("Next: {}", next.short_label()))
+                CTAButton::next_slide(
+                    next,
+                    i18n::t("workspace.oz_launch.next_button")
+                        .replace("{label}", &next.short_label()),
+                )
             }
-            OzLaunchSlide::LaunchCredits => CTAButton::custom("Try it out", |ctx| {
-                send_telemetry_from_ctx!(
-                    CloudAgentTelemetryEvent::EnteredCloudMode {
-                        entry_point: CloudModeEntryPoint::OzLaunchModal,
-                    },
-                    ctx
-                );
-                ctx.emit(LaunchModalEvent::Close);
-                ctx.dispatch_typed_action(&WorkspaceAction::StartAgentOnboardingTutorial(
-                    OnboardingTutorial::NoProject {
-                        intention: OnboardingIntention::AgentDrivenDevelopment,
-                    },
-                ));
-                ctx.dispatch_typed_action(&WorkspaceAction::AddAmbientAgentTab);
-            }),
+            OzLaunchSlide::LaunchCredits => {
+                CTAButton::custom(i18n::t("workspace.oz_launch.try_it_out"), |ctx| {
+                    send_telemetry_from_ctx!(
+                        CloudAgentTelemetryEvent::EnteredCloudMode {
+                            entry_point: CloudModeEntryPoint::OzLaunchModal,
+                        },
+                        ctx
+                    );
+                    ctx.emit(LaunchModalEvent::Close);
+                    ctx.dispatch_typed_action(&WorkspaceAction::StartAgentOnboardingTutorial(
+                        OnboardingTutorial::NoProject {
+                            intention: OnboardingIntention::AgentDrivenDevelopment,
+                        },
+                    ));
+                    ctx.dispatch_typed_action(&WorkspaceAction::AddAmbientAgentTab);
+                })
+            }
         }
     }
 
     fn secondary_cta_button(&self) -> Option<CTAButton<Self>> {
         match self {
-            OzLaunchSlide::LaunchCredits => Some(CTAButton::close("Skip for now")),
+            OzLaunchSlide::LaunchCredits => Some(CTAButton::close(i18n::t(
+                "workspace.launch_modal.skip_for_now",
+            ))),
             OzLaunchSlide::CloudAgents
             | OzLaunchSlide::AgentAutomations
             | OzLaunchSlide::AgentManagement => None,
@@ -172,8 +176,13 @@ impl Slide for OzLaunchSlide {
 
     fn checkbox_config(&self) -> Option<CheckboxConfig> {
         Some(CheckboxConfig {
-            label: "Sync conversations to cloud",
-            description: "Agent conversations stored in the cloud can be shared with anyone with one click, and allow conversations to be continued across devices and on logout.",
+            label: Box::leak(
+                i18n::t("workspace.launch_modal.sync_conversations_to_cloud").into_boxed_str(),
+            ),
+            description: Box::leak(
+                i18n::t("workspace.launch_modal.sync_conversations_to_cloud.description")
+                    .into_boxed_str(),
+            ),
         })
     }
 

@@ -120,6 +120,28 @@ fn test_parse_empty_path_fails() {
 }
 
 #[test]
+fn parse_errors_use_i18n_messages() {
+    for (input, key) in [
+        ("", "warp_cli.skill.error.empty_specifier"),
+        (":code-review", "warp_cli.skill.error.empty_qualifier"),
+        ("warp-internal:", "warp_cli.skill.error.empty_identifier"),
+        (
+            "/warp-internal:code-review",
+            "warp_cli.skill.error.empty_org",
+        ),
+        ("warpdotdev/:code-review", "warp_cli.skill.error.empty_repo"),
+    ] {
+        let err = input
+            .parse::<SkillSpec>()
+            .expect_err("invalid skill spec should fail");
+        let expected = i18n::t(key);
+
+        assert_ne!(expected, key);
+        assert_eq!(err, expected);
+    }
+}
+
+#[test]
 fn test_skill_name_simple_name() {
     let spec: SkillSpec = "feedback-triage-bot".parse().unwrap();
     assert_eq!(spec.skill_name(), "feedback-triage-bot");

@@ -135,6 +135,10 @@ impl SearchItem for RepoSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Repo: {}", self.metadata.path.display())
+        format!(
+            "{}: {}",
+            i18n::t("search.repos.repo"),
+            self.metadata.path.display()
+        )
     }
 }

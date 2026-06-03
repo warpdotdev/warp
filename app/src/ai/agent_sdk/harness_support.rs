@@ -26,7 +26,9 @@ pub fn run(
     args: HarnessSupportArgs,
 ) -> Result<()> {
     if !FeatureFlag::AgentHarness.is_enabled() {
-        return Err(anyhow::anyhow!("This feature is not enabled"));
+        return Err(anyhow::anyhow!(i18n::t(
+            "ai.agent_sdk.harness_support.feature_not_enabled"
+        )));
     }
 
     // Store the run ID so that it's included on all server requests, along with a workload token.
@@ -121,7 +123,11 @@ fn report_artifact(
                             println!("{json}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Artifact reported: {}", response.artifact_uid);
+                            println!(
+                                "{}",
+                                i18n::t("ai.agent_sdk.harness_support.artifact_reported")
+                                    .replace("{uid}", &response.artifact_uid)
+                            );
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -155,7 +161,10 @@ fn notify_user(
                             println!("{{}}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Notification sent.");
+                            println!(
+                                "{}",
+                                i18n::t("ai.agent_sdk.harness_support.notification_sent")
+                            );
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -192,7 +201,7 @@ fn finish_task(
                             println!("{{}}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Task finished.");
+                            println!("{}", i18n::t("ai.agent_sdk.harness_support.task_finished"));
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -227,9 +236,9 @@ fn report_shutdown(
                         client.report_error_shutdown(category, message).await
                     }
                     (None, None) => client.report_clean_shutdown().await,
-                    _ => anyhow::bail!(
-                        "--error-category and --error-message must be provided together"
-                    ),
+                    _ => anyhow::bail!(i18n::t(
+                        "ai.agent_sdk.harness_support.shutdown_error_args_required"
+                    )),
                 }
             },
             move |_, result, ctx| match result {
@@ -239,7 +248,10 @@ fn report_shutdown(
                             println!("{{}}");
                         }
                         OutputFormat::Pretty | OutputFormat::Text => {
-                            println!("Shutdown reported.");
+                            println!(
+                                "{}",
+                                i18n::t("ai.agent_sdk.harness_support.shutdown_reported")
+                            );
                         }
                     }
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);

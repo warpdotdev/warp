@@ -113,8 +113,6 @@ type PtyController = writeable_pty::PtyController<mio_channel::Sender<Message>>;
 type RemoteServerController =
     writeable_pty::remote_server_controller::RemoteServerController<mio_channel::Sender<Message>>;
 
-const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
-
 /// Whether the given CRDT operation should be dropped when broadcasting
 /// sharer input to viewers. In ambient agent sessions the sharer is a
 /// headless worker — forwarding its selection ops would produce a phantom
@@ -1671,7 +1669,7 @@ impl TerminalManager {
 
                 terminal_view.update(ctx, |view, ctx| {
                     view.show_persistent_toast(
-                        "Something went wrong. Please try sharing again.".to_string(),
+                        i18n::t("terminal.shared_session.error.internal"),
                         ToastFlavor::Error,
                         ctx,
                     );
@@ -2050,7 +2048,7 @@ impl TerminalManager {
                     }
                     LinkAccessLevelUpdateResponse::Error => {
                         let reason_string =
-                            "Failed to update permissions for shared session".to_owned();
+                            i18n::t("terminal.shared_session.error.update_permissions_failed");
                         view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
                     }
                 });
@@ -2074,7 +2072,7 @@ impl TerminalManager {
                     }
                     TeamAccessLevelUpdateResponse::Error(_) => {
                         view.show_persistent_toast(
-                            ACL_UPDATE_FAILURE_RESPONSE.to_owned(),
+                            i18n::t("common.something_went_wrong_try_again"),
                             crate::view_components::ToastFlavor::Error,
                             ctx,
                         );
@@ -2093,7 +2091,7 @@ impl TerminalManager {
                 if let RemoveGuestResponse::Error(_) = response {
                     terminal_view.update(ctx, |view, ctx| {
                         view.show_persistent_toast(
-                            ACL_UPDATE_FAILURE_RESPONSE.to_owned(),
+                            i18n::t("common.something_went_wrong_try_again"),
                             crate::view_components::ToastFlavor::Error,
                             ctx,
                         );
@@ -2104,7 +2102,7 @@ impl TerminalManager {
                 if let UpdatePendingUserRoleResponse::Error(_) = response {
                     terminal_view.update(ctx, |view, ctx| {
                         view.show_persistent_toast(
-                            ACL_UPDATE_FAILURE_RESPONSE.to_owned(),
+                            i18n::t("common.something_went_wrong_try_again"),
                             crate::view_components::ToastFlavor::Error,
                             ctx,
                         );

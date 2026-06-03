@@ -343,8 +343,7 @@ impl RemoteDiffStateModel {
             }
             DiffState::Loaded => {
                 let Some(base_content) = diffs else {
-                    let error =
-                        "Server reported loaded state but no diff data was available".to_string();
+                    let error = i18n::t("code_review.remote_diff.empty_data");
                     let load_duration = self
                         .tracked_diff_load_start_time
                         .take()

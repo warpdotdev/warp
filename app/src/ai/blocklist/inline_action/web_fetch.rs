@@ -37,7 +37,7 @@ impl WebFetchView {
         let appearance = Appearance::as_ref(app);
         let loading_icon = yellow_running_icon(appearance);
 
-        let text = format!("Fetching {} web pages...", urls.len());
+        let text = i18n::t("ai.web_fetch.fetching").replace("{count}", &urls.len().to_string());
 
         super::search_results_common::render_loading_header(text, loading_icon, app)
     }
@@ -49,9 +49,11 @@ impl WebFetchView {
     ) -> Box<dyn Element> {
         let successful_count = pages.iter().filter(|(_, _, success)| *success).count();
         let title_text = if successful_count == pages.len() {
-            format!("Fetched {} web pages", pages.len())
+            i18n::t("ai.web_fetch.fetched_all").replace("{count}", &pages.len().to_string())
         } else {
-            format!("Fetched {} of {} web pages", successful_count, pages.len())
+            i18n::t("ai.web_fetch.fetched_partial")
+                .replace("{successful}", &successful_count.to_string())
+                .replace("{total}", &pages.len().to_string())
         };
 
         let body = if self.collapsible.is_expanded {
@@ -63,7 +65,7 @@ impl WebFetchView {
         render_collapsible_search_results(
             title_text,
             pages.len(),
-            "URLs",
+            &i18n::t("ai.search_results.urls"),
             &self.collapsible,
             body,
             |ctx| {
@@ -118,7 +120,7 @@ impl WebFetchView {
 
         if pages.is_empty() {
             let no_results = Text::new_inline(
-                "No URLs fetched".to_string(),
+                i18n::t("ai.web_fetch.no_urls_fetched"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )

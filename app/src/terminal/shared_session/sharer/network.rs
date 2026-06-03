@@ -1304,8 +1304,6 @@ impl Network {
     }
 }
 
-const NO_QUOTA_REMAINING_MESSAGE: &str =
-    "Session sharing usage exceeded for the day. Please try again later.";
 fn session_terminated_reason_diagnostic_label(reason: &SessionTerminatedReason) -> &'static str {
     match reason {
         SessionTerminatedReason::NoUserQuotaRemaining {} => "no_user_quota_remaining",
@@ -1322,14 +1320,15 @@ pub fn session_terminated_reason_string(
     match reason {
         SessionTerminatedReason::NoUserQuotaRemaining {} => {
             // TODO: we should pass down the next refresh time to tell the user.
-            NO_QUOTA_REMAINING_MESSAGE.to_string()
+            i18n::t("terminal.shared_session.error.no_quota_remaining")
         }
         SessionTerminatedReason::ExceededSizeLimit => {
             let max_bytes = max_session_size.get_appropriate_unit(UnitType::Decimal);
-            format!("Session limit ({max_bytes}) exceeded. Please reshare to continue.")
+            i18n::t("terminal.shared_session.error.size_limit_exceeded")
+                .replace("{max_bytes}", &max_bytes.to_string())
         }
         SessionTerminatedReason::InternalServerError { .. } => {
-            "Session ended due to an internal error. Please try sharing again.".to_string()
+            i18n::t("terminal.shared_session.error.internal_ended")
         }
     }
 }
@@ -1338,31 +1337,31 @@ pub fn session_terminated_reason_string(
 pub fn failed_to_initialize_session_user_error(reason: &FailedToInitializeSessionReason) -> String {
     match reason {
         FailedToInitializeSessionReason::InternalServerError { .. } => {
-            "An internal error occurred. Please try sharing again."
+            i18n::t("terminal.shared_session.error.internal")
         }
         FailedToInitializeSessionReason::ScrollbackTooLarge {} => {
-            "Scrollback exceeds limit. Try sharing again without scrollback."
+            i18n::t("terminal.shared_session.error.scrollback_too_large")
         }
         FailedToInitializeSessionReason::NoUserQuotaRemaining { .. } => {
             // TODO: we should pass down the next refresh time to tell the user.
-            NO_QUOTA_REMAINING_MESSAGE
+            i18n::t("terminal.shared_session.error.no_quota_remaining")
         }
-        FailedToInitializeSessionReason::UserNotFound => "You must be logged in to share sessions.",
+        FailedToInitializeSessionReason::UserNotFound => {
+            i18n::t("terminal.shared_session.error.login_required")
+        }
     }
-    .to_string()
 }
 
 pub fn failed_to_add_guests_user_error(reason: &FailedToAddGuestsReason) -> String {
     match reason {
-        FailedToAddGuestsReason::Invalid => "Something went wrong. Please try again.",
+        FailedToAddGuestsReason::Invalid => i18n::t("common.something_went_wrong_try_again"),
         FailedToAddGuestsReason::NotWarpUsers => {
-            "One or more emails were not associated with Warp accounts."
+            i18n::t("terminal.shared_session.error.guests_not_warp_users")
         }
         FailedToAddGuestsReason::GuestAlreadyAdded => {
-            "One or more emails have already been added to the session."
+            i18n::t("terminal.shared_session.error.guests_already_added")
         }
     }
-    .to_string()
 }
 
 pub enum NetworkEvent {

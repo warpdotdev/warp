@@ -95,7 +95,7 @@ impl SearchItem for InlineItem {
                 .with_child(name_text.finish())
                 .with_child(
                     Text::new(
-                        " or ",
+                        i18n::t("common.or"),
                         appearance.ui_font_family(),
                         inline_styles::font_size(appearance),
                     )

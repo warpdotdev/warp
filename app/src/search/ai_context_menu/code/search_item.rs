@@ -261,8 +261,10 @@ impl SearchItem for CodeSearchItem {
 
     fn accessibility_label(&self) -> String {
         format!(
-            "Code symbol: {} in {}:{}",
+            "{}: {} {} {}:{}",
+            i18n::t("search.ai_context_menu.code_symbol_prefix"),
             self.code_symbol.symbol.name,
+            i18n::t("search.ai_context_menu.code_symbol_in"),
             self.code_symbol.file_path.to_string_lossy(),
             self.code_symbol.symbol.line_number
         )

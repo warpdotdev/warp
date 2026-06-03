@@ -62,7 +62,7 @@ impl SearchItem for NotebookSearchItem {
     ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let title = if self.cloud_notebook.model().title.is_empty() {
-            "Untitled".to_string()
+            i18n::t("search.untitled")
         } else {
             self.cloud_notebook.model().title.clone()
         };
@@ -142,6 +142,14 @@ impl SearchItem for NotebookSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Notebook: {}", self.cloud_notebook.model().title)
+        format!(
+            "{}: {}",
+            i18n::t("search.warp_drive.notebook"),
+            if self.cloud_notebook.model().title.is_empty() {
+                i18n::t("search.untitled")
+            } else {
+                self.cloud_notebook.model().title.clone()
+            }
+        )
     }
 }

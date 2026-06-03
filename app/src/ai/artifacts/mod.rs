@@ -292,7 +292,7 @@ pub fn file_button_label(filename: &str, filepath: &str) -> String {
     {
         return filepath_basename.to_string();
     }
-    "File".to_string()
+    i18n::t("ai.artifacts.file")
 }
 
 pub fn open_screenshot_lightbox<V: warpui::View>(
@@ -360,7 +360,7 @@ fn screenshot_lightbox_image_from_download_result(
             log::warn!("Failed to load screenshot artifact {index}: {e}");
             Some(LightboxImage {
                 source: LightboxImageSource::Loading,
-                description: Some("Failed to load".to_string()),
+                description: Some(i18n::t("ai.artifacts.failed_to_load")),
             })
         }
     }
@@ -386,7 +386,7 @@ pub fn download_file_artifact<V: warpui::View>(
                 log::warn!("Failed to load file artifact {artifact_uid}: {error}");
                 show_file_download_toast(
                     &artifact_uid,
-                    DismissibleToast::error("Failed to prepare file download.".to_string()),
+                    DismissibleToast::error(i18n::t("ai.artifacts.download_prepare_failed")),
                     ctx,
                 );
             }
@@ -447,7 +447,10 @@ fn open_file_download_picker<V: warpui::View>(
                 move |_me, result, ctx| match result {
                     Ok(()) => show_file_download_toast(
                         &artifact_uid,
-                        DismissibleToast::success(format!("Downloaded {toast_filename}.")),
+                        DismissibleToast::success(
+                            i18n::t("ai.artifacts.downloaded")
+                                .replace("{filename}", &toast_filename),
+                        ),
                         ctx,
                     ),
                     Err(error) => {

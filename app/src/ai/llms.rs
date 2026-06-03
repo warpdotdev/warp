@@ -46,7 +46,10 @@ pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bo
 /// Note: this key used to store a single [`AvailableLLMs`]
 /// but was migrated to store a full [`ModelsByFeature`].
 pub const MODELS_BY_FEATURE_CACHE_KEY: &str = "AvailableLLMs";
-const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Custom endpoint";
+
+fn custom_endpoint_usage_fallback_label() -> String {
+    i18n::t("ai.llms.custom_endpoint")
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LLMUsageMetadata {
@@ -65,15 +68,13 @@ pub enum DisableReason {
 
 impl DisableReason {
     /// Returns a user-facing tooltip explaining why the model is disabled.
-    pub fn tooltip_text(&self) -> &'static str {
+    pub fn tooltip_text(&self) -> String {
         match self {
-            DisableReason::AdminDisabled => "This model has been disabled by your team admin.",
-            DisableReason::OutOfRequests => "Please upgrade your plan to make more requests.",
-            DisableReason::ProviderOutage => {
-                "This model is temporarily unavailable due to a provider outage."
-            }
-            DisableReason::RequiresUpgrade => "Please upgrade your plan to access this model.",
-            DisableReason::Unavailable => "This model is unavailable.",
+            DisableReason::AdminDisabled => i18n::t("ai.model.disable_reason.admin_disabled"),
+            DisableReason::OutOfRequests => i18n::t("ai.model.disable_reason.out_of_requests"),
+            DisableReason::ProviderOutage => i18n::t("ai.model.disable_reason.provider_outage"),
+            DisableReason::RequiresUpgrade => i18n::t("ai.model.disable_reason.requires_upgrade"),
+            DisableReason::Unavailable => i18n::t("ai.model.disable_reason.unavailable"),
         }
     }
 
@@ -827,7 +828,7 @@ impl LLMPreferences {
         self.custom_llm_info_for_id(&config_key)
             .map(|info| info.display_name.as_str())
             .map(str::to_string)
-            .unwrap_or_else(|| CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL.to_string())
+            .unwrap_or_else(custom_endpoint_usage_fallback_label)
     }
 
     fn custom_llm_info_for_id_if_enabled(&self, id: &LLMId, app: &AppContext) -> Option<&LLMInfo> {

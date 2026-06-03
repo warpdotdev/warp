@@ -26,7 +26,7 @@ use super::model::{AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus};
 use super::view_impl::common::{
     render_switch_control_to_user_button, render_warping_indicator, render_warping_indicator_base,
     AutoExecuteButtonProps, ButtonProps, ForceRefreshButtonProps, MaybeShimmeringText,
-    WarpingIndicatorProps, WarpingProps, LOAD_OUTPUT_MESSAGE, WAITING_FOR_USER_INPUT_MESSAGE,
+    WarpingIndicatorProps, WarpingProps,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
@@ -725,7 +725,7 @@ impl BlocklistAIStatusBar {
             if let Some(tip) = self.current_tip.as_ref() {
                 send_telemetry_from_app_ctx!(
                     TelemetryEvent::AgentTipShown {
-                        tip: tip.description.clone()
+                        tip: tip.description_key.to_owned()
                     },
                     ctx
                 );
@@ -807,9 +807,8 @@ impl BlocklistAIStatusBar {
             app,
         );
         let default_warping_text = fallback_warping_text
-            .as_deref()
-            .unwrap_or(LOAD_OUTPUT_MESSAGE)
-            .to_owned();
+            .clone()
+            .unwrap_or_else(|| i18n::t("ai.loading.warping"));
         let secondary_element = if fallback_warping_text.is_some() {
             Some(render_fallback_explanation(model.as_ref(), app))
         } else {
@@ -927,14 +926,18 @@ impl BlocklistAIStatusBar {
         if let Some(auth_url) = ambient_agent_model.github_auth_url() {
             let error_message = ambient_agent_model
                 .github_auth_error_message()
-                .unwrap_or("Missing GitHub authentication.");
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| i18n::t("ai.status.missing_github_authentication"));
             return Some(render_wrapping_standard_message_bar(
                 CoreIcon::Triangle,
                 error_color,
                 error_color,
                 vec![
                     FormattedTextFragment::plain_text(format!("{error_message} ")),
-                    FormattedTextFragment::hyperlink("Authenticate GitHub", auth_url.to_owned()),
+                    FormattedTextFragment::hyperlink(
+                        i18n::t("ai.status.authenticate_github"),
+                        auth_url.to_owned(),
+                    ),
                 ],
                 app,
             ));
@@ -946,9 +949,9 @@ impl BlocklistAIStatusBar {
                 CoreIcon::StopFilled,
                 color,
                 color,
-                vec![FormattedTextFragment::plain_text(
-                    "Cloud agent run cancelled",
-                )],
+                vec![FormattedTextFragment::plain_text(i18n::t(
+                    "ai.status.cloud_agent_run_cancelled",
+                ))],
                 app,
             ));
         }
@@ -999,7 +1002,7 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
 
-    let tip_description = tip.description.clone();
+    let tip_description = tip.description_key.to_owned();
     let action_text = tip.action.clone().and_then(|action| action.display_text());
 
     let mut fragments = tip.to_formatted_text(app);
@@ -1009,7 +1012,10 @@ fn render_agent_tip(tip: &AgentTip, app: &AppContext) -> Box<dyn Element> {
         fragments.push(FormattedTextFragment::hyperlink_action(text, action));
     } else if let Some(link_target) = tip.link.clone() {
         fragments.push(FormattedTextFragment::plain_text(" "));
-        fragments.push(FormattedTextFragment::hyperlink("Learn more", link_target));
+        fragments.push(FormattedTextFragment::hyperlink(
+            i18n::t("common.learn_more"),
+            link_target,
+        ));
     }
 
     let formatted_text =
@@ -1069,9 +1075,9 @@ fn render_fallback_explanation<V: View>(
         .map(|info| info.base_model_name.as_str());
     let text = match primary_name {
         Some(primary) => {
-            format!("The primary model ({primary}) failed. Retrying with the fallback model.")
+            i18n::t("ai.status.primary_model_failed_with_name").replace("{model}", primary)
         }
-        None => "The primary model failed. Retrying with the fallback model.".to_owned(),
+        None => i18n::t("ai.status.primary_model_failed"),
     };
     let appearance = Appearance::as_ref(app);
     Text::new_inline(
@@ -1124,8 +1130,8 @@ fn resolve_fallback_warping_message<V: View>(
         return None;
     }
     Some(match display_name.as_deref() {
-        Some(name) => format!("Warping with {name}."),
-        None => "Warping with another model.".to_owned(),
+        Some(name) => i18n::t("ai.status.warping_with").replace("{model}", name),
+        None => i18n::t("ai.status.warping_with_another_model"),
     })
 }
 
@@ -1163,7 +1169,7 @@ impl View for BlocklistAIStatusBar {
                     WarpingIndicatorProps {
                         icon: None,
                         warping_indicator_text: MaybeShimmeringText::Shimmering {
-                            text: "Setting up environment".into(),
+                            text: i18n::t("ai.status.setting_up_environment").into(),
                             shimmering_text_handle: self.shimmering_text_handle.clone(),
                         },
                         non_shimmering_text: None,
@@ -1190,13 +1196,13 @@ impl View for BlocklistAIStatusBar {
                     WarpingIndicatorProps {
                         icon: Some(icons::gray_clock_icon(appearance).finish()),
                         warping_indicator_text: MaybeShimmeringText::Static(
-                            WAITING_FOR_USER_INPUT_MESSAGE.into(),
+                            i18n::t("ai.common.agent_waiting_for_instructions").into(),
                         ),
                         non_shimmering_text: None,
                         non_shimmering_suffix: None,
                         buttons: Some(render_switch_control_to_user_button(
-                            "Exit",
-                            "Exit agent input",
+                            i18n::t("common.exit"),
+                            i18n::t("ai.common.exit_agent_input_tooltip"),
                             ButtonProps {
                                 button_handle: &self.state_handles.take_over_button,
                                 keystroke: self.set_terminal_input_keystroke.as_ref(),

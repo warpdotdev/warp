@@ -191,7 +191,7 @@ impl<T: Action + Clone> SearchResultsMenuView<T> {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No results found",
+                i18n::t("search.no_results_found"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -339,9 +339,9 @@ impl<T: Action + Clone> View for SearchResultsMenuView<T> {
     }
 }
 
-fn renderable_title_name(query_filter: QueryFilter) -> Option<&'static str> {
+fn renderable_title_name(query_filter: QueryFilter) -> Option<String> {
     if matches!(query_filter, QueryFilter::AgentModeWorkflows) {
-        return Some("Prompts");
+        return Some(i18n::t("search.search_results_menu.prompts"));
     }
 
     None

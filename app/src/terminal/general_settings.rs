@@ -14,7 +14,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.show_warning_before_quitting",
-        description: "Whether to show a warning dialog before quitting Warp.",
+        description_key: "settings.schema.general.show_warning_before_quitting.description",
     },
     quit_on_last_window_closed: QuitOnLastWindowClosed {
         type: bool,
@@ -23,7 +23,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.quit_on_last_window_closed",
-        description: "Whether to quit Warp when the last window is closed.",
+        description_key: "settings.schema.general.quit_on_last_window_closed.description",
     },
     restore_session: RestoreSession {
         type: bool,
@@ -32,7 +32,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.restore_session",
-        description: "Whether to restore the previous session when Warp starts up.",
+        description_key: "settings.schema.general.restore_session.description",
     },
     add_app_as_login_item: LoginItem {
         type: bool,
@@ -44,7 +44,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "general.login_item",
-        description: "Whether to launch Warp automatically when you log in.",
+        description_key: "settings.schema.general.login_item.description",
     },
     // Records whether the app has been added as a login item.
     // If it has, we don't try to add it again unless the user explicitly
@@ -68,7 +68,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "general.link_tooltip",
-        description: "Whether to show a tooltip when hovering over links.",
+        description_key: "settings.schema.general.link_tooltip.description",
     },
     welcome_tips_features_used: WelcomeTipsFeaturesUsed {
         type: HashSet<Tip>,
@@ -164,7 +164,7 @@ define_settings_group!(GeneralSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "code.editor.auto_open_code_review_pane_on_first_agent_change",
-        description: "Whether to automatically open the code review pane when the agent makes its first change.",
+        description_key: "settings.schema.code.editor.auto_open_code_review_pane_on_first_agent_change.description",
     },
     bonus_grants_shown: BonusGrantsShown {
         type: HashSet<String>,

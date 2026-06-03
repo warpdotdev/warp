@@ -14,17 +14,8 @@ use crate::terminal::view::{InlineBannerId, TerminalAction};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
-const SPEEDBUMP_HEADER: &str = "Index Codebase?";
-const SPEEDBUMP_TEXT: &str = "Indexing helps agents quickly understand context and provide targeted solutions. Code is never stored on the server.";
 /// Uniform padding around the banner
 const PADDING: f32 = 12.;
-/// Text for the button that allows execution
-const ALLOW_BUTTON_TEXT: &str = "Index codebase";
-const ALLOW_SETTINGS_TEXT: &str = "Allow automatic indexing";
-const DISMISS_FOREVER_BUTTON_TEXT: &str = "Don't show again";
-
-const INDEXING_HEADER: &str = "Indexing codebase";
-const VIEW_STATUS_BUTTON_TEXT: &str = "View status";
 
 #[derive(PartialEq, Clone)]
 pub enum VisibilityState {
@@ -99,9 +90,9 @@ impl CodebaseIndexSpeedbumpBannerState {
 
         let title = ui_builder
             .span(if self.visibility_state == VisibilityState::Speedbump {
-                SPEEDBUMP_HEADER
+                i18n::t("ai.codebase_index.speedbump_header")
             } else {
-                INDEXING_HEADER
+                i18n::t("ai.codebase_index.indexing_header")
             })
             .with_style(UiComponentStyles {
                 font_color: Some(appearance.theme().foreground().into_solid()),
@@ -114,7 +105,7 @@ impl CodebaseIndexSpeedbumpBannerState {
         col.add_child(title);
 
         let body = ui_builder
-            .span(SPEEDBUMP_TEXT)
+            .span(i18n::t("ai.codebase_index.speedbump_text"))
             .with_style(UiComponentStyles {
                 font_color: Some(blended_colors::text_sub(theme, theme.surface_1())),
                 font_size: Some(appearance.ui_font_size()),
@@ -191,7 +182,7 @@ impl CodebaseIndexSpeedbumpBannerState {
                 .finish();
 
             let checkbox_text = ui_builder
-                .span(ALLOW_SETTINGS_TEXT)
+                .span(i18n::t("ai.codebase_index.allow_automatic_indexing"))
                 .with_style(UiComponentStyles {
                     font_color: Some(blended_colors::text_disabled(theme, theme.surface_1())),
                     font_size: Some(appearance.ui_font_size()),
@@ -226,7 +217,7 @@ impl CodebaseIndexSpeedbumpBannerState {
                                     ButtonVariant::Outlined,
                                     self.dont_show_again_mouse_state.clone(),
                                 )
-                                .with_text_label(DISMISS_FOREVER_BUTTON_TEXT.to_string())
+                                .with_text_label(i18n::t("common.do_not_show_again"))
                                 .with_style(UiComponentStyles {
                                     font_color: Some(appearance.theme().foreground().into_solid()),
                                     font_size: Some(appearance.ui_font_size()),
@@ -261,7 +252,7 @@ impl CodebaseIndexSpeedbumpBannerState {
                                     ButtonVariant::Outlined,
                                     self.allow_button_mouse_state.clone(),
                                 )
-                                .with_text_label(ALLOW_BUTTON_TEXT.to_string())
+                                .with_text_label(i18n::t("ai.codebase_index.index_codebase"))
                                 .with_style(UiComponentStyles {
                                     font_color: Some(appearance.theme().foreground().into_solid()),
                                     font_size: Some(appearance.ui_font_size()),
@@ -298,7 +289,7 @@ impl CodebaseIndexSpeedbumpBannerState {
                                     ButtonVariant::Outlined,
                                     self.view_status_button_mouse_state.clone(),
                                 )
-                                .with_text_label(VIEW_STATUS_BUTTON_TEXT.to_string())
+                                .with_text_label(i18n::t("ai.codebase_index.view_status"))
                                 .with_style(UiComponentStyles {
                                     font_color: Some(appearance.theme().foreground().into_solid()),
                                     font_size: Some(appearance.ui_font_size()),

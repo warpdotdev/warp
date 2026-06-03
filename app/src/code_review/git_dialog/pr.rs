@@ -46,16 +46,16 @@ pub struct PrState {
     changes_scroll_state: ClippedScrollStateHandle,
 }
 
-pub(super) fn confirm_label_for() -> &'static str {
-    "Create PR"
+pub(super) fn confirm_label_for() -> String {
+    i18n::t("code_review.git.create_pr")
 }
 
 pub(super) fn confirm_icon_for() -> Icon {
     Icon::Github
 }
 
-fn loading_label_for() -> &'static str {
-    "Creating\u{2026}"
+fn loading_label_for() -> String {
+    i18n::t("code_review.git.create_pr.loading")
 }
 
 /// PR mode has no prerequisites beyond a branch with commits; confirm is
@@ -234,9 +234,9 @@ pub(super) fn show_pr_created_toast(pr_info: &PrInfo, ctx: &mut ViewContext<GitD
     let window_id = ctx.window_id();
     let url = pr_info.url.clone();
     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-        let link = ToastLink::new("Open PR".to_string()).with_href(url);
+        let link = ToastLink::new(i18n::t("code_review.git.open_pr")).with_href(url);
         let toast =
-            DismissibleToast::default("PR successfully created.".to_string()).with_link(link);
+            DismissibleToast::default(i18n::t("code_review.git.create_pr.success")).with_link(link);
         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
     });
 }
@@ -249,7 +249,8 @@ pub(super) fn render_body(
     let base_branch = state
         .base_branch_name
         .as_deref()
-        .unwrap_or("default branch");
+        .map(str::to_string)
+        .unwrap_or_else(|| i18n::t("code_review.git.default_branch"));
     let branch_name = format!("{branch_name} \u{2192} {base_branch}");
     Flex::column()
         .with_child(
@@ -266,7 +267,7 @@ fn render_changes_section(state: &PrState, appearance: &Appearance) -> Box<dyn E
     let main_color = theme.main_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Changes",
+        i18n::t("code_review.git.changes"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )

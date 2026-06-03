@@ -49,16 +49,16 @@ impl LinkTarget {
     pub fn secondary_action(&self) -> Option<SecondaryAction> {
         match self {
             LinkTarget::LocalDirectory { .. } => Some(SecondaryAction {
-                label: "New session".into(),
-                tooltip: Some("Open a new terminal session in this directory".into()),
-                accessibility_content: "Open in terminal session".into(),
+                label: i18n::t("notebooks.link.new_session").into(),
+                tooltip: Some(i18n::t("notebooks.link.new_session_tooltip").into()),
+                accessibility_content: i18n::t("notebooks.link.open_in_terminal_session").into(),
             }),
             LinkTarget::LocalFile {
                 is_markdown: true, ..
             } => Some(SecondaryAction {
-                label: "Open in editor".into(),
+                label: i18n::t("notebooks.file.open_in_editor").into(),
                 tooltip: None,
-                accessibility_content: "Edit Markdown file".into(),
+                accessibility_content: i18n::t("notebooks.link.edit_markdown_file").into(),
             }),
             LinkTarget::Url(_) | LinkTarget::LocalFile { .. } => None,
         }
@@ -404,9 +404,13 @@ impl From<std::io::Error> for ResolveError {
 impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ResolveError::FileNotFound => f.write_str("File not found"),
-            ResolveError::MissingContext => f.write_str("No base directory"),
-            ResolveError::Unknown => f.write_str("Broken file link"),
+            ResolveError::FileNotFound => {
+                f.write_str(&i18n::t("notebooks.link.error.file_not_found"))
+            }
+            ResolveError::MissingContext => {
+                f.write_str(&i18n::t("notebooks.link.error.no_base_directory"))
+            }
+            ResolveError::Unknown => f.write_str(&i18n::t("notebooks.link.error.broken_file_link")),
         }
     }
 }

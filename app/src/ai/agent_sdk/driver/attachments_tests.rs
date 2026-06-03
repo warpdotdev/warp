@@ -10,6 +10,10 @@ use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::MockAIClient;
 
+fn use_english_locale() {
+    i18n::set_locale("en");
+}
+
 #[test]
 fn process_attachment_text_file() {
     let mut f = NamedTempFile::with_suffix(".txt").unwrap();
@@ -29,6 +33,8 @@ fn process_attachment_text_file() {
 
 #[test]
 fn process_attachment_too_large() {
+    use_english_locale();
+
     let mut f = NamedTempFile::with_suffix(".bin").unwrap();
     let data = vec![0u8; MAX_ATTACHMENT_SIZE_BYTES + 1];
     f.write_all(&data).unwrap();
@@ -39,6 +45,8 @@ fn process_attachment_too_large() {
 
 #[test]
 fn process_attachment_nonexistent_file() {
+    use_english_locale();
+
     let path = std::path::PathBuf::from("/tmp/nonexistent_attachment_test_file.xyz");
     let err = process_attachment(&path, 0).unwrap_err();
     assert!(err.to_string().contains("Failed to read"));
@@ -328,6 +336,8 @@ async fn e2e_empty_attachment_list_returns_none_without_creating_dir() {
 
 #[tokio::test]
 async fn e2e_get_handoff_snapshot_attachments_failure_is_fatal() {
+    use_english_locale();
+
     // When the listing call errors, the function must return Err wrapping the underlying
     // message with a context describing where it happened.
     let _guard = FeatureFlag::OzHandoff.override_enabled(true);

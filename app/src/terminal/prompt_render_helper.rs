@@ -248,31 +248,43 @@ impl PromptRenderHelper {
         if let Some(pending_session_id) = model.pending_session_id() {
             if let Some(state) = sessions.remote_server_setup_state(pending_session_id) {
                 return match state {
-                    RemoteServerSetupState::Checking => "Starting shell...".to_string(),
+                    RemoteServerSetupState::Checking => {
+                        i18n::t("terminal.remote_server.loading.starting_shell")
+                    }
                     RemoteServerSetupState::Installing {
                         progress_percent: Some(p),
-                    } => format!("Installing Warp SSH Extension... ({p}%)"),
+                    } => {
+                        i18n::t("terminal.remote_server.loading.installing_ssh_extension_progress")
+                            .replace("{percent}", &p.to_string())
+                    }
                     RemoteServerSetupState::Installing {
                         progress_percent: None,
-                    } => "Installing Warp SSH Extension...".to_string(),
+                    } => i18n::t("terminal.remote_server.loading.installing_ssh_extension"),
                     RemoteServerSetupState::Updating => {
-                        "Updating Warp SSH Extension...".to_string()
+                        i18n::t("terminal.remote_server.loading.updating_ssh_extension")
                     }
-                    RemoteServerSetupState::Initializing => "Initializing...".to_string(),
-                    RemoteServerSetupState::Ready => "Starting shell...".to_string(),
+                    RemoteServerSetupState::Initializing => {
+                        i18n::t("terminal.remote_server.loading.initializing")
+                    }
+                    RemoteServerSetupState::Ready => {
+                        i18n::t("terminal.remote_server.loading.starting_shell")
+                    }
                     // Failed and Unsupported both fall back to the legacy SSH
                     // flow, so we render the same generic prompt as a normal
                     // SSH session that doesn't have the remote-server extension.
                     RemoteServerSetupState::Failed { .. }
-                    | RemoteServerSetupState::Unsupported { .. } => "Starting shell...".to_string(),
+                    | RemoteServerSetupState::Unsupported { .. } => {
+                        i18n::t("terminal.remote_server.loading.starting_shell")
+                    }
                 };
             }
         }
 
         if !sessions.is_empty() {
-            "Starting shell...".to_string()
+            i18n::t("terminal.remote_server.loading.starting_shell")
         } else {
-            format!("Starting {}...", model.shell_launch_state().display_name())
+            i18n::t("terminal.loading.starting_shell_named")
+                .replace("{shell}", model.shell_launch_state().display_name())
         }
     }
 
@@ -431,7 +443,7 @@ impl PromptRenderHelper {
             let prompt = PromptAndPadding {
                 element: PromptAndPaddingElement::Text(Box::new(
                     Text::new_inline(
-                        "Loading prompt...",
+                        i18n::t("terminal.loading_prompt"),
                         appearance.monospace_font_family(),
                         appearance.monospace_font_size(),
                     )

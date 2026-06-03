@@ -168,7 +168,7 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let chip_color = theme.sub_text_color(theme.surface_3()).into_solid();
     Container::new(
-        Text::new_inline("BETA", appearance.ui_font_family(), 10.)
+        Text::new_inline(i18n::t("common.beta"), appearance.ui_font_family(), 10.)
             .with_color(chip_color)
             .finish(),
     )
@@ -301,6 +301,41 @@ impl Display for SettingsSection {
 }
 
 impl SettingsSection {
+    /// Returns the localized sidebar navigation label for this section.
+    ///
+    /// This mirrors the English text produced by `Display`, but routes it
+    /// through the i18n catalog so the sidebar can be translated. `Display`
+    /// itself must remain unchanged because it feeds crash-reporting and
+    /// `FromStr`.
+    pub fn nav_label(&self) -> String {
+        match self {
+            SettingsSection::About => i18n::t("settings.nav.about"),
+            SettingsSection::Account => i18n::t("settings.nav.account"),
+            SettingsSection::MCPServers => i18n::t("settings.nav.mcp_servers"),
+            SettingsSection::BillingAndUsage => i18n::t("settings.nav.billing_and_usage"),
+            SettingsSection::Appearance => i18n::t("settings.nav.appearance"),
+            SettingsSection::Features => i18n::t("settings.nav.features"),
+            SettingsSection::Keybindings => i18n::t("settings.nav.keybindings"),
+            SettingsSection::Privacy => i18n::t("settings.nav.privacy"),
+            SettingsSection::Referrals => i18n::t("settings.nav.referrals"),
+            SettingsSection::SharedBlocks => i18n::t("settings.nav.shared_blocks"),
+            SettingsSection::Teams => i18n::t("settings.nav.teams"),
+            SettingsSection::WarpDrive => i18n::t("settings.nav.warp_drive"),
+            SettingsSection::Warpify => i18n::t("settings.nav.warpify"),
+            SettingsSection::AI => i18n::t("settings.nav.ai"),
+            SettingsSection::WarpAgent => i18n::t("settings.nav.warp_agent"),
+            SettingsSection::AgentProfiles => i18n::t("settings.nav.agent_profiles"),
+            SettingsSection::AgentMCPServers => i18n::t("settings.nav.agent_mcp_servers"),
+            SettingsSection::Knowledge => i18n::t("settings.nav.knowledge"),
+            SettingsSection::ThirdPartyCLIAgents => i18n::t("settings.nav.third_party_cli_agents"),
+            SettingsSection::Code => i18n::t("settings.nav.code"),
+            SettingsSection::CodeIndexing => i18n::t("settings.nav.code_indexing"),
+            SettingsSection::EditorAndCodeReview => i18n::t("settings.nav.editor_and_code_review"),
+            SettingsSection::CloudEnvironments => i18n::t("settings.nav.cloud_environments"),
+            SettingsSection::OzCloudAPIKeys => i18n::t("settings.nav.oz_cloud_api_keys"),
+        }
+    }
+
     /// Returns true if this section is a subpage under any umbrella.
     pub fn is_subpage(&self) -> bool {
         self.is_ai_subpage() || self.is_code_subpage() || self.is_cloud_platform_subpage()
@@ -606,8 +641,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             vec![
                 ToggleSettingActionPair::custom(
                     SettingActionPairDescriptions::new(
-                        "Show initialization block",
-                        "Hide initialization block",
+                        i18n::t("settings.action.show_initialization_block"),
+                        i18n::t("settings.action.hide_initialization_block"),
                     ),
                     builder(SettingsAction::Debug(
                         DebugSettingsAction::ToggleInitializationBlock,
@@ -620,8 +655,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 ),
                 ToggleSettingActionPair::custom(
                     SettingActionPairDescriptions::new(
-                        "Show in-band command blocks",
-                        "Hide in-band command blocks",
+                        i18n::t("settings.action.show_in_band_command_blocks"),
+                        i18n::t("settings.action.hide_in_band_command_blocks"),
                     ),
                     builder(SettingsAction::Debug(
                         DebugSettingsAction::ToggleInBandCommandBlocks,
@@ -641,25 +676,25 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
             vec![
                 ToggleSettingActionPair::new(
-                    "recording mode",
+                    i18n::t("settings.action.recording_mode"),
                     WorkspaceAction::ToggleRecordingMode,
                     &id!("Workspace"),
                     flags::RECORDING_MODE_FLAG,
                 ),
                 ToggleSettingActionPair::new(
-                    "in-band generators for new sessions",
+                    i18n::t("settings.action.in_band_generators_for_new_sessions"),
                     WorkspaceAction::ToggleInBandGenerators,
                     &id!("Workspace"),
                     flags::IN_BAND_GENERATORS_FLAG,
                 ),
                 ToggleSettingActionPair::new(
-                    "debug network status",
+                    i18n::t("settings.action.debug_network_status"),
                     WorkspaceAction::ToggleDebugNetworkStatus,
                     &id!("Workspace"),
                     flags::DEBUG_NETWORK_ONLINE_FLAG,
                 ),
                 ToggleSettingActionPair::new(
-                    "memory statistics",
+                    i18n::t("settings.action.memory_statistics"),
                     WorkspaceAction::ToggleShowMemoryStats,
                     &id!("Workspace"),
                     flags::DEBUG_SHOW_MEMORY_STATS_FLAG,
@@ -684,10 +719,10 @@ pub struct SettingActionPairDescriptions {
 }
 
 impl SettingActionPairDescriptions {
-    pub fn new(enable: &str, disable: &str) -> Self {
+    pub fn new(enable: impl Into<String>, disable: impl Into<String>) -> Self {
         Self {
-            enable: enable.to_owned(),
-            disable: disable.to_owned(),
+            enable: enable.into(),
+            disable: disable.into(),
         }
     }
 }
@@ -750,17 +785,20 @@ impl<T: Action + Clone> ToggleSettingActionPair<T> {
     /// is in the enabled state,
     /// and absent when the action is in the disabled state.
     pub fn new(
-        description_suffix: &str,
+        description_suffix: impl AsRef<str>,
         toggle_action: T,
         context_prefix: &ContextPredicate,
         context_boolean_flag: &'static str,
     ) -> Self {
         use warpui::keymap::macros::id;
+        let description_suffix = description_suffix.as_ref();
 
         ToggleSettingActionPair {
             descriptions: SettingActionPairDescriptions {
-                enable: format!("Enable {description_suffix}"),
-                disable: format!("Disable {description_suffix}"),
+                enable: i18n::t("settings.action.enable")
+                    .replace("{description}", description_suffix),
+                disable: i18n::t("settings.action.disable")
+                    .replace("{description}", description_suffix),
             },
             contexts: SettingActionPairContexts {
                 enable_predicate: context_prefix.to_owned() & !id!(context_boolean_flag),
@@ -1100,7 +1138,8 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Settings"));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(i18n::t("settings.title")));
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
@@ -1234,7 +1273,7 @@ impl SettingsView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(i18n::t("common.search"), ctx);
             editor
         });
 
@@ -1593,28 +1632,28 @@ impl SettingsView {
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
-                MenuItemFields::new("Split pane right")
+                MenuItemFields::new(i18n::t("common.split_pane_right"))
                     .with_on_select_action(SettingsAction::Split(Direction::Right))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_right",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane left")
+                MenuItemFields::new(i18n::t("common.split_pane_left"))
                     .with_on_select_action(SettingsAction::Split(Direction::Left))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_left",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane down")
+                MenuItemFields::new(i18n::t("common.split_pane_down"))
                     .with_on_select_action(SettingsAction::Split(Direction::Down))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_down",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane up")
+                MenuItemFields::new(i18n::t("common.split_pane_up"))
                     .with_on_select_action(SettingsAction::Split(Direction::Up))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_up",
@@ -1643,7 +1682,7 @@ impl SettingsView {
             );
 
             items.push(
-                MenuItemFields::new("Close pane")
+                MenuItemFields::new(i18n::t("common.close_pane"))
                     .with_on_select_action(SettingsAction::Close)
                     .with_key_shortcut_label(
                         custom_tag_to_keystroke(CustomAction::CloseCurrentSession.into())
@@ -2323,10 +2362,10 @@ impl SettingsView {
         Container::new(
             Align::new(
                 Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_children([
                         Text::new(
-                            "No settings match your search.",
+                            i18n::t("settings.search.no_matches"),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2334,7 +2373,7 @@ impl SettingsView {
                         .with_color(theme.sub_text_color(theme.background()).into_solid())
                         .finish(),
                         Text::new(
-                            "You may want to try using different keywords or checking for any possible typos.",
+                            i18n::t("settings.search.no_matches_hint"),
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -2345,7 +2384,7 @@ impl SettingsView {
             )
             .finish(),
         )
-            .with_uniform_margin(16.)
+        .with_uniform_margin(16.)
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .with_background(internal_colors::fg_overlay_1(appearance.theme()))
         .finish()
@@ -2753,7 +2792,7 @@ impl BackingView for SettingsView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Settings")
+        view::HeaderContent::simple(i18n::t("settings.title"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

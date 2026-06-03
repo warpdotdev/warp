@@ -144,48 +144,48 @@ fn should_send_git_ops_ai_request(app: &AppContext) -> bool {
 /// Maps a raw git error string to a user-friendly toast message. Known
 /// failure modes get dedicated copy; anything else falls back to a generic
 /// message (the raw error is always logged separately at the call site).
-fn user_facing_git_error(raw: &str) -> &'static str {
+fn user_facing_git_error(raw: &str) -> String {
     let lower = raw.to_lowercase();
     if lower.contains("nothing to commit") {
-        "No changes to commit."
+        i18n::t("code_review.git.error.no_changes_to_commit")
     } else if lower.contains("please tell me who you are")
         || lower.contains("author identity unknown")
     {
-        "Git identity not configured. Set user.name and user.email."
+        i18n::t("code_review.git.error.identity_not_configured")
     } else if lower.contains("updates were rejected")
         || lower.contains("non-fast-forward")
         || lower.contains("fetch first")
     {
-        "Remote has new changes \u{2014} pull before pushing."
+        i18n::t("code_review.git.error.remote_has_new_changes")
     } else if lower.contains("does not appear to be a git repository")
         || lower.contains("no configured push destination")
         || lower.contains("no such remote")
     {
-        "No remote configured for this branch."
+        i18n::t("code_review.git.error.no_remote")
     } else if lower.contains("authentication failed")
         || lower.contains("permission denied (publickey)")
     {
-        "Authentication failed. Check your Git credentials."
+        i18n::t("code_review.git.error.auth_failed")
     } else if lower.contains("could not resolve host")
         || lower.contains("network is unreachable")
         || lower.contains("connection timed out")
     {
-        "Network error. Check your connection."
+        i18n::t("code_review.git.error.network")
     } else if lower.contains("repository not found") {
-        "Remote repository not found."
+        i18n::t("code_review.git.error.remote_repo_not_found")
     } else if lower.contains("failed to execute gh command") {
         // `run_gh_command` wraps spawn failures with this prefix, which is
         // the reliable "gh binary missing" signal.
-        "GitHub CLI (gh) not installed. See https://cli.github.com/."
+        i18n::t("code_review.git.error.gh_not_installed")
     } else if lower.contains("not logged in")
         || lower.contains("authentication required")
         || lower.contains("gh auth login")
     {
         // Phrases mirror `context_chips::current_prompt::is_gh_auth_error`,
         // which has been vetted against real `gh` failure output.
-        "GitHub CLI not authenticated. Run `gh auth login`."
+        i18n::t("code_review.git.error.gh_not_authenticated")
     } else {
-        "Git operation failed."
+        i18n::t("code_review.git.error.generic")
     }
 }
 
@@ -206,7 +206,7 @@ fn render_branch_section(
     let sub_color = theme.sub_text_color(theme.surface_1()).into_solid();
 
     let label = Text::new(
-        "Branch",
+        i18n::t("code_review.git.branch"),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -291,10 +291,12 @@ fn render_file_changes_box(
     let total_deletions: usize = file_changes.iter().map(|f| f.deletions).sum();
 
     let files_text = Text::new(
-        format!(
-            "{total_files} {}",
-            if total_files == 1 { "file" } else { "files" }
-        ),
+        i18n::t(if total_files == 1 {
+            "code_review.git.files.singular"
+        } else {
+            "code_review.git.files.plural"
+        })
+        .replace("{count}", &total_files.to_string()),
         appearance.ui_font_family(),
         appearance.ui_font_size(),
     )
@@ -499,7 +501,7 @@ impl GitDialog {
         // communicates which of commit / commit-and-push / commit-and-create-PR
         // will actually run on click.
         let (confirm_button, cancel_button, close_button) =
-            Self::build_dialog_buttons("Confirm", None, ctx);
+            Self::build_dialog_buttons(i18n::t("code_review.git.confirm"), None, ctx);
         let state = commit::new_state(&repo_path, allow_create_pr, has_upstream, ctx);
         let this = Self {
             repo_path,
@@ -559,7 +561,7 @@ impl GitDialog {
     }
 
     fn build_dialog_buttons(
-        confirm_label: &'static str,
+        confirm_label: String,
         confirm_icon: Option<Icon>,
         ctx: &mut ViewContext<Self>,
     ) -> (
@@ -568,7 +570,7 @@ impl GitDialog {
         ViewHandle<ActionButton>,
     ) {
         let confirm_button = ctx.add_typed_action_view(move |_ctx| {
-            let mut button = ActionButton::new(confirm_label, SecondaryTheme)
+            let mut button = ActionButton::new(confirm_label.clone(), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .with_height(32.);
             if let Some(icon) = confirm_icon {
@@ -577,7 +579,7 @@ impl GitDialog {
             button.on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Confirm))
         });
         let cancel_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme)
+            ActionButton::new(i18n::t("common.cancel"), NakedTheme)
                 .with_size(ButtonSize::Small)
                 .with_height(32.)
                 .on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Cancel))
@@ -614,7 +616,7 @@ impl GitDialog {
 
     /// Disables cancel/confirm/close and swaps the confirm label while the
     /// async op is running.
-    fn set_loading(&mut self, loading_label: &'static str, ctx: &mut ViewContext<Self>) {
+    fn set_loading(&mut self, loading_label: String, ctx: &mut ViewContext<Self>) {
         self.loading = true;
         self.confirm_button.update(ctx, |b, ctx| {
             b.set_label(loading_label, ctx);
@@ -650,17 +652,17 @@ impl GitDialog {
         });
     }
 
-    fn title(&self) -> &'static str {
+    fn title(&self) -> String {
         match &self.mode {
-            GitDialogMode::Commit(_) => "Commit your changes",
+            GitDialogMode::Commit(_) => i18n::t("code_review.git.dialog.title.commit"),
             GitDialogMode::Push(state) => {
                 if state.publish {
-                    "Publish branch"
+                    i18n::t("code_review.git.dialog.title.publish")
                 } else {
-                    "Push changes"
+                    i18n::t("code_review.git.dialog.title.push")
                 }
             }
-            GitDialogMode::CreatePr(_) => "Create pull request",
+            GitDialogMode::CreatePr(_) => i18n::t("code_review.git.dialog.title.create_pr"),
         }
     }
 

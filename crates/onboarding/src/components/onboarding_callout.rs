@@ -92,7 +92,7 @@ pub struct Button {
 impl Button {
     pub fn next(handler: MouseEventHandler) -> Self {
         Self {
-            text: Cow::Borrowed("Next"),
+            text: Cow::Owned(i18n::t("common.next")),
             keystroke: Some(Keystroke {
                 key: "enter".into(),
                 ..Default::default()

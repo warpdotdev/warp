@@ -28,14 +28,18 @@ pub struct CreateProjectView {
 }
 
 struct BuildSuggestion {
-    prompt: &'static str,
+    prompt_key: &'static str,
     mouse_state: MouseStateHandle,
 }
 
 impl CreateProjectView {
     pub fn new(is_ftux: bool, ctx: &mut ViewContext<Self>) -> Self {
-        let editor =
-            ctx.add_typed_action_view(|ctx| GlowingEditor::new("What do you want to build?", ctx));
+        let editor = ctx.add_typed_action_view(|ctx| {
+            GlowingEditor::new(
+                i18n::t("coding_entrypoints.create_project.placeholder"),
+                ctx,
+            )
+        });
 
         ctx.subscribe_to_view(&editor, move |me, _, event, ctx| {
             me.handle_editor_event(event, ctx);
@@ -43,23 +47,23 @@ impl CreateProjectView {
 
         let suggestions = vec![
             BuildSuggestion {
-                prompt: "Build a Minesweeper clone in React",
+                prompt_key: "coding_entrypoints.create_project.suggestion.minesweeper",
                 mouse_state: Default::default(),
             },
             BuildSuggestion {
-                prompt: "Code a Node.js server that returns random quotes from a JSON file",
+                prompt_key: "coding_entrypoints.create_project.suggestion.random_quotes_server",
                 mouse_state: Default::default(),
             },
             BuildSuggestion {
-                prompt: "Write a CSV to JSON converter CLI",
+                prompt_key: "coding_entrypoints.create_project.suggestion.csv_to_json_cli",
                 mouse_state: Default::default(),
             },
             BuildSuggestion {
-                prompt: "Create a starter template for a résumé web page",
+                prompt_key: "coding_entrypoints.create_project.suggestion.resume_template",
                 mouse_state: Default::default(),
             },
             BuildSuggestion {
-                prompt: "Make a Conway's Game of Life simulation",
+                prompt_key: "coding_entrypoints.create_project.suggestion.game_of_life",
                 mouse_state: Default::default(),
             },
         ];
@@ -122,7 +126,7 @@ impl CreateProjectView {
         let font_color = theme.sub_text_color(theme.background()).into_solid();
 
         let mouse_state = suggestion.mouse_state.clone();
-        let prompt = suggestion.prompt;
+        let prompt = i18n::t(suggestion.prompt_key);
 
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -140,7 +144,7 @@ impl CreateProjectView {
                 .finish(),
                 Expanded::new(
                     1.,
-                    Text::new(prompt, font_family, font_size)
+                    Text::new(prompt.clone(), font_family, font_size)
                         .with_color(font_color)
                         .with_style(Properties::default().weight(Weight::Medium))
                         .soft_wrap(false)
@@ -163,7 +167,7 @@ impl CreateProjectView {
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(CreateProjectAction::SuggestionSelected {
-                prompt: prompt.to_string(),
+                prompt: prompt.clone(),
             });
         })
         .finish()

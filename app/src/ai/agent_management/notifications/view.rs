@@ -120,7 +120,7 @@ impl NotificationMailboxView {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::XSmall)
-                .with_tooltip("Close")
+                .with_tooltip(i18n::t("agent_management.notifications.close"))
                 .with_tooltip_sublabel("Esc")
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(NotificationMailboxViewAction::Dismiss);
@@ -128,11 +128,14 @@ impl NotificationMailboxView {
         });
 
         let mark_all_read_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Mark all as read", NakedTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(NotificationMailboxViewAction::MarkAllRead);
-                })
+            ActionButton::new(
+                i18n::t("agent_management.notifications.mark_all_as_read"),
+                NakedTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(NotificationMailboxViewAction::MarkAllRead);
+            })
         });
 
         Self {
@@ -409,7 +412,7 @@ impl NotificationMailboxView {
 
         let label = appearance
             .ui_builder()
-            .wrappable_text("Notifications".to_string(), false)
+            .wrappable_text(i18n::t("agent_management.notifications.title"), false)
             .with_style(UiComponentStyles {
                 font_size: Some(14.),
                 font_color: Some(theme.main_text_color(theme.surface_2()).into()),
@@ -460,9 +463,11 @@ impl NotificationMailboxView {
             let is_active = self.active_filter == filter;
             let count = notifications.filtered_count(filter);
             let label = if count == 0 {
-                filter.label().to_string()
+                filter.label()
             } else {
-                format!("{} ({count})", filter.label())
+                i18n::t("agent_management.notifications.filter_with_count")
+                    .replace("{label}", &filter.label())
+                    .replace("{count}", &count.to_string())
             };
             let text_color = if is_active {
                 theme.main_text_color(theme.surface_2())
@@ -546,7 +551,7 @@ impl NotificationMailboxView {
         Container::new(
             appearance
                 .ui_builder()
-                .wrappable_text("No notifications".to_string(), false)
+                .wrappable_text(i18n::t("agent_management.notifications.empty"), false)
                 .with_style(UiComponentStyles {
                     font_size: Some(14.),
                     font_color: Some(theme.sub_text_color(theme.surface_2()).into()),

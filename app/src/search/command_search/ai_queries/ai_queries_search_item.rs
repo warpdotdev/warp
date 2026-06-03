@@ -152,7 +152,8 @@ impl SearchItem for AIQuerySearchResultItem {
             Container::new(
                 ui_builder
                     .paragraph(format!(
-                        "Ran {}",
+                        "{} {}",
+                        i18n::t("search.command_search.result.ran_prefix"),
                         format_approx_duration_from_now(self.start_time)
                     ))
                     .build()
@@ -178,6 +179,10 @@ impl SearchItem for AIQuerySearchResultItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("AI query: {}", self.query_text)
+        format!(
+            "{}: {}",
+            i18n::t("search.command_search.result.ai_query_prefix"),
+            self.query_text
+        )
     }
 }

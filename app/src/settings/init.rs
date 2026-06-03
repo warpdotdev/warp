@@ -11,6 +11,7 @@ use super::app_icon::AppIconSettings;
 use super::app_installation_detection::UserAppInstallDetectionSettings;
 use super::cloud_preferences::CloudPreferencesSettings;
 use super::initializer::SettingsInitializer;
+use super::language::LanguageSettings;
 use super::native_preference::NativePreferenceSettings;
 use super::{
     AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
@@ -83,6 +84,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     WarpDrivePrivacySettings::register(ctx);
     UserAppInstallDetectionSettings::register(ctx);
     AppIconSettings::register(ctx);
+    LanguageSettings::register(ctx);
     AppEditorSettings::register(ctx);
     InputSettings::register(ctx);
     WarpifySettings::register(ctx);
@@ -123,6 +125,11 @@ pub fn init(
     if needs_settings_file_migration(ctx) {
         migrate_native_settings_to_settings_file(ctx);
     }
+
+    // Initialize the i18n layer from the saved language preference so the very
+    // first frame renders in the user's chosen language (Chinese by default).
+    let language = LanguageSettings::as_ref(ctx).language();
+    i18n::set_locale(language.locale_tag());
 
     let use_thin_strokes = *FontSettings::as_ref(ctx).use_thin_strokes;
 
@@ -194,6 +201,18 @@ pub fn init(
                     report_if_error!(input_settings.input_box_type.set_value(new_type, ctx));
                 });
             }
+        },
+    );
+
+    // When the user switches languages, swap the active i18n catalog and
+    // repaint every view in every window so all labels update live — no
+    // restart required.
+    ctx.subscribe_to_model(
+        &LanguageSettings::handle(ctx),
+        |language_settings, _event, ctx| {
+            let language = language_settings.as_ref(ctx).language();
+            i18n::set_locale(language.locale_tag());
+            ctx.invalidate_all_views();
         },
     );
 

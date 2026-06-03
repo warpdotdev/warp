@@ -224,7 +224,8 @@ impl TerminalView {
                 match &self.inline_banners_state.open_in_warp_banner {
                     Some(banner_state) => {
                         ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
-                            format!("Open {} in Warp", banner_state.target.path.display()),
+                            i18n::t("terminal.open_in_warp.a11y.open")
+                                .replace("{path}", &banner_state.target.path.display().to_string()),
                             WarpA11yRole::UserAction,
                         ))
                     }
@@ -233,14 +234,14 @@ impl TerminalView {
             }
             OpenInWarpBannerAction::Close => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
-                    "Close View in Warp banner",
+                    i18n::t("terminal.open_in_warp.a11y.close_banner"),
                     WarpA11yRole::UserAction,
                 ))
             }
             OpenInWarpBannerAction::LearnMore => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new(
-                    "Learn more",
-                    "Learn more about opening Markdown files in Warp",
+                    i18n::t("common.learn_more"),
+                    i18n::t("terminal.open_in_warp.a11y.learn_more_help"),
                     WarpA11yRole::UserAction,
                 ))
             }

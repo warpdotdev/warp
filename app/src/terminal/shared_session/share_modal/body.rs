@@ -39,7 +39,7 @@ struct RadioButtonGroupState {
 }
 
 struct ScrollbackOption {
-    label: &'static str,
+    label: String,
     scrollback_type: SharedSessionScrollbackType,
     mouse_state_handle: MouseStateHandle,
     is_disabled: bool,
@@ -156,15 +156,15 @@ impl Body {
             > max_session_size.as_u64();
 
         let scrollback_from_active_block_message = if model.is_alt_screen_active() {
-            "Share from current screen"
+            i18n::t("terminal.shared_session.scrollback.current_screen")
         } else if model
             .block_list()
             .active_block()
             .is_active_and_long_running()
         {
-            "Share from current block"
+            i18n::t("terminal.shared_session.scrollback.current_block")
         } else {
-            "Share without scrollback"
+            i18n::t("terminal.shared_session.scrollback.without_scrollback")
         };
 
         let mut options = vec![
@@ -175,7 +175,7 @@ impl Body {
                 is_disabled: is_scrollback_from_active_block_disabled,
             },
             ScrollbackOption {
-                label: "Share from start of session",
+                label: i18n::t("terminal.shared_session.scrollback.start_of_session"),
                 scrollback_type: SharedSessionScrollbackType::All,
                 mouse_state_handle: Default::default(),
                 is_disabled: is_all_scrollback_disabled,
@@ -208,7 +208,7 @@ impl Body {
             options.insert(
                 0,
                 ScrollbackOption {
-                    label: "Share from selected block and onwards",
+                    label: i18n::t("terminal.shared_session.scrollback.selected_block_onwards"),
                     scrollback_type,
                     mouse_state_handle: Default::default(),
                     is_disabled,
@@ -239,7 +239,7 @@ impl View for Body {
                 ButtonVariant::Accent,
                 self.button_mouse_states.start_sharing_button.clone(),
             )
-            .with_centered_text_label(String::from("Start sharing"))
+            .with_centered_text_label(i18n::t("terminal.shared_session.start_sharing"))
             .with_style(style::button_styles());
 
         // If none of the scrollback options are available, the start sharing
@@ -265,7 +265,7 @@ impl View for Body {
                 ButtonVariant::Outlined,
                 self.button_mouse_states.cancel_button.clone(),
             )
-            .with_centered_text_label(String::from("Cancel"))
+            .with_centered_text_label(i18n::t("common.cancel"))
             .with_style(style::button_styles())
             .build()
             .with_cursor(Cursor::PointingHand)
@@ -290,7 +290,7 @@ impl View for Body {
                 self.radio_button_mouse_states
                     .items
                     .iter()
-                    .map(|i| RadioButtonItem::text(i.label).with_disabled(i.is_disabled))
+                    .map(|i| RadioButtonItem::text(i.label.clone()).with_disabled(i.is_disabled))
                     .collect(),
                 self.radio_button_mouse_states.group_state_handle.clone(),
                 default_option,
@@ -334,16 +334,20 @@ impl View for Body {
         } else if disabled_count > 1 {
             // Multiple options disabled - mention both reasons if agent conversations exist
             if self.has_agent_conversations {
-                Some("Some options are disabled due to sharing size limits and the presence of agent conversations in the session")
+                Some(i18n::t(
+                    "terminal.shared_session.options_disabled_size_and_agents",
+                ))
             } else {
-                Some("Some options are disabled due to sharing size limits")
+                Some(i18n::t("terminal.shared_session.options_disabled_size"))
             }
         } else {
             // Only one option disabled - use specific message if it's due to agent conversations
             if self.has_agent_conversations {
-                Some("Sharing without scrollback is disabled because this session has agent conversations")
+                Some(i18n::t(
+                    "terminal.shared_session.without_scrollback_disabled_agents",
+                ))
             } else {
-                Some("Some options are disabled due to sharing size limits")
+                Some(i18n::t("terminal.shared_session.options_disabled_size"))
             }
         };
 

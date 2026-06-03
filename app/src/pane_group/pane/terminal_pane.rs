@@ -1791,15 +1791,16 @@ fn launch_local_no_harness_child(
                             parent_conversation_id,
                             request_id: Some(request_id),
                             orchestration_harness: Some(Harness::Oz),
-                            error_message:
-                                "Failed to create a hidden pane for the local child agent."
-                                    .to_string(),
+                            error_message: i18n::t(
+                                "pane_group.local_child.failed_create_hidden_agent_pane",
+                            ),
                         },
                         ctx,
                     );
                 }
             }
             Err(error) => {
+                let error = error.to_string();
                 let _ = create_error_child_agent_conversation(
                     group,
                     ErrorChildAgentConversationRequest {
@@ -1808,7 +1809,8 @@ fn launch_local_no_harness_child(
                         parent_conversation_id,
                         request_id: Some(request_id),
                         orchestration_harness: Some(Harness::Oz),
-                        error_message: format!("Failed to create local child task: {error}"),
+                        error_message: i18n::t("pane_group.local_child.failed_create_task")
+                            .replace("{error}", &error),
                     },
                     ctx,
                 );
@@ -1940,9 +1942,9 @@ fn launch_local_harness_child(
                             parent_conversation_id,
                             request_id: Some(request_id),
                             orchestration_harness: Some(orchestration_harness),
-                            error_message:
-                                "Failed to create a hidden pane for the local child harness."
-                                    .to_string(),
+                            error_message: i18n::t(
+                                "pane_group.local_child.failed_create_hidden_harness_pane",
+                            ),
                         },
                         ctx,
                     );

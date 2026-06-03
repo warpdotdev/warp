@@ -10,7 +10,7 @@ use warpui::{
 };
 
 use super::shared_objects_creation_denied_body::{
-    SharedObjectsCreationDeniedBody, SharedObjectsCreationDeniedBodyEvent,
+    shared_object_type_label, SharedObjectsCreationDeniedBody, SharedObjectsCreationDeniedBodyEvent,
 };
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
@@ -20,8 +20,6 @@ use crate::themes::theme::Fill;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::CustomerType;
-
-const DEFAULT_LIMIT_REACHED_MODAL_HEADER: &str = "Shared object limit reached";
 
 pub struct SharedObjectsCreationDeniedModal {
     shared_objects_creation_denied_modal: ViewHandle<Modal<SharedObjectsCreationDeniedBody>>,
@@ -65,7 +63,9 @@ impl SharedObjectsCreationDeniedModal {
 
         let shared_objects_creation_denied_modal = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some(DEFAULT_LIMIT_REACHED_MODAL_HEADER.into()),
+                Some(i18n::t(
+                    "billing.shared_objects.default_limit_reached_header",
+                )),
                 shared_objects_creation_denied_body,
                 ctx,
             )
@@ -124,10 +124,17 @@ impl SharedObjectsCreationDeniedModal {
     ) {
         let appearance = Appearance::as_ref(ctx);
         self.team_uid = Some(team_uid);
+        let object_type_label = shared_object_type_label(object_type);
         let title: Option<String> = if is_delinquent_due_to_payment_issue {
-            Some(format!("Shared {object_type}s restricted"))
+            Some(
+                i18n::t("billing.shared_objects.restricted_title")
+                    .replace("{object_type}", &object_type_label),
+            )
         } else {
-            Some(format!("Shared {object_type}s limit reached"))
+            Some(
+                i18n::t("billing.shared_objects.limit_reached_title")
+                    .replace("{object_type}", &object_type_label),
+            )
         };
         let (icon, icon_color) = match object_type {
             DriveObjectType::Notebook { is_ai_document } => (

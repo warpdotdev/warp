@@ -148,7 +148,8 @@ impl SearchItem for MatchedBinding {
         let trigger = self.binding.trigger.as_ref();
 
         format!(
-            "Selected {}, {}.",
+            "{} {}, {}.",
+            i18n::t("search.a11y.selected_prefix"),
             &self
                 .binding
                 .description
@@ -161,10 +162,13 @@ impl SearchItem for MatchedBinding {
         self.binding
             .trigger
             .as_ref()
-            .map_or("Press enter to confirm.".into(), |trigger| {
+            .map_or(i18n::t("search.a11y.press_enter_to_confirm"), |trigger| {
                 format!(
-                    "Press enter to confirm. Use {} binding to run this action in the future.",
-                    trigger.normalized()
+                    "{} {} {} {}",
+                    i18n::t("search.a11y.press_enter_to_confirm"),
+                    i18n::t("search.a11y.use_binding_prefix"),
+                    trigger.normalized(),
+                    i18n::t("search.a11y.use_binding_suffix")
                 )
             })
             .into()

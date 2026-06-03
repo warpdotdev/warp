@@ -227,7 +227,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::Pencil,
                     self.mouse_state_handles.edit_button_state.clone(),
-                    "Edit",
+                    i18n::t("common.edit"),
                     None,
                 )
                 .on_click(move |ctx, _, _| {
@@ -245,7 +245,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::Copy,
                     self.mouse_state_handles.copy_button_state.clone(),
-                    "Copy",
+                    i18n::t("common.copy"),
                     custom_action_to_display(CustomAction::Copy),
                 )
                 .on_click(move |ctx, _, _| {
@@ -267,7 +267,7 @@ impl NotebookEmbed {
                     appearance,
                     Icon::TerminalInput,
                     self.mouse_state_handles.insert_button_state.clone(),
-                    "Run in terminal",
+                    i18n::t("notebooks.command.run_in_terminal"),
                     NotebookKeybindings::as_ref(ctx).run_commands_keybinding(),
                 )
                 .on_click(move |ctx, _, _| {
@@ -318,7 +318,7 @@ impl EmbeddedItemModel for NotebookEmbed {
                             .remove_embedding_button_state
                             .clone(),
                     )
-                    .with_text_label("Remove".to_string())
+                    .with_text_label(i18n::t("common.remove"))
                     .build()
                     .with_cursor(Cursor::Arrow)
                     .on_click(move |ctx, _, _| {

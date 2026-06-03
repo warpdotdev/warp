@@ -3,6 +3,10 @@ use warp_cli::mcp::MCPSpec;
 
 use super::build_mcp_servers_from_specs;
 
+fn use_english_locale() {
+    i18n::set_locale("en");
+}
+
 fn build(specs: Vec<MCPSpec>) -> Map<String, Value> {
     build_mcp_servers_from_specs(&specs)
         .expect("builder should not error")
@@ -171,6 +175,8 @@ fn single_server_shorthand_url_is_wrapped() {
 
 #[test]
 fn merge_multiple_specs_and_duplicate_name_errors() {
+    use_english_locale();
+
     let s1 = json!({ "mcpServers": { "a": { "command": "npx", "args": [] } } }).to_string();
     let s2 = json!({ "mcpServers": { "b": { "url": "https://example.com/mcp" } } }).to_string();
 
@@ -208,6 +214,8 @@ fn preserves_escaped_strings_in_env_values() {
 
 #[test]
 fn validation_rejects_invalid_entries() {
+    use_english_locale();
+
     // Both command and url.
     let spec = json!({
         "mcpServers": {

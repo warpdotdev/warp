@@ -52,6 +52,14 @@ const DROP_SHADOW_COLOR: ColorU = ColorU {
 };
 const SECONDARY_TEXT_RATIO: f32 = 0.9;
 
+fn menu_item_selected_a11y(item: &str) -> String {
+    i18n::t("menu.a11y.item_selected").replace("{item}", item)
+}
+
+fn menu_item_expanded_a11y(item: &str) -> String {
+    i18n::t("menu.a11y.item_expanded").replace("{item}", item)
+}
+
 #[derive(Clone, Debug)]
 /// At the current time, its not recommended to have more than 1 nested submenu due to
 /// layout constraints.
@@ -715,9 +723,9 @@ impl<A: Action + Clone> MenuItemFields<A> {
 
     pub fn toggle_pane_action(is_maximized: bool) -> Self {
         Self::new(if is_maximized {
-            "Minimize pane"
+            i18n::t("menu.pane.minimize")
         } else {
-            "Maximize pane"
+            i18n::t("menu.pane.maximize")
         })
     }
 
@@ -772,6 +780,10 @@ impl<A: Action + Clone> MenuItemFields<A> {
 
     pub fn on_select_action(&self) -> Option<&A> {
         self.on_select_action.as_ref()
+    }
+
+    pub fn has_submenu(&self) -> bool {
+        self.has_submenu
     }
 
     pub fn no_highlight_on_hover(mut self) -> Self {
@@ -2540,19 +2552,19 @@ impl<A: Action + Clone> SubMenu<A> {
             Select(_) => {
                 let menu_item = match self.selected_item() {
                     Some(item) => match item {
-                        MenuItem::Item(fields) => format!("{} Selected", fields.get_a11y_text()),
+                        MenuItem::Item(fields) => menu_item_selected_a11y(fields.get_a11y_text()),
                         MenuItem::ItemsRow { items } => {
                             let selected_item_text = items
                                 .get(self.selected_item_index.unwrap_or_default())
                                 .map_or_else(|| "", |item| item.get_a11y_text());
-                            format!("{selected_item_text} Selected")
+                            menu_item_selected_a11y(selected_item_text)
                         }
                         MenuItem::Separator => String::from(""),
                         MenuItem::Submenu { fields, .. } => {
-                            format!("{} Expanded", fields.get_a11y_text())
+                            menu_item_expanded_a11y(fields.get_a11y_text())
                         }
                         MenuItem::Header { fields, .. } => {
-                            format!("{} Selected", fields.get_a11y_text())
+                            menu_item_selected_a11y(fields.get_a11y_text())
                         }
                     },
                     None => String::from(""),
@@ -2560,9 +2572,9 @@ impl<A: Action + Clone> SubMenu<A> {
 
                 let instructions = if matches!(self.selected_item(), Some(MenuItem::Submenu { .. }))
                 {
-                    "Press the up key or the down key to select a menu item. Press the right key to open the submenu"
+                    i18n::t("menu.a11y.instructions.select_item_open_submenu")
                 } else {
-                    "Press the up key or the down key to select a menu item"
+                    i18n::t("menu.a11y.instructions.select_item")
                 };
 
                 Custom(AccessibilityContent::new(
@@ -2572,23 +2584,23 @@ impl<A: Action + Clone> SubMenu<A> {
                 ))
             }
             OpenSubmenu => Custom(AccessibilityContent::new(
-                String::from("Submenu Expanded"),
-                "Press the right key to open the selected submenu",
+                i18n::t("menu.a11y.submenu_expanded"),
+                i18n::t("menu.a11y.instructions.open_selected_submenu"),
                 WarpA11yRole::TextRole,
             )),
             CloseSubmenu(_) => Custom(AccessibilityContent::new(
-                String::from("Submenu Closed"),
-                "Removing focus from a submenu will close the submenu",
+                i18n::t("menu.a11y.submenu_closed"),
+                i18n::t("menu.a11y.instructions.close_submenu"),
                 WarpA11yRole::TextRole,
             )),
             Close(_) => Custom(AccessibilityContent::new(
-                String::from("Menu Closed"),
-                "Press the escape key to close the menu",
+                i18n::t("menu.a11y.menu_closed"),
+                i18n::t("menu.a11y.instructions.close_menu"),
                 WarpA11yRole::TextRole,
             )),
             Enter => Custom(AccessibilityContent::new(
-                String::from("Action Selected"),
-                "Press the enter key to execute the selected menu item action",
+                i18n::t("menu.a11y.action_selected"),
+                i18n::t("menu.a11y.instructions.execute_action"),
                 WarpA11yRole::TextRole,
             )),
             HoverSubmenuLeafNode { .. }

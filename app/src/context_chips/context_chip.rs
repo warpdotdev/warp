@@ -168,11 +168,13 @@ pub enum ChipDisabledReason {
 impl ChipDisabledReason {
     pub fn tooltip_text(&self) -> String {
         match self {
-            Self::RequiresLocalSession => "Requires a local session".to_string(),
+            Self::RequiresLocalSession => i18n::t("context_chips.requires_local_session"),
             Self::RequiresExecutable { command } if command == "gh" => {
-                "Requires the GitHub CLI".to_string()
+                i18n::t("context_chips.requires_github_cli")
             }
-            Self::RequiresExecutable { command } => format!("Requires the `{command}` command"),
+            Self::RequiresExecutable { command } => {
+                i18n::t("context_chips.requires_command").replace("{command}", command)
+            }
         }
     }
 }

@@ -12,7 +12,7 @@ define_settings_group!(GPUSettings, settings: [
        sync_to_cloud: SyncToCloud::Never,
        private: false,
        toml_path: "system.prefer_low_power_gpu",
-       description: "Whether to prefer the integrated (low-power) GPU.",
+       description_key: "settings.schema.system.prefer_low_power_gpu.description",
    },
    preferred_backend: PreferredGraphicsBackend {
        type: Option<GraphicsBackend>,
@@ -21,6 +21,6 @@ define_settings_group!(GPUSettings, settings: [
        sync_to_cloud: SyncToCloud::Never,
        private: false,
        toml_path: "system.preferred_graphics_backend",
-       description: "The preferred graphics backend on Windows.",
+       description_key: "settings.schema.system.preferred_graphics_backend.description",
    },
 ]);

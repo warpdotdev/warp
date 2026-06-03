@@ -9,7 +9,7 @@ define_settings_group!(CodeSettings, settings: [
         sync_to_cloud: SyncToCloud::Never,
         private: false,
         toml_path: "code.editor.use_warp_as_default_editor",
-        description: "Whether Warp is used as the default code editor.",
+        description_key: "settings.schema.code.editor.use_warp_as_default_editor.description",
     }
     codebase_context_enabled: CodebaseContextEnabled {
         type: bool,
@@ -19,7 +19,7 @@ define_settings_group!(CodeSettings, settings: [
         private: false,
         storage_key: "AgentModeCodebaseContext",
         toml_path: "code.indexing.agent_mode_codebase_context",
-        description: "Whether codebase context is provided to the AI agent.",
+        description_key: "settings.schema.code.indexing.agent_mode_codebase_context.description",
     },
     auto_indexing_enabled: AutoIndexingEnabled {
         type: bool,
@@ -29,7 +29,7 @@ define_settings_group!(CodeSettings, settings: [
         private: false,
         storage_key: "AgentModeCodebaseContextAutoIndexing",
         toml_path: "code.indexing.agent_mode_codebase_context_auto_indexing",
-        description: "Whether automatic codebase indexing is enabled.",
+        description_key: "settings.schema.code.indexing.agent_mode_codebase_context_auto_indexing.description",
     },
     // Whether or not the user has manually dismissed the code toolbelt new feature popup.
     dismissed_code_toolbelt_new_feature_popup: DismissedCodeToolbeltNewFeaturePopup {
@@ -47,7 +47,7 @@ define_settings_group!(CodeSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "code.editor.show_project_explorer",
-        description: "Whether the project explorer is shown in the tools panel.",
+        description_key: "settings.schema.code.editor.show_project_explorer.description",
     },
     // Controls whether global file search appears in the tools panel.
     show_global_search: ShowGlobalSearch {
@@ -57,6 +57,6 @@ define_settings_group!(CodeSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "code.editor.show_global_search",
-        description: "Whether global file search is shown in the tools panel.",
+        description_key: "settings.schema.code.editor.show_global_search.description",
     },
 ]);

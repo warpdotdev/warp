@@ -81,6 +81,10 @@ impl SearchItem for CommandSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Command: {}", self.command)
+        format!(
+            "{}: {}",
+            i18n::t("search.ai_context_menu.command_prefix"),
+            self.command
+        )
     }
 }

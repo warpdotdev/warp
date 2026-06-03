@@ -725,7 +725,7 @@ pub fn render_citation(
 /// "Manage AI Autonomy permissions" link. Matches the visual rhythm of
 /// [`render_autonomy_checkbox_setting_speedbump_footer`].
 pub fn render_autonomy_dropdown_setting_speedbump_footer<A>(
-    description: &'static str,
+    description: String,
     dropdown: &warpui::ViewHandle<crate::view_components::dropdown::Dropdown<A>>,
     settings_link_handle: MouseStateHandle,
     app: &AppContext,
@@ -760,7 +760,7 @@ where
                     appearance
                         .ui_builder()
                         .link(
-                            "Manage AI Autonomy permissions".into(),
+                            i18n::t("ai.output.manage_ai_autonomy_permissions").into(),
                             None,
                             Some(Box::new(move |ctx| {
                                 ctx.dispatch_typed_action(
@@ -787,7 +787,7 @@ where
 /// This function is needed both above (i.e. `block.rs`) and below (i.e. `output.rs`), and as such
 /// cannot reside in `output.rs` because we don't want to make `mod output` public.
 pub fn render_autonomy_checkbox_setting_speedbump_footer(
-    description: &'static str,
+    description: String,
     checked: bool,
     on_toggled_action: AIBlockAction,
     checkbox_handle: MouseStateHandle,
@@ -833,7 +833,7 @@ pub fn render_autonomy_checkbox_setting_speedbump_footer(
                     appearance
                         .ui_builder()
                         .link(
-                            "Manage AI Autonomy permissions".into(),
+                            i18n::t("ai.output.manage_ai_autonomy_permissions").into(),
                             None,
                             Some(Box::new(move |ctx| {
                                 ctx.dispatch_typed_action(

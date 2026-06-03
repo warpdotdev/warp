@@ -184,14 +184,19 @@ impl SecretManager {
     ) -> ErrorMessageAndCommand {
         match error_type {
             SecretErrorType::NotInstalled => {
-                let message = format!("{} CLI is not installed", &self);
+                let manager = self.to_string();
+                let message = i18n::t("external_secrets.error.cli_not_installed")
+                    .replace("{manager}", &manager);
 
                 let (link, link_message) = (
                     match self {
                         SecretManager::OnePassword => Some(ONEPASSWORD_DOCS_LINK.to_owned()),
                         SecretManager::LastPass => Some(LASTPASS_DOCS_LINK.to_owned()),
                     },
-                    Some(format!("View {} CLI installation documentation", &self)),
+                    Some(
+                        i18n::t("external_secrets.link.view_cli_installation_docs")
+                            .replace("{manager}", &manager),
+                    ),
                 );
 
                 ErrorMessageAndCommand {
@@ -204,21 +209,19 @@ impl SecretManager {
                 let (link, link_message) = match self {
                     SecretManager::OnePassword => (
                         Some(ONEPASSWORD_DOCS_LINK.to_owned()),
-                        Some("Integrate 1Password app with CLI".to_owned()),
+                        Some(i18n::t("external_secrets.link.integrate_1password_cli")),
                     ),
                     SecretManager::LastPass => (None, None),
                 };
                 ErrorMessageAndCommand {
-                    message: format!(
-                        "{} didn't return secrets (likely not configured or authenticated)",
-                        &self
-                    ),
+                    message: i18n::t("external_secrets.error.fetch_failed")
+                        .replace("{manager}", &self.to_string()),
                     link,
                     link_message,
                 }
             }
             SecretErrorType::InvalidPlatform => ErrorMessageAndCommand {
-                message: "Platform not supported".to_owned(),
+                message: i18n::t("external_secrets.error.platform_not_supported"),
                 link: None,
                 link_message: None,
             },

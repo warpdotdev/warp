@@ -34,6 +34,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::ASSETS;
 
 fn initialize_app(app: &mut App) {
+    i18n::set_locale("en");
     initialize_settings_for_tests(app);
 
     app.add_singleton_model(CloudModel::mock);

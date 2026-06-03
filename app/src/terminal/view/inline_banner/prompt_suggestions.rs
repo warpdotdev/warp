@@ -39,9 +39,6 @@ use crate::util::bindings::keybinding_name_to_keystroke;
 const INLINE_BANNER_SPACING: f32 = 8.;
 const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;
 
-const DELINQUENT_DUE_TO_PAYMENT_ISSUE_TOOLTIP_MESSAGE: &str = "Restricted due to payment issue";
-const OUT_OF_REQUESTS_TOOLTIP_MESSAGE: &str = "Out of credits";
-
 /// Types of zero-state prompt suggestions.
 #[derive(Debug, Copy, Clone, Serialize)]
 pub enum ZeroStatePromptSuggestionType {
@@ -66,20 +63,16 @@ impl ZeroStatePromptSuggestionType {
     /// Constant for the number of zero-state prompt suggestion types.
     pub const COUNT: usize = 5;
 
-    pub fn query(&self) -> &'static str {
+    pub fn query(&self) -> String {
         match self {
-            Self::Explain => "Explain this to me.",
-            Self::Fix => "Help me fix this.",
-            Self::Install => {
-                "Help me install a binary/dependency. What information do I need to provide to you to do this?"
+            Self::Explain => i18n::t("terminal.inline_banner.prompt_suggestions.query.explain"),
+            Self::Fix => i18n::t("terminal.inline_banner.prompt_suggestions.query.fix"),
+            Self::Install => i18n::t("terminal.inline_banner.prompt_suggestions.query.install"),
+            Self::Code => i18n::t("terminal.inline_banner.prompt_suggestions.query.code"),
+            Self::Deploy => i18n::t("terminal.inline_banner.prompt_suggestions.query.deploy"),
+            Self::SomethingElse => {
+                i18n::t("terminal.inline_banner.prompt_suggestions.query.something_else")
             }
-            Self::Code => {
-                "Help me write some code. What information do I need to provide to you to do this?"
-            }
-            Self::Deploy => {
-                "Help me deploy my project. What information do I need to provide to you to do this?"
-            }
-            Self::SomethingElse => "Something else?",
         }
     }
 
@@ -294,16 +287,16 @@ fn get_tooltip_text_for_alert_state(alert_state: &PromptAlertState) -> Option<St
     // This is not an exhaustive list; the actual prompt alert component will have more information,
     // so we can keep the tooltip's text relatively minimal and just capture broad groups.
     match alert_state {
-        PromptAlertState::DelinquentDueToPaymentIssue => {
-            Some(DELINQUENT_DUE_TO_PAYMENT_ISSUE_TOOLTIP_MESSAGE.to_string())
-        }
+        PromptAlertState::DelinquentDueToPaymentIssue => Some(i18n::t(
+            "terminal.inline_banner.prompt_suggestions.payment_issue_tooltip",
+        )),
         PromptAlertState::RequestLimitReached
         | PromptAlertState::AnonymousUserRequestLimitHardGate
         | PromptAlertState::AnonymousUserRequestLimitSoftGate
         | PromptAlertState::OveragesToggleableButNotEnabled
-        | PromptAlertState::MonthlyOveragesSpendLimitReached => {
-            Some(OUT_OF_REQUESTS_TOOLTIP_MESSAGE.to_string())
-        }
+        | PromptAlertState::MonthlyOveragesSpendLimitReached => Some(i18n::t(
+            "terminal.inline_banner.prompt_suggestions.out_of_credits_tooltip",
+        )),
         _ => None,
     }
 }

@@ -27,9 +27,6 @@ use denied_body::{DeniedBody, DeniedBodyEvent};
 use self::body::BodyEvent;
 use super::{SharedSessionActionSource, SharedSessionScrollbackType};
 
-const MODAL_HEADER: &str = "Share session";
-const SESSION_LIMIT_REACHED_HEADER: &str = "Shared session limit reached";
-
 pub struct ShareSessionModal {
     modal: ViewHandle<Modal<Body>>,
     denied_modal: ViewHandle<Modal<DeniedBody>>,
@@ -72,17 +69,21 @@ impl ShareSessionModal {
         });
 
         let modal = ctx.add_typed_action_view(|ctx| {
-            Modal::new(Some(MODAL_HEADER.to_string()), body, ctx)
-                .with_modal_style(UiComponentStyles {
-                    width: Some(MODAL_WIDTH),
-                    height: Some(MODAL_HEIGHT),
-                    ..Default::default()
-                })
-                .with_header_style(style::modal_header_styles())
-                .with_body_style(style::modal_body_styles())
-                .with_background_opacity(100)
-                .with_dismiss_on_click()
-                .close_modal_button_disabled()
+            Modal::new(
+                Some(i18n::t("terminal.shared_session.share_session")),
+                body,
+                ctx,
+            )
+            .with_modal_style(UiComponentStyles {
+                width: Some(MODAL_WIDTH),
+                height: Some(MODAL_HEIGHT),
+                ..Default::default()
+            })
+            .with_header_style(style::modal_header_styles())
+            .with_body_style(style::modal_body_styles())
+            .with_background_opacity(100)
+            .with_dismiss_on_click()
+            .close_modal_button_disabled()
         });
 
         let denied_body = ctx.add_typed_action_view(DeniedBody::new);
@@ -91,7 +92,7 @@ impl ShareSessionModal {
         });
         let denied_modal = ctx.add_typed_action_view(|ctx| {
             let mut denied_modal = Modal::new(
-                Some(SESSION_LIMIT_REACHED_HEADER.to_string()),
+                Some(i18n::t("terminal.shared_session.limit_reached_header")),
                 denied_body,
                 ctx,
             )

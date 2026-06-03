@@ -44,12 +44,6 @@ impl Entity for OnboardingDriveSharingBlock {
     type Event = ();
 }
 
-const TITLE_TEXT: &str = "Sharing in Warp Drive";
-const BODY_TEXT: &[&str] = &[
-    "You can now share drive objects, in Warp or on the web, with anyone - Warp user or not. Click Share in the Warp Drive menu or the pane header to share via link or email.",
-    "You’ll be able to modify the access permissions any time.",
-];
-
 const BLOCK_PADDING: f32 = 16.;
 const BUTTON_WIDTH: f32 = 100.;
 const BUTTON_HEIGHT: f32 = 32.;
@@ -66,21 +60,28 @@ impl View for OnboardingDriveSharingBlock {
         let font_size = appearance.monospace_font_size();
 
         let header = Container::new(
-            Text::new(TITLE_TEXT, font_family, font_size)
-                .with_color(appearance.theme().accent().into_solid())
-                .with_style(Properties::default().weight(Weight::Bold))
-                .finish(),
+            Text::new(
+                i18n::t("terminal.block_onboarding.drive_sharing.title"),
+                font_family,
+                font_size,
+            )
+            .with_color(appearance.theme().accent().into_solid())
+            .with_style(Properties::default().weight(Weight::Bold))
+            .finish(),
         )
         .with_padding_bottom(BLOCK_PADDING)
         .finish();
 
         let mut content = Flex::column().with_child(header);
 
-        for paragraph in BODY_TEXT.iter() {
+        for paragraph in [
+            i18n::t("terminal.block_onboarding.drive_sharing.body"),
+            i18n::t("terminal.block_onboarding.drive_sharing.permissions"),
+        ] {
             content.add_child(
                 appearance
                     .ui_builder()
-                    .paragraph(*paragraph)
+                    .paragraph(paragraph)
                     .with_style(UiComponentStyles {
                         font_family_id: Some(font_family),
                         font_size: Some(font_size),
@@ -93,8 +94,10 @@ impl View for OnboardingDriveSharingBlock {
         }
 
         let button_label = match CloudModel::as_ref(app).get_by_uid(&self.object_id.uid()) {
-            Some(object) => format!("Share {}", object.display_name()),
-            None => format!("Share this {}", self.object_id.object_type()),
+            Some(object) => i18n::t("terminal.block_onboarding.drive_sharing.share_object")
+                .replace("{name}", &object.display_name()),
+            None => i18n::t("terminal.block_onboarding.drive_sharing.share_this_object")
+                .replace("{type}", &self.object_id.object_type().to_string()),
         };
         let object_id = self.object_id;
         let button = appearance

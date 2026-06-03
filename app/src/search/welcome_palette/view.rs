@@ -269,7 +269,7 @@ impl WelcomePalette {
             SearchBar::new(
                 mixer.clone(),
                 search_bar_state.clone(),
-                "Code, build, or search for anything...",
+                i18n::t("search.welcome_palette.placeholder"),
                 Self::create_query_result_renderer,
                 ctx,
             )
@@ -286,7 +286,7 @@ impl WelcomePalette {
         });
 
         let placeholder_element = QueryResultRenderer::new(
-            MatchedBinding::placeholder("No results found".into()).into(),
+            MatchedBinding::placeholder(i18n::t("search.welcome_palette.no_results")).into(),
             "welcome_palette:no_results".into(),
             |_, _, _| {},
             *styles::QUERY_RESULT_RENDERER_STYLES,
@@ -700,8 +700,13 @@ impl WelcomePalette {
             .with_text_and_icon_label(TextAndIcon::new(
                 TextAndIconAlignment::IconFirst,
                 match &self.open_project_keybinding {
-                    Some(keystroke) => format!("Add repository {keystroke}"),
-                    None => "Add repository".to_string(),
+                    Some(keystroke) => {
+                        format!(
+                            "{} {keystroke}",
+                            i18n::t("search.welcome_palette.add_repository")
+                        )
+                    }
+                    None => i18n::t("search.welcome_palette.add_repository"),
                 },
                 Icon::Plus.to_warpui_icon(theme.foreground()),
                 MainAxisSize::Max,
@@ -723,8 +728,11 @@ impl WelcomePalette {
             .with_text_and_icon_label(TextAndIcon::new(
                 TextAndIconAlignment::IconFirst,
                 match &self.terminal_session_keybinding {
-                    Some(keystroke) => format!("Terminal session {keystroke}"),
-                    None => "Terminal session".to_string(),
+                    Some(keystroke) => format!(
+                        "{} {keystroke}",
+                        i18n::t("search.welcome_palette.terminal_session")
+                    ),
+                    None => i18n::t("search.welcome_palette.terminal_session"),
                 },
                 Icon::Terminal.to_warpui_icon(theme.foreground()),
                 MainAxisSize::Max,

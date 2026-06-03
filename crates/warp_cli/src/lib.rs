@@ -187,72 +187,56 @@ impl Args {
                 if !FeatureFlag::CloudEnvironments.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "environment" {
-                        eprintln!("error: unrecognized subcommand 'environment'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("environment");
                     }
                 }
 
                 if !FeatureFlag::ProviderCommand.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "provider" {
-                        eprintln!("error: unrecognized subcommand 'provider'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("provider");
                     }
                 }
 
                 if !FeatureFlag::IntegrationCommand.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "integration" {
-                        eprintln!("error: unrecognized subcommand 'integration'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("integration");
                     }
                 }
 
                 if !FeatureFlag::ScheduledAmbientAgents.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "schedule" {
-                        eprintln!("error: unrecognized subcommand 'schedule'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("schedule");
                     }
                 }
 
                 if !FeatureFlag::WarpManagedSecrets.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "secret" {
-                        eprintln!("error: unrecognized subcommand 'secret'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("secret");
                     }
                 }
 
                 if !FeatureFlag::OzIdentityFederation.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "federate" {
-                        eprintln!("error: unrecognized subcommand 'federate'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("federate");
                     }
                 }
 
                 if !FeatureFlag::ArtifactCommand.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "artifact" {
-                        eprintln!("error: unrecognized subcommand 'artifact'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("artifact");
                     }
                 }
 
                 if !FeatureFlag::APIKeyManagement.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "api-key" {
-                        eprintln!("error: unrecognized subcommand 'api-key'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
+                        exit_unrecognized_subcommand("api-key");
                     }
                 }
 
@@ -276,6 +260,7 @@ impl Args {
     /// IMPORTANT: use this instead of [`CommandFactory::command`], since we customize the command at runtime.
     pub fn clap_command() -> clap::Command {
         let mut command = <Args as CommandFactory>::command();
+        command = localize_clap_command(command);
 
         // Hide the environment subcommands and --environment flags from help text
         if !FeatureFlag::CloudEnvironments.is_enabled() {
@@ -374,18 +359,8 @@ impl Args {
         // Substitute the actual binary name into help output. Ideally clap would do this for us.
         let bin_name =
             binary_name().unwrap_or_else(|| ChannelState::channel().cli_command_name().to_string());
-        command = command.after_help(color_print::cformat!(
-            r#"<bold><underline>Examples:</underline></bold>
-
-  <dim>$</dim> <bold>{bin_name} agent run --prompt "Build anything"</bold>
-
-  <dim>$</dim> <bold>{bin_name} mcp list</bold>
-
-<bold><underline>Learn more:</underline></bold>
-* Use <bold>{bin_name} help</bold> to learn more about each command
-* Read the documentation at https://docs.warp.dev/reference/cli
-"#
-        ));
+        command =
+            command.after_help(i18n::t("warp_cli.after_help").replace("{bin_name}", &bin_name));
 
         command
     }
@@ -436,6 +411,1323 @@ impl Args {
     pub fn session_sharing_server_url(&self) -> Option<&str> {
         self.session_sharing_server_url.as_deref()
     }
+}
+
+fn localize_clap_command(mut command: clap::Command) -> clap::Command {
+    command = command
+        .about(i18n::t("warp_cli.about"))
+        .mut_arg("api_key", |arg| {
+            arg.help(i18n::t("warp_cli.arg.api_key.help"))
+        })
+        .mut_arg("output_format", |arg| {
+            arg.help(i18n::t("warp_cli.arg.output_format.help"))
+        })
+        .mut_arg("debug", |arg| arg.help(i18n::t("warp_cli.arg.debug.help")));
+
+    command = command
+        .mut_subcommand("agent", |cmd| {
+            localize_agent_command(cmd.about(i18n::t("warp_cli.command.agent.about")))
+        })
+        .mut_subcommand("environment", |cmd| {
+            localize_environment_cli_command(
+                cmd.about(i18n::t("warp_cli.command.environment.about")),
+            )
+        })
+        .mut_subcommand("mcp", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.mcp.about"))
+                .mut_subcommand("list", |cmd| {
+                    cmd.about(i18n::t("warp_cli.command.mcp.list.about"))
+                })
+        })
+        .mut_subcommand("run", |cmd| {
+            localize_task_command(cmd.about(i18n::t("warp_cli.command.run.about")))
+        })
+        .mut_subcommand("model", |cmd| {
+            localize_model_command(cmd.about(i18n::t("warp_cli.command.model.about")))
+        })
+        .mut_subcommand("login", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.login.about"))
+        })
+        .mut_subcommand("logout", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.logout.about"))
+        })
+        .mut_subcommand("whoami", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.whoami.about"))
+        })
+        .mut_subcommand("provider", |cmd| {
+            localize_provider_command(cmd.about(i18n::t("warp_cli.command.provider.about")))
+        })
+        .mut_subcommand("integration", |cmd| {
+            localize_integration_command(cmd.about(i18n::t("warp_cli.command.integration.about")))
+        })
+        .mut_subcommand("schedule", |cmd| {
+            localize_schedule_command(
+                cmd.about(i18n::t("warp_cli.command.schedule.about"))
+                    .long_about(i18n::t("warp_cli.command.schedule.long_about")),
+            )
+        })
+        .mut_subcommand("secret", |cmd| {
+            localize_secret_command(cmd.about(i18n::t("warp_cli.command.secret.about")))
+        })
+        .mut_subcommand("federate", |cmd| {
+            localize_federate_command(
+                cmd.about(i18n::t("warp_cli.command.federate.about"))
+                    .long_about(i18n::t("warp_cli.command.federate.long_about")),
+            )
+        })
+        .mut_subcommand("artifact", |cmd| {
+            localize_artifact_command(cmd.about(i18n::t("warp_cli.command.artifact.about")))
+        })
+        .mut_subcommand("api-key", |cmd| {
+            localize_api_key_command(cmd.about(i18n::t("warp_cli.command.api_key.about")))
+        })
+        .mut_subcommand("completions", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.completions.about"))
+                .long_about(i18n::t("warp_cli.command.completions.long_about"))
+                .mut_arg("shell", |arg| {
+                    arg.help(i18n::t("warp_cli.command.completions.shell.help"))
+                })
+        })
+        .mut_subcommand("dump-debug-info", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.dump_debug_info.about"))
+        })
+        .mut_subcommand("harness-support", |cmd| {
+            localize_harness_support_command(
+                cmd.about(i18n::t("warp_cli.command.harness_support.about")),
+            )
+        })
+        .mut_subcommand("minidump-server", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.worker.minidump_server.about"))
+                .mut_arg("socket_name", |arg| {
+                    arg.help(i18n::t("warp_cli.worker.arg.minidump_socket_name.help"))
+                })
+        });
+
+    #[cfg(unix)]
+    {
+        command = command.mut_subcommand("terminal-server", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.worker.terminal_server.about"))
+        });
+    }
+
+    #[cfg(feature = "plugin_host")]
+    {
+        command = command.mut_subcommand("plugin-host", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.worker.plugin_host.about"))
+        });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        command = command
+            .mut_subcommand("remote-server-proxy", |cmd| {
+                cmd.about(i18n::t("warp_cli.command.worker.remote_server_proxy.about"))
+            })
+            .mut_subcommand("remote-server-daemon", |cmd| {
+                cmd.about(i18n::t(
+                    "warp_cli.command.worker.remote_server_daemon.about",
+                ))
+            })
+            .mut_subcommand("ripgrep-search", |cmd| {
+                cmd.about(i18n::t("warp_cli.command.worker.ripgrep_search.about"))
+                    .mut_arg("ignore_case", |arg| {
+                        arg.help(i18n::t("warp_cli.worker.arg.ripgrep_ignore_case.help"))
+                    })
+                    .mut_arg("multiline", |arg| {
+                        arg.help(i18n::t("warp_cli.worker.arg.ripgrep_multiline.help"))
+                    })
+                    .mut_arg("pattern", |arg| {
+                        arg.help(i18n::t("warp_cli.worker.arg.ripgrep_pattern.help"))
+                    })
+                    .mut_arg("paths", |arg| {
+                        arg.help(i18n::t("warp_cli.worker.arg.ripgrep_paths.help"))
+                    })
+            })
+            .mut_subcommand("print-telemetry-events", |cmd| {
+                cmd.about(i18n::t("warp_cli.command.print_telemetry_events.about"))
+            });
+    }
+
+    command
+}
+
+fn localize_agent_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("run", |cmd| {
+            localize_agent_run_args(cmd.about(i18n::t("warp_cli.command.agent.run.about")))
+        })
+        .mut_subcommand("run-cloud", |cmd| {
+            localize_agent_run_cloud_args(
+                cmd.about(i18n::t("warp_cli.command.agent.run_cloud.about")),
+            )
+        })
+        .mut_subcommand("profile", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.agent.profile.about"))
+                .mut_subcommand("list", |cmd| {
+                    cmd.about(i18n::t("warp_cli.command.agent.profile.list.about"))
+                })
+        })
+        .mut_subcommand("list", |cmd| {
+            localize_agent_list_args(cmd.about(i18n::t("warp_cli.command.agent.list.about")))
+        })
+        .mut_subcommand("get", |cmd| {
+            localize_agent_get_args(cmd.about(i18n::t("warp_cli.command.agent.get.about")))
+        })
+        .mut_subcommand("create", |cmd| {
+            localize_agent_create_args(cmd.about(i18n::t("warp_cli.command.agent.create.about")))
+        })
+        .mut_subcommand("update", |cmd| {
+            localize_agent_update_args(cmd.about(i18n::t("warp_cli.command.agent.update.about")))
+        })
+        .mut_subcommand("delete", |cmd| {
+            localize_agent_delete_args(cmd.about(i18n::t("warp_cli.command.agent.delete.about")))
+        })
+        .mut_subcommand("skills", |cmd| {
+            localize_agent_skills_args(cmd.about(i18n::t("warp_cli.command.agent.skills.about")))
+        })
+}
+
+fn localize_agent_run_args(command: clap::Command) -> clap::Command {
+    localize_snapshot_args(localize_config_file_args(localize_model_args(
+        localize_prompt_args(command),
+    )))
+    .mut_arg("skill", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.skill.help"))
+            .long_help(i18n::t("warp_cli.agent.arg.skill.long_help"))
+    })
+    .mut_arg("name", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.name.help"))
+    })
+    .mut_arg("cwd", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.cwd.help"))
+    })
+    .mut_arg("share", |arg| {
+        arg.help(i18n::t("warp_cli.share.arg.help"))
+            .long_help(i18n::t("warp_cli.share.arg.long_help"))
+    })
+    .mut_arg("mcp_specs", |arg| {
+        arg.help(i18n::t("warp_cli.mcp.arg.spec.help"))
+            .long_help(i18n::t("warp_cli.mcp.arg.spec.long_help"))
+    })
+    .mut_arg("environment", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.environment.help"))
+    })
+    .mut_arg("conversation", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.conversation.help"))
+    })
+    .mut_arg("profile", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.profile.help"))
+    })
+}
+
+fn localize_agent_run_cloud_args(command: clap::Command) -> clap::Command {
+    localize_snapshot_args(localize_computer_use_args(localize_scope_args(
+        localize_environment_create_args(localize_config_file_args(localize_model_args(
+            localize_prompt_args(command),
+        ))),
+    )))
+    .mut_arg("skill", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.skill.help"))
+            .long_help(i18n::t("warp_cli.agent.arg.skill.long_help"))
+    })
+    .mut_arg("name", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.name.help"))
+    })
+    .mut_arg("mcp_specs", |arg| {
+        arg.help(i18n::t("warp_cli.mcp.arg.spec.help"))
+            .long_help(i18n::t("warp_cli.mcp.arg.spec.long_help"))
+    })
+    .mut_arg("open", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.open.help"))
+    })
+    .mut_arg("conversation", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.conversation.help"))
+    })
+    .mut_arg("agent_uid", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.agent_uid.help"))
+            .long_help(i18n::t("warp_cli.agent.arg.agent_uid.long_help"))
+    })
+    .mut_arg("worker_host", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.worker_host.help"))
+            .long_help(i18n::t("warp_cli.agent.arg.worker_host.long_help"))
+    })
+    .mut_arg("attachment_paths", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.attachment_paths.help"))
+            .long_help(i18n::t("warp_cli.agent.arg.attachment_paths.long_help"))
+    })
+}
+
+fn localize_agent_list_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("sort_by", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.sort_by.help"))
+        })
+        .mut_arg("sort_order", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.sort_order.help"))
+        })
+}
+
+fn localize_agent_get_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command).mut_arg("uid", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.uid.get.help"))
+    })
+}
+
+fn localize_agent_create_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.create.name.help"))
+        })
+        .mut_arg("description", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.create.description.help"))
+        })
+        .mut_arg("secrets", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.create.secrets.help"))
+        })
+        .mut_arg("skills", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.create.skills.help"))
+        })
+        .mut_arg("base_model", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.create.base_model.help"))
+        })
+        .mut_arg("environment", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.create.environment.help"))
+        })
+}
+
+fn localize_agent_update_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("uid", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.uid.update.help"))
+        })
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.name.help"))
+        })
+        .mut_arg("description", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.description.help"))
+        })
+        .mut_arg("remove_description", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.remove_description.help"))
+        })
+        .mut_arg("add_secrets", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.add_secrets.help"))
+        })
+        .mut_arg("remove_secrets", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.remove_secrets.help"))
+        })
+        .mut_arg("remove_all_secrets", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.remove_all_secrets.help"))
+        })
+        .mut_arg("add_skills", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.add_skills.help"))
+        })
+        .mut_arg("remove_skills", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.remove_skills.help"))
+        })
+        .mut_arg("remove_all_skills", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.remove_all_skills.help"))
+        })
+        .mut_arg("base_model", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.base_model.help"))
+        })
+        .mut_arg("remove_base_model", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.remove_base_model.help"))
+        })
+        .mut_arg("environment", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.environment.help"))
+        })
+        .mut_arg("remove_environment", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.update.remove_environment.help"))
+        })
+}
+
+fn localize_agent_delete_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("uid", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.uid.delete.help"))
+    })
+}
+
+fn localize_agent_skills_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("repo", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.skills.repo.help"))
+            .long_help(i18n::t("warp_cli.agent.arg.skills.repo.long_help"))
+    })
+}
+
+fn localize_task_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("list", |cmd| {
+            localize_task_list_args(cmd.about(i18n::t("warp_cli.command.run.list.about")))
+        })
+        .mut_subcommand("get", |cmd| {
+            localize_task_get_args(cmd.about(i18n::t("warp_cli.command.run.get.about")))
+        })
+        .mut_subcommand("conversation", |cmd| {
+            localize_conversation_command(
+                cmd.about(i18n::t("warp_cli.command.run.conversation.about")),
+            )
+        })
+        .mut_subcommand("message", |cmd| {
+            localize_message_command(cmd.about(i18n::t("warp_cli.command.run.message.about")))
+        })
+}
+
+fn localize_task_list_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("limit", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.limit.help"))
+        })
+        .mut_arg("state", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.state.help"))
+        })
+        .mut_arg("source", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.source.help"))
+        })
+        .mut_arg("execution_location", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.execution_location.help"))
+        })
+        .mut_arg("creator", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.creator.help"))
+        })
+        .mut_arg("environment", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.environment.help"))
+        })
+        .mut_arg("skill", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.skill.help"))
+        })
+        .mut_arg("schedule", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.schedule.help"))
+        })
+        .mut_arg("ancestor_run", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.ancestor_run.help"))
+        })
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.name.help"))
+        })
+        .mut_arg("model", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.model.help"))
+        })
+        .mut_arg("artifact_type", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.artifact_type.help"))
+        })
+        .mut_arg("created_after", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.created_after.help"))
+        })
+        .mut_arg("created_before", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.created_before.help"))
+        })
+        .mut_arg("updated_after", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.updated_after.help"))
+        })
+        .mut_arg("query", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.query.help"))
+        })
+        .mut_arg("sort_by", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.sort_by.help"))
+        })
+        .mut_arg("sort_order", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.sort_order.help"))
+        })
+        .mut_arg("cursor", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.cursor.help"))
+                .long_help(i18n::t("warp_cli.task.arg.cursor.long_help"))
+        })
+}
+
+fn localize_task_get_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("task_id", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.task_id.help"))
+        })
+        .mut_arg("conversation", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.conversation.help"))
+        })
+}
+
+fn localize_conversation_command(command: clap::Command) -> clap::Command {
+    command.mut_subcommand("get", |cmd| {
+        cmd.about(i18n::t("warp_cli.command.run.conversation.get.about"))
+            .mut_arg("conversation_id", |arg| {
+                arg.help(i18n::t("warp_cli.task.arg.conversation_id.help"))
+            })
+    })
+}
+
+fn localize_message_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("watch", |cmd| {
+            localize_message_watch_args(
+                cmd.about(i18n::t("warp_cli.command.run.message.watch.about")),
+            )
+        })
+        .mut_subcommand("send", |cmd| {
+            localize_message_send_args(
+                cmd.about(i18n::t("warp_cli.command.run.message.send.about")),
+            )
+        })
+        .mut_subcommand("list", |cmd| {
+            localize_message_list_args(
+                cmd.about(i18n::t("warp_cli.command.run.message.list.about")),
+            )
+        })
+        .mut_subcommand("read", |cmd| {
+            localize_message_read_args(
+                cmd.about(i18n::t("warp_cli.command.run.message.read.about")),
+            )
+        })
+        .mut_subcommand("mark-delivered", |cmd| {
+            localize_message_delivered_args(
+                cmd.about(i18n::t("warp_cli.command.run.message.mark_delivered.about")),
+            )
+        })
+}
+
+fn localize_message_send_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("to", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.to.help"))
+        })
+        .mut_arg("subject", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.subject.help"))
+        })
+        .mut_arg("body", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.body.help"))
+        })
+        .mut_arg("sender_run_id", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.sender_run_id.help"))
+        })
+}
+
+fn localize_message_list_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("run_id", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.run_id.list.help"))
+        })
+        .mut_arg("unread", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.unread.help"))
+        })
+        .mut_arg("since", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.since.help"))
+        })
+        .mut_arg("limit", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.limit.help"))
+        })
+}
+
+fn localize_message_watch_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("run_id", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.run_id.watch.help"))
+        })
+        .mut_arg("since_sequence", |arg| {
+            arg.help(i18n::t("warp_cli.task.arg.message.since_sequence.help"))
+        })
+}
+
+fn localize_message_read_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("message_id", |arg| {
+        arg.help(i18n::t("warp_cli.task.arg.message.message_id.read.help"))
+    })
+}
+
+fn localize_message_delivered_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("message_id", |arg| {
+        arg.help(i18n::t(
+            "warp_cli.task.arg.message.message_id.mark_delivered.help",
+        ))
+    })
+}
+
+fn localize_schedule_command(command: clap::Command) -> clap::Command {
+    localize_schedule_create_args(command)
+        .mut_subcommand("create", |cmd| {
+            localize_schedule_create_args(
+                cmd.about(i18n::t("warp_cli.command.schedule.create.about")),
+            )
+        })
+        .mut_subcommand("list", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.schedule.list.about"))
+        })
+        .mut_subcommand("get", |cmd| {
+            localize_schedule_get_args(cmd.about(i18n::t("warp_cli.command.schedule.get.about")))
+        })
+        .mut_subcommand("update", |cmd| {
+            localize_schedule_update_args(
+                cmd.about(i18n::t("warp_cli.command.schedule.update.about")),
+            )
+        })
+        .mut_subcommand("pause", |cmd| {
+            localize_schedule_pause_args(
+                cmd.about(i18n::t("warp_cli.command.schedule.pause.about"))
+                    .long_about(i18n::t("warp_cli.command.schedule.pause.long_about")),
+            )
+        })
+        .mut_subcommand("unpause", |cmd| {
+            localize_schedule_unpause_args(
+                cmd.about(i18n::t("warp_cli.command.schedule.unpause.about"))
+                    .long_about(i18n::t("warp_cli.command.schedule.unpause.long_about")),
+            )
+        })
+        .mut_subcommand("delete", |cmd| {
+            localize_schedule_delete_args(
+                cmd.about(i18n::t("warp_cli.command.schedule.delete.about")),
+            )
+        })
+}
+
+fn localize_schedule_create_args(command: clap::Command) -> clap::Command {
+    localize_scope_args(localize_environment_create_args(localize_config_file_args(
+        localize_model_args(command),
+    )))
+    .mut_arg("name", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.name.create.help"))
+    })
+    .mut_arg("cron", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.cron.create.help"))
+    })
+    .mut_arg("mcp_specs", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.mcp_specs.help"))
+            .long_help(i18n::t("warp_cli.schedule.arg.mcp_specs.long_help"))
+    })
+    .mut_arg("prompt", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.prompt.create.help"))
+    })
+    .mut_arg("skill", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.skill.create.help"))
+            .long_help(i18n::t("warp_cli.schedule.arg.skill.create.long_help"))
+    })
+    .mut_arg("worker_host", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.worker_host.help"))
+            .long_help(i18n::t("warp_cli.schedule.arg.worker_host.long_help"))
+    })
+}
+
+fn localize_schedule_get_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("schedule_id", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.schedule_id.get.help"))
+    })
+}
+
+fn localize_schedule_update_args(command: clap::Command) -> clap::Command {
+    localize_schedule_environment_update_args(localize_config_file_args(localize_model_args(
+        command,
+    )))
+    .mut_arg("schedule_id", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.schedule_id.update.help"))
+    })
+    .mut_arg("name", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.name.update.help"))
+    })
+    .mut_arg("cron", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.cron.update.help"))
+    })
+    .mut_arg("mcp_specs", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.mcp_specs.help"))
+            .long_help(i18n::t("warp_cli.schedule.arg.mcp_specs.long_help"))
+    })
+    .mut_arg("remove_mcp", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.remove_mcp.help"))
+            .long_help(i18n::t("warp_cli.schedule.arg.remove_mcp.long_help"))
+    })
+    .mut_arg("prompt", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.prompt.update.help"))
+    })
+    .mut_arg("skill", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.skill.update.help"))
+            .long_help(i18n::t("warp_cli.schedule.arg.skill.update.long_help"))
+    })
+    .mut_arg("remove_skill", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.remove_skill.help"))
+    })
+    .mut_arg("worker_host", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.worker_host.help"))
+            .long_help(i18n::t("warp_cli.schedule.arg.worker_host.long_help"))
+    })
+}
+
+fn localize_schedule_environment_update_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("environment", |arg| {
+            arg.help(i18n::t("warp_cli.schedule.arg.environment.update.help"))
+        })
+        .mut_arg("remove_environment", |arg| {
+            arg.help(i18n::t("warp_cli.schedule.arg.remove_environment.help"))
+        })
+}
+
+fn localize_schedule_pause_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("schedule_id", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.schedule_id.pause.help"))
+    })
+}
+
+fn localize_schedule_unpause_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("schedule_id", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.schedule_id.unpause.help"))
+    })
+}
+
+fn localize_schedule_delete_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("schedule_id", |arg| {
+        arg.help(i18n::t("warp_cli.schedule.arg.schedule_id.delete.help"))
+    })
+}
+
+fn localize_environment_cli_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("list", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.environment.list.about"))
+        })
+        .mut_subcommand("image", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.environment.image.about"))
+                .mut_subcommand("list", |cmd| {
+                    cmd.about(i18n::t("warp_cli.command.environment.image.list.about"))
+                })
+        })
+        .mut_subcommand("create", |cmd| {
+            localize_environment_create_command_args(
+                cmd.about(i18n::t("warp_cli.command.environment.create.about")),
+            )
+        })
+        .mut_subcommand("delete", |cmd| {
+            localize_environment_delete_command_args(
+                cmd.about(i18n::t("warp_cli.command.environment.delete.about")),
+            )
+        })
+        .mut_subcommand("get", |cmd| {
+            localize_environment_get_command_args(
+                cmd.about(i18n::t("warp_cli.command.environment.get.about")),
+            )
+        })
+        .mut_subcommand("update", |cmd| {
+            localize_environment_update_command_args(
+                cmd.about(i18n::t("warp_cli.command.environment.update.about")),
+            )
+        })
+}
+
+fn localize_environment_create_command_args(command: clap::Command) -> clap::Command {
+    localize_scope_args(command)
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.name.create.help"))
+        })
+        .mut_arg("description", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.description.create.help"))
+        })
+        .mut_arg("docker_image", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.docker_image.create.help"))
+                .long_help(i18n::t(
+                    "warp_cli.environment.arg.docker_image.create.long_help",
+                ))
+        })
+        .mut_arg("repo", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.repo.create.help"))
+        })
+        .mut_arg("setup_command", |arg| {
+            arg.help(i18n::t(
+                "warp_cli.environment.arg.setup_command.create.help",
+            ))
+        })
+}
+
+fn localize_environment_delete_command_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("id", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.id.delete.help"))
+        })
+        .mut_arg("force", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.force.delete.help"))
+        })
+}
+
+fn localize_environment_get_command_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("id", |arg| {
+        arg.help(i18n::t("warp_cli.environment.arg.id.get.help"))
+    })
+}
+
+fn localize_environment_update_command_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("id", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.id.update.help"))
+        })
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.name.update.help"))
+        })
+        .mut_arg("description", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.description.update.help"))
+        })
+        .mut_arg("remove_description", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.remove_description.help"))
+        })
+        .mut_arg("docker_image", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.docker_image.update.help"))
+        })
+        .mut_arg("repo", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.repo.update.help"))
+        })
+        .mut_arg("setup_command", |arg| {
+            arg.help(i18n::t(
+                "warp_cli.environment.arg.setup_command.update.help",
+            ))
+        })
+        .mut_arg("remove_repo", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.remove_repo.help"))
+        })
+        .mut_arg("remove_setup_command", |arg| {
+            arg.help(i18n::t(
+                "warp_cli.environment.arg.remove_setup_command.help",
+            ))
+        })
+        .mut_arg("force", |arg| {
+            arg.help(i18n::t("warp_cli.environment.arg.force.update.help"))
+        })
+}
+
+fn localize_secret_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("create", |cmd| {
+            localize_secret_create_args(
+                cmd.about(i18n::t("warp_cli.command.secret.create.about"))
+                    .long_about(i18n::t("warp_cli.command.secret.create.long_about")),
+            )
+        })
+        .mut_subcommand("delete", |cmd| {
+            localize_secret_delete_args(cmd.about(i18n::t("warp_cli.command.secret.delete.about")))
+        })
+        .mut_subcommand("update", |cmd| {
+            localize_secret_update_args(
+                cmd.about(i18n::t("warp_cli.command.secret.update.about"))
+                    .long_about(i18n::t("warp_cli.command.secret.update.long_about")),
+            )
+        })
+        .mut_subcommand("list", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.secret.list.about"))
+        })
+}
+
+fn localize_secret_create_args(command: clap::Command) -> clap::Command {
+    localize_secret_value_args(localize_common_secret_create_args(command))
+        .mut_arg("secret_type", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.secret_type.help"))
+        })
+        .mut_subcommand("claude", |cmd| {
+            localize_secret_claude_create_command(
+                cmd.about(i18n::t("warp_cli.command.secret.create.claude.about")),
+            )
+        })
+        .mut_subcommand("codex", |cmd| {
+            localize_secret_codex_create_command(
+                cmd.about(i18n::t("warp_cli.command.secret.create.codex.about")),
+            )
+        })
+}
+
+fn localize_secret_claude_create_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("api-key", |cmd| {
+            localize_anthropic_api_key_args(cmd.about(i18n::t(
+                "warp_cli.command.secret.create.claude.api_key.about",
+            )))
+        })
+        .mut_subcommand("bedrock-api-key", |cmd| {
+            localize_bedrock_api_key_args(cmd.about(i18n::t(
+                "warp_cli.command.secret.create.claude.bedrock_api_key.about",
+            )))
+        })
+        .mut_subcommand("bedrock-access-key", |cmd| {
+            localize_bedrock_access_key_args(cmd.about(i18n::t(
+                "warp_cli.command.secret.create.claude.bedrock_access_key.about",
+            )))
+        })
+}
+
+fn localize_secret_codex_create_command(command: clap::Command) -> clap::Command {
+    command.mut_subcommand("api-key", |cmd| {
+        localize_openai_api_key_args(cmd.about(i18n::t(
+            "warp_cli.command.secret.create.codex.api_key.about",
+        )))
+    })
+}
+
+fn localize_common_secret_create_args(command: clap::Command) -> clap::Command {
+    localize_scope_args(command)
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.name.create.help"))
+        })
+        .mut_arg("description", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.description.help"))
+        })
+}
+
+fn localize_secret_value_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("value_file", |arg| {
+        arg.help(i18n::t("warp_cli.secret.arg.value_file.help"))
+            .long_help(i18n::t("warp_cli.secret.arg.value_file.long_help"))
+    })
+}
+
+fn localize_anthropic_api_key_args(command: clap::Command) -> clap::Command {
+    localize_secret_value_args(localize_common_secret_create_args(command))
+}
+
+fn localize_bedrock_api_key_args(command: clap::Command) -> clap::Command {
+    localize_common_secret_create_args(command)
+        .mut_arg("bedrock_api_key", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.bedrock_api_key.help"))
+        })
+        .mut_arg("region", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.bedrock_region.help"))
+        })
+}
+
+fn localize_bedrock_access_key_args(command: clap::Command) -> clap::Command {
+    localize_common_secret_create_args(command)
+        .mut_arg("access_key_id", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.aws_access_key_id.help"))
+        })
+        .mut_arg("secret_access_key", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.aws_secret_access_key.help"))
+        })
+        .mut_arg("session_token", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.aws_session_token.help"))
+        })
+        .mut_arg("region", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.bedrock_region.help"))
+        })
+}
+
+fn localize_openai_api_key_args(command: clap::Command) -> clap::Command {
+    localize_secret_value_args(localize_common_secret_create_args(command)).mut_arg(
+        "base_url",
+        |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.openai_base_url.help"))
+                .long_help(i18n::t("warp_cli.secret.arg.openai_base_url.long_help"))
+        },
+    )
+}
+
+fn localize_secret_delete_args(command: clap::Command) -> clap::Command {
+    localize_scope_args(command)
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.name.delete.help"))
+        })
+        .mut_arg("force", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.force.delete.help"))
+        })
+}
+
+fn localize_secret_update_args(command: clap::Command) -> clap::Command {
+    localize_secret_value_args(localize_scope_args(command))
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.name.update.help"))
+        })
+        .mut_arg("value", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.value.update.help"))
+        })
+        .mut_arg("description", |arg| {
+            arg.help(i18n::t("warp_cli.secret.arg.description.update.help"))
+        })
+}
+
+fn localize_integration_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("create", |cmd| {
+            localize_integration_create_args(
+                cmd.about(i18n::t("warp_cli.command.integration.create.about")),
+            )
+        })
+        .mut_subcommand("update", |cmd| {
+            localize_integration_update_args(
+                cmd.about(i18n::t("warp_cli.command.integration.update.about")),
+            )
+        })
+        .mut_subcommand("list", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.integration.list.about"))
+        })
+}
+
+fn localize_integration_create_args(command: clap::Command) -> clap::Command {
+    localize_environment_create_args(localize_config_file_args(localize_model_args(command)))
+        .mut_arg("provider", |arg| {
+            arg.help(i18n::t("warp_cli.integration.arg.provider.create.help"))
+        })
+        .mut_arg("mcp_specs", |arg| {
+            arg.help(i18n::t("warp_cli.integration.arg.mcp_specs.help"))
+                .long_help(i18n::t("warp_cli.integration.arg.mcp_specs.long_help"))
+        })
+        .mut_arg("prompt", |arg| {
+            arg.help(i18n::t("warp_cli.integration.arg.prompt.help"))
+        })
+        .mut_arg("worker_host", |arg| {
+            arg.help(i18n::t("warp_cli.integration.arg.worker_host.help"))
+                .long_help(i18n::t("warp_cli.integration.arg.worker_host.long_help"))
+        })
+}
+
+fn localize_integration_update_args(command: clap::Command) -> clap::Command {
+    localize_integration_environment_update_args(localize_config_file_args(localize_model_args(
+        command,
+    )))
+    .mut_arg("provider", |arg| {
+        arg.help(i18n::t("warp_cli.integration.arg.provider.update.help"))
+    })
+    .mut_arg("mcp_specs", |arg| {
+        arg.help(i18n::t("warp_cli.integration.arg.mcp_specs.help"))
+            .long_help(i18n::t("warp_cli.integration.arg.mcp_specs.long_help"))
+    })
+    .mut_arg("remove_mcp", |arg| {
+        arg.help(i18n::t("warp_cli.integration.arg.remove_mcp.help"))
+            .long_help(i18n::t("warp_cli.integration.arg.remove_mcp.long_help"))
+    })
+    .mut_arg("prompt", |arg| {
+        arg.help(i18n::t("warp_cli.integration.arg.prompt.help"))
+    })
+    .mut_arg("worker_host", |arg| {
+        arg.help(i18n::t("warp_cli.integration.arg.worker_host.help"))
+            .long_help(i18n::t("warp_cli.integration.arg.worker_host.long_help"))
+    })
+}
+
+fn localize_integration_environment_update_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("environment", |arg| {
+            arg.help(i18n::t("warp_cli.integration.arg.environment.update.help"))
+        })
+        .mut_arg("remove_environment", |arg| {
+            arg.help(i18n::t("warp_cli.integration.arg.remove_environment.help"))
+        })
+}
+
+fn localize_api_key_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("list", |cmd| {
+            localize_api_key_list_args(cmd.about(i18n::t("warp_cli.command.api_key.list.about")))
+        })
+        .mut_subcommand("create", |cmd| {
+            localize_api_key_create_args(
+                cmd.about(i18n::t("warp_cli.command.api_key.create.about")),
+            )
+        })
+        .mut_subcommand("expire", |cmd| {
+            localize_api_key_expire_args(
+                cmd.about(i18n::t("warp_cli.command.api_key.expire.about")),
+            )
+        })
+}
+
+fn localize_api_key_list_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("sort_by", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.sort_by.help"))
+        })
+        .mut_arg("sort_order", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.sort_order.help"))
+        })
+}
+
+fn localize_api_key_create_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("name", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.name.create.help"))
+        })
+        .mut_arg("agent_uid", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.agent_uid.help"))
+        })
+        .mut_arg("expires_in", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.expires_in.help"))
+        })
+        .mut_arg("expires_at", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.expires_at.help"))
+        })
+        .mut_arg("no_expiration", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.no_expiration.help"))
+        })
+}
+
+fn localize_api_key_expire_args(command: clap::Command) -> clap::Command {
+    localize_json_output_args(command)
+        .mut_arg("key_uid", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.key_uid.expire.help"))
+        })
+        .mut_arg("force", |arg| {
+            arg.help(i18n::t("warp_cli.api_key.arg.force.expire.help"))
+        })
+}
+
+fn localize_artifact_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("upload", |cmd| {
+            localize_artifact_upload_args(
+                cmd.about(i18n::t("warp_cli.command.artifact.upload.about")),
+            )
+        })
+        .mut_subcommand("get", |cmd| {
+            localize_artifact_get_args(cmd.about(i18n::t("warp_cli.command.artifact.get.about")))
+        })
+        .mut_subcommand("download", |cmd| {
+            localize_artifact_download_args(
+                cmd.about(i18n::t("warp_cli.command.artifact.download.about")),
+            )
+        })
+}
+
+fn localize_artifact_upload_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("path", |arg| {
+            arg.help(i18n::t("warp_cli.artifact.arg.path.upload.help"))
+        })
+        .mut_arg("run_id", |arg| {
+            arg.help(i18n::t("warp_cli.artifact.arg.run_id.help"))
+        })
+        .mut_arg("conversation_id", |arg| {
+            arg.help(i18n::t("warp_cli.artifact.arg.conversation_id.help"))
+        })
+        .mut_arg("description", |arg| {
+            arg.help(i18n::t("warp_cli.artifact.arg.description.help"))
+        })
+}
+
+fn localize_artifact_get_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("artifact_uid", |arg| {
+        arg.help(i18n::t("warp_cli.artifact.arg.artifact_uid.get.help"))
+    })
+}
+
+fn localize_artifact_download_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("artifact_uid", |arg| {
+            arg.help(i18n::t("warp_cli.artifact.arg.artifact_uid.download.help"))
+        })
+        .mut_arg("out", |arg| {
+            arg.help(i18n::t("warp_cli.artifact.arg.out.help"))
+        })
+}
+
+fn localize_federate_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("issue-token", |cmd| {
+            localize_federate_issue_token_args(
+                cmd.about(i18n::t("warp_cli.command.federate.issue_token.about")),
+            )
+        })
+        .mut_subcommand("issue-gcp-token", |cmd| {
+            localize_federate_issue_gcp_token_args(
+                cmd.about(i18n::t("warp_cli.command.federate.issue_gcp_token.about"))
+                    .long_about(i18n::t(
+                        "warp_cli.command.federate.issue_gcp_token.long_about",
+                    )),
+            )
+        })
+}
+
+fn localize_federate_issue_token_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("run_id", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.run_id.help"))
+        })
+        .mut_arg("audience", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.audience.help"))
+        })
+        .mut_arg("duration", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.duration.help"))
+        })
+        .mut_arg("subject_template", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.subject_template.help"))
+                .long_help(i18n::t("warp_cli.federate.arg.subject_template.long_help"))
+        })
+}
+
+fn localize_federate_issue_gcp_token_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("run_id", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.run_id.help"))
+        })
+        .mut_arg("duration", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.duration.help"))
+        })
+        .mut_arg("audience", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.gcp_audience.help"))
+        })
+        .mut_arg("token_type", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.gcp_token_type.help"))
+        })
+        .mut_arg("output_file", |arg| {
+            arg.help(i18n::t("warp_cli.federate.arg.gcp_output_file.help"))
+        })
+}
+
+fn localize_provider_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_subcommand("setup", |cmd| {
+            localize_provider_setup_args(
+                cmd.about(i18n::t("warp_cli.command.provider.setup.about")),
+            )
+        })
+        .mut_subcommand("list", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.provider.list.about"))
+        })
+}
+
+fn localize_provider_setup_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("provider_type", |arg| {
+            arg.help(i18n::t("warp_cli.provider.arg.provider_type.help"))
+        })
+        .mut_arg("team", |arg| {
+            arg.help(i18n::t("warp_cli.provider.arg.team.help"))
+        })
+        .mut_arg("personal", |arg| {
+            arg.help(i18n::t("warp_cli.provider.arg.personal.help"))
+        })
+}
+
+fn localize_model_command(command: clap::Command) -> clap::Command {
+    command.mut_subcommand("list", |cmd| {
+        cmd.about(i18n::t("warp_cli.command.model.list.about"))
+    })
+}
+
+fn localize_harness_support_command(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("run_id", |arg| {
+            arg.help(i18n::t("warp_cli.harness_support.arg.run_id.help"))
+        })
+        .mut_subcommand("ping", |cmd| {
+            cmd.about(i18n::t("warp_cli.command.harness_support.ping.about"))
+        })
+        .mut_subcommand("report-artifact", |cmd| {
+            cmd.about(i18n::t(
+                "warp_cli.command.harness_support.report_artifact.about",
+            ))
+            .mut_subcommand("pull-request", |cmd| {
+                cmd.about(i18n::t(
+                    "warp_cli.command.harness_support.report_artifact.pull_request.about",
+                ))
+                .mut_arg("url", |arg| {
+                    arg.help(i18n::t(
+                        "warp_cli.harness_support.arg.pull_request.url.help",
+                    ))
+                })
+                .mut_arg("branch", |arg| {
+                    arg.help(i18n::t(
+                        "warp_cli.harness_support.arg.pull_request.branch.help",
+                    ))
+                })
+            })
+        })
+        .mut_subcommand("notify-user", |cmd| {
+            cmd.about(i18n::t(
+                "warp_cli.command.harness_support.notify_user.about",
+            ))
+            .mut_arg("message", |arg| {
+                arg.help(i18n::t("warp_cli.harness_support.arg.message.help"))
+            })
+        })
+        .mut_subcommand("finish-task", |cmd| {
+            cmd.about(i18n::t(
+                "warp_cli.command.harness_support.finish_task.about",
+            ))
+            .mut_arg("status", |arg| {
+                arg.help(i18n::t("warp_cli.harness_support.arg.status.help"))
+            })
+            .mut_arg("summary", |arg| {
+                arg.help(i18n::t("warp_cli.harness_support.arg.summary.help"))
+            })
+        })
+        .mut_subcommand("report-shutdown", |cmd| {
+            cmd.about(i18n::t(
+                "warp_cli.command.harness_support.report_shutdown.about",
+            ))
+            .mut_arg("error_category", |arg| {
+                arg.help(i18n::t("warp_cli.harness_support.arg.error_category.help"))
+            })
+            .mut_arg("error_message", |arg| {
+                arg.help(i18n::t("warp_cli.harness_support.arg.error_message.help"))
+            })
+        })
+}
+
+fn localize_prompt_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("prompt", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.prompt.help"))
+        })
+        .mut_arg("saved_prompt", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.saved_prompt.help"))
+        })
+}
+
+fn localize_model_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("model", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.model.help"))
+    })
+}
+
+fn localize_config_file_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("file", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.config_file.help"))
+    })
+}
+
+fn localize_json_output_args(command: clap::Command) -> clap::Command {
+    command.mut_arg("filter", |arg| {
+        arg.help(i18n::t("warp_cli.agent.arg.jq_filter.help"))
+            .long_help(i18n::t("warp_cli.agent.arg.jq_filter.long_help"))
+    })
+}
+
+fn localize_snapshot_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("no_snapshot", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.no_snapshot.help"))
+        })
+        .mut_arg("snapshot_upload_timeout", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.snapshot_upload_timeout.help"))
+        })
+        .mut_arg("snapshot_script_timeout", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.snapshot_script_timeout.help"))
+        })
+}
+
+fn localize_scope_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("team", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.scope.team.help"))
+        })
+        .mut_arg("personal", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.scope.personal.help"))
+        })
+}
+
+fn localize_environment_create_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("environment", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.environment.help"))
+        })
+        .mut_arg("no_environment", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.no_environment.help"))
+        })
+}
+
+fn localize_computer_use_args(command: clap::Command) -> clap::Command {
+    command
+        .mut_arg("computer_use", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.computer_use.help"))
+        })
+        .mut_arg("no_computer_use", |arg| {
+            arg.help(i18n::t("warp_cli.agent.arg.no_computer_use.help"))
+        })
+}
+
+fn exit_unrecognized_subcommand(subcommand: &str) -> ! {
+    eprintln!(
+        "{}",
+        i18n::t("warp_cli.error.unrecognized_subcommand").replace("{subcommand}", subcommand)
+    );
+    eprintln!();
+    eprintln!("{}", i18n::t("warp_cli.error.more_info_help"));
+    std::process::exit(2);
 }
 
 /// Warp may spawn several worker processes - mostly servers that support the main application.

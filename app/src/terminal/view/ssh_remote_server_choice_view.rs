@@ -74,23 +74,19 @@ impl SshRemoteServerChoiceView {
         let buttons = ctx.add_typed_action_view(|_| {
             KeyboardNavigableButtons::new(vec![
                 rich_navigation_button(
-                    "Install Warp's SSH extension".to_string(),
-                    Some(
-                        "Install Warp's extension to enable agent features like file browsing, \
-                         code review, and intelligent command completions in this session."
-                            .to_string(),
-                    ),
+                    i18n::t("terminal.ssh_remote_choice.install_extension.title"),
+                    Some(i18n::t(
+                        "terminal.ssh_remote_choice.install_extension.description",
+                    )),
                     /* recommended */ true,
                     MouseStateHandle::default(),
                     SshRemoteServerChoiceViewAction::Install,
                 ),
                 rich_navigation_button(
-                    "Continue without installing".to_string(),
-                    Some(
-                        "You'll still get a Warpified experience just without the coding \
-                         features."
-                            .to_string(),
-                    ),
+                    i18n::t("terminal.ssh_remote_choice.continue_without_installing.title"),
+                    Some(i18n::t(
+                        "terminal.ssh_remote_choice.continue_without_installing.description",
+                    )),
                     /* recommended */ false,
                     MouseStateHandle::default(),
                     SshRemoteServerChoiceViewAction::Skip,
@@ -120,7 +116,7 @@ impl SshRemoteServerChoiceView {
         // Match the Figma design: a plain title row, no icon / chevron /
         // action buttons. `HeaderConfig` without an `interaction_mode` set
         // renders exactly that.
-        HeaderConfig::new("Choose your experience for this remote session:", app)
+        HeaderConfig::new(i18n::t("terminal.ssh_remote_choice.title"), app)
             .with_corner_radius_override(CornerRadius::with_top(Radius::Pixels(
                 PROMPT_BORDER_RADIUS,
             )))
@@ -155,9 +151,13 @@ impl SshRemoteServerChoiceView {
 
         let checkbox_label =
             Hoverable::new(self.do_not_ask_again_label_mouse_state.clone(), move |_| {
-                Text::new("Don't ask me this again", ui_font_family, footer_font_size)
-                    .with_color(muted_color)
-                    .finish()
+                Text::new(
+                    i18n::t("terminal.ssh_remote_choice.dont_ask_again"),
+                    ui_font_family,
+                    footer_font_size,
+                )
+                .with_color(muted_color)
+                .finish()
             })
             .with_cursor(Cursor::PointingHand)
             .on_click(|ctx, _, _| {
@@ -175,7 +175,7 @@ impl SshRemoteServerChoiceView {
         let manage_settings_link = appearance
             .ui_builder()
             .link(
-                "Manage Warpify settings".into(),
+                i18n::t("terminal.ssh_remote_choice.manage_settings"),
                 None,
                 Some(Box::new(|ctx| {
                     ctx.dispatch_typed_action(SshRemoteServerChoiceViewAction::OpenWarpifySettings);

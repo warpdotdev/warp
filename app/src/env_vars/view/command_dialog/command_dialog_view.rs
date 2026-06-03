@@ -27,12 +27,6 @@ const CONTAINER_PADDING: f32 = 25.;
 const ELEMENT_SPACING: f32 = 10.;
 const EDITOR_DIVIDE: f32 = 6.;
 
-const SECRET_SPAN: &str = "Secret command";
-const SAVE_BUTTON_LABEL: &str = "Save";
-const CANCEL_BUTTON_LABEL: &str = "Cancel";
-const NAME_PLACEHOLDER_TEXT: &str = "Name";
-const COMMAND_PLACEHOLDER_TEXT: &str = "Command";
-
 #[derive(Debug, Clone)]
 pub enum EnvVarCommandDialogAction {
     Close,
@@ -70,7 +64,7 @@ impl EnvVarCommandDialog {
                 };
 
                 let mut editor = EditorView::single_line(options, ctx);
-                editor.set_placeholder_text(NAME_PLACEHOLDER_TEXT, ctx);
+                editor.set_placeholder_text(i18n::t("common.name"), ctx);
                 editor
             })
         };
@@ -98,7 +92,7 @@ impl EnvVarCommandDialog {
                 };
 
                 let mut editor = EditorView::new(options, ctx);
-                editor.set_placeholder_text(COMMAND_PLACEHOLDER_TEXT, ctx);
+                editor.set_placeholder_text(i18n::t("env_vars.command_placeholder"), ctx);
                 editor
             })
         };
@@ -254,7 +248,7 @@ impl EnvVarCommandDialog {
         Container::new(
             appearance
                 .ui_builder()
-                .span(SECRET_SPAN)
+                .span(i18n::t("env_vars.secret_command"))
                 .with_style(UiComponentStyles {
                     font_size: Some(SPAN_FONT_SIZE),
                     ..Default::default()
@@ -306,7 +300,7 @@ impl View for EnvVarCommandDialog {
                                                     .cancel_button_mouse_state_handle
                                                     .clone(),
                                                 EnvVarCommandDialogAction::Close,
-                                                CANCEL_BUTTON_LABEL,
+                                                &i18n::t("common.cancel"),
                                                 false,
                                                 app,
                                             ),
@@ -325,7 +319,7 @@ impl View for EnvVarCommandDialog {
                                                 .save_button_mouse_state_handle
                                                 .clone(),
                                             EnvVarCommandDialogAction::SaveCommand,
-                                            SAVE_BUTTON_LABEL,
+                                            &i18n::t("common.save"),
                                             true,
                                             app,
                                         ),

@@ -288,7 +288,7 @@ impl ConversationUsageView {
 
         // Usage summary
         labels.push(render_section_header(
-            "USAGE SUMMARY".to_string(),
+            i18n::t("ai.usage.summary"),
             appearance,
         ));
         values.push(render_section_header("".to_string(), appearance));
@@ -306,7 +306,7 @@ impl ConversationUsageView {
         {
             let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
             labels.push(render_label_text(
-                "Credits spent (last response)",
+                &i18n::t("ai.usage.credits_spent_last_response"),
                 appearance,
             ));
             values.push(render_value_text(
@@ -314,14 +314,20 @@ impl ConversationUsageView {
                 appearance,
             ));
 
-            labels.push(render_label_text("Credits spent (total)", appearance));
+            labels.push(render_label_text(
+                &i18n::t("ai.usage.credits_spent_total"),
+                appearance,
+            ));
             values.push(self.render_total_credits_value_row(
                 total_credits_value,
                 rollup.as_ref(),
                 appearance,
             ));
         } else {
-            labels.push(render_label_text("Credits spent", appearance));
+            labels.push(render_label_text(
+                &i18n::t("ai.usage.credits_spent"),
+                appearance,
+            ));
             values.push(self.render_total_credits_value_row(
                 total_credits_value,
                 rollup.as_ref(),
@@ -337,9 +343,16 @@ impl ConversationUsageView {
         // existing flex spacing handles indentation.
         self.append_per_agent_rows(&mut labels, &mut values, rollup.as_ref(), appearance);
 
-        labels.push(render_label_text("Tool calls", appearance));
+        labels.push(render_label_text(
+            &i18n::t("ai.usage.tool_calls"),
+            appearance,
+        ));
         values.push(render_value_text(
-            format_value_text(self.usage_info.tool_calls, "call"),
+            format_count_text(
+                self.usage_info.tool_calls,
+                "ai.usage.call_one",
+                "ai.usage.call_other",
+            ),
             appearance,
         ));
 
@@ -359,9 +372,10 @@ impl ConversationUsageView {
 
             let label_text = if category == PRIMARY_AGENT_CATEGORY && entries_by_category.len() == 1
             {
-                "Models".to_string()
+                i18n::t("ai.usage.models")
             } else {
-                format!("Models ({})", token_usage_category_display_name(&category))
+                let category_name = token_usage_category_display_name(&category);
+                i18n::t("ai.usage.models_with_category").replace("{category}", &category_name)
             };
 
             // For FULL_TERMINAL_USE_CATEGORY, add an info icon with tooltip
@@ -372,7 +386,7 @@ impl ConversationUsageView {
                     .ui_builder()
                     .info_button_with_tooltip(
                         font_size * 0.85,
-                        "You can change which model is used for full terminal use in the AI settings page",
+                        &i18n::t("ai.usage.full_terminal_model_tooltip"),
                         self.full_terminal_use_tooltip_mouse_state.clone(),
                     )
                     .finish();
@@ -435,7 +449,10 @@ impl ConversationUsageView {
             );
         }
 
-        labels.push(render_label_text("Context window used", appearance));
+        labels.push(render_label_text(
+            &i18n::t("ai.usage.context_window_used"),
+            appearance,
+        ));
         let context_usage_str =
             format!("{}%", (self.usage_info.context_window_usage * 100.).round());
         let context_window_element = Flex::row()
@@ -473,18 +490,28 @@ impl ConversationUsageView {
 
         // Tool call summary
         labels.push(render_section_header(
-            "TOOL CALL SUMMARY".to_string(),
+            i18n::t("ai.usage.tool_call_summary"),
             appearance,
         ));
         values.push(render_section_header("".to_string(), appearance));
 
-        labels.push(render_label_text("Files changed", appearance));
+        labels.push(render_label_text(
+            &i18n::t("ai.usage.files_changed"),
+            appearance,
+        ));
         values.push(render_value_text(
-            format_value_text(self.usage_info.files_changed, "file"),
+            format_count_text(
+                self.usage_info.files_changed,
+                "ai.usage.file_one",
+                "ai.usage.file_other",
+            ),
             appearance,
         ));
 
-        labels.push(render_label_text("Diffs applied", appearance));
+        labels.push(render_label_text(
+            &i18n::t("ai.usage.diffs_applied"),
+            appearance,
+        ));
         let diffs_element = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
@@ -521,9 +548,16 @@ impl ConversationUsageView {
             .finish();
         values.push(diffs_element);
 
-        labels.push(render_label_text("Commands executed", appearance));
+        labels.push(render_label_text(
+            &i18n::t("ai.usage.commands_executed"),
+            appearance,
+        ));
         values.push(render_value_text(
-            format_value_text(self.usage_info.commands_executed, "command"),
+            format_count_text(
+                self.usage_info.commands_executed,
+                "ai.usage.command_one",
+                "ai.usage.command_other",
+            ),
             appearance,
         ));
 
@@ -548,25 +582,31 @@ impl ConversationUsageView {
 
                     // Section header
                     labels.push(render_section_header(
-                        "LAST RESPONSE TIME".to_string(),
+                        i18n::t("ai.usage.last_response_time"),
                         appearance,
                     ));
                     values.push(render_section_header("".to_string(), appearance));
 
-                    labels.push(render_label_text("Time to first token", appearance));
+                    labels.push(render_label_text(
+                        &i18n::t("ai.usage.time_to_first_token"),
+                        appearance,
+                    ));
                     values.push(render_value_text(
-                        format!(
-                            "{:.1} seconds",
-                            timing.time_to_first_token_ms as f64 / 1000.0
+                        i18n::t("ai.usage.seconds").replace(
+                            "{seconds}",
+                            &format!("{:.1}", timing.time_to_first_token_ms as f64 / 1000.0),
                         ),
                         appearance,
                     ));
 
-                    labels.push(render_label_text("Total agent response time", appearance));
+                    labels.push(render_label_text(
+                        &i18n::t("ai.usage.total_agent_response_time"),
+                        appearance,
+                    ));
                     values.push(render_value_text(
-                        format!(
-                            "{:.1} seconds",
-                            timing.total_agent_response_time_ms as f64 / 1000.0
+                        i18n::t("ai.usage.seconds").replace(
+                            "{seconds}",
+                            &format!("{:.1}", timing.total_agent_response_time_ms as f64 / 1000.0),
                         ),
                         appearance,
                     ));
@@ -574,11 +614,14 @@ impl ConversationUsageView {
                     if let Some(wall_ms) = timing.wall_to_wall_response_time_ms {
                         if wall_ms != 0 {
                             labels.push(render_label_text(
-                                "Total time (including tool calls)",
+                                &i18n::t("ai.usage.total_time_including_tool_calls"),
                                 appearance,
                             ));
                             values.push(render_value_text(
-                                format!("{:.1} seconds", wall_ms as f64 / 1000.0),
+                                i18n::t("ai.usage.seconds").replace(
+                                    "{seconds}",
+                                    &format!("{:.1}", wall_ms as f64 / 1000.0),
+                                ),
                                 appearance,
                             ));
                         }
@@ -681,18 +724,17 @@ impl ConversationUsageView {
         let link_color = theme.ansi_fg_blue();
         let icon_size = font_size;
         let (label, icon) = if self.details_expanded {
-            ("Hide details", Icon::ChevronUp)
+            (i18n::t("ai.usage.hide_details"), Icon::ChevronUp)
         } else {
-            ("View details", Icon::ChevronDown)
+            (i18n::t("ai.usage.view_details"), Icon::ChevronDown)
         };
         Hoverable::new(
             self.details_toggle_mouse_state.clone(),
             move |_hover_state| {
-                let text_element =
-                    Text::new(label.to_string(), appearance.ui_font_family(), font_size)
-                        .with_color(link_color)
-                        .with_selectable(false)
-                        .finish();
+                let text_element = Text::new(label.clone(), appearance.ui_font_family(), font_size)
+                    .with_color(link_color)
+                    .with_selectable(false)
+                    .finish();
                 let icon_element =
                     ConstrainedBox::new(icon.to_warpui_icon(link_color.into()).finish())
                         .with_width(icon_size)
@@ -791,7 +833,7 @@ impl ConversationUsageView {
         let theme = appearance.theme();
         let font_size = appearance.ui_font_size() + 2.;
         let link_color = theme.ansi_fg_blue();
-        let label = format!("Show {hidden_count} more");
+        let label = i18n::t("ai.usage.show_more").replace("{count}", &hidden_count.to_string());
         Hoverable::new(self.show_more_mouse_state.clone(), move |_hover_state| {
             Text::new(label.clone(), appearance.ui_font_family(), font_size)
                 .with_color(link_color)
@@ -903,10 +945,10 @@ fn render_section_header(header_label: String, appearance: &Appearance) -> Box<d
     .finish()
 }
 
-/// Format a value and a label into one usage string,
-/// making the label plural if the value is not 1.
-fn format_value_text(value: i32, label: &str) -> String {
-    format!("{} {}{}", value, label, if value == 1 { "" } else { "s" })
+/// Format a localized count value using singular/plural keys.
+fn format_count_text(value: i32, singular_key: &str, plural_key: &str) -> String {
+    let key = if value == 1 { singular_key } else { plural_key };
+    i18n::t(key).replace("{count}", &value.to_string())
 }
 
 /// Helper to build a text element with consistent styling for labels.

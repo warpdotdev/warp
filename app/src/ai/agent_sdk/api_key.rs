@@ -113,7 +113,7 @@ impl ApiKeyCommandRunner {
                         ));
                     }
                     GenerateApiKeyResult::Unknown => {
-                        return Err(anyhow!("failed to create API key"))
+                        return Err(anyhow!(i18n::t("ai.agent_sdk.api_key.create_failed")))
                     }
                 };
                 print_created_api_key(result, output_format, json_output)?;
@@ -168,22 +168,25 @@ impl ApiKeyCommandRunner {
                 if !force {
                     if !io::stdin().is_terminal() {
                         super::report_fatal_error(
-                            anyhow!(
-                                "Refusing to expire API key without confirmation in non-interactive mode (use --force to bypass)"
-                            ),
+                            anyhow!(i18n::t(
+                                "ai.agent_sdk.api_key.expire_refusing_noninteractive"
+                            )),
                             ctx,
                         );
                         return;
                     }
 
-                    let prompt = format!("Expire API key '{key}'?");
+                    let prompt = i18n::t("ai.agent_sdk.api_key.expire_confirm")
+                        .replace("{key}", &key.to_string());
                     let should_expire = match Confirm::new(&prompt)
                         .with_default(false)
-                        .with_help_message("This action takes effect immediately")
+                        .with_help_message(&i18n::t("ai.agent_sdk.api_key.expire_confirm_help"))
                         .prompt()
                     {
                         Ok(should_expire) => should_expire,
-                        Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                        Err(
+                            InquireError::OperationCanceled | InquireError::OperationInterrupted,
+                        ) => {
                             ctx.terminate_app(TerminationMode::ForceTerminate, None);
                             return;
                         }
@@ -194,7 +197,7 @@ impl ApiKeyCommandRunner {
                     };
 
                     if !should_expire {
-                        println!("Expiration cancelled");
+                        println!("{}", i18n::t("ai.agent_sdk.api_key.expiration_cancelled"));
                         ctx.terminate_app(TerminationMode::ForceTerminate, None);
                         return;
                     }
@@ -213,7 +216,7 @@ impl ApiKeyCommandRunner {
                                 ));
                             }
                             ExpireApiKeyResult::Unknown => {
-                                return Err(anyhow!("failed to expire API key"))
+                                return Err(anyhow!(i18n::t("ai.agent_sdk.api_key.expire_failed")))
                             }
                         };
                         print_expire_api_key_result(
@@ -267,20 +270,27 @@ impl fmt::Display for ApiKeyInfo {
         let name = &self.name;
         let uid = &self.uid;
         let created_at = self.created_at.format("%Y-%m-%d %H:%M:%S UTC");
-        write!(f, "{name} ({uid}, created {created_at})")
+        write!(
+            f,
+            "{}",
+            i18n::t("ai.agent_sdk.api_key.display")
+                .replace("{name}", name)
+                .replace("{uid}", uid)
+                .replace("{created_at}", &created_at.to_string())
+        )
     }
 }
 
 impl TableFormat for ApiKeyInfo {
     fn header() -> Vec<Cell> {
         vec![
-            Cell::new("UID"),
-            Cell::new("Name"),
-            Cell::new("Key"),
-            Cell::new("Scope"),
-            Cell::new("Created"),
-            Cell::new("Last Used"),
-            Cell::new("Expires At"),
+            Cell::new(i18n::t("ai.agent_sdk.api_key.table.uid")),
+            Cell::new(i18n::t("ai.agent_sdk.api_key.table.name")),
+            Cell::new(i18n::t("ai.agent_sdk.api_key.table.key")),
+            Cell::new(i18n::t("ai.agent_sdk.api_key.table.scope")),
+            Cell::new(i18n::t("ai.agent_sdk.api_key.table.created")),
+            Cell::new(i18n::t("ai.agent_sdk.api_key.table.last_used")),
+            Cell::new(i18n::t("ai.agent_sdk.api_key.table.expires_at")),
         ]
     }
 
@@ -294,12 +304,12 @@ impl TableFormat for ApiKeyInfo {
             Cell::new(
                 self.last_used_at
                     .map(format_approx_duration_from_now_utc)
-                    .unwrap_or_else(|| "Never".to_string()),
+                    .unwrap_or_else(|| i18n::t("ai.agent_sdk.api_key.never")),
             ),
             Cell::new(
                 self.expires_at
                     .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-                    .unwrap_or_else(|| "Never".to_string()),
+                    .unwrap_or_else(|| i18n::t("ai.agent_sdk.api_key.never")),
             ),
         ]
     }
@@ -321,14 +331,16 @@ fn resolve_api_key_identifier(
     matches.sort_by_key(|key| Reverse(key.created_at));
 
     if matches.is_empty() {
-        return Err(anyhow!("API key '{key_identifier}' not found"));
+        return Err(anyhow!(
+            i18n::t("ai.agent_sdk.api_key.not_found").replace("{key}", key_identifier)
+        ));
     } else if matches.len() == 1 {
         return Ok(Some(matches[0].clone()));
     }
 
     if io::stdin().is_terminal() {
         return match Select::new(
-            &format!("Multiple API keys match '{key_identifier}'. Select a key to expire:"),
+            &i18n::t("ai.agent_sdk.api_key.multiple_select").replace("{key}", key_identifier),
             matches,
         )
         .prompt()
@@ -338,14 +350,18 @@ fn resolve_api_key_identifier(
             Err(err) => Err(err.into()),
         };
     }
-    println!("Multiple API keys match '{key_identifier}':");
+    println!(
+        "{}",
+        i18n::t("ai.agent_sdk.api_key.multiple_matches").replace("{key}", key_identifier)
+    );
     for key in matches {
         println!("  {key}");
     }
 
-    Err(anyhow!(
-        "Multiple API keys match '{key_identifier}'; specify the key by UID"
-    ))
+    Err(anyhow!(i18n::t(
+        "ai.agent_sdk.api_key.multiple_specify_uid"
+    )
+    .replace("{key}", key_identifier)))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -419,11 +435,13 @@ fn expires_at_from_args(args: ApiKeyExpirationArgs) -> Result<Option<Time>> {
 
     if let Some(expires_in) = args.expires_in {
         let duration = chrono::Duration::from_std(expires_in.into())
-            .map_err(|_| anyhow!("expiration duration is too large"))?;
+            .map_err(|_| anyhow!(i18n::t("ai.agent_sdk.api_key.expiration_too_large")))?;
         return Ok(Some(Time::from(Utc::now() + duration)));
     }
 
-    Err(anyhow!("expiration behavior is required"))
+    Err(anyhow!(i18n::t(
+        "ai.agent_sdk.api_key.expiration_behavior_required"
+    )))
 }
 
 fn print_created_api_key(
@@ -439,10 +457,20 @@ fn print_created_api_key(
         OutputFormat::Json => output::write_json(&result, std::io::stdout())?,
         OutputFormat::Ndjson => output::write_json_line(&result, std::io::stdout())?,
         OutputFormat::Pretty | OutputFormat::Text => {
-            println!("API key '{}' created.", result.api_key.name);
-            println!("UID: {}", result.api_key.uid);
-            println!("Raw API key: {}", result.raw_api_key);
-            println!("This secret key is shown only once. Store it securely.");
+            println!(
+                "{}",
+                i18n::t("ai.agent_sdk.api_key.created").replace("{name}", &result.api_key.name)
+            );
+            println!(
+                "{}",
+                i18n::t("ai.agent_sdk.api_key.uid").replace("{uid}", &result.api_key.uid)
+            );
+            println!(
+                "{}",
+                i18n::t("ai.agent_sdk.api_key.raw_api_key")
+                    .replace("{api_key}", &result.raw_api_key)
+            );
+            println!("{}", i18n::t("ai.agent_sdk.api_key.store_securely"));
         }
     }
     Ok(())
@@ -465,9 +493,15 @@ fn print_expire_api_key_result(
         OutputFormat::Ndjson => output::write_json_line(&result, std::io::stdout())?,
         OutputFormat::Pretty | OutputFormat::Text => {
             if expired {
-                println!("API key '{}' expired.", result.key_uid);
+                println!(
+                    "{}",
+                    i18n::t("ai.agent_sdk.api_key.expired").replace("{uid}", &result.key_uid)
+                );
             } else {
-                println!("API key '{}' was not expired.", result.key_uid);
+                println!(
+                    "{}",
+                    i18n::t("ai.agent_sdk.api_key.not_expired").replace("{uid}", &result.key_uid)
+                );
             }
         }
     }

@@ -96,87 +96,87 @@ pub fn maybe_log_out(app: &mut AppContext) {
             || num_unsaved_files > 0)
     {
         send_telemetry_sync_from_app_ctx!(TelemetryEvent::LogOutModalShown, app);
-        let mut button_data = vec![ModalButton::for_app("Yes, log out", |ctx| {
-            log_out(ctx);
-        })];
+        let mut button_data = vec![ModalButton::for_app(
+            i18n::t("auth.logout.confirm"),
+            |ctx| {
+                log_out(ctx);
+            },
+        )];
 
         let mut info_text_vec: Vec<String> = vec![];
         if num_long_running_commands > 0 {
-            let plural = if num_long_running_commands > 1 {
-                "processes"
+            let key = if num_long_running_commands > 1 {
+                "auth.logout.running_processes"
             } else {
-                "process"
+                "auth.logout.running_process"
             };
-            info_text_vec.push(format!(
-                "You have {num_long_running_commands} {plural} running."
-            ));
+            info_text_vec
+                .push(i18n::t(key).replace("{count}", &num_long_running_commands.to_string()));
 
-            button_data.push(ModalButton::for_app("Show running processes", move |ctx| {
-                send_telemetry_sync_from_app_ctx!(
-                    TelemetryEvent::LogOutModalCancel { nav_palette: true },
-                    ctx
-                );
-                let windowing_model = ctx.windows();
-                let window_id = if let Some(active_window_id) = windowing_model.active_window() {
-                    active_window_id
-                } else if let Some(window_id) = ctx.window_ids().collect_vec().first() {
-                    let window_id = *window_id;
-                    windowing_model.show_window_and_focus_app(window_id);
-                    window_id
-                } else {
-                    return;
-                };
+            button_data.push(ModalButton::for_app(
+                i18n::t("auth.logout.show_running_processes"),
+                move |ctx| {
+                    send_telemetry_sync_from_app_ctx!(
+                        TelemetryEvent::LogOutModalCancel { nav_palette: true },
+                        ctx
+                    );
+                    let windowing_model = ctx.windows();
+                    let window_id = if let Some(active_window_id) = windowing_model.active_window()
+                    {
+                        active_window_id
+                    } else if let Some(window_id) = ctx.window_ids().collect_vec().first() {
+                        let window_id = *window_id;
+                        windowing_model.show_window_and_focus_app(window_id);
+                        window_id
+                    } else {
+                        return;
+                    };
 
-                if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-                    if let Some(handle) = workspaces.first() {
-                        ctx.dispatch_typed_action_for_view(
-                            window_id,
-                            handle.id(),
-                            &WorkspaceAction::OpenPalette {
-                                mode: PaletteMode::Navigation,
-                                source: PaletteSource::LogOutModal,
-                                query: Some("running".to_owned()),
-                            },
-                        );
+                    if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
+                        if let Some(handle) = workspaces.first() {
+                            ctx.dispatch_typed_action_for_view(
+                                window_id,
+                                handle.id(),
+                                &WorkspaceAction::OpenPalette {
+                                    mode: PaletteMode::Navigation,
+                                    source: PaletteSource::LogOutModal,
+                                    query: Some("running".to_owned()),
+                                },
+                            );
+                        }
                     }
-                }
-            }))
+                },
+            ))
         }
 
         if num_shared_sessions > 0 {
-            let plural = if num_shared_sessions > 1 {
-                "sessions"
+            let key = if num_shared_sessions > 1 {
+                "auth.logout.shared_sessions"
             } else {
-                "session"
+                "auth.logout.shared_session"
             };
-            info_text_vec.push(format!("You have {num_shared_sessions} shared {plural}."));
+            info_text_vec.push(i18n::t(key).replace("{count}", &num_shared_sessions.to_string()));
         }
 
         if num_unsaved_objects > 0 {
-            let plural = if num_unsaved_objects > 1 {
-                "objects"
+            let key = if num_unsaved_objects > 1 {
+                "auth.logout.unsynced_objects"
             } else {
-                "object"
+                "auth.logout.unsynced_object"
             };
-            info_text_vec.push(format!(
-                "You have {num_unsaved_objects} unsynced Warp Drive {plural}. \
-            Logging out will cause you to lose the {plural}."
-            ));
+            info_text_vec.push(i18n::t(key).replace("{count}", &num_unsaved_objects.to_string()));
         }
 
         if num_unsaved_files > 0 {
-            let plural = if num_unsaved_files > 1 {
-                "files"
+            let key = if num_unsaved_files > 1 {
+                "auth.logout.unsaved_files"
             } else {
-                "file"
+                "auth.logout.unsaved_file"
             };
-            info_text_vec.push(format!(
-                "You have {num_unsaved_files} unsaved {plural}. \
-            Logging out will cause you to lose the {plural}."
-            ));
+            info_text_vec.push(i18n::t(key).replace("{count}", &num_unsaved_files.to_string()));
         }
 
-        button_data.push(ModalButton::for_app("Cancel", move |ctx| {
+        button_data.push(ModalButton::for_app(i18n::t("common.cancel"), move |ctx| {
             send_telemetry_sync_from_app_ctx!(
                 TelemetryEvent::LogOutModalCancel { nav_palette: false },
                 ctx
@@ -184,7 +184,7 @@ pub fn maybe_log_out(app: &mut AppContext) {
         }));
 
         let alert_data = AlertDialogWithCallbacks::for_app(
-            "Log out?",
+            i18n::t("auth.logout.title"),
             info_text_vec.join("\n"),
             button_data,
             move |ctx| {

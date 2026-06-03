@@ -129,6 +129,7 @@ jemalloc_pprof = { version = "0.8.1", optional = true, features = [
 ] }
 lsp-types = "0.97.0"
 indexmap = { version = "2.0.2", features = ["serde"] }
+i18n.workspace = true
 input_classifier.workspace = true
 instant.workspace = true
 ipc.workspace = true

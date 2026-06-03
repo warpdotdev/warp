@@ -115,7 +115,7 @@ impl SettingsWidget for AboutPageWidget {
                 .with_child(version_row.finish())
                 .with_child(
                     ui_builder
-                        .span("Copyright 2026 Warp")
+                        .span(i18n::t("settings.about.copyright"))
                         .build()
                         .with_margin_top(16.)
                         .finish(),

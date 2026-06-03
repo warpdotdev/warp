@@ -27,7 +27,6 @@ use crate::terminal::{BlockListSettings, TerminalManager, TerminalView};
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icon_with_status::{render_icon_with_status, IconWithStatusVariant};
-const DEFAULT_CLOUD_AGENT_TITLE: &str = "New cloud agent";
 
 #[derive(Default)]
 struct StateHandles {
@@ -135,8 +134,8 @@ impl AmbientAgentEntryBlock {
 
     fn meaningful_title(title: &str) -> Option<String> {
         let title = title.trim();
-        (!title.is_empty() && !title.eq_ignore_ascii_case(DEFAULT_CLOUD_AGENT_TITLE))
-            .then(|| title.to_owned())
+        let default_title = i18n::t("terminal.ambient_agent.default_cloud_agent_title");
+        (!title.is_empty() && !title.eq_ignore_ascii_case(&default_title)).then(|| title.to_owned())
     }
 
     fn title_from_task_data(&self, app: &AppContext) -> Option<String> {
@@ -164,7 +163,7 @@ impl AmbientAgentEntryBlock {
             .and_then(|title| Self::meaningful_title(&title))
             .or_else(|| self.title_from_task_data(app))
             .or_else(|| self.title_from_spawn_request(app))
-            .unwrap_or_else(|| DEFAULT_CLOUD_AGENT_TITLE.to_owned())
+            .unwrap_or_else(|| i18n::t("terminal.ambient_agent.default_cloud_agent_title"))
     }
 
     fn ambient_agent_view_model<'a>(
@@ -178,14 +177,18 @@ impl AmbientAgentEntryBlock {
     }
 
     /// Gets the detail text to display based on the ambient agent status.
-    fn detail_text(&self, app: &AppContext) -> Option<&'static str> {
+    fn detail_text(&self, app: &AppContext) -> Option<String> {
         match self.ambient_agent_view_model(app)?.status() {
             Status::Setup | Status::Composing => None,
-            Status::WaitingForSession { .. } => Some("Starting environment..."),
-            Status::AgentRunning => Some("Agent is working on task"),
-            Status::Failed { .. } => Some("Agent failed"),
-            Status::NeedsGithubAuth { .. } => Some("Authentication required"),
-            Status::Cancelled { .. } => Some("Cancelled"),
+            Status::WaitingForSession { .. } => Some(i18n::t(
+                "terminal.ambient_agent.status.starting_environment",
+            )),
+            Status::AgentRunning => Some(i18n::t("terminal.ambient_agent.status.agent_working")),
+            Status::Failed { .. } => Some(i18n::t("terminal.ambient_agent.status.agent_failed")),
+            Status::NeedsGithubAuth { .. } => {
+                Some(i18n::t("terminal.ambient_agent.status.auth_required"))
+            }
+            Status::Cancelled { .. } => Some(i18n::t("terminal.ambient_agent.status.cancelled")),
         }
     }
 
@@ -197,7 +200,7 @@ impl AmbientAgentEntryBlock {
             }
             Status::Failed { .. } => Some(ConversationStatus::Error),
             Status::NeedsGithubAuth { .. } => Some(ConversationStatus::Blocked {
-                blocked_action: "GitHub authentication required".to_owned(),
+                blocked_action: i18n::t("terminal.ambient_agent.status.github_auth_required"),
             }),
             Status::Cancelled { .. } => Some(ConversationStatus::Cancelled),
         }

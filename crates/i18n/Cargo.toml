@@ -1,0 +1,12 @@
+[package]
+name = "i18n"
+edition = "2021"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+rust-embed.workspace = true
+once_cell.workspace = true
+log.workspace = true

@@ -34,7 +34,7 @@ impl EnvVarCollectionSearchItem {
                 env_var_collection
                     .title
                     .clone()
-                    .unwrap_or("Untitled".to_owned()),
+                    .unwrap_or_else(|| i18n::t("search.untitled")),
                 true,
             )
             .with_style(UiComponentStyles {
@@ -92,7 +92,7 @@ impl SearchItem for EnvVarCollectionSearchItem {
             env_var_collection
                 .title
                 .clone()
-                .unwrap_or("Untitled".to_owned()),
+                .unwrap_or_else(|| i18n::t("search.untitled")),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
@@ -216,11 +216,12 @@ impl SearchItem for EnvVarCollectionSearchItem {
         let env_var_collection = self.env_var_collection.model().string_model.clone();
 
         format!(
-            "Environment Variables: {}",
+            "{}: {}",
+            i18n::t("search.command_search.result.environment_variables_prefix"),
             env_var_collection
                 .title
                 .clone()
-                .unwrap_or("Untitled".to_owned())
+                .unwrap_or_else(|| i18n::t("search.untitled"))
         )
     }
 }

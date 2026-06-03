@@ -86,10 +86,14 @@ impl WarpifyBannerState {
         self.mode.is_ssh()
     }
 
-    pub fn title(&self) -> &str {
+    pub fn title(&self) -> String {
         match &self.mode {
-            WarpificationMode::Ssh { .. } => "Warpify SSH session",
-            WarpificationMode::Subshell { .. } => "Warpify subshell",
+            WarpificationMode::Ssh { .. } => {
+                i18n::t("terminal.use_agent_footer.warpify_ssh_session")
+            }
+            WarpificationMode::Subshell { .. } => {
+                i18n::t("terminal.use_agent_footer.warpify_subshell")
+            }
         }
     }
 
@@ -151,7 +155,7 @@ pub fn render_warpification_banner(
                 ButtonVariant::Text,
                 state.dont_ask_button_mouse_state.clone(),
             )
-            .with_text_label("Do not show again".to_owned())
+            .with_text_label(i18n::t("common.do_not_show_again"))
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(TerminalAction::DismissWarpifyBanner(
@@ -226,7 +230,7 @@ fn render_yes_button(
     let yes_button = match initialize_warpification_keybinding {
         Some(keystroke) => appearance
             .ui_builder()
-            .keyboard_shortcut_button(state.title().to_owned(), keystroke, mouse_state.clone())
+            .keyboard_shortcut_button(state.title(), keystroke, mouse_state.clone())
             .with_style(UiComponentStyles {
                 height: Some(36.),
                 padding: Some(Coords {
@@ -240,7 +244,7 @@ fn render_yes_button(
         None => appearance
             .ui_builder()
             .button(ButtonVariant::Basic, mouse_state.clone())
-            .with_text_label(state.title().to_owned())
+            .with_text_label(state.title())
             .with_style(UiComponentStyles {
                 background: Some(Fill::Solid(ColorU::transparent_black()).into()),
                 height: Some(36.),

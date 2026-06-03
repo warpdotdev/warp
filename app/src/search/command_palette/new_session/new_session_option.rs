@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::fmt;
 
 use warpui::Action;
 
@@ -23,21 +22,6 @@ pub(super) enum Direction {
     Right,
     Up,
     Left,
-}
-
-impl fmt::Display for Direction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Direction::Down => "Down",
-                Direction::Right => "Right",
-                Direction::Up => "Up",
-                Direction::Left => "Left",
-            }
-        )
-    }
 }
 
 #[derive(Debug)]
@@ -83,13 +67,28 @@ impl NewSessionOption {
 impl NewSessionOption {
     pub(super) fn new(id: NewSessionOptionId, config: NewSessionConfig) -> Self {
         let description = match &config {
-            NewSessionConfig::NewTab(shell) => format!("Create New Tab: {}", shell.short_name()),
+            NewSessionConfig::NewTab(shell) => format!(
+                "{}: {}",
+                i18n::t("search.new_session.create_new_tab"),
+                shell.short_name()
+            ),
             NewSessionConfig::NewWindow(shell) => {
-                format!("Create New Window: {}", shell.short_name())
+                format!(
+                    "{}: {}",
+                    i18n::t("search.new_session.create_new_window"),
+                    shell.short_name()
+                )
             }
-            NewSessionConfig::Split(direction, shell) => {
-                format!("Split Pane {direction}: {}", shell.short_name())
-            }
+            NewSessionConfig::Split(direction, shell) => format!(
+                "{}: {}",
+                match direction {
+                    Direction::Down => i18n::t("search.new_session.split_pane_down"),
+                    Direction::Right => i18n::t("search.new_session.split_pane_right"),
+                    Direction::Up => i18n::t("search.new_session.split_pane_up"),
+                    Direction::Left => i18n::t("search.new_session.split_pane_left"),
+                },
+                shell.short_name()
+            ),
         };
         Self {
             id,

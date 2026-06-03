@@ -225,7 +225,9 @@ impl AgentManagementRunner {
                 },
             };
             if request_is_empty(&request) {
-                return Err(anyhow!("No updates requested"));
+                return Err(anyhow!(i18n::t(
+                    "ai.agent_sdk.agent_management.no_updates_requested"
+                )));
             }
 
             if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
@@ -315,9 +317,9 @@ fn ensure_json_sort_is_not_requested(
     if (matches!(output_format, OutputFormat::Json) || json_output.force_json_output())
         && (args.sort_by.is_some() || args.sort_order.is_some())
     {
-        return Err(anyhow!(
-            "--sort-by and --sort-order are not supported with JSON output"
-        ));
+        return Err(anyhow!(i18n::t(
+            "ai.agent_sdk.agent_management.json_sort_unsupported"
+        )));
     }
 
     Ok(())
@@ -362,14 +364,14 @@ fn sort_agents(
 impl TableFormat for AgentResponse {
     fn header() -> Vec<Cell> {
         vec![
-            Cell::new("UID"),
-            Cell::new("Name"),
-            Cell::new("Created"),
-            Cell::new("Description"),
-            Cell::new("Secrets"),
-            Cell::new("Skills"),
-            Cell::new("Base model"),
-            Cell::new("Environment"),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.uid")),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.name")),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.created")),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.description")),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.secrets")),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.skills")),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.base_model")),
+            Cell::new(i18n::t("ai.agent_sdk.agent_management.table.environment")),
         ]
     }
 
@@ -395,7 +397,10 @@ fn print_agents(agents: &[AgentResponse], output_format: OutputFormat) -> anyhow
             let (visible_agents, hidden_count) = visible_agents_and_hidden_count(agents);
             match output_format {
                 OutputFormat::Pretty if visible_agents.is_empty() => {
-                    println!("No agents found.");
+                    println!(
+                        "{}",
+                        i18n::t("ai.agent_sdk.agent_management.no_agents_found")
+                    );
                     print_skills_hint();
                 }
                 OutputFormat::Pretty => {
@@ -433,7 +438,11 @@ fn visible_agents_and_hidden_count(agents: &[AgentResponse]) -> (Vec<AgentRespon
 
 fn print_disabled_agents_hidden_notice(hidden_count: usize) {
     if hidden_count > 0 {
-        eprintln!("{hidden_count} disabled agents hidden");
+        eprintln!(
+            "{}",
+            i18n::t("ai.agent_sdk.agent_management.disabled_agents_hidden")
+                .replace("{count}", &hidden_count.to_string())
+        );
     }
 }
 fn print_single_agent(agent: &AgentResponse, output_format: OutputFormat) -> anyhow::Result<()> {
@@ -451,7 +460,10 @@ fn print_single_agent(agent: &AgentResponse, output_format: OutputFormat) -> any
 
 fn print_skills_hint() {
     let binary_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
-    println!("\n\nLooking for your agent skills? Use `{binary_name} agent skills` instead.");
+    println!(
+        "\n\n{}",
+        i18n::t("ai.agent_sdk.agent_management.skills_hint").replace("{binary_name}", &binary_name)
+    );
 }
 
 #[derive(Serialize)]
@@ -463,7 +475,10 @@ struct DeleteAgentResult<'a> {
 fn print_delete_result(uid: &str, output_format: OutputFormat) -> anyhow::Result<()> {
     match output_format {
         OutputFormat::Pretty => {
-            println!("Deleted agent {uid}.");
+            println!(
+                "{}",
+                i18n::t("ai.agent_sdk.agent_management.deleted").replace("{uid}", uid)
+            );
         }
         OutputFormat::Text => {
             let mut stdout = std::io::stdout();

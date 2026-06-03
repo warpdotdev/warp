@@ -63,9 +63,12 @@ impl clap::builder::TypedValueParser for ShareRequestParser {
         arg: Option<&Arg>,
         value: &OsStr,
     ) -> Result<Self::Value, clap::Error> {
-        let value_str = value
-            .to_str()
-            .ok_or_else(|| clap::Error::raw(ErrorKind::InvalidUtf8, "Invalid share recipient"))?;
+        let value_str = value.to_str().ok_or_else(|| {
+            clap::Error::raw(
+                ErrorKind::InvalidUtf8,
+                i18n::t("warp_cli.share.error.invalid_recipient"),
+            )
+        })?;
 
         // If there's a `:`, treat the first part as the subject and the second as the access level. Otherwise, default to `view` access.
         let (subject_str, level_str) = match value_str.split_once(':') {
@@ -89,19 +92,19 @@ impl clap::builder::TypedValueParser for ShareRequestParser {
         Some(Box::new(
             [
                 PossibleValue::new("team:view")
-                    .help("Share with your team, view-only")
+                    .help(i18n::t("warp_cli.share.possible.team_view"))
                     .alias("team"),
-                PossibleValue::new("team:edit").help("Share with your team, with edit access"),
+                PossibleValue::new("team:edit").help(i18n::t("warp_cli.share.possible.team_edit")),
                 PossibleValue::new("public:view")
-                    .help("Share with anyone who has the link, view-only")
+                    .help(i18n::t("warp_cli.share.possible.public_view"))
                     .alias("public"),
                 PossibleValue::new("public:edit")
-                    .help("Share with anyone who has the link, with edit access"),
+                    .help(i18n::t("warp_cli.share.possible.public_edit")),
                 PossibleValue::new("<user@email.com>:view")
-                    .help("Share with <user@email.com>, view-only")
+                    .help(i18n::t("warp_cli.share.possible.user_view"))
                     .alias("<user@email.com>"),
                 PossibleValue::new("<user@email.com>:edit")
-                    .help("Share with <user@email.com>, with edit access"),
+                    .help(i18n::t("warp_cli.share.possible.user_edit")),
             ]
             .into_iter(),
         ))
@@ -147,9 +150,7 @@ impl FromStr for ShareSubject {
             }),
             other => Err(clap::Error::raw(
                 ErrorKind::InvalidValue,
-                format!(
-                    "Cannot share with '{other}'. Expected 'team', 'public', or an email address"
-                ),
+                i18n::t("warp_cli.share.error.invalid_subject").replace("{subject}", other),
             )),
         }
     }

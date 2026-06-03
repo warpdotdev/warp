@@ -20,7 +20,9 @@ pub fn run(
     command: FederateCommand,
 ) -> Result<()> {
     if !FeatureFlag::OzIdentityFederation.is_enabled() {
-        return Err(anyhow::anyhow!("This feature is not enabled"));
+        return Err(anyhow::anyhow!(i18n::t(
+            "ai.agent_sdk.federate.feature_not_enabled"
+        )));
     }
     match command {
         FederateCommand::IssueToken(args) => issue_token(ctx, args, global_options.output_format),
@@ -39,8 +41,9 @@ fn issue_token(
     let duration: std::time::Duration = args.duration.into();
     let audience = args.audience;
     let subject_template = match args.subject_template {
-        Some(template) => vec1::Vec1::try_from_vec(template)
-            .map_err(|_| anyhow::anyhow!("--subject-template requires at least one value"))?,
+        Some(template) => vec1::Vec1::try_from_vec(template).map_err(|_| {
+            anyhow::anyhow!(i18n::t("ai.agent_sdk.federate.subject_template_required"))
+        })?,
         None => vec1::vec1!["principal".to_owned()],
     };
 
@@ -71,9 +74,19 @@ fn issue_token(
                         println!("{token_value}");
                     }
                     OutputFormat::Pretty => {
-                        println!("Token: {token_value}");
-                        println!("Expires at: {expires_at}");
-                        println!("Issuer: {issuer}");
+                        println!(
+                            "{}",
+                            i18n::t("ai.agent_sdk.federate.token").replace("{token}", &token_value)
+                        );
+                        println!(
+                            "{}",
+                            i18n::t("ai.agent_sdk.federate.expires_at")
+                                .replace("{expires_at}", &expires_at)
+                        );
+                        println!(
+                            "{}",
+                            i18n::t("ai.agent_sdk.federate.issuer").replace("{issuer}", &issuer)
+                        );
                     }
                 }
                 ctx.terminate_app(TerminationMode::ForceTerminate, None);
@@ -106,8 +119,10 @@ fn issue_gcp_token(ctx: &mut AppContext, args: IssueGcpTokenArgs) -> Result<()> 
                 // If we can't cache the token, report an error but don't fail the command.
                 if let Some(output_path) = output_file {
                     if let Err(err) = std::fs::write(&output_path, &output) {
-                        report_error!(anyhow!(err)
-                            .context(format!("Error writing GCP token to {output_path}")));
+                        report_error!(anyhow!(err).context(
+                            i18n::t("ai.agent_sdk.federate.write_gcp_token_failed")
+                                .replace("{path}", &output_path)
+                        ));
                     }
                 }
 

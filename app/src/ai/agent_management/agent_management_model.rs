@@ -157,12 +157,16 @@ impl AgentNotificationsModel {
                     );
                 }
                 CLIAgentSessionStatus::Success => {
-                    let title = session_context
-                        .display_title()
-                        .unwrap_or_else(|| format!("{} completed", agent.display_name()));
+                    let title = session_context.display_title().unwrap_or_else(|| {
+                        format!(
+                            "{}{}",
+                            agent.display_name(),
+                            i18n::t("agent_management.notifications.agent_completed_suffix")
+                        )
+                    });
                     let message = match agent {
-                        CLIAgent::Codex => "Notification from Codex",
-                        _ => "Task completed.",
+                        CLIAgent::Codex => i18n::t("agent_management.notifications.from_codex"),
+                        _ => i18n::t("agent_management.notifications.task_completed"),
                     };
                     let metadata = TerminalViewMetadata::lookup(*terminal_view_id, ctx);
                     self.add_notification(
@@ -181,15 +185,19 @@ impl AgentNotificationsModel {
                     );
                 }
                 CLIAgentSessionStatus::Blocked { message } => {
-                    let title = session_context
-                        .display_title()
-                        .unwrap_or_else(|| format!("{} needs attention", agent.display_name()));
+                    let title = session_context.display_title().unwrap_or_else(|| {
+                        format!(
+                            "{}{}",
+                            agent.display_name(),
+                            i18n::t("agent_management.notifications.needs_attention_suffix")
+                        )
+                    });
                     let metadata = TerminalViewMetadata::lookup(*terminal_view_id, ctx);
                     self.add_notification(
                         title,
-                        message
-                            .clone()
-                            .unwrap_or_else(|| "Waiting for input.".to_owned()),
+                        message.clone().unwrap_or_else(|| {
+                            i18n::t("agent_management.notifications.waiting_for_input")
+                        }),
                         NotificationCategory::Request,
                         NotificationSourceAgent::CLI {
                             agent: *agent,
@@ -319,7 +327,8 @@ impl AgentNotificationsModel {
             return;
         }
 
-        let title = latest_query.unwrap_or_else(|| "Agent task".to_owned());
+        let title =
+            latest_query.unwrap_or_else(|| i18n::t("agent_management.notifications.agent_task"));
         let metadata = TerminalViewMetadata::lookup(terminal_view_id, ctx);
         let oz_agent = NotificationSourceAgent::Oz {
             is_ambient: metadata.is_ambient,
@@ -334,7 +343,7 @@ impl AgentNotificationsModel {
                 let artifacts = self.flush_pending_artifacts(conversation_id);
                 self.add_notification(
                     title,
-                    "Task completed.".to_owned(),
+                    i18n::t("agent_management.notifications.task_completed"),
                     NotificationCategory::Complete,
                     oz_agent,
                     origin,
@@ -348,7 +357,7 @@ impl AgentNotificationsModel {
                 let artifacts = self.flush_pending_artifacts(conversation_id);
                 self.add_notification(
                     title,
-                    "Task was cancelled.".to_owned(),
+                    i18n::t("agent_management.notifications.task_cancelled"),
                     NotificationCategory::Complete,
                     oz_agent,
                     origin,
@@ -375,7 +384,7 @@ impl AgentNotificationsModel {
                 let artifacts = self.flush_pending_artifacts(conversation_id);
                 self.add_notification(
                     title,
-                    "Something went wrong.".to_owned(),
+                    i18n::t("agent_management.notifications.error"),
                     NotificationCategory::Error,
                     oz_agent,
                     origin,

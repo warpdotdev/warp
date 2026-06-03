@@ -141,7 +141,9 @@ fn collect_buttons(
             } => {
                 // Only show plan button if synced to Warp Drive (has notebook_uid)
                 if let Some(notebook_uid) = notebook_uid {
-                    let button_text = title.clone().unwrap_or("Untitled Plan".to_string());
+                    let button_text = title
+                        .clone()
+                        .unwrap_or_else(|| i18n::t("ai.artifacts.untitled_plan"));
                     let theme = theme.clone();
                     buttons.push(ctx.add_typed_action_view(move |_| {
                         make_plan_button(button_text, *notebook_uid, theme)
@@ -195,7 +197,7 @@ fn collect_buttons(
     if !screenshot_uids.is_empty() {
         let theme = theme.clone();
         buttons.push(ctx.add_typed_action_view(move |_| {
-            make_screenshot_button("Screenshots".to_string(), screenshot_uids, theme)
+            make_screenshot_button(i18n::t("ai.artifacts.screenshots"), screenshot_uids, theme)
         }));
     }
 
@@ -221,7 +223,7 @@ fn make_branch_button(branch: String, theme: Arc<dyn ActionButtonTheme>) -> Acti
     make_artifact_button(
         branch.clone(),
         Icon::GitBranch,
-        "Copy branch name",
+        &i18n::t("ai.artifact.button.copy_branch_name"),
         Some(AnsiColorIdentifier::Green),
         ArtifactButtonAction::CopyBranch { branch },
         theme,
@@ -243,7 +245,7 @@ fn make_pr_button(
     make_artifact_button(
         display_text,
         Icon::Github,
-        "Open pull request",
+        &i18n::t("ai.artifact.button.open_pull_request"),
         None,
         ArtifactButtonAction::OpenPullRequest { url },
         theme,

@@ -98,6 +98,7 @@ impl ExportTest {
 }
 
 fn initialize_app(app: &mut App) {
+    i18n::set_locale("en");
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(ExportManager::new);
     app.add_singleton_model(UserWorkspaces::default_mock);

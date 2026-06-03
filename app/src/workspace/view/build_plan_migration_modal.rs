@@ -193,7 +193,7 @@ impl BuildPlanMigrationModal {
             UserWorkspacesEvent::UpdateWorkspaceSettingsRejected(_err) => {
                 self.is_updating = false;
                 ctx.emit(BuildPlanMigrationModalEvent::ShowToast {
-                    message: "Failed to enable auto-reload. Please try updating your settings in Billing & usage.".to_string(),
+                    message: i18n::t("workspace.build_plan_migration.auto_reload_failed"),
                     flavor: ToastFlavor::Error,
                 });
                 ctx.notify();
@@ -266,12 +266,16 @@ impl BuildPlanMigrationModal {
             })
             .finish();
 
-        let label = FormattedTextElement::from_str("Auto-reload", appearance.ui_font_family(), 12.)
-            .with_color(blended_colors::text_sub(
-                theme,
-                blended_colors::neutral_4(theme),
-            ))
-            .finish();
+        let label = FormattedTextElement::from_str(
+            i18n::t("settings.billing.addon.auto_reload_label"),
+            appearance.ui_font_family(),
+            12.,
+        )
+        .with_color(blended_colors::text_sub(
+            theme,
+            blended_colors::neutral_4(theme),
+        ))
+        .finish();
 
         let checkbox_row = Flex::row()
             .with_child(checkbox)
@@ -304,9 +308,9 @@ impl BuildPlanMigrationModal {
 
     fn render_get_started_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let button_text = if self.is_updating {
-            "Saving...".to_string()
+            i18n::t("workspace.build_plan_migration.saving")
         } else {
-            "Get Started".to_string()
+            i18n::t("workspace.build_plan_migration.get_started")
         };
 
         let button_font_color = self.is_updating.then_some(
@@ -354,7 +358,7 @@ impl BuildPlanMigrationModal {
         let theme = appearance.theme();
 
         let title = Self::create_text(
-            "Use auto-reload to never miss a beat.".to_string(),
+            i18n::t("workspace.build_plan_migration.auto_reload_title"),
             appearance.ui_font_family(),
             16.,
             blended_colors::text_main(theme, blended_colors::neutral_2(theme)),
@@ -362,7 +366,7 @@ impl BuildPlanMigrationModal {
         );
 
         let description = Self::create_text(
-            "Auto-reload will automatically purchase credits at your selected rate when your account balance reaches 100 credits. Your monthly spend limit is set at your legacy plan's monthly cost and can be updated in Settings > Billing & usage.".to_string(),
+            i18n::t("workspace.build_plan_migration.auto_reload_description"),
             appearance.ui_font_family(),
             14.,
             blended_colors::text_sub(theme, blended_colors::neutral_4(theme)),
@@ -514,13 +518,13 @@ impl BuildPlanMigrationModal {
             .unwrap_or((2000, 1800));
 
         let title_text = if is_business {
-            "Welcome to the New Business Plan"
+            i18n::t("workspace.build_plan.welcome_business")
         } else {
-            "Welcome to Warp Build"
+            i18n::t("workspace.build_plan.welcome_build")
         };
 
         let title = Self::create_text(
-            title_text.to_string(),
+            title_text,
             font_family,
             24.,
             blended_colors::text_main(theme, blended_colors::neutral_2(theme)),
@@ -528,20 +532,19 @@ impl BuildPlanMigrationModal {
         );
 
         let intro_text = if is_business {
-            "Your workspace has been updated to the new Warp Business Plan as the legacy Business plan is sunset."
+            i18n::t("workspace.build_plan.intro_business")
         } else {
-            "Your workspace has been updated to the Warp Build Plan as the legacy Pro, Turbo, and Lightspeed plans are sunset."
+            i18n::t("workspace.build_plan.intro_build")
         };
 
-        let intro = Self::create_text(intro_text.to_string(), font_family, 14., text_color, None);
+        let intro = Self::create_text(intro_text, font_family, 14., text_color, None);
 
         let pricing_header = Self::create_text(
             if is_business {
-                "The new Business plan is a primarily usage-based plan, starting at:"
+                i18n::t("workspace.build_plan.pricing_header_business")
             } else {
-                "Warp Build is a primarily usage-based plan, starting at:"
-            }
-            .to_string(),
+                i18n::t("workspace.build_plan.pricing_header_build")
+            },
             font_family,
             14.,
             text_color,
@@ -549,17 +552,16 @@ impl BuildPlanMigrationModal {
         );
 
         let price_monthly = Self::create_bullet_item(
-            format!("${} per user per month", base_plan_prices.0 / 100),
+            i18n::t("workspace.build_plan.price_per_user_month")
+                .replace("{price}", &(base_plan_prices.0 / 100).to_string()),
             font_family,
             14.,
             text_color,
         );
 
         let price_annual = Self::create_bullet_item(
-            format!(
-                "${} per user per month for annual plans",
-                base_plan_prices.1 / 100
-            ),
+            i18n::t("workspace.build_plan.price_per_user_month_annual")
+                .replace("{price}", &(base_plan_prices.1 / 100).to_string()),
             font_family,
             14.,
             text_color,
@@ -567,11 +569,10 @@ impl BuildPlanMigrationModal {
 
         let features_header = Self::create_text(
             if is_business {
-                "The new Business plan comes with:"
+                i18n::t("workspace.build_plan.features_header_business")
             } else {
-                "Build comes with:"
-            }
-            .to_string(),
+                i18n::t("workspace.build_plan.features_header_build")
+            },
             font_family,
             14.,
             text_color,
@@ -579,24 +580,22 @@ impl BuildPlanMigrationModal {
         );
 
         let base_credits = Self::create_bullet_item(
-            format!(
-                "{} base credits per month",
-                base_credits_limit.separate_with_commas()
-            ),
+            i18n::t("workspace.build_plan.base_credits_per_month")
+                .replace("{credits}", &base_credits_limit.separate_with_commas()),
             font_family,
             14.,
             text_color,
         );
 
         let reload_credits = Self::create_bullet_item(
-            "Access to Reload credits and volume-based discounts".to_string(),
+            i18n::t("workspace.build_plan.reload_credits_discounts"),
             font_family,
             14.,
             text_color,
         );
 
         let byok = Self::create_bullet_item(
-            "Bring your own API key".to_string(),
+            i18n::t("workspace.build_plan.bring_your_own_api_key"),
             font_family,
             14.,
             text_color,
@@ -610,7 +609,7 @@ impl BuildPlanMigrationModal {
 
         if is_business {
             let sso = Self::create_bullet_item(
-                "SAML-based SSO".to_string(),
+                i18n::t("workspace.build_plan.saml_sso"),
                 font_family,
                 14.,
                 text_color,
@@ -618,7 +617,7 @@ impl BuildPlanMigrationModal {
             features_list.add_child(sso);
 
             let zdr = Self::create_bullet_item(
-                "Automatically enforced team-wide Zero Data Retention".to_string(),
+                i18n::t("workspace.build_plan.zero_data_retention"),
                 font_family,
                 14.,
                 text_color,
@@ -626,13 +625,20 @@ impl BuildPlanMigrationModal {
             features_list.add_child(zdr);
         }
 
-        let and_more =
-            Self::create_bullet_item("And more...".to_string(), font_family, 14., text_color);
+        let and_more = Self::create_bullet_item(
+            i18n::t("workspace.build_plan.and_more"),
+            font_family,
+            14.,
+            text_color,
+        );
         features_list.add_child(and_more);
 
         let learn_more_fragments = vec![
-            FormattedTextFragment::plain_text("Learn more on our "),
-            FormattedTextFragment::hyperlink("pricing page", "https://www.warp.dev/pricing"),
+            FormattedTextFragment::plain_text(i18n::t("workspace.build_plan.learn_more_prefix")),
+            FormattedTextFragment::hyperlink(
+                i18n::t("workspace.build_plan.pricing_page"),
+                "https://www.warp.dev/pricing",
+            ),
             FormattedTextFragment::plain_text("."),
         ];
         let learn_more = Container::new(
@@ -790,8 +796,7 @@ impl TypedActionView for BuildPlanMigrationModal {
                 let workspaces = UserWorkspaces::as_ref(ctx);
                 let Some(team_uid) = workspaces.current_team_uid() else {
                     ctx.emit(BuildPlanMigrationModalEvent::ShowToast {
-                        message: "Oops, something went wrong; your team data could not be found."
-                            .to_string(),
+                        message: i18n::t("workspace.build_plan_migration.team_data_not_found"),
                         flavor: ToastFlavor::Error,
                     });
                     return;

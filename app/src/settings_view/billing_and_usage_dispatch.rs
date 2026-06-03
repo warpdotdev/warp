@@ -47,7 +47,13 @@ impl BillingAndUsageDispatchView {
             ctx.notify();
         });
 
-        let page = PageType::new_monolith(BillingAndUsageWidget, Some("Billing and Usage"), true);
+        let page = PageType::new_monolith(
+            BillingAndUsageWidget,
+            Some(Box::leak(
+                i18n::t("settings.nav.billing_and_usage").into_boxed_str(),
+            )),
+            true,
+        );
 
         Self { page, v1, v2 }
     }

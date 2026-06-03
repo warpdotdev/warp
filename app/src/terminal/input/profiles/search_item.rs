@@ -14,8 +14,6 @@ use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles as inline_styles;
 use crate::terminal::input::profiles::data_source::SelectProfileMenuItem;
 
-const MANAGE_PROFILES_LABEL: &str = "Manage profiles";
-
 #[derive(Debug, Clone)]
 enum ProfileSearchItemKind {
     Profile {
@@ -108,7 +106,9 @@ impl SearchItem for ProfileSearchItem {
                 is_selected,
                 ..
             } => (profile_name.clone(), *is_selected),
-            ProfileSearchItemKind::ManageProfiles => (MANAGE_PROFILES_LABEL.to_owned(), false),
+            ProfileSearchItemKind::ManageProfiles => {
+                (i18n::t("terminal.profile_selector.manage_profiles"), false)
+            }
         };
 
         let mut label = Text::new_inline(label_text, appearance.ui_font_family(), font_size)
@@ -181,9 +181,11 @@ impl SearchItem for ProfileSearchItem {
     fn accessibility_label(&self) -> String {
         match &self.kind {
             ProfileSearchItemKind::Profile { profile_name, .. } => {
-                format!("Profile: {profile_name}")
+                i18n::t("terminal.input.a11y.profile").replace("{profile}", profile_name)
             }
-            ProfileSearchItemKind::ManageProfiles => MANAGE_PROFILES_LABEL.to_string(),
+            ProfileSearchItemKind::ManageProfiles => {
+                i18n::t("terminal.profile_selector.manage_profiles")
+            }
         }
     }
 }

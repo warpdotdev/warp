@@ -44,9 +44,12 @@ impl clap::builder::TypedValueParser for MCPSpecParser {
         _arg: Option<&Arg>,
         value: &OsStr,
     ) -> Result<Self::Value, clap::Error> {
-        let s = value
-            .to_str()
-            .ok_or_else(|| clap::Error::raw(ErrorKind::InvalidUtf8, "Invalid UTF-8 in MCP spec"))?;
+        let s = value.to_str().ok_or_else(|| {
+            clap::Error::raw(
+                ErrorKind::InvalidUtf8,
+                i18n::t("warp_cli.mcp.error.invalid_utf8"),
+            )
+        })?;
 
         // Try UUID first
         if let Ok(uuid) = uuid::Uuid::parse_str(s) {
@@ -59,7 +62,9 @@ impl clap::builder::TypedValueParser for MCPSpecParser {
             std::fs::read_to_string(path).map_err(|e| {
                 clap::Error::raw(
                     ErrorKind::Io,
-                    format!("Failed to read MCP config file '{}': {e}", path.display()),
+                    i18n::t("warp_cli.mcp.error.read_config_file_failed")
+                        .replace("{path}", &path.display().to_string())
+                        .replace("{error}", &e.to_string()),
                 )
             })?
         } else {
@@ -73,8 +78,8 @@ impl clap::builder::TypedValueParser for MCPSpecParser {
     fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
         Some(Box::new(
             [
-                PossibleValue::new("<path>").help("Path to a JSON file containing MCP config"),
-                PossibleValue::new("<json>").help("Inline JSON MCP server configuration"),
+                PossibleValue::new("<path>").help(i18n::t("warp_cli.mcp.possible.path")),
+                PossibleValue::new("<json>").help(i18n::t("warp_cli.mcp.possible.json")),
             ]
             .into_iter(),
         ))

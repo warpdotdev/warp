@@ -48,7 +48,8 @@ where
     T: Serialize,
     W: std::io::Write,
 {
-    serde_json::to_writer_pretty(&mut output, value).context("unable to write JSON output")?;
+    serde_json::to_writer_pretty(&mut output, value)
+        .context(i18n::t("ai.agent_sdk.output.write_json_failed"))?;
     writeln!(&mut output)?;
     Ok(())
 }
@@ -59,7 +60,8 @@ where
     T: Serialize,
     W: std::io::Write,
 {
-    serde_json::to_writer(&mut output, value).context("unable to write JSON output")?;
+    serde_json::to_writer(&mut output, value)
+        .context(i18n::t("ai.agent_sdk.output.write_json_failed"))?;
     writeln!(&mut output)?;
     Ok(())
 }
@@ -176,7 +178,7 @@ pub fn print_raw_json(value: serde_json::Value, json_output: &JsonOutput) -> any
     match json_output.filter.as_ref() {
         None => {
             serde_json::to_writer_pretty(&mut out, &value)
-                .context("unable to write JSON output")?;
+                .context(i18n::t("ai.agent_sdk.output.write_json_failed"))?;
             writeln!(&mut out)?;
         }
         Some(filter) => run_jq_filter(value, filter, &mut out)?,
@@ -213,11 +215,19 @@ fn run_jq_filter<W: std::io::Write>(
         Default::default(),
         [input_result].into_iter(),
         // Callback to format invalid input errors.
-        |err| anyhow::anyhow!("Invalid data: {err}"),
+        |err| {
+            anyhow::anyhow!(
+                "{}",
+                i18n::t("ai.agent_sdk.output.invalid_data").replace("{error}", &err.to_string())
+            )
+        },
         // Callback to handle filter outputs.
         |result| match result {
             Ok(val) => write_filter_output(&val, out),
-            Err(err) => anyhow::bail!("jq filter error: {err}"),
+            Err(err) => anyhow::bail!(
+                "{}",
+                i18n::t("ai.agent_sdk.output.jq_filter_error").replace("{error}", &err.to_string())
+            ),
         },
     )?;
 
@@ -256,7 +266,7 @@ fn write_filter_output<W: std::io::Write>(val: &Val, out: &mut W) -> anyhow::Res
         }
         Val::Arr(_) | Val::Obj(_) => {
             jaq_write::write(&mut *out, &pretty_pp(), 0, val)
-                .context("unable to write jq output as JSON")?;
+                .context(i18n::t("ai.agent_sdk.output.write_jq_json_failed"))?;
             writeln!(out)?;
         }
     }
@@ -277,7 +287,8 @@ where
     match output_format {
         OutputFormat::Json => {
             let items = items.into_iter().collect::<Vec<_>>();
-            serde_json::to_writer(&mut output, &items).context("unable to write JSON output")
+            serde_json::to_writer(&mut output, &items)
+                .context(i18n::t("ai.agent_sdk.output.write_json_failed"))
         }
         OutputFormat::Ndjson => {
             for item in items {

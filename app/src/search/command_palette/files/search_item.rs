@@ -97,17 +97,21 @@ impl SearchItem for FileSearchItem {
 
     fn accessibility_label(&self) -> String {
         if self.is_directory {
-            format!("Directory: {}", self.path.display())
+            format!(
+                "{}: {}",
+                i18n::t("search.files.directory"),
+                self.path.display()
+            )
         } else {
-            format!("File: {}", self.path.display())
+            format!("{}: {}", i18n::t("search.files.file"), self.path.display())
         }
     }
 
     fn accessibility_help_message(&self) -> Option<String> {
         Some(if self.is_directory {
-            "Press Enter to navigate to this directory".to_string()
+            i18n::t("search.files.press_enter_to_navigate_directory")
         } else {
-            "Press Enter to open this file".to_string()
+            i18n::t("search.files.press_enter_to_open_file")
         })
     }
 
@@ -161,7 +165,11 @@ impl SearchItem for CreateFileSearchItem {
         let text_color = highlight_state.sub_text_fill(appearance).into_solid();
 
         let label = Text::new_inline(
-            format!("Create a file named {}…", &self.file_name),
+            format!(
+                "{} {}…",
+                i18n::t("search.files.create_file_named"),
+                &self.file_name
+            ),
             appearance.ui_font_family(),
             appearance.monospace_font_size(),
         )
@@ -195,13 +203,19 @@ impl SearchItem for CreateFileSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Create file: {}", self.file_name)
+        format!(
+            "{}: {}",
+            i18n::t("search.files.create_file"),
+            self.file_name
+        )
     }
 
     fn accessibility_help_message(&self) -> Option<String> {
         Some(format!(
-            "Press Enter to create {} in the current directory",
-            self.file_name
+            "{} {} {}",
+            i18n::t("search.files.press_enter_to_create_prefix"),
+            self.file_name,
+            i18n::t("search.files.press_enter_to_create_suffix")
         ))
     }
 

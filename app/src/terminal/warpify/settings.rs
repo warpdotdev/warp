@@ -19,7 +19,7 @@ maybe_define_setting!(AddedSubshellCommands, group: WarpifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.subshells.added_subshell_commands",
-    description: "Additional regex patterns for commands that should be recognized as subshells.",
+    description_key: "settings.schema.warpify.subshells.added_subshell_commands.description",
 });
 
 maybe_define_setting!(SubshellCommandsDenylist, group: WarpifySettings, {
@@ -29,7 +29,7 @@ maybe_define_setting!(SubshellCommandsDenylist, group: WarpifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.subshells.subshell_commands_denylist",
-    description: "Commands that should not trigger the subshell warpification prompt.",
+    description_key: "settings.schema.warpify.subshells.subshell_commands_denylist.description",
 });
 
 maybe_define_setting!(SshHostsDenylist, group: WarpifySettings, {
@@ -39,7 +39,7 @@ maybe_define_setting!(SshHostsDenylist, group: WarpifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.ssh.ssh_hosts_denylist",
-    description: "SSH hosts that should not trigger the warpification prompt.",
+    description_key: "settings.schema.warpify.ssh.ssh_hosts_denylist.description",
 });
 
 maybe_define_setting!(EnableSshWarpification, group: WarpifySettings, {
@@ -49,7 +49,7 @@ maybe_define_setting!(EnableSshWarpification, group: WarpifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.ssh.enable_ssh_warpification",
-    description: "Whether to enable Warp features in SSH sessions.",
+    description_key: "settings.schema.warpify.ssh.enable_ssh_warpification.description",
 });
 
 maybe_define_setting!(UseSshTmuxWrapper, group: WarpifySettings, {
@@ -59,7 +59,7 @@ maybe_define_setting!(UseSshTmuxWrapper, group: WarpifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.ssh.use_ssh_tmux_wrapper",
-    description: "Whether to use a tmux-based wrapper for SSH warpification.",
+    description_key: "settings.schema.warpify.ssh.use_ssh_tmux_wrapper.description",
 });
 
 /// Controls how Warp handles the SSH extension (remote server binary) when connecting
@@ -98,7 +98,7 @@ maybe_define_setting!(SshExtensionInstallModeSetting, group: WarpifySettings, {
     sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "warpify.ssh.ssh_extension_install_mode",
-    description: "Controls SSH extension installation behavior.",
+    description_key: "settings.schema.warpify.ssh.ssh_extension_install_mode.description",
 });
 
 impl SshExtensionInstallMode {
@@ -107,6 +107,20 @@ impl SshExtensionInstallMode {
             SshExtensionInstallMode::AlwaysAsk => "Always ask",
             SshExtensionInstallMode::AlwaysInstall => "Always install",
             SshExtensionInstallMode::NeverInstall => "Never install",
+        }
+    }
+
+    pub fn localized_display_name(&self) -> String {
+        match self {
+            SshExtensionInstallMode::AlwaysAsk => {
+                i18n::t("settings.warpify.install_mode.always_ask")
+            }
+            SshExtensionInstallMode::AlwaysInstall => {
+                i18n::t("settings.warpify.install_mode.always_install")
+            }
+            SshExtensionInstallMode::NeverInstall => {
+                i18n::t("settings.warpify.install_mode.never_install")
+            }
         }
     }
 }

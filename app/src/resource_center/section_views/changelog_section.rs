@@ -30,9 +30,6 @@ struct ChangelogMouseStateHandles {
     view_changelogs_mouse_state: MouseStateHandle,
 }
 
-const CHANGELOG_FETCH_ERROR_MSG: &str = "Unable to fetch the latest changelog.";
-const CHANGELOG_LOADING_MSG: &str = "Loading...";
-
 pub struct ChangelogSectionView {
     changelog_model_handle: ModelHandle<ChangelogModel>,
     changelog_button_mouse_states: ChangelogMouseStateHandles,
@@ -96,10 +93,10 @@ impl ChangelogSectionView {
             new_features_highlighted_link: Default::default(),
             improvements_highlighted_link: Default::default(),
             bug_fixes_highlighted_link: Default::default(),
-            changelog_fetch_error: create_formatted_text_from_string(
-                CHANGELOG_FETCH_ERROR_MSG.to_string(),
-            ),
-            changelog_loading: create_formatted_text_from_string(CHANGELOG_LOADING_MSG.to_string()),
+            changelog_fetch_error: create_formatted_text_from_string(i18n::t(
+                "resource_center.changelog.fetch_error",
+            )),
+            changelog_loading: create_formatted_text_from_string(i18n::t("common.loading")),
         }
     }
 
@@ -118,22 +115,23 @@ impl ChangelogSectionView {
         model: &ChangelogModel,
         appearance: &Appearance,
     ) {
-        let title = ChangelogHeader::NewFeatures.to_string();
+        let lookup_title = ChangelogHeader::NewFeatures.to_string();
+        let display_title = changelog_header_label(ChangelogHeader::NewFeatures);
         let icon = icons::Icon::Gift;
-        let Some(markdown) = model.parsed_changelog.get(&title) else {
+        let Some(markdown) = model.parsed_changelog.get(&lookup_title) else {
             return;
         };
 
         // Section Title
         if self.show_special_new_features_header {
             content.add_child(render_special_changelog_header(
-                &title,
+                &display_title,
                 render_icon(icon, appearance.theme().terminal_colors().normal.red.into()),
                 appearance,
             ));
         } else {
             content.add_child(render_basic_changelog_header(
-                &title,
+                &display_title,
                 render_icon(
                     icon,
                     appearance
@@ -199,14 +197,15 @@ impl ChangelogSectionView {
         ];
 
         for (section, icon, link) in additional_sections {
-            let title = section.to_string();
-            let Some(markdown) = model.parsed_changelog.get(&title) else {
+            let lookup_title = section.to_string();
+            let display_title = changelog_header_label(section);
+            let Some(markdown) = model.parsed_changelog.get(&lookup_title) else {
                 continue;
             };
 
             // Title
             content.add_child(render_basic_changelog_header(
-                &title,
+                &display_title,
                 render_icon(
                     icon,
                     appearance
@@ -226,6 +225,14 @@ fn render_icon(icon: icons::Icon, color: Fill) -> ConstrainedBox {
     ConstrainedBox::new(Icon::new(icon.into(), color).finish())
         .with_width(16.)
         .with_height(16.)
+}
+
+fn changelog_header_label(header: ChangelogHeader) -> String {
+    match header {
+        ChangelogHeader::NewFeatures => i18n::t("resource_center.changelog.new_features"),
+        ChangelogHeader::Improvements => i18n::t("resource_center.changelog.improvements"),
+        ChangelogHeader::BugFixes => i18n::t("resource_center.changelog.bug_fixes"),
+    }
 }
 
 fn render_special_changelog_header(
@@ -366,7 +373,7 @@ impl SectionView for ChangelogSectionView {
             appearance
                 .ui_builder()
                 .link(
-                    "Read all changelogs".into(),
+                    i18n::t("resource_center.changelog.read_all"),
                     Some("https://docs.warp.dev/changelog".into()),
                     None,
                     self.changelog_button_mouse_states

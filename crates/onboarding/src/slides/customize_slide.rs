@@ -146,7 +146,7 @@ impl CustomizeUISlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Customize your Warp")
+            .paragraph(i18n::t("onboarding.customize.title"))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -156,7 +156,7 @@ impl CustomizeUISlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Tailor your features and UI to your working style.",
+            i18n::t("onboarding.customize.subtitle"),
             appearance.ui_font_family(),
             16.,
         )
@@ -218,11 +218,11 @@ impl CustomizeUISlide {
         render_toggle_card(
             appearance,
             ToggleCardSpec {
-                title: "Tab styling",
+                title: i18n::t("onboarding.customize.tab_styling"),
                 is_expanded: is_selected,
                 is_left_selected: ui.use_vertical_tabs,
-                left_label: "Vertical",
-                right_label: "Horizontal",
+                left_label: i18n::t("onboarding.customize.vertical"),
+                right_label: i18n::t("onboarding.customize.horizontal"),
                 card_mouse_state: self.tab_styling_mouse_state.clone(),
                 on_expand: Box::new(|ctx, _, _| {
                     ctx.dispatch_typed_action(CustomizeSlideAction::SelectSettingCard {
@@ -258,7 +258,7 @@ impl CustomizeUISlide {
 
         if ui.tools_panel_enabled(&intention) {
             chips.push(ChipSpec {
-                label: "File explorer",
+                label: i18n::t("onboarding.customize.file_explorer"),
                 is_enabled: ui.show_project_explorer,
                 mouse_state: self.chip_file_explorer_mouse.clone(),
                 on_click: Box::new(|ctx, _, _| {
@@ -278,7 +278,7 @@ impl CustomizeUISlide {
             // Conversation history chip is only shown for the agent intention.
             if is_agent {
                 chips.push(ChipSpec {
-                    label: "Conversation history",
+                    label: i18n::t("onboarding.customize.conversation_history"),
                     is_enabled: ui.show_conversation_history,
                     mouse_state: self.chip_conversation_mouse.clone(),
                     on_click: Box::new(|ctx, _, _| {
@@ -297,7 +297,7 @@ impl CustomizeUISlide {
             }
 
             chips.push(ChipSpec {
-                label: "Global file search",
+                label: i18n::t("onboarding.customize.global_file_search"),
                 is_enabled: ui.show_global_search,
                 mouse_state: self.chip_global_search_mouse.clone(),
                 on_click: Box::new(|ctx, _, _| {
@@ -315,7 +315,7 @@ impl CustomizeUISlide {
             });
 
             chips.push(ChipSpec {
-                label: "Warp Drive",
+                label: i18n::t("onboarding.features.warp_drive"),
                 is_enabled: ui.show_warp_drive,
                 mouse_state: self.chip_warp_drive_mouse.clone(),
                 on_click: Box::new(|ctx, _, _| {
@@ -336,11 +336,11 @@ impl CustomizeUISlide {
         render_toggle_card(
             appearance,
             ToggleCardSpec {
-                title: "Tools panel",
+                title: i18n::t("onboarding.customize.tools_panel"),
                 is_expanded: is_selected,
                 is_left_selected: ui.tools_panel_enabled(&intention),
-                left_label: "Enabled",
-                right_label: "Disabled",
+                left_label: i18n::t("onboarding.common.enabled"),
+                right_label: i18n::t("onboarding.common.disabled"),
                 card_mouse_state: self.tools_panel_mouse_state.clone(),
                 on_expand: Box::new(|ctx, _, _| {
                     ctx.dispatch_typed_action(CustomizeSlideAction::SelectSettingCard {
@@ -374,11 +374,11 @@ impl CustomizeUISlide {
         render_toggle_card(
             appearance,
             ToggleCardSpec {
-                title: "Code review",
+                title: i18n::t("onboarding.customize.code_review"),
                 is_expanded: is_selected,
                 is_left_selected: ui.show_code_review_button,
-                left_label: "Enabled",
-                right_label: "Disabled",
+                left_label: i18n::t("onboarding.common.enabled"),
+                right_label: i18n::t("onboarding.common.disabled"),
                 card_mouse_state: self.code_review_mouse_state.clone(),
                 on_expand: Box::new(|ctx, _, _| {
                     ctx.dispatch_typed_action(CustomizeSlideAction::SelectSettingCard {
@@ -412,7 +412,7 @@ impl CustomizeUISlide {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Back".into()),
+                content: button::Content::Label(i18n::t("common.back").into()),
                 theme: &button::themes::Naked,
                 options: button::Options {
                     on_click: Some(Box::new(|ctx, _app, _pos| {
@@ -427,7 +427,7 @@ impl CustomizeUISlide {
         let next_button = self.next_button.render(
             appearance,
             button::Params {
-                content: button::Content::Label("Next".into()),
+                content: button::Content::Label(i18n::t("common.next").into()),
                 theme: &button::themes::Primary,
                 options: button::Options {
                     keystroke: Some(enter),

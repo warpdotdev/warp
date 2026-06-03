@@ -187,7 +187,7 @@ define_settings_group!(AppEditorSettings, settings: [
         private: false,
         storage_key: "CursorBlink",
         toml_path: "appearance.cursor.cursor_blink",
-        description: "Whether the cursor blinks.",
+        description_key: "settings.schema.appearance.cursor.cursor_blink.description",
     },
     cursor_display_type: CursorDisplayState {
         type: CursorDisplayType,
@@ -197,7 +197,7 @@ define_settings_group!(AppEditorSettings, settings: [
         private: false,
         storage_key: "CursorDisplayType",
         toml_path: "appearance.cursor.cursor_display_type",
-        description: "The visual style of the cursor.",
+        description_key: "settings.schema.appearance.cursor.cursor_display_type.description",
     },
     vim_mode: VimModeEnabled {
         type: bool,
@@ -206,7 +206,7 @@ define_settings_group!(AppEditorSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "text_editing.vim_mode_enabled",
-        description: "Whether Vim keybindings are enabled.",
+        description_key: "settings.schema.text_editing.vim_mode_enabled.description",
     },
     vim_unnamed_system_clipboard: VimUnnamedSystemClipboard {
         type: bool,
@@ -215,7 +215,7 @@ define_settings_group!(AppEditorSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "text_editing.vim_unnamed_system_clipboard",
-        description: "Whether the Vim unnamed register uses the system clipboard.",
+        description_key: "settings.schema.text_editing.vim_unnamed_system_clipboard.description",
     },
     vim_status_bar: VimStatusBar {
         type: bool,
@@ -224,7 +224,7 @@ define_settings_group!(AppEditorSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "text_editing.vim_status_bar",
-        description: "Whether the Vim status bar is displayed.",
+        description_key: "settings.schema.text_editing.vim_status_bar.description",
     },
     code_editor_line_number_mode: CodeEditorLineNumberModeSetting {
         type: CodeEditorLineNumberMode,
@@ -233,7 +233,7 @@ define_settings_group!(AppEditorSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "text_editing.code_editor_line_number_mode",
-        description: "How line numbers are displayed in code editors.",
+        description_key: "settings.schema.text_editing.code_editor_line_number_mode.description",
     },
     autocomplete_symbols: AutocompleteSymbols {
         type: bool,
@@ -242,7 +242,7 @@ define_settings_group!(AppEditorSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "text_editing.autocomplete_symbols",
-        description: "Whether matching symbols like brackets and quotes are auto-completed.",
+        description_key: "settings.schema.text_editing.autocomplete_symbols.description",
     },
     enable_autosuggestions: EnableAutosuggestions {
         type: bool,
@@ -252,7 +252,7 @@ define_settings_group!(AppEditorSettings, settings: [
         private: false,
         storage_key: "Autosuggestions",
         toml_path: "terminal.input.autosuggestions.enabled",
-        description: "Whether command autosuggestions are shown.",
+        description_key: "settings.schema.terminal.input.autosuggestions.enabled.description",
     },
     autosuggestion_keybinding_hint: AutosuggestionKeybindingHint {
         type: bool,
@@ -261,7 +261,7 @@ define_settings_group!(AppEditorSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.input.autosuggestions.keybinding_hint",
-        description: "Whether autosuggestion keybinding hints are displayed.",
+        description_key: "settings.schema.terminal.input.autosuggestions.keybinding_hint.description",
     },
     show_autosuggestion_ignore_button: ShowAutosuggestionIgnoreButton {
         type: bool,
@@ -270,7 +270,7 @@ define_settings_group!(AppEditorSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.input.autosuggestions.show_ignore_button",
-        description: "Whether the ignore button is shown for autosuggestions.",
+        description_key: "settings.schema.terminal.input.autosuggestions.show_ignore_button.description",
     },
 ]);
 

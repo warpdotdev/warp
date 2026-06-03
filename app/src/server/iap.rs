@@ -292,8 +292,9 @@ impl IapManager {
         let Some(window_id) = window_id else {
             return;
         };
-        let toast: DismissibleToast<WorkspaceAction> =
-            DismissibleToast::error(format!("IAP credential refresh failed: {message}"));
+        let toast: DismissibleToast<WorkspaceAction> = DismissibleToast::error(
+            i18n::t("server.iap.credential_refresh_failed").replace("{message}", &message),
+        );
         ToastStack::handle(ctx).update(ctx, |stack, ctx| {
             stack.add_ephemeral_toast(toast, window_id, ctx);
         });

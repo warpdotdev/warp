@@ -14,6 +14,13 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
 
+fn classify_renderable_error_en(
+    error: &RenderableAIError,
+) -> (AgentTaskState, Option<TaskStatusUpdate>) {
+    i18n::set_locale("en");
+    classify_renderable_error(error)
+}
+
 /// Helper to assert a (state, Option<TaskStatusUpdate>) tuple.
 fn assert_update(
     (state, update): (AgentTaskState, Option<TaskStatusUpdate>),
@@ -44,7 +51,7 @@ fn assert_update(
 #[test]
 fn quota_limit_is_failed_with_insufficient_credits() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::QuotaLimit {
+        classify_renderable_error_en(&RenderableAIError::QuotaLimit {
             user_display_message: None,
         }),
         AgentTaskState::Failed,
@@ -56,7 +63,7 @@ fn quota_limit_is_failed_with_insufficient_credits() {
 #[test]
 fn server_overloaded_is_error_with_resource_unavailable() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::ServerOverloaded),
+        classify_renderable_error_en(&RenderableAIError::ServerOverloaded),
         AgentTaskState::Error,
         Some(PlatformErrorCode::ResourceUnavailable),
         Some("overloaded"),
@@ -66,7 +73,7 @@ fn server_overloaded_is_error_with_resource_unavailable() {
 #[test]
 fn internal_warp_error_is_error() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::InternalWarpError),
+        classify_renderable_error_en(&RenderableAIError::InternalWarpError),
         AgentTaskState::Error,
         Some(PlatformErrorCode::InternalError),
         Some("internal error"),
@@ -76,7 +83,7 @@ fn internal_warp_error_is_error() {
 #[test]
 fn context_window_exceeded_is_failed() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::ContextWindowExceeded("too big".into())),
+        classify_renderable_error_en(&RenderableAIError::ContextWindowExceeded("too big".into())),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::InternalError),
         Some("Context window exceeded"),
@@ -86,7 +93,7 @@ fn context_window_exceeded_is_failed() {
 #[test]
 fn invalid_api_key_is_failed_with_auth_required() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::InvalidApiKey {
+        classify_renderable_error_en(&RenderableAIError::InvalidApiKey {
             provider: "OpenAI".into(),
             model_name: "gpt-4".into(),
         }),
@@ -99,7 +106,7 @@ fn invalid_api_key_is_failed_with_auth_required() {
 #[test]
 fn aws_bedrock_credentials_is_failed_with_auth_required() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
+        classify_renderable_error_en(&RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
             model_name: "claude-v2".into(),
         }),
         AgentTaskState::Failed,
@@ -111,7 +118,7 @@ fn aws_bedrock_credentials_is_failed_with_auth_required() {
 #[test]
 fn other_error_is_error_with_internal() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::Other {
+        classify_renderable_error_en(&RenderableAIError::Other {
             error_message: "something broke".into(),
             will_attempt_resume: false,
             waiting_for_network: false,

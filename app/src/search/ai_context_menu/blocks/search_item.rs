@@ -19,20 +19,32 @@ use crate::util::truncation::truncate_from_end;
 /// Calculate how long ago a timestamp was
 fn time_ago_string(timestamp: Option<&DateTime<Local>>) -> String {
     let Some(timestamp) = timestamp else {
-        return "Just now".to_string();
+        return i18n::t("search.ai_context_menu.time.just_now");
     };
 
     let now = Local::now();
     let duration = now.signed_duration_since(*timestamp);
 
     if duration.num_seconds() < 60 {
-        "Just now".to_string()
+        i18n::t("search.ai_context_menu.time.just_now")
     } else if duration.num_minutes() < 60 {
-        format!("{} minutes ago", duration.num_minutes())
+        format!(
+            "{}{}",
+            duration.num_minutes(),
+            i18n::t("search.ai_context_menu.time.minutes_ago_suffix")
+        )
     } else if duration.num_hours() < 24 {
-        format!("{} hours ago", duration.num_hours())
+        format!(
+            "{}{}",
+            duration.num_hours(),
+            i18n::t("search.ai_context_menu.time.hours_ago_suffix")
+        )
     } else {
-        format!("{} days ago", duration.num_days())
+        format!(
+            "{}{}",
+            duration.num_days(),
+            i18n::t("search.ai_context_menu.time.days_ago_suffix")
+        )
     }
 }
 
@@ -135,7 +147,7 @@ impl SearchItem for BlockSearchItem {
 
         // Create sub text: last 3 lines of output
         let sub_text = if self.output_lines.is_empty() {
-            "No output".to_string()
+            i18n::t("search.ai_context_menu.blocks.no_output")
         } else {
             let joined = self.output_lines.join("\n").trim().to_string();
             // Additional safety truncation for the hover card
@@ -206,6 +218,10 @@ impl SearchItem for BlockSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Block: {}", self.command)
+        format!(
+            "{}: {}",
+            i18n::t("search.ai_context_menu.blocks.prefix"),
+            self.command
+        )
     }
 }

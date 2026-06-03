@@ -384,7 +384,7 @@ impl AgentRunDisplayStatus {
                     .status_message
                     .as_ref()
                     .map(|m| m.message.clone())
-                    .unwrap_or_else(|| "Task blocked".to_string()),
+                    .unwrap_or_else(|| i18n::t("ai.agent_conversations.task_blocked")),
             },
             AmbientAgentTaskState::Cancelled => Self::TaskCancelled,
             AmbientAgentTaskState::Unknown => Self::TaskUnknown,
@@ -479,6 +479,34 @@ impl AgentRunDisplayStatus {
             ),
             AgentRunDisplayStatus::ConversationCancelled => {
                 (Icon::StopFilled, internal_colors::neutral_5(theme))
+            }
+        }
+    }
+
+    pub fn localized_label(&self) -> String {
+        match self {
+            AgentRunDisplayStatus::TaskQueued => i18n::t("ai.conversation_status.queued"),
+            AgentRunDisplayStatus::TaskPending => i18n::t("ai.conversation_status.pending"),
+            AgentRunDisplayStatus::TaskClaimed => i18n::t("ai.conversation_status.claimed"),
+            AgentRunDisplayStatus::TaskInProgress
+            | AgentRunDisplayStatus::ConversationInProgress => {
+                i18n::t("ai.conversation_status.in_progress")
+            }
+            AgentRunDisplayStatus::TaskSucceeded | AgentRunDisplayStatus::ConversationSucceeded => {
+                i18n::t("ai.conversation_status.done")
+            }
+            AgentRunDisplayStatus::TaskFailed | AgentRunDisplayStatus::TaskUnknown => {
+                i18n::t("ai.conversation_status.failed")
+            }
+            AgentRunDisplayStatus::TaskError | AgentRunDisplayStatus::ConversationError => {
+                i18n::t("ai.conversation_status.error")
+            }
+            AgentRunDisplayStatus::TaskBlocked { .. }
+            | AgentRunDisplayStatus::ConversationBlocked { .. } => {
+                i18n::t("ai.conversation_status.blocked")
+            }
+            AgentRunDisplayStatus::TaskCancelled | AgentRunDisplayStatus::ConversationCancelled => {
+                i18n::t("ai.conversation_status.cancelled")
             }
         }
     }

@@ -1473,13 +1473,18 @@ impl AgentDriver {
                             };
                             let error = match repo_metadata.as_ref(ctx).repository_state(&id, ctx) {
                                 Some(IndexedRepoState::Indexed(_)) => None,
-                                Some(IndexedRepoState::Pending(_)) => Some(format!(
-                                    "Repository indexing is still pending: {repo_id_path}"
-                                )),
-                                Some(IndexedRepoState::Failed(error)) => {
-                                    Some(format!("Repository indexing failed: {error}"))
-                                }
-                                None => Some(format!("Repository not found: {repo_id_path}")),
+                                Some(IndexedRepoState::Pending(_)) => Some(
+                                    i18n::t("ai.agent_sdk.driver.repository_indexing_pending")
+                                        .replace("{repo_path}", &repo_id_path.to_string()),
+                                ),
+                                Some(IndexedRepoState::Failed(error)) => Some(
+                                    i18n::t("ai.agent_sdk.driver.repository_indexing_failed")
+                                        .replace("{error}", &error.to_string()),
+                                ),
+                                None => Some(
+                                    i18n::t("ai.agent_sdk.driver.repository_not_found")
+                                        .replace("{repo_path}", &repo_id_path.to_string()),
+                                ),
                             };
                             Some((repo_path, error))
                         })
@@ -2284,14 +2289,14 @@ impl AgentDriver {
                     report_if_error!(runner
                         .save_conversation(SavePoint::Periodic, foreground)
                         .await
-                        .context("Failed to save harness conversation (periodic)"));
+                        .context(i18n::t("ai.agent_sdk.driver.save_harness_conversation_periodic_failed")));
                 }
                 _ = harness_exit_rx => {
                     log::debug!("Requesting harness exit");
                     report_if_error!(runner
                         .exit(foreground)
                         .await
-                        .context("Failed to exit harness"));
+                        .context(i18n::t("ai.agent_sdk.driver.exit_harness_failed")));
                 }
                 detected = scanner_fut => {
                     if let Some(error) = detected {
@@ -2338,9 +2343,9 @@ impl AgentDriver {
                             report_if_error!(runner
                                 .exit(foreground)
                                 .await
-                                .context(
-                                    "Failed to exit harness after runtime failure detection",
-                                ));
+                                .context(i18n::t(
+                                    "ai.agent_sdk.driver.exit_harness_after_runtime_failure_failed",
+                                )));
                             detected_runtime_failure = Some(error);
                         }
                     }
@@ -2356,8 +2361,9 @@ impl AgentDriver {
         let final_save_succeeded = match runner
             .save_conversation(SavePoint::Final, foreground)
             .await
-            .context("Failed to save harness conversation (final)")
-        {
+            .context(i18n::t(
+                "ai.agent_sdk.driver.save_harness_conversation_final_failed",
+            )) {
             Ok(()) => true,
             Err(err) => {
                 report_error!(err);
@@ -2375,7 +2381,9 @@ impl AgentDriver {
         if let Err(err) = runner
             .cleanup(cleanup_disposition, foreground)
             .await
-            .context("Failed to clean up harness runtime state")
+            .context(i18n::t(
+                "ai.agent_sdk.driver.cleanup_harness_runtime_state_failed",
+            ))
         {
             report_error!(err);
         }
@@ -2516,7 +2524,7 @@ impl AgentDriver {
                     // When a new exchange is appended, we should already have its inputs available.
                     report_if_error!(me
                         .write_exchange_inputs(exchange)
-                        .context("Failed to write exchange inputs"));
+                        .context(i18n::t("ai.agent_sdk.driver.write_exchange_inputs_failed")));
 
                     // Forward any successful file-edit paths from this exchange's inputs to the
                     // snapshot declarations writer so the end-of-run upload covers files written
@@ -2569,7 +2577,7 @@ impl AgentDriver {
                             report_if_error!(output::with_stdout_buffered(|buf| match me.output_format {
                                 OutputFormat::Json | OutputFormat::Ndjson => output::json::conversation_started(&token, buf),
                                 OutputFormat::Text | OutputFormat::Pretty => output::text::conversation_started(&token, buf),
-                            }).context("Failed to write conversation ID"));
+                            }).context(i18n::t("ai.agent_sdk.driver.write_conversation_id_failed")));
                             written_conversation_id = true;
 
                             // Store the server conversation token and record that we should update the task
@@ -2587,7 +2595,7 @@ impl AgentDriver {
                     if exchange.output_status.is_finished() {
                         report_if_error!(me
                             .write_exchange_output(exchange)
-                            .context("Failed to write exchange output"));
+                            .context(i18n::t("ai.agent_sdk.driver.write_exchange_output_failed")));
                     }
 
                     // Perform task update after all immutable borrows end
@@ -2774,7 +2782,7 @@ impl AgentDriver {
                     }
                 }
             })
-            .context("Failed to write artifact_created"));
+            .context(i18n::t("ai.agent_sdk.driver.write_artifact_created_failed")));
         });
 
         // Submit the AI query.
@@ -2950,12 +2958,16 @@ impl AgentDriver {
                             report_if_error!(runner
                                 .handle_session_update(&spawner)
                                 .await
-                                .context("Failed to update harness state from CLI session event"));
+                                .context(i18n::t(
+                                    "ai.agent_sdk.driver.update_harness_state_from_cli_session_event_failed",
+                                )));
                             log::debug!("Triggering post-turn save of harness conversation data");
                             report_if_error!(runner
                                 .save_conversation(SavePoint::PostTurn, &spawner)
                                 .await
-                                .context("Failed to save harness conversation (post-turn)"));
+                                .context(i18n::t(
+                                    "ai.agent_sdk.driver.save_harness_conversation_post_turn_failed",
+                                )));
                         },
                         |_, _, _| {},
                     );
@@ -2975,9 +2987,7 @@ impl AgentDriver {
     ) {
         match event {
             TerminalDriverEvent::SlowBootstrap => {
-                eprintln!(
-                    "Warning: Terminal session is slow to bootstrap. See https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
-                );
+                eprintln!("{}", i18n::t("ai.agent_sdk.driver.slow_bootstrap_warning"));
             }
             TerminalDriverEvent::EstablishedSharedSession {
                 session_id,
@@ -2994,7 +3004,9 @@ impl AgentDriver {
                             report_if_error!(server_api
                                 .update_agent_task(task_id, None, Some(session_id), None, None)
                                 .await
-                                .context("Error setting ambient agent shared session ID"));
+                                .context(i18n::t(
+                                    "ai.agent_sdk.driver.set_ambient_agent_shared_session_id_failed",
+                                )));
                         },
                         |_, _, _| {},
                     );
@@ -3058,7 +3070,8 @@ impl AgentDriver {
 
         for provider in providers {
             if let Err(err) = provider.cleanup().await {
-                report_error!(anyhow!(err).context("Unable to clean up cloud provider"));
+                report_error!(anyhow!(err)
+                    .context(i18n::t("ai.agent_sdk.driver.cleanup_cloud_provider_failed")));
             }
         }
     }
@@ -3260,7 +3273,7 @@ pub(super) fn write_run_started(run_id: &str, output_format: OutputFormat) {
         OutputFormat::Json | OutputFormat::Ndjson => output::json::run_started(run_id, buf),
         OutputFormat::Text | OutputFormat::Pretty => output::text::run_started(run_id, buf),
     })
-    .context("Failed to write run ID"));
+    .context(i18n::t("ai.agent_sdk.driver.write_run_id_failed")));
 }
 
 /// Report a driver-level error to the server for the given task.
@@ -3278,9 +3291,10 @@ pub(super) async fn report_driver_error(
         .update_agent_task(task_id, Some(state), None, None, Some(status_update))
         .await
     {
-        report_error!(
-            anyhow!(e).context(format!("Failed to report driver error for task {task_id}"))
-        );
+        report_error!(anyhow!(e).context(
+            i18n::t("ai.agent_sdk.driver.report_driver_error_failed")
+                .replace("{task_id}", &task_id.to_string())
+        ));
     }
 }
 
@@ -3312,7 +3326,9 @@ fn write_session_joined(join_url: &str, output_format: OutputFormat) {
             output::text::shared_session_established(join_url, buf)
         }
     })
-    .context("Failed to write shared session event"));
+    .context(i18n::t(
+        "ai.agent_sdk.driver.write_shared_session_event_failed"
+    )));
 }
 
 #[cfg(test)]

@@ -258,11 +258,12 @@ impl SshInstallTmuxBlock {
         let package_manager = &self.system_details.package_manager;
         Container::new(requested_script::render_requested_scripts(
             TitledScript {
-                title: format!("Install with {package_manager}"),
+                title: i18n::t("terminal.ssh.install_tmux.install_with")
+                    .replace("{package_manager}", package_manager),
                 content: tmux_system_install_script.to_string(),
             },
             TitledScript {
-                title: "Install to ~/.warp".to_string(),
+                title: i18n::t("terminal.ssh.install_tmux.install_to_warp"),
                 content: self.tmux_local_install_script.clone(),
             },
             *is_first_script_active,
@@ -290,12 +291,12 @@ impl SshInstallTmuxBlock {
 
     fn render_local_install_ui(&self, app: &AppContext) -> Box<dyn Element> {
         let header = if self.is_focused {
-            "Run this script to install tmux?"
+            i18n::t("terminal.ssh.install_tmux.run_script_prompt")
         } else {
-            ""
+            String::new()
         };
         Container::new(requested_script::render_requested_script(
-            header,
+            &header,
             &self.tmux_local_install_script,
             self.script_status.clone(),
             self.is_collapsed,
@@ -320,7 +321,7 @@ impl SshInstallTmuxBlock {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let header_contents = render::build_header_row(
-            "Install tmux?",
+            i18n::t("terminal.ssh.install_tmux.title"),
             Icon::new(UiIcon::Warp.into(), theme.active_ui_detail()),
             theme,
             appearance,
@@ -378,14 +379,17 @@ impl View for SshInstallTmuxBlock {
         );
 
         let explanation = if self.outdated_version {
-            "In order to Warpify your SSH session, a more recent version of tmux (>=3.0) must be installed. "
+            i18n::t("terminal.ssh.install_tmux.outdated_version_explanation")
         } else {
-            "In order to Warpify your SSH session, tmux must be installed. "
+            i18n::t("terminal.ssh.install_tmux.missing_tmux_explanation")
         };
 
         let warpify_description = vec![
             FormattedTextFragment::plain_text(explanation),
-            FormattedTextFragment::hyperlink("Why do I need tmux?", WHY_INSTALL_TMUX_URL),
+            FormattedTextFragment::hyperlink(
+                i18n::t("terminal.ssh.why_tmux"),
+                WHY_INSTALL_TMUX_URL,
+            ),
         ];
 
         let text_color =

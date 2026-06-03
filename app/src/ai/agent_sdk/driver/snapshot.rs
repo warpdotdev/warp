@@ -537,29 +537,37 @@ async fn path_is_under_existing_repo(path: &Path) -> bool {
 /// The serialized shape matches the schema the parser expects.
 async fn append_declaration_line(declarations_path: &Path, path: &str) -> Result<()> {
     if let Some(parent) = declarations_path.parent() {
-        tokio_fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("create_dir_all {}", parent.display()))?;
+        tokio_fs::create_dir_all(parent).await.with_context(|| {
+            i18n::t("ai.agent_sdk.driver.snapshot.create_declarations_dir_failed")
+                .replace("{path}", &parent.display().to_string())
+        })?;
     }
     let mut line = serde_json::to_string(&FileDeclaration {
         version: DECLARATION_VERSION,
         kind: "file",
         path,
     })
-    .context("serialize file declaration")?;
+    .context(i18n::t(
+        "ai.agent_sdk.driver.snapshot.serialize_file_declaration_failed",
+    ))?;
     line.push('\n');
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
         .open(declarations_path)
         .await
-        .with_context(|| format!("open declarations file {}", declarations_path.display()))?;
-    file.write_all(line.as_bytes())
-        .await
-        .with_context(|| format!("write declarations file {}", declarations_path.display()))?;
-    file.flush()
-        .await
-        .with_context(|| format!("flush declarations file {}", declarations_path.display()))?;
+        .with_context(|| {
+            i18n::t("ai.agent_sdk.driver.snapshot.open_declarations_file_failed")
+                .replace("{path}", &declarations_path.display().to_string())
+        })?;
+    file.write_all(line.as_bytes()).await.with_context(|| {
+        i18n::t("ai.agent_sdk.driver.snapshot.write_declarations_file_failed")
+            .replace("{path}", &declarations_path.display().to_string())
+    })?;
+    file.flush().await.with_context(|| {
+        i18n::t("ai.agent_sdk.driver.snapshot.flush_declarations_file_failed")
+            .replace("{path}", &declarations_path.display().to_string())
+    })?;
     Ok(())
 }
 
@@ -804,7 +812,9 @@ pub(crate) async fn upload_snapshot_for_handoff(
     let response = client
         .upload_local_handoff_snapshot(upload_request)
         .await
-        .context("failed to allocate initial snapshot token")?;
+        .context(i18n::t(
+            "ai.agent_sdk.driver.snapshot.allocate_initial_snapshot_token_failed",
+        ))?;
     log::info!(
         "Initial snapshot token allocated; expires_at={}, uploads={}",
         response.expires_at,
@@ -994,7 +1004,9 @@ async fn upload_gathered_snapshot(
             Err(e) => {
                 // Pipeline-abort: route through report_error! so Sentry captures the structured
                 // error chain and on-call alerting can fire.
-                report_error!(e.context("Failed to get snapshot upload targets; skipping upload"));
+                report_error!(e.context(i18n::t(
+                    "ai.agent_sdk.driver.snapshot.get_upload_targets_failed"
+                )));
                 return None;
             }
         };
@@ -1048,8 +1060,9 @@ async fn upload_prepared_snapshot_files(
         Ok(b) => b,
         Err(e) => {
             // Pipeline-abort: route through report_error! so Sentry captures it.
-            report_error!(anyhow::Error::from(e)
-                .context("Failed to serialize snapshot manifest; skipping upload"));
+            report_error!(anyhow::Error::from(e).context(i18n::t(
+                "ai.agent_sdk.driver.snapshot.serialize_manifest_failed"
+            )));
             return None;
         }
     };
@@ -1062,7 +1075,10 @@ async fn upload_prepared_snapshot_files(
                 Err(e) => {
                     // Capture the full chain for the manifest's `error` field, then surface it
                     // to Sentry via report_error!.
-                    let e = e.context(format!("Failed to upload manifest '{manifest_filename}'"));
+                    let e = e.context(
+                        i18n::t("ai.agent_sdk.driver.snapshot.upload_manifest_failed")
+                            .replace("{manifest_filename}", &manifest_filename),
+                    );
                     let msg = format!("{e:#}");
                     report_error!(e);
                     (false, Some(msg))
@@ -1198,7 +1214,9 @@ async fn gather_file(
             });
         }
         Err(e) => {
-            let err_str = format!("Failed to read file '{file_path}': {e:#}");
+            let err_str = i18n::t("ai.agent_sdk.driver.snapshot.read_file_failed")
+                .replace("{file_path}", file_path)
+                .replace("{error}", &format!("{e:#}"));
             log::warn!("{err_str}");
             files.push(FileManifestEntry {
                 path: file_path.to_string(),
@@ -1602,17 +1620,24 @@ where
             )));
         }
         Err(_) => anyhow::bail!(
-            "git {:?} timed out after {:?} in {}",
-            args,
-            GIT_COMMAND_TIMEOUT,
-            repo_dir.display()
+            "{}",
+            i18n::t("ai.agent_sdk.driver.snapshot.git_command_timed_out")
+                .replace("{args}", &format!("{args:?}"))
+                .replace("{timeout}", &format!("{GIT_COMMAND_TIMEOUT:?}"))
+                .replace("{repo_dir}", &repo_dir.display().to_string())
         ),
     };
 
     let status_code = output.status.code().unwrap_or(-1);
     if !allowed_exit_codes.contains(&status_code) {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git {:?} failed in {}: {stderr}", args, repo_dir.display());
+        anyhow::bail!(
+            "{}",
+            i18n::t("ai.agent_sdk.driver.snapshot.git_command_failed")
+                .replace("{args}", &format!("{args:?}"))
+                .replace("{repo_dir}", &repo_dir.display().to_string())
+                .replace("{stderr}", &stderr)
+        );
     }
     Ok(output.stdout)
 }

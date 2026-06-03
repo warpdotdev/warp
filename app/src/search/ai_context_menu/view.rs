@@ -102,28 +102,39 @@ pub enum AIContextMenuCategory {
 }
 
 impl AIContextMenuCategory {
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            AIContextMenuCategory::CurrentFolderFiles => "Files and folders",
-            AIContextMenuCategory::RepoFiles => "Files and folders",
-            AIContextMenuCategory::Commands => "Commands",
-            AIContextMenuCategory::Blocks => "Blocks",
-            AIContextMenuCategory::Workflows => "Workflows",
-            AIContextMenuCategory::Notebooks => "Notebooks",
-            AIContextMenuCategory::Plans => "Plans",
-            AIContextMenuCategory::Diffs => "Diffs",
-            AIContextMenuCategory::Docs => "Docs",
-            AIContextMenuCategory::Tasks => "Past tasks",
-            AIContextMenuCategory::Rules => "Rules",
-            AIContextMenuCategory::Servers => "Servers and integrations",
-            AIContextMenuCategory::Terminal => "Terminal",
-            AIContextMenuCategory::Web => "Web",
-            AIContextMenuCategory::RecentDiff => "Most recent diff",
-            AIContextMenuCategory::RecentBlock => "Most recent block",
-            AIContextMenuCategory::Code => "Code",
-            AIContextMenuCategory::DiffSet => "Diff sets",
-            AIContextMenuCategory::Conversations => "Conversations",
-            AIContextMenuCategory::Skills => "Skills",
+            AIContextMenuCategory::CurrentFolderFiles | AIContextMenuCategory::RepoFiles => {
+                i18n::t("search.ai_context_menu.category.files_and_folders")
+            }
+            AIContextMenuCategory::Commands => i18n::t("search.ai_context_menu.category.commands"),
+            AIContextMenuCategory::Blocks => i18n::t("search.ai_context_menu.category.blocks"),
+            AIContextMenuCategory::Workflows => {
+                i18n::t("search.ai_context_menu.category.workflows")
+            }
+            AIContextMenuCategory::Notebooks => {
+                i18n::t("search.ai_context_menu.category.notebooks")
+            }
+            AIContextMenuCategory::Plans => i18n::t("search.ai_context_menu.category.plans"),
+            AIContextMenuCategory::Diffs => i18n::t("search.ai_context_menu.category.diffs"),
+            AIContextMenuCategory::Docs => i18n::t("search.ai_context_menu.category.docs"),
+            AIContextMenuCategory::Tasks => i18n::t("search.ai_context_menu.category.tasks"),
+            AIContextMenuCategory::Rules => i18n::t("search.ai_context_menu.category.rules"),
+            AIContextMenuCategory::Servers => i18n::t("search.ai_context_menu.category.servers"),
+            AIContextMenuCategory::Terminal => i18n::t("search.ai_context_menu.category.terminal"),
+            AIContextMenuCategory::Web => i18n::t("search.ai_context_menu.category.web"),
+            AIContextMenuCategory::RecentDiff => {
+                i18n::t("search.ai_context_menu.category.recent_diff")
+            }
+            AIContextMenuCategory::RecentBlock => {
+                i18n::t("search.ai_context_menu.category.recent_block")
+            }
+            AIContextMenuCategory::Code => i18n::t("search.ai_context_menu.category.code"),
+            AIContextMenuCategory::DiffSet => i18n::t("search.ai_context_menu.category.diff_set"),
+            AIContextMenuCategory::Conversations => {
+                i18n::t("search.ai_context_menu.category.conversations")
+            }
+            AIContextMenuCategory::Skills => i18n::t("search.ai_context_menu.category.skills"),
         }
     }
 
@@ -1372,7 +1383,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "No results found",
+                i18n::t("search.ai_context_menu.no_results"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -1388,7 +1399,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "Loading results...",
+                i18n::t("search.ai_context_menu.loading_results"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
@@ -1405,7 +1416,7 @@ impl AIContextMenu {
         let theme = appearance.theme();
         Container::new(
             Text::new(
-                "Code symbols indexing...",
+                i18n::t("search.ai_context_menu.code_symbols_indexing"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )

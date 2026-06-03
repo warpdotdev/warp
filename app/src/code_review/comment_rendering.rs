@@ -109,7 +109,7 @@ fn render_comment_file_path_header(
 
         let outdated_chip = Container::new(
             Text::new(
-                "Outdated",
+                i18n::t("code_review.comments.outdated_chip"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -172,7 +172,7 @@ fn render_comment_text_section(
     if is_imported_from_github {
         left_section.add_child(
             Text::new(
-                "From GitHub".to_string(),
+                i18n::t("code_review.comments.from_github"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -475,7 +475,7 @@ impl CommentViewCard {
             _ => source
                 .head()
                 .map(|head| head.title())
-                .unwrap_or_else(|| "Review Comment".to_string()),
+                .unwrap_or_else(|| i18n::t("code_review.comments.review_comment")),
         }
     }
 }

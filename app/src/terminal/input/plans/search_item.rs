@@ -160,6 +160,6 @@ impl SearchItem for PlanSearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Plan: {}", self.title)
+        i18n::t("terminal.input.a11y.plan").replace("{title}", &self.title)
     }
 }

@@ -109,11 +109,11 @@ pub enum Section {
 impl Section {
     const RENDER_ORDER: [Self; 3] = [Self::Commands, Self::Skills, Self::Prompts];
 
-    fn header(self) -> &'static str {
+    fn header(self) -> String {
         match self {
-            Self::Commands => "Commands",
-            Self::Skills => "Skills",
-            Self::Prompts => "Prompts",
+            Self::Commands => i18n::t("terminal.input.slash_commands.section.commands"),
+            Self::Skills => i18n::t("terminal.input.slash_commands.section.skills"),
+            Self::Prompts => i18n::t("terminal.input.slash_commands.section.prompts"),
         }
     }
 
@@ -893,18 +893,14 @@ impl CloudModeV2SlashCommandView {
         let theme = appearance.theme();
         let menu_bg = inline_styles::menu_background_color(app);
         let label = if self.mixer.as_ref(app).is_loading() {
-            "Loading..."
+            i18n::t("common.loading")
         } else {
-            "No results"
+            i18n::t("terminal.input.no_results")
         };
         Container::new(
-            Text::new(
-                label.to_owned(),
-                appearance.ui_font_family(),
-                ITEM_FONT_SIZE,
-            )
-            .with_color(theme.disabled_text_color(Fill::Solid(menu_bg)).into_solid())
-            .finish(),
+            Text::new(label, appearance.ui_font_family(), ITEM_FONT_SIZE)
+                .with_color(theme.disabled_text_color(Fill::Solid(menu_bg)).into_solid())
+                .finish(),
         )
         .with_horizontal_padding(MENU_HORIZONTAL_PADDING)
         .with_vertical_padding(ROW_VERTICAL_PADDING)
@@ -1159,7 +1155,7 @@ fn render_section_header(section: Section, app: &AppContext) -> Box<dyn Element>
 
     Container::new(
         Text::new(
-            section.header().to_owned(),
+            section.header(),
             appearance.ui_font_family(),
             SECTION_HEADER_FONT_SIZE,
         )
@@ -1184,7 +1180,8 @@ fn render_show_more_row(
     let menu_bg = inline_styles::menu_background_color(app);
     let secondary_color = theme.sub_text_color(Fill::Solid(menu_bg)).into_solid();
 
-    let label = format!("Show {hidden_count} more");
+    let label = i18n::t("terminal.input.slash_commands.show_more")
+        .replace("{count}", &hidden_count.to_string());
 
     let row = Hoverable::new(mouse_state, move |mouse_state| {
         let bg = if is_selected || mouse_state.is_hovered() {

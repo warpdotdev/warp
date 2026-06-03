@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 
 use clap::Parser;
+use clap::error::ErrorKind;
 
 use super::*;
 use crate::agent::{AgentCommand, Harness, OutputFormat};
@@ -28,6 +29,141 @@ fn restore_env_var(name: &str, previous: Option<OsString>) {
         // Safety: tests that mutate process environment are marked `serial` so
         // we do not race with other environment readers/writers in this crate.
         None => unsafe { std::env::remove_var(name) },
+    }
+}
+
+#[test]
+fn localized_clap_command_help_paths_do_not_panic() {
+    warp_core::features::mark_initialized();
+
+    let mut help_paths: Vec<Vec<&str>> = vec![
+        vec!["oz", "--help"],
+        vec!["oz", "agent", "--help"],
+        vec!["oz", "agent", "run", "--help"],
+        vec!["oz", "agent", "run-cloud", "--help"],
+        vec!["oz", "agent", "profile", "--help"],
+        vec!["oz", "agent", "profile", "list", "--help"],
+        vec!["oz", "agent", "list", "--help"],
+        vec!["oz", "agent", "get", "--help"],
+        vec!["oz", "agent", "create", "--help"],
+        vec!["oz", "agent", "update", "--help"],
+        vec!["oz", "agent", "delete", "--help"],
+        vec!["oz", "agent", "skills", "--help"],
+        vec!["oz", "mcp", "--help"],
+        vec!["oz", "mcp", "list", "--help"],
+        vec!["oz", "run", "--help"],
+        vec!["oz", "run", "list", "--help"],
+        vec!["oz", "run", "get", "--help"],
+        vec!["oz", "run", "conversation", "--help"],
+        vec!["oz", "run", "conversation", "get", "--help"],
+        vec!["oz", "run", "message", "--help"],
+        vec!["oz", "run", "message", "send", "--help"],
+        vec!["oz", "run", "message", "list", "--help"],
+        vec!["oz", "run", "message", "watch", "--help"],
+        vec!["oz", "run", "message", "read", "--help"],
+        vec!["oz", "run", "message", "mark-delivered", "--help"],
+        vec!["oz", "schedule", "--help"],
+        vec!["oz", "schedule", "create", "--help"],
+        vec!["oz", "schedule", "list", "--help"],
+        vec!["oz", "schedule", "get", "--help"],
+        vec!["oz", "schedule", "update", "--help"],
+        vec!["oz", "schedule", "pause", "--help"],
+        vec!["oz", "schedule", "unpause", "--help"],
+        vec!["oz", "schedule", "delete", "--help"],
+        vec!["oz", "environment", "--help"],
+        vec!["oz", "environment", "list", "--help"],
+        vec!["oz", "environment", "image", "--help"],
+        vec!["oz", "environment", "image", "list", "--help"],
+        vec!["oz", "environment", "create", "--help"],
+        vec!["oz", "environment", "delete", "--help"],
+        vec!["oz", "environment", "get", "--help"],
+        vec!["oz", "environment", "update", "--help"],
+        vec!["oz", "secret", "--help"],
+        vec!["oz", "secret", "create", "--help"],
+        vec!["oz", "secret", "create", "claude", "--help"],
+        vec!["oz", "secret", "create", "claude", "api-key", "--help"],
+        vec![
+            "oz",
+            "secret",
+            "create",
+            "claude",
+            "bedrock-api-key",
+            "--help",
+        ],
+        vec![
+            "oz",
+            "secret",
+            "create",
+            "claude",
+            "bedrock-access-key",
+            "--help",
+        ],
+        vec!["oz", "secret", "create", "codex", "--help"],
+        vec!["oz", "secret", "create", "codex", "api-key", "--help"],
+        vec!["oz", "secret", "delete", "--help"],
+        vec!["oz", "secret", "update", "--help"],
+        vec!["oz", "secret", "list", "--help"],
+        vec!["oz", "integration", "--help"],
+        vec!["oz", "integration", "create", "--help"],
+        vec!["oz", "integration", "update", "--help"],
+        vec!["oz", "integration", "list", "--help"],
+        vec!["oz", "api-key", "--help"],
+        vec!["oz", "api-key", "list", "--help"],
+        vec!["oz", "api-key", "create", "--help"],
+        vec!["oz", "api-key", "expire", "--help"],
+        vec!["oz", "artifact", "--help"],
+        vec!["oz", "artifact", "upload", "--help"],
+        vec!["oz", "artifact", "get", "--help"],
+        vec!["oz", "artifact", "download", "--help"],
+        vec!["oz", "federate", "--help"],
+        vec!["oz", "federate", "issue-token", "--help"],
+        vec!["oz", "federate", "issue-gcp-token", "--help"],
+        vec!["oz", "provider", "--help"],
+        vec!["oz", "provider", "setup", "--help"],
+        vec!["oz", "provider", "list", "--help"],
+        vec!["oz", "model", "--help"],
+        vec!["oz", "model", "list", "--help"],
+        vec!["oz", "login", "--help"],
+        vec!["oz", "logout", "--help"],
+        vec!["oz", "whoami", "--help"],
+        vec!["oz", "completions", "--help"],
+        vec!["oz", "--dump-debug-info", "--help"],
+        vec!["oz", "harness-support", "--help"],
+        vec!["oz", "harness-support", "ping", "--help"],
+        vec!["oz", "harness-support", "report-artifact", "--help"],
+        vec![
+            "oz",
+            "harness-support",
+            "report-artifact",
+            "pull-request",
+            "--help",
+        ],
+        vec!["oz", "harness-support", "notify-user", "--help"],
+        vec!["oz", "harness-support", "finish-task", "--help"],
+        vec!["oz", "harness-support", "report-shutdown", "--help"],
+        vec!["oz", "minidump-server", "--help"],
+    ];
+
+    #[cfg(unix)]
+    help_paths.push(vec!["oz", "terminal-server", "--help"]);
+
+    #[cfg(feature = "plugin_host")]
+    help_paths.push(vec!["oz", "--plugin-host", "--help"]);
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        help_paths.push(vec!["oz", "remote-server-proxy", "--help"]);
+        help_paths.push(vec!["oz", "remote-server-daemon", "--help"]);
+        help_paths.push(vec!["oz", "ripgrep-search", "--help"]);
+        help_paths.push(vec!["oz", "--print-telemetry-events", "--help"]);
+    }
+
+    for args in &help_paths {
+        let mut command = Args::clap_command();
+        let err = command
+            .try_get_matches_from_mut(args.iter().copied())
+            .expect_err("help paths should exit with DisplayHelp");
+        assert_eq!(err.kind(), ErrorKind::DisplayHelp, "args: {args:?}");
     }
 }
 

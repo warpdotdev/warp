@@ -2,6 +2,7 @@
 //! orchestrator and its child agents. Clicking a pill switches the
 //! active pane to that agent's conversation.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -359,7 +360,7 @@ impl Entity for OrchestrationPillBar {
 
 impl OrchestrationPillBar {
     fn overflow_menu_item(
-        label: &'static str,
+        label: String,
         icon: Icon,
         action: OrchestrationPillBarAction,
         hover_background: Fill,
@@ -488,19 +489,19 @@ impl OrchestrationPillBar {
 
         let mut items = if is_open_elsewhere {
             vec![item(
-                "Focus pane",
+                i18n::t("ai.orchestration.focus_pane"),
                 Icon::ArrowSplit,
                 OrchestrationPillBarAction::FocusOpenedConversation(conversation_id),
             )]
         } else {
             vec![
                 item(
-                    "Open in new pane",
+                    i18n::t("ai.orchestration.open_in_new_pane"),
                     Icon::ArrowSplit,
                     OrchestrationPillBarAction::OpenInNewPane(conversation_id),
                 ),
                 item(
-                    "Open in new tab",
+                    i18n::t("ai.orchestration.open_in_new_tab"),
                     Icon::Plus,
                     OrchestrationPillBarAction::OpenInNewTab(conversation_id),
                 ),
@@ -508,7 +509,7 @@ impl OrchestrationPillBar {
         };
         if Self::oz_run_url_for_conversation(conversation_id, ctx).is_some() {
             items.push(item(
-                "View in Oz",
+                i18n::t("ai.orchestration.view_in_oz"),
                 Icon::Oz,
                 OrchestrationPillBarAction::ViewInOz(conversation_id),
             ));
@@ -529,15 +530,15 @@ impl OrchestrationPillBar {
         items.push(MenuItem::Separator);
         if is_in_progress {
             items.push(destructive_item(
-                "Stop agent",
+                i18n::t("ai.orchestration.stop_agent"),
                 Icon::StopFilled,
                 OrchestrationPillBarAction::Stop(conversation_id),
             ));
         }
         let (kill_label, kill_icon) = if is_in_finished_state {
-            ("Delete agent", Icon::Trash)
+            (i18n::t("ai.orchestration.delete_agent"), Icon::Trash)
         } else {
-            ("Kill agent", Icon::X)
+            (i18n::t("ai.orchestration.kill_agent"), Icon::X)
         };
         items.push(destructive_item(
             kill_label,
@@ -678,10 +679,11 @@ impl OrchestrationPillBar {
         // Stamp each child's current pin state; partitioning happens at render.
         let pill_bar_model = OrchestrationPillBarModel::as_ref(app);
         for child in children {
-            let name = child
+            let name: Cow<'_, str> = child
                 .agent_name()
                 .filter(|n| !n.is_empty())
-                .unwrap_or("Agent");
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| Cow::Owned(i18n::t("ai.orchestration.agent")));
             let pin_state = if pill_bar_model.is_pinned(&child.id()) {
                 PillPinState::Pinned
             } else {
@@ -690,8 +692,8 @@ impl OrchestrationPillBar {
             specs.push(PillSpec {
                 conversation_id: child.id(),
                 label: name.to_string(),
-                avatar_color: pill_avatar_color(name, theme),
-                avatar_glyph: AvatarGlyph::Letter(pill_initial(name)),
+                avatar_color: pill_avatar_color(name.as_ref(), theme),
+                avatar_glyph: AvatarGlyph::Letter(pill_initial(name.as_ref())),
                 status: Some(child.status().clone()),
                 is_selected: child.id() == active_id,
                 kind: PillKind::Child,
@@ -751,7 +753,7 @@ fn orchestrator_label(orchestrator: &AIConversation) -> String {
         .agent_name()
         .filter(|n| !n.is_empty())
         .map(|n| n.to_string())
-        .unwrap_or_else(|| "Orchestrator".to_string())
+        .unwrap_or_else(|| i18n::t("ai.orchestration.orchestrator"))
 }
 
 impl OrchestrationPillBar {
@@ -1360,7 +1362,7 @@ fn render_hover_card(
         .filter(|n| !n.is_empty())
         .map(|n| n.to_string())
         .or_else(|| conversation.title())
-        .unwrap_or_else(|| "Agent".to_string());
+        .unwrap_or_else(|| i18n::t("ai.orchestration.agent"));
 
     // Header: small avatar disc + bold agent name on the left, status
     // badge right-aligned. We use the conversation's `ConversationStatus`
@@ -1598,7 +1600,7 @@ fn render_status_badge(
         .with_height(12.)
         .finish();
     let label = Text::new(
-        status.to_string(),
+        status.localized_label(),
         appearance.ui_font_family(),
         appearance.monospace_font_size() - 2.,
     )
@@ -2303,7 +2305,7 @@ pub fn render_orchestration_breadcrumbs(
                 .filter(|t| !t.is_empty())
                 .or_else(|| p.agent_name().map(str::to_string))
         })
-        .unwrap_or_else(|| "Orchestrator".to_string());
+        .unwrap_or_else(|| i18n::t("ai.orchestration.orchestrator"));
 
     // Treat empty `agent_name` as missing so the label, avatar color, and
     // initial all consistently fall back to "Agent". Without the
@@ -2313,8 +2315,9 @@ pub fn render_orchestration_breadcrumbs(
     let child_name = active
         .agent_name()
         .filter(|n| !n.is_empty())
-        .unwrap_or("Agent");
-    let child_label = child_name.to_string();
+        .map(str::to_string)
+        .unwrap_or_else(|| i18n::t("ai.orchestration.agent"));
+    let child_label = child_name.clone();
 
     // Parent crumb uses the Oz glyph on a neutral disc to match the
     // orchestrator pill in the pill bar.
@@ -2331,8 +2334,8 @@ pub fn render_orchestration_breadcrumbs(
     let child_spec = CrumbSpec {
         conversation_id: active_id,
         label: child_label,
-        avatar_color: pill_avatar_color(child_name, theme),
-        avatar_glyph: AvatarGlyph::Letter(pill_initial(child_name)),
+        avatar_color: pill_avatar_color(&child_name, theme),
+        avatar_glyph: AvatarGlyph::Letter(pill_initial(&child_name)),
         is_active: true,
     };
 

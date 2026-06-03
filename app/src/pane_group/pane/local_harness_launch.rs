@@ -72,14 +72,10 @@ pub(super) fn normalize_local_child_harness(harness_type: &str) -> Option<Harnes
 pub(super) fn validate_local_harness_shell(shell_type: Option<ShellType>) -> Result<(), String> {
     match shell_type {
         Some(ShellType::Bash) | Some(ShellType::Zsh) | Some(ShellType::Fish) => Ok(()),
-        Some(ShellType::PowerShell) => Err(
-            "Local child harnesses currently require bash, zsh, or fish; PowerShell is not supported."
-                .to_string(),
-        ),
-        None => Err(
-            "Local child harnesses currently require a detected bash, zsh, or fish session."
-                .to_string(),
-        ),
+        Some(ShellType::PowerShell) => {
+            Err(i18n::t("pane_group.local_child.powershell_unsupported"))
+        }
+        None => Err(i18n::t("pane_group.local_child.no_supported_shell")),
     }
 }
 
@@ -175,9 +171,9 @@ pub(super) async fn prepare_local_harness_child_launch(
     let Some(harness) = normalize_local_child_harness(&harness_type) else {
         let harness_name = harness_type.trim();
         return Err(if harness_name.is_empty() {
-            "Local child harness type is missing.".to_string()
+            i18n::t("pane_group.local_child.missing_harness_type")
         } else {
-            format!("Unsupported local child harness '{harness_name}'.")
+            i18n::t("pane_group.local_child.unsupported_harness").replace("{harness}", harness_name)
         });
     };
     if let Some(message) = local_harness_product_disabled_message(harness) {
@@ -191,10 +187,8 @@ pub(super) async fn prepare_local_harness_child_launch(
             let working_dir = startup_directory
                 .or_else(|| std::env::current_dir().ok())
                 .ok_or_else(|| {
-                    format!(
-                        "Could not resolve a working directory for the local {} child.",
-                        harness.display_name()
-                    )
+                    i18n::t("pane_group.local_child.missing_working_directory")
+                        .replace("{harness}", harness.display_name())
                 })?;
             let HarnessKind::ThirdParty(third_party_harness) =
                 harness_kind(harness).map_err(|error: AgentDriverError| error.to_string())?

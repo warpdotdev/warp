@@ -18,24 +18,18 @@ use crate::terminal::input::inline_menu::styles as inline_styles;
 const CORNER_RADIUS: f32 = 4.0;
 const ROW_SPACING: f32 = 12.0;
 
-pub const MODEL_SPECS_TITLE: &str = "Model Specs";
-pub const MODEL_SPECS_DESCRIPTION: &str = "Warp's benchmarks for how well a model performs in our harness, the rate at which it consumes credits, and task speed.";
-
-pub const REASONING_LEVEL_TITLE: &str = "Reasoning level";
-pub const REASONING_LEVEL_DESCRIPTION: &str = "Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.";
-
 pub enum CostRow {
     Bar {
         value: Option<f32>,
     },
     BilledToProvider {
-        label: &'static str,
+        label: String,
         tooltip: Option<CostRowTooltip>,
         manage_button: Box<dyn Element>,
     },
 }
 pub struct CostRowTooltip {
-    pub text: &'static str,
+    pub text: String,
     pub mouse_state: MouseStateHandle,
 }
 
@@ -50,7 +44,7 @@ pub fn render_model_spec_scores(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let mut rows = vec![render_score_row(
-        "Intelligence",
+        i18n::t("terminal.model_specs.intelligence"),
         ScoreRowKind::Bar {
             value: spec.as_ref().map(|spec| spec.quality),
         },
@@ -60,7 +54,7 @@ pub fn render_model_spec_scores(
     )];
 
     rows.push(render_score_row(
-        "Speed",
+        i18n::t("terminal.model_specs.speed"),
         ScoreRowKind::Bar {
             value: spec.as_ref().map(|spec| spec.speed),
         },
@@ -72,7 +66,7 @@ pub fn render_model_spec_scores(
     match cost_row {
         CostRow::Bar { value } => {
             rows.push(render_score_row(
-                "Cost",
+                i18n::t("terminal.model_specs.cost"),
                 ScoreRowKind::Bar { value },
                 None,
                 layout.bg_bar_color,
@@ -85,7 +79,7 @@ pub fn render_model_spec_scores(
             manage_button,
         } => {
             rows.push(render_score_row(
-                "Cost",
+                i18n::t("terminal.model_specs.cost"),
                 ScoreRowKind::BilledToProvider {
                     label,
                     manage_button,
@@ -108,13 +102,13 @@ enum ScoreRowKind {
         value: Option<f32>,
     },
     BilledToProvider {
-        label: &'static str,
+        label: String,
         manage_button: Box<dyn Element>,
     },
 }
 
 fn render_score_row(
-    name: &str,
+    name: String,
     kind: ScoreRowKind,
     label_tooltip: Option<CostRowTooltip>,
     bg_bar_color: ColorU,
@@ -131,7 +125,7 @@ fn render_score_row(
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     ) * 8.;
-    let label = ConstrainedBox::new(render_row_label(name, label_tooltip, appearance, app))
+    let label = ConstrainedBox::new(render_row_label(&name, label_tooltip, appearance, app))
         .with_width(label_width)
         .finish();
 
@@ -259,9 +253,9 @@ fn render_row_label(
         .finish()
 }
 
-fn render_provider_label(label: &'static str, appearance: &Appearance) -> Box<dyn Element> {
+fn render_provider_label(label: String, appearance: &Appearance) -> Box<dyn Element> {
     Container::new(
-        Text::new(label.to_string(), appearance.ui_font_family(), 14.)
+        Text::new(label, appearance.ui_font_family(), 14.)
             .with_color(appearance.theme().disabled_ui_text_color().into())
             .finish(),
     )
@@ -271,7 +265,7 @@ fn render_provider_label(label: &'static str, appearance: &Appearance) -> Box<dy
 fn render_info_tooltip(tooltip: CostRowTooltip, appearance: &Appearance) -> Box<dyn Element> {
     let icon_color = appearance.theme().disabled_ui_text_color();
     let ui_builder = appearance.ui_builder();
-    let tooltip_text = tooltip.text.to_string();
+    let tooltip_text = tooltip.text;
     Hoverable::new(tooltip.mouse_state, move |state| {
         let info_icon = Container::new(
             ConstrainedBox::new(WarpUiIcon::new("bundled/svg/info.svg", icon_color).finish())
@@ -300,15 +294,15 @@ fn render_info_tooltip(tooltip: CostRowTooltip, appearance: &Appearance) -> Box<
 }
 
 pub fn render_model_spec_header(
-    title: &str,
-    description: &str,
+    title: String,
+    description: String,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
 
     let title = Text::new(
-        title.to_string(),
+        title,
         appearance.ui_font_family(),
         appearance.monospace_font_size(),
     )
@@ -320,7 +314,7 @@ pub fn render_model_spec_header(
     .finish();
 
     let description = Text::new(
-        description.to_string(),
+        description,
         appearance.ui_font_family(),
         inline_styles::font_size(appearance),
     )

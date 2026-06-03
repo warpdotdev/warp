@@ -337,19 +337,24 @@ fn map_conversation_status(
                 Some(error) => classify_renderable_error(error),
                 None => (
                     AgentTaskState::Error,
-                    Some(TaskStatusUpdate::message("Agent encountered an error")),
+                    Some(TaskStatusUpdate::message(i18n::t(
+                        "ai.blocklist.local_agent_task_sync_model.agent_error",
+                    ))),
                 ),
             }
         }
         ConversationStatus::Cancelled => (
             AgentTaskState::Cancelled,
-            Some(TaskStatusUpdate::message("Cancelled by user")),
+            Some(TaskStatusUpdate::message(i18n::t(
+                "ai.blocklist.local_agent_task_sync_model.cancelled_by_user",
+            ))),
         ),
         ConversationStatus::Blocked { blocked_action } => (
             AgentTaskState::Blocked,
-            Some(TaskStatusUpdate::message(format!(
-                "The agent got stuck waiting for user confirmation on the action: {blocked_action}"
-            ))),
+            Some(TaskStatusUpdate::message(
+                i18n::t("ai.blocklist.local_agent_task_sync_model.conversation_blocked")
+                    .replace("{blocked_action}", blocked_action),
+            )),
         ),
     }
 }
@@ -365,44 +370,47 @@ pub(crate) fn classify_renderable_error(
         } => (
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
-                user_display_message.as_deref().unwrap_or(
-                    "Your team has run out of credits. Purchase more credits to continue.",
-                ),
+                user_display_message.clone().unwrap_or_else(|| {
+                    i18n::t("ai.blocklist.local_agent_task_sync_model.quota_limit")
+                }),
                 PlatformErrorCode::InsufficientCredits,
             )),
         ),
         RenderableAIError::ServerOverloaded => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
-                "Warp is temporarily overloaded. Please try again shortly.",
+                i18n::t("ai.blocklist.local_agent_task_sync_model.server_overloaded"),
                 PlatformErrorCode::ResourceUnavailable,
             )),
         ),
         RenderableAIError::InternalWarpError => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
-                "An internal error occurred during the conversation. Please try again.",
+                i18n::t("ai.blocklist.local_agent_task_sync_model.internal_warp_error"),
                 PlatformErrorCode::InternalError,
             )),
         ),
         RenderableAIError::ContextWindowExceeded(msg) => (
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
-                format!("Context window exceeded: {msg}"),
+                i18n::t("ai.blocklist.local_agent_task_sync_model.context_window_exceeded")
+                    .replace("{message}", msg),
                 PlatformErrorCode::InternalError,
             )),
         ),
         RenderableAIError::InvalidApiKey { provider, .. } => (
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
-                format!("Invalid API key for {provider}. Update your API key in settings."),
+                i18n::t("ai.blocklist.local_agent_task_sync_model.invalid_api_key")
+                    .replace("{provider}", provider),
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),
         RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid { model_name } => (
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
-                format!("AWS Bedrock credentials expired or invalid for {model_name}."),
+                i18n::t("ai.blocklist.local_agent_task_sync_model.aws_bedrock_invalid")
+                    .replace("{model_name}", model_name),
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),

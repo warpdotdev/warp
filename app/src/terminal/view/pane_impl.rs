@@ -676,7 +676,7 @@ impl BackingView for TerminalView {
         if shared_session_status.is_sharer_or_viewer() {
             if !is_ambient_agent {
                 items.push(
-                    MenuItemFields::new("Copy link")
+                    MenuItemFields::new(i18n::t("common.copy_link"))
                         .with_on_select_action(TerminalAction::CopySharedSessionLink { source })
                         .into_item(),
                 );
@@ -684,7 +684,7 @@ impl BackingView for TerminalView {
 
             if shared_session_status.is_sharer() {
                 items.push(
-                    MenuItemFields::new("Stop sharing session")
+                    MenuItemFields::new(i18n::t("terminal.shared_session.stop_sharing_session"))
                         .with_on_select_action(TerminalAction::StopSharingCurrentSession { source })
                         .into_item(),
                 );
@@ -696,7 +696,7 @@ impl BackingView for TerminalView {
                     == UserAppInstallStatus::Detected
             {
                 items.push(
-                    MenuItemFields::new("Open on Desktop")
+                    MenuItemFields::new(i18n::t("common.open_on_desktop"))
                         .with_on_select_action(TerminalAction::OpenSharedSessionOnDesktop {
                             source,
                         })
@@ -707,7 +707,7 @@ impl BackingView for TerminalView {
             && ContextFlag::CreateSharedSession.is_enabled()
         {
             items.push(
-                MenuItemFields::new("Share session")
+                MenuItemFields::new(i18n::t("terminal.shared_session.share_session"))
                     .with_on_select_action(TerminalAction::OpenShareSessionModal { source })
                     .into_item(),
             );
@@ -786,7 +786,12 @@ impl TerminalView {
             self.ambient_agent_cancel_mouse_state.clone(),
             blended_colors::text_sub(theme, theme.background()).into(),
         )
-        .with_tooltip(move || ui_builder.tool_tip("Cancel".to_string()).build().finish())
+        .with_tooltip(move || {
+            ui_builder
+                .tool_tip(i18n::t("common.cancel"))
+                .build()
+                .finish()
+        })
         .build()
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action::<PaneHeaderAction<TerminalAction, TerminalAction>>(
@@ -830,14 +835,11 @@ impl TerminalView {
         button
             .with_tooltip(move || {
                 let tooltip_text = if is_open {
-                    "Hide details"
+                    i18n::t("terminal.conversation_details.hide")
                 } else {
-                    "Show details"
+                    i18n::t("terminal.conversation_details.show")
                 };
-                ui_builder
-                    .tool_tip(tooltip_text.to_string())
-                    .build()
-                    .finish()
+                ui_builder.tool_tip(tooltip_text).build().finish()
             })
             .build()
             .on_click(|ctx, _, _| {
@@ -1084,8 +1086,8 @@ impl TerminalView {
 
 fn default_agent_conversation_title(is_ambient_agent: bool) -> String {
     if is_ambient_agent {
-        "New cloud agent".to_owned()
+        i18n::t("terminal.ambient_agent.default_cloud_agent_title")
     } else {
-        "New agent conversation".to_owned()
+        i18n::t("terminal.agent_conversation.default_title")
     }
 }

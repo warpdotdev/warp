@@ -18,6 +18,7 @@ bin = ["warpui/log_named_telemetry_events"]
 ai.workspace = true
 anyhow.workspace = true
 cfg-if.workspace = true
+i18n.workspace = true
 instant.workspace = true
 log.workspace = true
 pathfinder_color.workspace = true

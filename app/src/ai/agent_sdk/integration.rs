@@ -35,6 +35,14 @@ pub fn run(
 
 struct IntegrationCommandRunner;
 
+fn localized_integration_action(is_update: bool) -> String {
+    if is_update {
+        i18n::t("ai.agent_sdk.integration.action.update")
+    } else {
+        i18n::t("ai.agent_sdk.integration.action.creation")
+    }
+}
+
 impl IntegrationCommandRunner {
     fn list(&self, global_options: GlobalOptions, ctx: &mut ModelContext<Self>) {
         // Hardcoded set of providers that this client knows how to render.
@@ -154,15 +162,22 @@ impl IntegrationCommandRunner {
             let environment_uid = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
             {
                 Ok(EnvironmentChoice::None) => {
-                    eprintln!("Creating integration without an environment.");
+                    eprintln!(
+                        "{}",
+                        i18n::t("ai.agent_sdk.integration.creating_without_environment")
+                    );
                     None
                 }
                 Ok(EnvironmentChoice::Environment { id, .. }) => {
-                    eprintln!("Creating integration with environment {id}.");
+                    eprintln!(
+                        "{}",
+                        i18n::t("ai.agent_sdk.integration.creating_with_environment")
+                            .replace("{id}", &id)
+                    );
                     Some(id)
                 }
                 Err(ResolveConfigurationError::Canceled) => {
-                    eprintln!("Integration creation canceled.");
+                    eprintln!("{}", i18n::t("ai.agent_sdk.integration.creation_cancelled"));
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                     return;
                 }
@@ -204,15 +219,16 @@ impl IntegrationCommandRunner {
         attempt: u32,
     ) {
         const MAX_CREATE_ATTEMPTS: u32 = 8;
-        let action = if is_update { "update" } else { "creation" };
+        let action = localized_integration_action(is_update);
 
         if attempt > MAX_CREATE_ATTEMPTS {
             ctx.terminate_app(
                 TerminationMode::ForceTerminate,
-                Some(Err(anyhow::anyhow!(
-                    "Exceeded maximum number of integration creation attempts ({}). Retry.",
-                    MAX_CREATE_ATTEMPTS
-                ))),
+                Some(Err(anyhow::anyhow!(i18n::t(
+                    "ai.agent_sdk.integration.max_attempts_exceeded"
+                )
+                .replace("{action}", &action)
+                .replace("{count}", &MAX_CREATE_ATTEMPTS.to_string())))),
             );
             return;
         }
@@ -257,7 +273,11 @@ impl IntegrationCommandRunner {
                         match (auth_url, tx_id) {
                             (Some(auth_url), Some(tx_id)) => {
                                 // We have another auth step: open URL and poll txId.
-                                println!("Authorize the provider here: {auth_url}\n");
+                                println!(
+                                    "{}\n",
+                                    i18n::t("ai.agent_sdk.integration.authorize_provider_here")
+                                        .replace("{url}", &auth_url)
+                                );
                                 ctx.open_url(&auth_url);
 
                                 let integrations_client = ServerApiProvider::as_ref(ctx)
@@ -302,13 +322,17 @@ impl IntegrationCommandRunner {
                                             Ok(OauthConnectTxStatus::Failed) => {
                                                 ctx.terminate_app(
                                                     TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("OAuth authorization failed."))),
+                                                    Some(Err(anyhow::anyhow!(
+                                                        i18n::t("ai.agent_sdk.integration.oauth_authorization_failed")
+                                                    ))),
                                                 );
                                             }
                                             Ok(OauthConnectTxStatus::Expired) => {
                                                 ctx.terminate_app(
                                                     TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("OAuth authorization expired."))),
+                                                    Some(Err(anyhow::anyhow!(
+                                                        i18n::t("ai.agent_sdk.integration.oauth_authorization_expired")
+                                                    ))),
                                                 );
                                             }
                                             Ok(OauthConnectTxStatus::Pending)
@@ -316,13 +340,18 @@ impl IntegrationCommandRunner {
                                                 // Should not be returned by poll_oauth_until_terminal.
                                                 ctx.terminate_app(
                                                     TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("Unexpected non-terminal OAuth status returned"))),
+                                                    Some(Err(anyhow::anyhow!(
+                                                        i18n::t("ai.agent_sdk.integration.unexpected_non_terminal_oauth_status")
+                                                    ))),
                                                 );
                                             }
                                             Err(err) => {
                                                 ctx.terminate_app(
                                                     TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("Error polling OAuth status: {err}"))),
+                                                    Some(Err(anyhow::anyhow!(
+                                                        i18n::t("ai.agent_sdk.integration.poll_oauth_status_error")
+                                                            .replace("{error}", &err.to_string())
+                                                    ))),
                                                 );
                                             }
                                         }
@@ -330,10 +359,16 @@ impl IntegrationCommandRunner {
                                 );
                             }
                             (Some(auth_url), None) => {
-                                println!("Authorize the provider here: {auth_url}\n");
+                                println!(
+                                    "{}\n",
+                                    i18n::t("ai.agent_sdk.integration.authorize_provider_here")
+                                        .replace("{url}", &auth_url)
+                                );
                                 ctx.open_url(&auth_url);
                                 println!(
-                                    "After authorizing, re-run the command to continue the integration {action} process.",
+                                    "{}",
+                                    i18n::t("ai.agent_sdk.integration.rerun_after_authorizing")
+                                        .replace("{action}", &action)
                                 );
                                 ctx.terminate_app(
                                     TerminationMode::ForceTerminate,
@@ -343,7 +378,10 @@ impl IntegrationCommandRunner {
                             (None, Some(_)) => {
                                 ctx.terminate_app(
                                     TerminationMode::ForceTerminate,
-                                    Some(Err(anyhow::anyhow!("Server did not return an authURL for the integration creation process."))),
+                                    Some(Err(anyhow::anyhow!(
+                                        i18n::t("ai.agent_sdk.integration.missing_auth_url")
+                                            .replace("{action}", &action)
+                                    ))),
                                 );
                             }
                             (None, None) => {
@@ -356,7 +394,11 @@ impl IntegrationCommandRunner {
                                 } else {
                                     ctx.terminate_app(
                                         TerminationMode::ForceTerminate,
-                                        Some(Err(anyhow::anyhow!("Integration creation reported failure: {}", output.message))),
+                                        Some(Err(anyhow::anyhow!(
+                                            i18n::t("ai.agent_sdk.integration.reported_failure")
+                                                .replace("{action}", &action)
+                                                .replace("{message}", &output.message)
+                                        ))),
                                     );
                                 }
                             }

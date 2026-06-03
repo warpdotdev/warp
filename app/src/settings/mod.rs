@@ -18,6 +18,7 @@ mod init;
 pub mod initializer;
 mod input;
 mod input_mode;
+pub mod language;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
 pub mod macros;
@@ -52,6 +53,7 @@ pub use gpu::*;
 pub use init::*;
 pub use input::*;
 pub use input_mode::*;
+pub use language::*;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use linux::*;
 pub use native_preference::*;
@@ -98,17 +100,18 @@ impl SettingsFileError {
     pub fn heading_and_description(&self) -> (String, String) {
         match self {
             Self::FileParseFailed(_) => (
-                "Your settings file contains an error.".to_owned(),
-                format!("{self}. Open the file to fix it."),
+                i18n::t("settings.file_error.heading"),
+                i18n::t("settings.file_error.parse_description"),
             ),
-            Self::InvalidSettings(keys) => match keys.len() {
-                1 => (
-                    "Your settings file contains an error.".to_owned(),
-                    format!("{self}. The default value is being used."),
+            Self::InvalidSettings(keys) => match keys.as_slice() {
+                [key] => (
+                    i18n::t("settings.file_error.heading"),
+                    i18n::t("settings.file_error.invalid_single_description").replace("{key}", key),
                 ),
                 _ => (
-                    "Your settings file contains errors.".to_owned(),
-                    format!("{self}. Default values are being used."),
+                    i18n::t("settings.file_error.heading_plural"),
+                    i18n::t("settings.file_error.invalid_multiple_description")
+                        .replace("{keys}", &keys.join(", ")),
                 ),
             },
         }

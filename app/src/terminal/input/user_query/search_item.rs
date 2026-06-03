@@ -132,6 +132,6 @@ impl SearchItem for UserQuerySearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Query: {}", self.query_text)
+        i18n::t("terminal.input.a11y.query").replace("{query}", &self.query_text)
     }
 }

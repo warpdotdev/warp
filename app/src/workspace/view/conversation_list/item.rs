@@ -124,7 +124,7 @@ pub fn render_static_item(props: StaticItemProps<'_>, app: &AppContext) -> Box<d
     .finish();
 
     let title_text = Text::new_inline(
-        "New conversation",
+        i18n::t("workspace.conversation.new_conversation"),
         appearance.ui_font_family(),
         appearance.ui_font_size() + 2.,
     )

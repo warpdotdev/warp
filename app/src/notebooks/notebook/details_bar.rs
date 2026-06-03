@@ -130,7 +130,7 @@ impl DetailsBar {
             let ui_builder = appearance.ui_builder().clone();
             edit_button = edit_button.with_tooltip(move || {
                 ui_builder
-                    .tool_tip("Sign in to edit".to_string())
+                    .tool_tip(i18n::t("common.sign_in_to_edit"))
                     .build()
                     .finish()
             });
@@ -167,13 +167,13 @@ impl DetailsBar {
         match editor.state {
             EditorState::None => appearance
                 .ui_builder()
-                .span("Viewing")
+                .span(i18n::t("common.viewing"))
                 .with_style(base_text_styles)
                 .build()
                 .finish(),
             EditorState::CurrentUser => appearance
                 .ui_builder()
-                .span("Editing")
+                .span(i18n::t("common.editing"))
                 .with_style(base_text_styles)
                 .build()
                 .finish(),
@@ -181,7 +181,7 @@ impl DetailsBar {
                 let editor = editor_display_name(editor.email.as_deref(), app);
                 appearance
                     .ui_builder()
-                    .span(format!("{editor} is editing"))
+                    .span(i18n::t("notebooks.editor_is_editing").replace("{editor}", &editor))
                     .with_style(base_text_styles)
                     .with_highlights(
                         (0..editor.chars().count()).collect(),
@@ -202,7 +202,7 @@ fn editor_display_name(email: Option<&str>, app: &AppContext) -> String {
         Some(email) => UserProfiles::as_ref(app)
             .displayable_identifier_for_email(email)
             .unwrap_or_else(|| email.to_string()),
-        None => "Other user".to_string(),
+        None => i18n::t("common.other_user"),
     }
 }
 

@@ -132,7 +132,7 @@ impl FromStr for SkillSpec {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
         if s.is_empty() {
-            return Err("Skill specifier cannot be empty".to_string());
+            return Err(i18n::t("warp_cli.skill.error.empty_specifier"));
         }
 
         // Check for [qualifier:]skill_identifier format
@@ -141,12 +141,10 @@ impl FromStr for SkillSpec {
             let skill_identifier = skill_identifier.trim();
 
             if qualifier.is_empty() {
-                return Err(
-                    "Qualifier cannot be empty in 'repo:skill_identifier' format".to_string(),
-                );
+                return Err(i18n::t("warp_cli.skill.error.empty_qualifier"));
             }
             if skill_identifier.is_empty() {
-                return Err("Skill identifier cannot be empty".to_string());
+                return Err(i18n::t("warp_cli.skill.error.empty_identifier"));
             }
 
             // Check for org/repo format in qualifier
@@ -155,10 +153,10 @@ impl FromStr for SkillSpec {
                 let repo = repo.trim();
 
                 if org.is_empty() {
-                    return Err("Organization cannot be empty".to_string());
+                    return Err(i18n::t("warp_cli.skill.error.empty_org"));
                 }
                 if repo.is_empty() {
-                    return Err("Repository name cannot be empty".to_string());
+                    return Err(i18n::t("warp_cli.skill.error.empty_repo"));
                 }
 
                 Ok(Self::with_org_and_repo(

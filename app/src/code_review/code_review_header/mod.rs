@@ -320,7 +320,7 @@ impl CodeReviewHeader {
             .with_text_and_icon_label(
                 TextAndIcon::new(
                     TextAndIconAlignment::IconFirst,
-                    "Discard all".to_string(),
+                    i18n::t("code_review.discard.all"),
                     Icon::ReverseLeft.to_warpui_icon(warp_core::ui::theme::Fill::Solid(
                         sub_text_color.into_solid(),
                     )),
@@ -433,7 +433,7 @@ impl CodeReviewHeader {
             }))
             .with_tooltip(move || {
                 ui_builder
-                    .tool_tip("Add diff set as context".to_owned())
+                    .tool_tip(i18n::t("code_review.add_diff_set_context"))
                     .build()
                     .finish()
             })
@@ -489,6 +489,6 @@ impl CodeReviewHeader {
     fn get_header_text(diff_state_model: &ModelHandle<DiffStateModel>, app: &AppContext) -> String {
         let branch_name =
             diff_state_model.read(app, |model, ctx| model.get_current_branch_name(ctx));
-        branch_name.unwrap_or("Reviewing open changes".to_string())
+        branch_name.unwrap_or_else(|| i18n::t("code_review.header.reviewing_open_changes"))
     }
 }

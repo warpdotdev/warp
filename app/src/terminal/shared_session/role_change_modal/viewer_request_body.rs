@@ -39,10 +39,10 @@ impl ViewerRequestBody {
         }
     }
 
-    fn role_label(&self) -> &str {
+    fn role_label(&self) -> String {
         match self.role {
-            Role::Executor => "edit",
-            _ => "view",
+            Role::Executor => i18n::t("terminal.shared_session.role.edit"),
+            _ => i18n::t("terminal.shared_session.role.view"),
         }
     }
 
@@ -64,13 +64,15 @@ impl View for ViewerRequestBody {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let header = format!("You have requested {} mode", self.role_label());
-        let text = format!("Waiting for {}...", self.display_name);
+        let header = i18n::t("terminal.shared_session.viewer_request.header")
+            .replace("{role}", &self.role_label());
+        let text = i18n::t("terminal.shared_session.viewer_request.waiting")
+            .replace("{name}", &self.display_name);
 
         let cancel_button = appearance
             .ui_builder()
             .button(ButtonVariant::Outlined, self.mouse_state_handle.clone())
-            .with_centered_text_label(String::from("Cancel request"))
+            .with_centered_text_label(i18n::t("terminal.shared_session.viewer_request.cancel"))
             .with_style(UiComponentStyles {
                 font_size: Some(TEXT_FONT_SIZE),
                 font_weight: Some(Weight::Bold),

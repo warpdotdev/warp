@@ -87,13 +87,17 @@ where
     let on_accent_bg = bg.is_some();
     let on_select = Arc::new(on_select);
 
-    let label = Text::new_inline("Session type".to_string(), appearance.ui_font_family(), 12.)
-        .with_color(if on_accent_bg {
-            callout_label_color(appearance)
-        } else {
-            blended_colors::text_disabled(theme, bg_fill)
-        })
-        .finish();
+    let label = Text::new_inline(
+        i18n::t("tab_configs.session_type"),
+        appearance.ui_font_family(),
+        12.,
+    )
+    .with_color(if on_accent_bg {
+        callout_label_color(appearance)
+    } else {
+        blended_colors::text_disabled(theme, bg_fill)
+    })
+    .finish();
 
     let mut pills_row = Flex::row().with_spacing(PILL_GAP);
 
@@ -113,13 +117,9 @@ where
         .with_height(14.)
         .finish();
 
-        let name = Text::new_inline(
-            session_type.pill_label().to_string(),
-            appearance.ui_font_family(),
-            14.,
-        )
-        .with_color(item_color)
-        .finish();
+        let name = Text::new_inline(session_type.pill_label(), appearance.ui_font_family(), 14.)
+            .with_color(item_color)
+            .finish();
 
         let pill_content = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -224,7 +224,7 @@ where
     let on_accent_bg = bg.is_some();
 
     let label = Text::new_inline(
-        "Select directory".to_string(),
+        i18n::t("tab_configs.select_directory"),
         appearance.ui_font_family(),
         12.,
     )
@@ -356,7 +356,7 @@ where
             if state.is_hovered() {
                 let tooltip = Container::new(
                     Text::new_inline(
-                        "Select a git repository to enable worktree support".to_string(),
+                        i18n::t("tab_configs.select_git_repo_for_worktree"),
                         font_family,
                         12.,
                     )
@@ -400,7 +400,7 @@ where
         blended_colors::text_sub(theme, theme.background())
     };
     let label = Text::new(
-        "Automatically create a worktree when opening a new tab",
+        i18n::t("tab_configs.auto_create_worktree"),
         appearance.ui_font_family(),
         12.,
     )
@@ -487,9 +487,7 @@ where
             if state.is_hovered() {
                 let tooltip = Container::new(
                     Text::new_inline(
-                        "You must select that you want to automatically create a \
-                         worktree in order to select this"
-                            .to_string(),
+                        i18n::t("tab_configs.auto_create_worktree_required"),
                         font_family,
                         12.,
                     )
@@ -534,7 +532,7 @@ where
     };
 
     let label = Text::new(
-        "Auto-generate worktree branch name",
+        i18n::t("tab_configs.auto_generate_worktree_branch_name"),
         appearance.ui_font_family(),
         12.,
     )
