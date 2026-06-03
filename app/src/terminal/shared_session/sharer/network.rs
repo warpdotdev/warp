@@ -76,9 +76,9 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
 #[derive(Debug)]
 enum Stage {
     /// The server is not ready to receive messages from us.
-    BeforeStarted,
+    BeforeStarted { startup_retry: StartupRetryState },
     /// The server is ready to receive messages from us.
-    StartedSuccessfully,
+    StartedSuccessfully { startup_attempt: Option<usize> },
     /// The server disconnected after the session was started successfully and we are trying to reconnect.
     Reconnecting { abort_handle: AbortHandle },
     /// The session was ended.
@@ -121,6 +121,7 @@ struct StartupConfig {
     selected_model_id: String,
 }
 
+#[derive(Debug)]
 struct StartupRetryState {
     current_attempt: usize,
     max_attempts: usize,
@@ -245,7 +246,6 @@ pub struct Network {
     reconnect_token: Option<ReconnectToken>,
     sharer_id: Option<ParticipantId>,
     startup_config: Option<StartupConfig>,
-    startup_retry: Option<StartupRetryState>,
 
     /// HashMap from event_no to the event. We keep these in memory to support reconnections
     /// until the server acks that they have been processed and are safe to remove.
@@ -293,12 +293,13 @@ impl Network {
                 selection,
                 universal_developer_input_context: None,
             },
-            stage: Stage::BeforeStarted,
+            stage: Stage::BeforeStarted {
+                startup_retry: StartupRetryState::new(1),
+            },
             session_id: None,
             reconnect_token: None,
             sharer_id: None,
             startup_config: None,
-            startup_retry: None,
             unacked_terminal_events: HashMap::new(),
             next_buffer_seq_no: (init_block_id, InputOperationSeqNo::zero()),
         };
@@ -391,12 +392,11 @@ impl Network {
                 selection: selection.clone(),
                 universal_developer_input_context: Some(universal_developer_input_context.clone()),
             },
-            stage: Stage::BeforeStarted,
+            stage: Stage::BeforeStarted { startup_retry },
             session_id: None,
             reconnect_token: None,
             sharer_id: None,
             startup_config: Some(startup_config),
-            startup_retry: Some(startup_retry),
             unacked_terminal_events: HashMap::new(),
             next_buffer_seq_no: (init_block_id.clone(), InputOperationSeqNo::zero()),
         };
@@ -448,8 +448,8 @@ impl Network {
 
     fn stage_label(&self) -> &'static str {
         match self.stage {
-            Stage::BeforeStarted => "before_started",
-            Stage::StartedSuccessfully => "started_successfully",
+            Stage::BeforeStarted { .. } => "before_started",
+            Stage::StartedSuccessfully { .. } => "started_successfully",
             Stage::Reconnecting { .. } => "reconnecting",
             Stage::Finished => "finished",
         }
@@ -702,7 +702,7 @@ impl Network {
 
     #[cfg(not(any(test, feature = "integration_tests")))]
     fn start_create_session_attempt(&mut self, ctx: &mut ModelContext<Self>) {
-        if !matches!(self.stage, Stage::BeforeStarted) {
+        if !matches!(self.stage, Stage::BeforeStarted { .. }) {
             return;
         }
         let Some(config) = self.startup_config.clone() else {
@@ -716,14 +716,15 @@ impl Network {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         self.ws_proxy_tx = ws_proxy_tx;
         self.ws_proxy_rx = ws_proxy_rx.clone();
-
-        let Some(startup_retry) = self.startup_retry.as_mut() else {
-            log::error!("Cannot create shared session without startup retry state");
-            return;
+        let (attempt, max_attempts) = match &mut self.stage {
+            Stage::BeforeStarted { startup_retry } => {
+                startup_retry.current_attempt += 1;
+                (startup_retry.current_attempt, startup_retry.max_attempts)
+            }
+            Stage::StartedSuccessfully { .. } | Stage::Reconnecting { .. } | Stage::Finished => {
+                return;
+            }
         };
-        startup_retry.current_attempt += 1;
-        let attempt = startup_retry.current_attempt;
-        let max_attempts = startup_retry.max_attempts;
 
         if max_attempts > 1 {
             let timeout_handle = ctx.spawn(
@@ -732,7 +733,7 @@ impl Network {
                     network.handle_startup_attempt_timeout(attempt, ctx);
                 },
             );
-            if let Some(startup_retry) = self.startup_retry.as_mut() {
+            if let Stage::BeforeStarted { startup_retry } = &mut self.stage {
                 startup_retry.timeout_abort_handle = Some(timeout_handle.abort_handle());
             }
         }
@@ -766,7 +767,7 @@ impl Network {
             },
             move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
-                    if !network.is_current_startup_attempt(attempt) {
+                    if !network.is_active_startup_attempt_callback(attempt) {
                         return;
                     }
                     network.clear_startup_transport_handle(attempt);
@@ -815,7 +816,7 @@ impl Network {
                     );
                 }
                 Err(e) => {
-                    if !network.is_current_startup_attempt(attempt) {
+                    if !network.is_active_startup_attempt_callback(attempt) {
                         return;
                     }
                     network.clear_startup_transport_handle(attempt);
@@ -831,35 +832,67 @@ impl Network {
                 }
             },
         );
-        if let Some(startup_retry) = self.startup_retry.as_mut() {
+        if let Stage::BeforeStarted { startup_retry } = &mut self.stage {
             startup_retry.transport_abort_handle = Some(connect_handle.abort_handle());
         }
     }
 
     #[cfg(not(any(test, feature = "integration_tests")))]
     fn handle_startup_attempt_timeout(&mut self, attempt: usize, ctx: &mut ModelContext<Self>) {
-        if !self.is_current_startup_attempt(attempt) || !matches!(self.stage, Stage::BeforeStarted)
-        {
+        if !self.is_active_startup_attempt_callback(attempt) {
             return;
         }
         self.handle_startup_failure(StartupFailure::Timeout, ctx);
     }
+    /// Returns true only while `attempt` is still the active startup attempt.
+    ///
+    /// Use this for one-shot startup callbacks that are only valid while the session is
+    /// still starting, such as the create-connection result, attempt timeout, or
+    /// transport-handle cleanup. After `SessionInitialized` advances the stage, this
+    /// intentionally returns false even for the attempt that successfully created the
+    /// session.
+    fn is_active_startup_attempt_callback(&self, attempt: usize) -> bool {
+        matches!(
+            &self.stage,
+            Stage::BeforeStarted { startup_retry }
+                if startup_retry.current_attempt == attempt
+        )
+    }
 
-    fn is_current_startup_attempt(&self, attempt: usize) -> bool {
-        self.startup_retry
-            .as_ref()
-            .is_some_and(|startup_retry| startup_retry.current_attempt == attempt)
+    /// Returns true when callbacks owned by a startup-created websocket should be ignored.
+    ///
+    /// Use this for long-lived websocket callbacks created by a startup attempt: receive
+    /// message/error handling, websocket close handling, and the send task completion
+    /// callback. The accepted startup websocket continues to be the live session
+    /// websocket after `SessionInitialized`, so this helper also checks the winning
+    /// `startup_attempt` stored in `Stage::StartedSuccessfully`.
+    ///
+    /// Do not use this for one-shot startup callbacks that should only run before the
+    /// session starts; use `is_active_startup_attempt_callback` for those.
+    fn should_ignore_startup_attempt_websocket_callback(&self, attempt: usize) -> bool {
+        matches!(
+            &self.stage,
+            Stage::BeforeStarted { startup_retry }
+                if startup_retry.current_attempt != attempt
+        ) || matches!(
+            &self.stage,
+            Stage::StartedSuccessfully {
+                startup_attempt: Some(startup_attempt),
+            } if *startup_attempt != attempt
+        )
     }
 
     fn should_retry_startup_failure(&self, failure: &StartupFailure) -> bool {
         failure.is_retryable()
-            && self.startup_retry.as_ref().is_some_and(|startup_retry| {
-                startup_retry.current_attempt < startup_retry.max_attempts
-            })
+            && matches!(
+                &self.stage,
+                Stage::BeforeStarted { startup_retry }
+                    if startup_retry.current_attempt < startup_retry.max_attempts
+            )
     }
 
     fn abort_startup_handles(&mut self) {
-        if let Some(startup_retry) = self.startup_retry.as_mut() {
+        if let Stage::BeforeStarted { startup_retry } = &mut self.stage {
             if let Some(handle) = startup_retry.timeout_abort_handle.take() {
                 handle.abort();
             }
@@ -871,10 +904,10 @@ impl Network {
 
     #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
     fn clear_startup_transport_handle(&mut self, attempt: usize) {
-        if !self.is_current_startup_attempt(attempt) {
+        if !self.is_active_startup_attempt_callback(attempt) {
             return;
         }
-        if let Some(startup_retry) = self.startup_retry.as_mut() {
+        if let Stage::BeforeStarted { startup_retry } = &mut self.stage {
             startup_retry.transport_abort_handle.take();
         }
     }
@@ -896,18 +929,12 @@ impl Network {
         cause: Option<Arc<anyhow::Error>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !matches!(self.stage, Stage::BeforeStarted) {
+        let Stage::BeforeStarted { startup_retry } = &self.stage else {
             return;
-        }
+        };
 
-        let attempt = self
-            .startup_retry
-            .as_ref()
-            .map_or(0, |startup_retry| startup_retry.current_attempt);
-        let max_attempts = self
-            .startup_retry
-            .as_ref()
-            .map_or(1, |startup_retry| startup_retry.max_attempts);
+        let attempt = startup_retry.current_attempt;
+        let max_attempts = startup_retry.max_attempts;
         let reason = failure.diagnostic_label();
         if self.should_retry_startup_failure(&failure) {
             if let Some(cause) = cause.as_ref() {
@@ -936,11 +963,10 @@ impl Network {
                 "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} reason={reason}"
             );
         }
-        self.stage = Stage::Finished;
         self.abort_startup_handles();
+        self.stage = Stage::Finished;
         self.close_startup_transport(ctx);
         self.startup_config = None;
-        self.startup_retry = None;
 
         #[cfg(not(any(test, feature = "integration_tests")))]
         if let Some(cause) = cause.as_ref() {
@@ -1088,9 +1114,9 @@ impl Network {
             stream,
             move |network, message, ctx| match message {
                 Ok(message) => {
-                    if startup_attempt
-                        .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
-                    {
+                    if startup_attempt.is_some_and(|attempt| {
+                        network.should_ignore_startup_attempt_websocket_callback(attempt)
+                    }) {
                         return;
                     }
                     network.heartbeat.update(ctx, |heartbeat, ctx| {
@@ -1099,21 +1125,23 @@ impl Network {
                     network.process_websocket_message(message, ctx);
                 }
                 Err(e) => {
-                    if startup_attempt
-                        .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
-                    {
+                    if startup_attempt.is_some_and(|attempt| {
+                        network.should_ignore_startup_attempt_websocket_callback(attempt)
+                    }) {
                         return;
                     }
                     log::error!("Got error from shared session sharer websocket: {e}");
-                    if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted) {
+                    if startup_attempt.is_some()
+                        && matches!(network.stage, Stage::BeforeStarted { .. })
+                    {
                         network.handle_startup_failure(StartupFailure::WebsocketError, ctx);
                     }
                 }
             },
             move |network, ctx| {
-                if startup_attempt
-                    .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
-                {
+                if startup_attempt.is_some_and(|attempt| {
+                    network.should_ignore_startup_attempt_websocket_callback(attempt)
+                }) {
                     return;
                 }
                 let stage = network.stage_label();
@@ -1123,10 +1151,10 @@ impl Network {
                 network.close();
                 // The connection may have timed out or the server restarted.
                 // We don't emit this event if we haven't started successfully to avoid an infinite retry loop.
-                if matches!(network.stage, Stage::StartedSuccessfully) {
+                if matches!(network.stage, Stage::StartedSuccessfully { .. }) {
                     log::info!("Sharer reconnecting: websocket closed by server");
                     network.reconnect_websocket(ctx);
-                } else if matches!(network.stage, Stage::BeforeStarted) {
+                } else if matches!(network.stage, Stage::BeforeStarted { .. }) {
                     // If the websocket is closed while we were waiting for it to start, emit an error.
                     // This is unexpected; we expect to get [`DownstreamMessage::FailedToInitializeSession`]
                     // to get a possibly-more explicit reason.
@@ -1174,12 +1202,13 @@ impl Network {
                 if !startup_send_failed {
                     return;
                 }
-                if startup_attempt
-                    .is_some_and(|attempt| !network.is_current_startup_attempt(attempt))
-                {
+                if startup_attempt.is_some_and(|attempt| {
+                    network.should_ignore_startup_attempt_websocket_callback(attempt)
+                }) {
                     return;
                 }
-                if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted) {
+                if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted { .. })
+                {
                     network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
                 }
             },
@@ -1202,30 +1231,25 @@ impl Network {
                 sharer_firebase_uid,
                 ..
             } => {
-                if !matches!(self.stage, Stage::BeforeStarted) {
+                let Stage::BeforeStarted { startup_retry } = &self.stage else {
                     log::warn!("Received unexpected SessionInitialized message when we weren't in BeforeStarted stage");
                     return;
-                }
-                let attempt = self
-                    .startup_retry
-                    .as_ref()
-                    .map_or(1, |startup_retry| startup_retry.current_attempt);
-                let max_attempts = self
-                    .startup_retry
-                    .as_ref()
-                    .map_or(1, |startup_retry| startup_retry.max_attempts);
+                };
+                let attempt = startup_retry.current_attempt;
+                let max_attempts = startup_retry.max_attempts;
                 log::info!(
                     "Successfully created shared session; session_id={session_id:?} attempt={attempt} max_attempts={max_attempts}"
                 );
                 self.abort_startup_handles();
                 self.startup_config = None;
-                self.startup_retry = None;
 
                 self.session_id = Some(session_id);
                 self.reconnect_token = Some(reconnect_token);
                 self.sharer_id = Some(sharer_id.clone());
 
-                self.stage = Stage::StartedSuccessfully;
+                self.stage = Stage::StartedSuccessfully {
+                    startup_attempt: Some(attempt),
+                };
 
                 // Flush all events starting from the very first event 0, since events were buffered before the session was initialized.
                 self.flush_terminal_events_to_server(0);
@@ -1251,7 +1275,9 @@ impl Network {
                     return;
                 }
                 log::info!("Successfully reconnected to shared session server as sharer.");
-                self.stage = Stage::StartedSuccessfully;
+                self.stage = Stage::StartedSuccessfully {
+                    startup_attempt: None,
+                };
 
                 let start_event_no = last_received_event_no
                     .map_or(0, |last_received_event_no| last_received_event_no + 1);
@@ -1546,7 +1572,7 @@ impl Network {
                 .insert(event.event_no, event.clone());
         }
 
-        if let Stage::StartedSuccessfully = self.stage {
+        if let Stage::StartedSuccessfully { .. } = self.stage {
             if let Err(e) = self.ws_proxy_tx.try_send(message) {
                 log::warn!("Failed to send message over ws_proxy channel in session sharer: {e}");
             }
@@ -1600,7 +1626,7 @@ impl Network {
     }
 
     pub fn is_connected(&self) -> bool {
-        matches!(self.stage, Stage::StartedSuccessfully)
+        matches!(self.stage, Stage::StartedSuccessfully { .. })
     }
 }
 

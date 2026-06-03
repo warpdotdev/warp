@@ -89,24 +89,29 @@ fn test_should_retry_startup_failure_respects_attempt_budget() {
         let network = create_network(&mut app, false).0;
 
         network.update(&mut app, |network, _| {
-            network.startup_retry = Some(StartupRetryState {
-                current_attempt: 1,
-                max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
-                timeout_abort_handle: None,
-                transport_abort_handle: None,
-            });
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: 1,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
             assert!(network.should_retry_startup_failure(&StartupFailure::Timeout));
 
-            network.startup_retry = Some(StartupRetryState {
-                current_attempt: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
-                max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
-                timeout_abort_handle: None,
-                transport_abort_handle: None,
-            });
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
             assert!(!network.should_retry_startup_failure(&StartupFailure::Timeout));
 
-            network.startup_retry = Some(StartupRetryState::new(1));
-            network.startup_retry.as_mut().unwrap().current_attempt = 1;
+            let mut startup_retry = StartupRetryState::new(1);
+            startup_retry.current_attempt = 1;
+            network.stage = Stage::BeforeStarted { startup_retry };
             assert!(
                 !network.should_retry_startup_failure(&StartupFailure::ServerRejected(
                     FailedToInitializeSessionReason::InternalServerError {
@@ -114,6 +119,36 @@ fn test_should_retry_startup_failure_respects_attempt_budget() {
                     }
                 ))
             );
+        });
+    });
+}
+
+#[test]
+fn test_startup_attempt_stale_filtering() {
+    App::test((), |mut app| async move {
+        let network = create_network(&mut app, false).0;
+
+        network.update(&mut app, |network, _| {
+            network.stage = Stage::BeforeStarted {
+                startup_retry: StartupRetryState {
+                    current_attempt: 1,
+                    max_attempts: AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+                    timeout_abort_handle: None,
+                    transport_abort_handle: None,
+                },
+            };
+            assert!(!network.should_ignore_startup_attempt_websocket_callback(1));
+            assert!(network.should_ignore_startup_attempt_websocket_callback(0));
+            network.stage = Stage::StartedSuccessfully {
+                startup_attempt: Some(1),
+            };
+            assert!(!network.should_ignore_startup_attempt_websocket_callback(1));
+            assert!(network.should_ignore_startup_attempt_websocket_callback(0));
+
+            network.stage = Stage::StartedSuccessfully {
+                startup_attempt: None,
+            };
+            assert!(!network.should_ignore_startup_attempt_websocket_callback(0));
         });
     });
 }
@@ -151,7 +186,9 @@ fn create_network(
 
     if session_initialized {
         network.update(app, |network, _| {
-            network.stage = Stage::StartedSuccessfully;
+            network.stage = Stage::StartedSuccessfully {
+                startup_attempt: None,
+            };
         });
     }
 
@@ -549,7 +586,7 @@ fn test_messages_are_buffered_before_session_initialized() {
         // The network should start in the BeforeStarted state with no events.
         assert_eq!(ws_proxy_rx.len(), 0);
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::BeforeStarted));
+            assert!(matches!(&network.stage, Stage::BeforeStarted { .. }));
             assert_eq!(network.unacked_terminal_events.len(), 0);
         });
 
@@ -570,7 +607,7 @@ fn test_messages_are_buffered_before_session_initialized() {
         // The message should not be sent to the server but should instead be buffered.
         assert_eq!(ws_proxy_rx.len(), 0);
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::BeforeStarted));
+            assert!(matches!(&network.stage, Stage::BeforeStarted { .. }));
             assert!(is_upstream_message_command_executed(
                 &UpstreamMessage::OrderedTerminalEvent(
                     network.unacked_terminal_events.get(&0).unwrap().clone()
@@ -601,7 +638,7 @@ fn test_messages_are_buffered_before_session_initialized() {
         matches!(item.unwrap(), UpstreamMessage::UpdateActivePrompt(_));
 
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::StartedSuccessfully));
+            assert!(matches!(&network.stage, Stage::StartedSuccessfully { .. }));
         });
     });
 }
@@ -622,7 +659,7 @@ fn test_messages_are_buffered_while_reconnecting() {
         // The network should start in the BeforeStarted state with no events.
         assert_eq!(ws_proxy_rx.len(), 0);
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::BeforeStarted));
+            assert!(matches!(&network.stage, Stage::BeforeStarted { .. }));
             assert_eq!(network.unacked_terminal_events.len(), 0);
         });
 
@@ -699,7 +736,7 @@ fn test_messages_are_buffered_while_reconnecting() {
         matches!(item.unwrap(), UpstreamMessage::UpdateActivePrompt(_));
 
         network.read(&app, |network, _| {
-            assert!(matches!(&network.stage, Stage::StartedSuccessfully));
+            assert!(matches!(&network.stage, Stage::StartedSuccessfully { .. }));
         });
     });
 }
