@@ -11776,7 +11776,6 @@ impl TerminalView {
                                         let model = me.model.lock();
                                         me.detect_cli_agent_from_model(&model, ctx)
                                     };
-
                                     let view_id = me.view_id;
                                     CLIAgentSessionsModel::handle(ctx).update(
                                         ctx,
@@ -12940,7 +12939,6 @@ impl TerminalView {
         let remote_host = self.active_session_remote_host(ctx);
         let should_auto_toggle_input =
             *AISettings::as_ref(ctx).auto_open_rich_input_on_cli_agent_start;
-
         // Seed context from the event that caused registration before the
         // listener subscribes to future events.
         CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
@@ -12966,6 +12964,14 @@ impl TerminalView {
         agent: CLIAgent,
         ctx: &mut ViewContext<Self>,
     ) {
+        // No SessionStart event in this path (mid-session install/update).
+        // Assume the just-installed plugin meets the minimum version for this agent
+        // so the update chip doesn't flash before the user runs /reload-plugins.
+        #[cfg(not(target_family = "wasm"))]
+        let plugin_version =
+            plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned());
+        #[cfg(target_family = "wasm")]
+        let plugin_version = None;
         let notification = CLIAgentEvent {
             v: 1,
             agent,
@@ -12974,7 +12980,7 @@ impl TerminalView {
             cwd: None,
             project: None,
             payload: CLIAgentEventPayload {
-                plugin_version: None,
+                plugin_version,
                 ..Default::default()
             },
         };
