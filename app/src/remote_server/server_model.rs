@@ -710,17 +710,11 @@ impl ServerModel {
                     Some(host_scoped_request::Message::ReadFileContext(m)) => {
                         self.handle_read_file_context(m, &request_id, conn_id, ctx)
                     }
-                    Some(host_scoped_request::Message::OpenBuffer(m)) => {
-                        self.handle_open_buffer(m, &request_id, conn_id, ctx)
-                    }
                     Some(host_scoped_request::Message::SaveBuffer(m)) => {
                         self.handle_save_buffer(m, &request_id, conn_id, ctx)
                     }
                     Some(host_scoped_request::Message::ResolveConflict(m)) => {
                         self.handle_resolve_conflict(m, &request_id, conn_id, ctx)
-                    }
-                    Some(host_scoped_request::Message::GetDiffState(m)) => {
-                        self.handle_get_diff_state(m, &request_id, conn_id, ctx)
                     }
                     Some(host_scoped_request::Message::DiscardFiles(m)) => {
                         self.handle_discard_files(m, &request_id, ctx)
@@ -769,6 +763,16 @@ impl ServerModel {
                     }
                     Some(session_scoped_request::Message::RunCommand(m)) => {
                         self.handle_run_command(m, &request_id, conn_id, ctx)
+                    }
+                    // Subscription-establishing ops: their per-connection
+                    // subscription state is bound to this connection, so the
+                    // response (and later pushes) must stay on it — never
+                    // failed over to a sibling.
+                    Some(session_scoped_request::Message::OpenBuffer(m)) => {
+                        self.handle_open_buffer(m, &request_id, conn_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::GetDiffState(m)) => {
+                        self.handle_get_diff_state(m, &request_id, conn_id, ctx)
                     }
                     None => {
                         log::warn!(
@@ -1289,13 +1293,15 @@ impl ServerModel {
         request_id: Option<&RequestId>,
         message: server_message::Message,
     ) {
-        // Check if this is a host-scoped request eligible for failover
-        // delivery BEFORE removing from tracking.
+        // Sending a response is the terminal step of a host-scoped request,
+        // so we drop its failover-tracking entry here. We snapshot whether
+        // the request was tracked *before* removing it, because that decides
+        // whether the message is eligible for failover delivery below (and
+        // the removal would otherwise erase that signal). Push notifications
+        // (empty/absent request_id) are never tracked, so this is a no-op for
+        // them.
         let is_host_scoped_response = request_id
             .is_some_and(|rid| !rid.is_empty() && self.host_scoped_requests.contains_key(rid));
-
-        // Remove from host-scoped tracking if this is a response
-        // (not a push notification).
         if let Some(rid) = request_id {
             self.host_scoped_requests.remove(rid);
         }
@@ -1575,6 +1581,11 @@ impl ServerModel {
     /// This is a notification — no response is sent.
     fn handle_abort(&mut self, abort: Abort, request_id: &RequestId, ctx: &mut ModelContext<Self>) {
         let target_id = RequestId::from(abort.request_id_to_abort);
+        // Drop any failover-tracking entry for the aborted request so it
+        // doesn't leak in `host_scoped_requests` until all connections drop.
+        // (A manager-side timeout sends `Abort` while sibling connections may
+        // still be alive, so `deregister_connection` won't clean it up.)
+        self.host_scoped_requests.remove(&target_id);
         if let Some(handle) = self.in_progress.remove(&target_id) {
             log::info!(
                 "Aborting in-progress request (request_id={target_id}, \

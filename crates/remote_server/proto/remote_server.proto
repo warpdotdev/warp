@@ -26,14 +26,16 @@ message ClientMessage {
 // if the originating connection disconnects before the response
 // is ready.
 message HostScopedRequest {
+  // 4 (open_buffer) and 7 (get_diff_state) moved to SessionScopedRequest:
+  // they establish per-connection subscription state, so they must be
+  // delivered on (and answered by) a specific connection, never failed over.
+  reserved 4, 7;
   oneof message {
     WriteFile write_file = 1;
     DeleteFile delete_file = 2;
     ReadFileContextRequest read_file_context = 3;
-    OpenBuffer open_buffer = 4;
     SaveBuffer save_buffer = 5;
     ResolveConflict resolve_conflict = 6;
-    GetDiffState get_diff_state = 7;
     DiscardFilesRequest discard_files = 8;
     IndexCodebase index_codebase = 9;
     DropCodebaseIndex drop_codebase_index = 10;
@@ -52,6 +54,11 @@ message SessionScopedRequest {
     NavigatedToDirectory navigated_to_directory = 2;
     LoadRepoMetadataDirectory load_repo_metadata_directory = 3;
     RunCommandRequest run_command = 4;
+    // Subscription-establishing requests: the daemon registers per-connection
+    // state (buffer / diff-state subscriptions) keyed to the originating
+    // connection, so the response must come back on that same connection.
+    OpenBuffer open_buffer = 5;
+    GetDiffState get_diff_state = 6;
   }
 }
 

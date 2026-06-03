@@ -7,8 +7,9 @@ use super::*;
 use crate::proto::{
     client_message, host_scoped_request, notification, run_command_response, server_message,
     session_scoped_request, ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState,
-    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, ErrorCode, InitializeResponse,
-    RunCommandResponse, RunCommandSuccess, ServerMessage, WriteFile,
+    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, ErrorCode, GetDiffStateResponse,
+    InitializeResponse, OpenBufferResponse, RunCommandResponse, RunCommandSuccess, ServerMessage,
+    WriteFile,
 };
 use crate::protocol;
 
@@ -504,4 +505,103 @@ async fn server_returns_error_for_malformed_message_with_parseable_id() {
         }
         other => panic!("expected ErrorResponse, got: {other:?}"),
     }
+}
+
+/// A malformed *server* response carrying a parseable request_id that doesn't
+/// match a session-scoped pending request must surface as
+/// `HostScopedDecodeFailed` so the manager can fail the host request promptly
+/// instead of letting it hang until the request timeout.
+#[tokio::test]
+async fn malformed_host_scoped_response_emits_decode_failed_event() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    drop(server_read);
+
+    let executor = executor::Background::default();
+    let (_client, event_rx, _failure_rx, _host_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+    let mut server_write = server_write.compat_write();
+
+    // Field 1 (string): tag=0x0a, length=15, "host-req-decode", then invalid
+    // trailing bytes (field 1, reserved wire type 7) so prost decode fails
+    // while `try_extract_request_id` still recovers the request_id.
+    let mut payload = Vec::new();
+    payload.push(0x0a);
+    payload.push(15);
+    payload.extend_from_slice(b"host-req-decode");
+    payload.extend_from_slice(&[0x0F, 0x01]);
+
+    let len = payload.len() as u32;
+    server_write.write_all(&len.to_le_bytes()).await.unwrap();
+    server_write.write_all(&payload).await.unwrap();
+    server_write.flush().await.unwrap();
+
+    match event_rx.recv().await.unwrap() {
+        ClientEvent::HostScopedDecodeFailed { request_id } => {
+            assert_eq!(request_id.to_string(), "host-req-decode");
+        }
+        other => panic!("Expected HostScopedDecodeFailed, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn get_diff_state_round_trips_as_session_scoped() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match unwrap_session_scoped(msg) {
+            session_scoped_request::Message::GetDiffState(req) => {
+                assert_eq!(req.repo_path, "/repo");
+            }
+            other => panic!("Expected GetDiffState, got {other:?}"),
+        }
+        server_message::Message::GetDiffStateResponse(GetDiffStateResponse { result: None })
+    });
+
+    let resp = client
+        .get_diff_state("/repo".to_string(), crate::proto::DiffMode::default())
+        .await
+        .expect("get_diff_state should succeed");
+    assert!(resp.result.is_none());
+}
+
+#[tokio::test]
+async fn open_buffer_round_trips_as_session_scoped() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
+        match unwrap_session_scoped(msg) {
+            session_scoped_request::Message::OpenBuffer(req) => {
+                assert_eq!(req.path, "/tmp/f.txt");
+                assert!(!req.force_reload);
+            }
+            other => panic!("Expected OpenBuffer, got {other:?}"),
+        }
+        server_message::Message::OpenBufferResponse(OpenBufferResponse { result: None })
+    });
+
+    let resp = client
+        .open_buffer("/tmp/f.txt".to_string(), false)
+        .await
+        .expect("open_buffer should succeed");
+    assert!(resp.result.is_none());
+}
+
+/// A session-scoped request on a connection that has already dropped resolves
+/// promptly with a transport error (no hang), because `pending_requests` is
+/// cleared on disconnect.
+#[tokio::test]
+async fn get_diff_state_on_dead_connection_errors_promptly() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    drop(server_stream);
+
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let executor = executor::Background::default();
+    let (client, disconnect_rx, _failure_rx, _host_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+
+    // Drain the Disconnected event so the reader-task teardown is observed.
+    let _ = disconnect_rx.recv().await;
+
+    let result = client
+        .get_diff_state("/repo".to_string(), crate::proto::DiffMode::default())
+        .await;
+    assert!(result.is_err());
 }

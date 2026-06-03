@@ -89,6 +89,13 @@ pub enum ClientEvent {
     /// connected session for the same host (or failing the request if none
     /// exists).
     HostScopedWriteFailed { request_id: RequestId },
+    /// A server response carried a parseable `request_id` but could not be
+    /// decoded, and the id did not match a session-scoped pending request (so
+    /// it belongs to a host-scoped request the manager is tracking). The
+    /// manager fails that pending request immediately instead of letting it
+    /// hang until the request timeout. The daemon already produced a reply, so
+    /// this is terminal — not retried.
+    HostScopedDecodeFailed { request_id: RequestId },
     /// A buffer was updated on the server (file changed on disk).
     BufferUpdated {
         path: String,
@@ -446,6 +453,76 @@ impl RemoteServerClient {
                 safe_error!(
                     safe: ("Remote server unexpected response for LoadRepoMetadataDirectory"),
                     full: ("Remote server unexpected response for LoadRepoMetadataDirectory: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Sends a session-scoped `GetDiffState` request and awaits the response.
+    ///
+    /// Session-scoped (not host-scoped): the daemon registers a per-connection
+    /// diff-state subscription, so the response — and every subsequent diff
+    /// push — must travel on this connection. If the connection drops, the
+    /// pending request resolves promptly with a transport error via
+    /// `pending_requests` cleanup, instead of hanging until the timeout.
+    pub async fn get_diff_state(
+        &self,
+        repo_path: String,
+        mode: DiffMode,
+    ) -> Result<crate::proto::GetDiffStateResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::GetDiffState(crate::proto::GetDiffState {
+                repo_path,
+                mode: Some(mode),
+            }),
+        );
+
+        let response = self.send_request_internal(request_id, msg).await?;
+
+        match response.message {
+            Some(server_message::Message::GetDiffStateResponse(resp)) => Ok(resp),
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for GetDiffState"),
+                    full: ("Remote server unexpected response for GetDiffState: response={other:?}")
+                );
+                Err(ClientError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Sends a session-scoped `OpenBuffer` request and awaits the response.
+    ///
+    /// Session-scoped for the same reason as [`Self::get_diff_state`]: the
+    /// daemon registers a per-connection buffer subscription, so the buffer's
+    /// content response and subsequent `BufferUpdatedPush`es must stay on this
+    /// connection. When `force_reload` is true the server re-reads the file
+    /// from disk, discarding in-memory buffer state.
+    pub async fn open_buffer(
+        &self,
+        path: String,
+        force_reload: bool,
+    ) -> Result<crate::proto::OpenBufferResponse, ClientError> {
+        let request_id = RequestId::new();
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::OpenBuffer(crate::proto::OpenBuffer {
+                path,
+                force_reload,
+            }),
+        );
+
+        let response = self.send_request_internal(request_id, msg).await?;
+
+        match response.message {
+            Some(server_message::Message::OpenBufferResponse(resp)) => Ok(resp),
+            other => {
+                safe_error!(
+                    safe: ("Remote server unexpected response for OpenBuffer"),
+                    full: ("Remote server unexpected response for OpenBuffer: response={other:?}")
                 );
                 Err(ClientError::UnexpectedResponse)
             }
@@ -862,10 +939,19 @@ impl RemoteServerClient {
                             Some(request_id.clone()),
                         ))));
                     } else {
+                        // Not a session-scoped pending request — this is a
+                        // host-scoped response the manager is tracking. Tell
+                        // it so the caller fails fast rather than waiting for
+                        // the request timeout.
                         log::warn!(
-                            "Reader task: malformed response for \
-                             unknown request (request_id={request_id}): {err}"
+                            "Reader task: malformed host-scoped response \
+                             (request_id={request_id}): {err}"
                         );
+                        let _ = event_tx
+                            .send(ClientEvent::HostScopedDecodeFailed {
+                                request_id: request_id.clone(),
+                            })
+                            .await;
                     }
                 }
                 Err(ProtocolError::Decode(ref err, None)) => {

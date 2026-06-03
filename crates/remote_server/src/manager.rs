@@ -267,6 +267,7 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
         }
         ClientEvent::CodebaseIndexStatusUpdated { .. } => "codebase_index_status_updated",
         ClientEvent::HostScopedWriteFailed { .. } => "host_scoped_write_failed",
+        ClientEvent::HostScopedDecodeFailed { .. } => "host_scoped_decode_failed",
         ClientEvent::BufferUpdated { .. } => "buffer_updated",
         ClientEvent::BufferConflictDetected { .. } => "buffer_conflict_detected",
         ClientEvent::DiffStateSnapshotReceived { .. } => "diff_state_snapshot",
@@ -660,6 +661,20 @@ pub enum HostRequestError {
     OperationFailed(String),
 }
 
+impl From<crate::client::ClientError> for HostRequestError {
+    fn from(err: crate::client::ClientError) -> Self {
+        use crate::client::ClientError;
+        match err {
+            ClientError::Disconnected | ClientError::ResponseChannelClosed => {
+                Self::AllSessionsDisconnected
+            }
+            ClientError::Timeout(_) => Self::Timeout,
+            ClientError::ServerError { code, message } => Self::ServerError { code, message },
+            ClientError::Protocol(_) | ClientError::UnexpectedResponse => Self::UnexpectedResponse,
+        }
+    }
+}
+
 /// Tracks an in-flight host-scoped request on the manager.
 struct PendingHostRequest {
     host_id: HostId,
@@ -779,18 +794,20 @@ impl HostRequestHandle {
         path: String,
         force_reload: bool,
     ) -> Result<crate::proto::OpenBufferResponse, HostRequestError> {
-        let msg = self
-            .send(crate::proto::host_scoped_request::Message::OpenBuffer(
-                crate::proto::OpenBuffer { path, force_reload },
-            ))
-            .await?;
-        match msg.message {
-            Some(crate::proto::server_message::Message::OpenBufferResponse(resp)) => Ok(resp),
-            other => {
-                log::error!("Unexpected response variant for OpenBuffer: {other:?}");
-                Err(HostRequestError::UnexpectedResponse)
-            }
-        }
+        // `OpenBuffer` is session-scoped: the daemon binds the buffer
+        // subscription to the connection the request arrives on, so it must be
+        // sent over a specific connected session (not the host-scoped failover
+        // path) and resolved through that connection's request/response
+        // correlation. We grab a connected client on the main thread, then
+        // await the round-trip on the caller's thread.
+        let host_id = self.host_id.clone();
+        let client = self
+            .spawner
+            .spawn(move |me, _ctx| me.client_for_host(&host_id).cloned())
+            .await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)?
+            .ok_or(HostRequestError::AllSessionsDisconnected)?;
+        Ok(client.open_buffer(path, force_reload).await?)
     }
 
     /// Batch-reads one or more files from the remote host with full context
@@ -995,6 +1012,28 @@ impl RemoteServerManager {
     pub fn client_for_host(&self, host_id: &HostId) -> Option<&Arc<RemoteServerClient>> {
         self.any_connected_session_for_host(host_id)
             .map(|(_, client)| client)
+    }
+
+    /// Returns an owned client for `host_id`, preferring `preferred_session`
+    /// when it is still connected and otherwise falling back to any connected
+    /// session for the host.
+    ///
+    /// Used for session-scoped requests issued by host-scoped callers (diff
+    /// state / buffers): routing over the session that actually needs the
+    /// result means closing an *unrelated* session can't disturb it, while the
+    /// fallback keeps things working when no specific session is available or
+    /// the preferred one has dropped.
+    fn client_for_host_preferring(
+        &self,
+        host_id: &HostId,
+        preferred_session: Option<SessionId>,
+    ) -> Option<Arc<RemoteServerClient>> {
+        if let Some(session_id) = preferred_session {
+            if let Some(client) = self.client_for_session(session_id) {
+                return Some(client.clone());
+            }
+        }
+        self.client_for_host(host_id).cloned()
     }
 
     /// Returns the [`SessionId`] of an arbitrary currently-connected session
@@ -1254,6 +1293,24 @@ impl RemoteServerManager {
                     .result_tx
                     .send(Err(HostRequestError::AllSessionsDisconnected));
             }
+        }
+    }
+
+    /// Fails a pending host-scoped request whose response arrived but could
+    /// not be decoded. The daemon already produced a reply, so this is
+    /// terminal — unlike a write failure, retrying wouldn't help. Resolving
+    /// the caller now avoids waiting out the request timeout.
+    fn fail_host_request_decode_error(&mut self, request_id: crate::protocol::RequestId) {
+        if let Some(pending) = self.pending_host_requests.remove(&request_id) {
+            pending.cancel_timeout();
+            log::warn!(
+                "Failing host request {request_id} — server response could not be \
+                 decoded (host={})",
+                pending.host_id
+            );
+            let _ = pending
+                .result_tx
+                .send(Err(HostRequestError::UnexpectedResponse));
         }
     }
 
@@ -2403,9 +2460,14 @@ impl RemoteServerManager {
     /// Sends a `GetDiffState` request to the remote server for the given
     /// host and emits the snapshot response as a manager event.
     ///
-    /// Uses `send_host_request` for daemon-side failover: if the session
-    /// that sent the request disconnects, the daemon delivers the response
-    /// on another open connection.
+    /// `GetDiffState` is session-scoped: the daemon registers a per-connection
+    /// diff-state subscription, so the request is dispatched over a specific
+    /// connected session — `preferred_session` when it is still connected
+    /// (the session actually showing the review), otherwise any connected
+    /// session for the host. Routing over the viewing session means closing
+    /// an unrelated session can't disturb this request, and the session-scoped
+    /// request/response correlation resolves it promptly (success or error) if
+    /// that connection drops.
     ///
     /// When no session is currently connected for the host the request is
     /// silently dropped (logged) — the caller is a session-agnostic model
@@ -2418,92 +2480,76 @@ impl RemoteServerManager {
         host_id: HostId,
         repo_path: StandardizedPath,
         mode: DiffMode,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        use crate::proto::{host_scoped_request, ClientMessage, GetDiffState};
+        let Some(client) = self.client_for_host_preferring(&host_id, preferred_session) else {
+            log::warn!("Remote server get_diff_state: no connected client host={host_id}");
+            return;
+        };
 
-        let request_id = crate::protocol::RequestId::new();
-        let msg = ClientMessage::host_scoped(
-            request_id.to_string(),
-            host_scoped_request::Message::GetDiffState(GetDiffState {
-                repo_path: repo_path.to_string(),
-                mode: Some(mode.clone()),
-            }),
-        );
-
-        let result_rx = self.send_host_request(&host_id, msg);
-
+        let repo_path_str = repo_path.to_string();
+        let mode_for_rpc = mode.clone();
         let host_id_for_event = host_id;
         let repo_path_for_event = repo_path;
         let mode_for_event = mode;
-        ctx.spawn(async move { result_rx.await }, move |_me, result, ctx| {
-            let emit_snapshot = |snapshot, ctx: &mut ModelContext<Self>| {
-                ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
-                    host_id: host_id_for_event.clone(),
-                    repo_path: repo_path_for_event.clone(),
-                    mode: mode_for_event.clone(),
-                    snapshot,
-                });
-            };
+        ctx.spawn(
+            async move { client.get_diff_state(repo_path_str, mode_for_rpc).await },
+            move |_me, result, ctx| {
+                let emit_snapshot = |snapshot, ctx: &mut ModelContext<Self>| {
+                    ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
+                        host_id: host_id_for_event.clone(),
+                        repo_path: repo_path_for_event.clone(),
+                        mode: mode_for_event.clone(),
+                        snapshot,
+                    });
+                };
 
-            match result {
-                Ok(Ok(msg)) => {
-                    // Parse the GetDiffStateResponse from the raw ServerMessage.
-                    match msg.message {
-                        Some(crate::proto::server_message::Message::GetDiffStateResponse(
-                            GetDiffStateResponse {
-                                result: Some(get_diff_state_response::Result::Snapshot(snapshot)),
-                            },
-                        )) => {
-                            emit_snapshot(snapshot, ctx);
-                        }
-                        Some(crate::proto::server_message::Message::GetDiffStateResponse(
-                            GetDiffStateResponse {
-                                result: Some(get_diff_state_response::Result::Error(e)),
-                            },
-                        )) => {
-                            log::warn!("Remote server get_diff_state error: {}", e.message);
-                            emit_snapshot(
-                                Self::make_diff_state_error_snapshot(
-                                    &repo_path_for_event,
-                                    &mode_for_event,
-                                    e.message,
-                                ),
-                                ctx,
-                            );
-                        }
-                        _ => {
-                            log::warn!("Remote server get_diff_state: unexpected response");
-                            emit_snapshot(
-                                Self::make_diff_state_error_snapshot(
-                                    &repo_path_for_event,
-                                    &mode_for_event,
-                                    "Unexpected response from server".to_string(),
-                                ),
-                                ctx,
-                            );
-                        }
+                match result {
+                    Ok(GetDiffStateResponse {
+                        result: Some(get_diff_state_response::Result::Snapshot(snapshot)),
+                    }) => emit_snapshot(snapshot, ctx),
+                    Ok(GetDiffStateResponse {
+                        result: Some(get_diff_state_response::Result::Error(e)),
+                    }) => {
+                        log::warn!("Remote server get_diff_state error: {}", e.message);
+                        emit_snapshot(
+                            Self::make_diff_state_error_snapshot(
+                                &repo_path_for_event,
+                                &mode_for_event,
+                                e.message,
+                            ),
+                            ctx,
+                        );
+                    }
+                    Ok(GetDiffStateResponse { result: None }) => {
+                        log::warn!("Remote server get_diff_state: unexpected response");
+                        emit_snapshot(
+                            Self::make_diff_state_error_snapshot(
+                                &repo_path_for_event,
+                                &mode_for_event,
+                                "Unexpected response from server".to_string(),
+                            ),
+                            ctx,
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Remote server get_diff_state failed: host={} error={e}",
+                            host_id_for_event
+                        );
+                        emit_snapshot(
+                            Self::make_diff_state_error_snapshot(
+                                &repo_path_for_event,
+                                &mode_for_event,
+                                e.to_string(),
+                            ),
+                            ctx,
+                        );
                     }
                 }
-                Ok(Err(e)) => {
-                    log::warn!(
-                        "Remote server get_diff_state failed: host={} error={e}",
-                        host_id_for_event
-                    );
-                    emit_snapshot(
-                        Self::make_diff_state_error_snapshot(
-                            &repo_path_for_event,
-                            &mode_for_event,
-                            e.to_string(),
-                        ),
-                        ctx,
-                    );
-                }
-                Err(_) => {
-                    // Oneshot cancelled — caller dropped. No-op.
-                }
-            }
-        });
+            },
+        );
     }
 
     /// Builds a `DiffStateSnapshot` carrying an `Error` state. Used by the
@@ -2791,6 +2837,9 @@ impl RemoteServerManager {
             }
             ClientEvent::HostScopedWriteFailed { request_id } => {
                 self.handle_host_scoped_write_failed(session_id, request_id);
+            }
+            ClientEvent::HostScopedDecodeFailed { request_id } => {
+                self.fail_host_request_decode_error(request_id);
             }
             ClientEvent::BufferUpdated {
                 path,

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use warp_core::SessionId;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, ModelContext, ModelHandle};
@@ -354,15 +355,21 @@ impl DiffStateModel {
         Self::Local(local)
     }
 
-    /// Creates a new remote-backed `DiffStateModel`. The model is
-    /// session-agnostic and is keyed by `(host_id, repo, mode)`; the
-    /// `RemoteServerManager` resolves a connected session for the host at
-    /// every outbound RPC, so the wrapper does not need to thread a
-    /// `SessionId` through. Callers must ensure a session for the host is
-    /// connected before constructing.
-    pub fn new_remote(remote_path: RemotePath, ctx: &mut ModelContext<Self>) -> Self {
-        let remote =
-            ctx.add_model(|ctx| RemoteDiffStateModel::new(remote_path, DiffMode::default(), ctx));
+    /// Creates a new remote-backed `DiffStateModel`. The model is keyed by
+    /// `(host_id, repo, mode)` and shared across sessions viewing the same
+    /// repo. `preferred_session` is the session that opened this review (when
+    /// known): `GetDiffState` is session-scoped, so the manager dispatches it
+    /// over that session when it's connected and falls back to any connected
+    /// session for the host otherwise. Callers must ensure a session for the
+    /// host is connected before constructing.
+    pub fn new_remote(
+        remote_path: RemotePath,
+        preferred_session: Option<SessionId>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        let remote = ctx.add_model(|ctx| {
+            RemoteDiffStateModel::new(remote_path, DiffMode::default(), preferred_session, ctx)
+        });
         ctx.subscribe_to_model(&remote, Self::forward_event);
         Self::Remote(remote)
     }
@@ -482,11 +489,16 @@ impl DiffStateModel {
 
     // ── Unified write API ─────────────────────────────────────────────
 
+    /// `preferred_session` is the session that triggered this call (the
+    /// session showing the review). It's forwarded per-call to the remote
+    /// model so the `GetDiffState` RPC rides that session; the local backend
+    /// ignores it. The remote model never caches it.
     pub(crate) fn set_diff_mode(
         &self,
         mode: DiffMode,
         should_fetch_base: bool,
         track_load_duration: bool,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
@@ -497,7 +509,7 @@ impl DiffStateModel {
             }
             Self::Remote(model) => {
                 model.update(ctx, |model, ctx| {
-                    model.set_diff_mode(mode, track_load_duration, ctx);
+                    model.set_diff_mode(mode, track_load_duration, preferred_session, ctx);
                 });
             }
         }
@@ -506,6 +518,7 @@ impl DiffStateModel {
     pub(crate) fn set_diff_mode_and_fetch_base(
         &self,
         mode: DiffMode,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
@@ -516,7 +529,7 @@ impl DiffStateModel {
             }
             Self::Remote(model) => {
                 model.update(ctx, |model, ctx| {
-                    model.set_diff_mode(mode, true, ctx);
+                    model.set_diff_mode(mode, true, preferred_session, ctx);
                 });
             }
         }
@@ -526,6 +539,7 @@ impl DiffStateModel {
         &self,
         should_fetch_base: bool,
         track_load_duration: bool,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
@@ -536,7 +550,7 @@ impl DiffStateModel {
             }
             Self::Remote(remote) => {
                 remote.update(ctx, |remote, ctx| {
-                    remote.fetch_fresh_snapshot(track_load_duration, ctx);
+                    remote.fetch_fresh_snapshot(track_load_duration, preferred_session, ctx);
                 });
             }
         }
