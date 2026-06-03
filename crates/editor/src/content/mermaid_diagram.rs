@@ -1,8 +1,11 @@
+use anyhow::anyhow;
+use std::any::Any;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use mermaid_to_svg::MermaidTheme;
+use mermaid_to_svg::{MermaidError, MermaidTheme};
 use warpui_core::assets::asset_cache::{
     AssetCache, AssetSource, AssetState, AsyncAssetId, AsyncAssetType,
 };
@@ -31,15 +34,43 @@ pub fn mermaid_asset_source(source: &str) -> AssetSource {
         id: AsyncAssetId::new::<MermaidDiagramAsset>(id),
         fetch: Arc::new(move || {
             let source = fetch_source.clone();
-            Box::pin(async move {
-                mermaid_to_svg::render_mermaid_to_svg(&source, Some(&MermaidTheme::light()))
-                    .map(|svg| Bytes::from(svg.into_bytes()))
-                    .map_err(Into::into)
-            })
+            Box::pin(async move { render_mermaid_asset_bytes(&source) })
         }),
     }
 }
 
+fn render_mermaid_asset_bytes(source: &str) -> anyhow::Result<Bytes> {
+    render_mermaid_asset_bytes_with(source, |source, theme| {
+        mermaid_to_svg::render_mermaid_to_svg(source, Some(theme))
+    })
+}
+
+fn render_mermaid_asset_bytes_with(
+    source: &str,
+    render: impl FnOnce(&str, &MermaidTheme) -> Result<String, MermaidError>,
+) -> anyhow::Result<Bytes> {
+    let theme = MermaidTheme::light();
+    let svg = catch_unwind(AssertUnwindSafe(|| render(source, &theme))).map_err(|payload| {
+        anyhow!(
+            "Mermaid renderer panicked: {}",
+            panic_message(payload.as_ref())
+        )
+    })??;
+
+    Ok(Bytes::from(svg.into_bytes()))
+}
+
+fn panic_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return message.to_string();
+    }
+
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+
+    "unknown panic payload".to_string()
+}
 pub fn mermaid_diagram_layout(
     source: &str,
     layout: &TextLayout,

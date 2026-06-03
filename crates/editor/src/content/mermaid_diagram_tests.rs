@@ -38,6 +38,19 @@ fn loading_mermaid_layout_uses_default_height() {
 }
 
 #[test]
+fn mermaid_renderer_panic_returns_error() {
+    let err = render_mermaid_asset_bytes_with("graph TD\nA --> B\n", |_source, _theme| {
+        panic!("dagre failed to find an intersection")
+    })
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Mermaid renderer panicked: dagre failed to find an intersection"
+    );
+}
+
+#[test]
 fn failed_mermaid_layout_uses_compact_height() {
     App::test((), |app| async move {
         app.read(|ctx| {
