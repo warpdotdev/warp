@@ -239,7 +239,6 @@ pub struct Network {
     session_id: Option<SessionId>,
     reconnect_token: Option<ReconnectToken>,
     sharer_id: Option<ParticipantId>,
-    source: Option<SharedSessionSource>,
     startup_config: Option<StartupConfig>,
     startup_retry: Option<StartupRetryState>,
 
@@ -293,7 +292,6 @@ impl Network {
             session_id: None,
             reconnect_token: None,
             sharer_id: None,
-            source: None,
             startup_config: None,
             startup_retry: None,
             unacked_terminal_events: HashMap::new(),
@@ -386,7 +384,6 @@ impl Network {
 
         // We should validate the scrollback is under the limit before creating the Network, but check here just to be safe.
         if num_bytes_scrollback > network.max_session_size {
-            network.log_diagnostic("local_policy_rejected_start", "reason=scrollback_too_large");
             log::warn!("Session sharing scrollback exceeds max session size; failing startup");
             ctx.emit(NetworkEvent::FailedToCreateSharedSession {
                 reason: FailedToInitializeSessionReason::ScrollbackTooLarge {},
@@ -440,20 +437,8 @@ impl Network {
     pub fn max_session_size(&self) -> Byte {
         self.max_session_size
     }
-    fn diagnostic_source_context(&self) -> (&'static str, Option<&str>) {
-        match self.source.as_ref() {
-            Some(source) => {
-                let source_type = match &source.source_type {
-                    SessionSourceType::User => "user",
-                    SessionSourceType::AmbientAgent { .. } => "ambient_agent",
-                };
-                (source_type, source.orchestrator_task_id())
-            }
-            None => ("unknown", None),
-        }
-    }
 
-    fn diagnostic_stage(&self) -> &'static str {
+    fn stage_label(&self) -> &'static str {
         match self.stage {
             Stage::BeforeStarted => "before_started",
             Stage::StartedSuccessfully => "started_successfully",
@@ -462,19 +447,11 @@ impl Network {
         }
     }
 
-    fn log_diagnostic(&self, event: &'static str, details: impl std::fmt::Display) {
-        let (source_type, source_task_id) = self.diagnostic_source_context();
-        log::info!(
-            "Shared session sharer lifecycle: event={event} session_id={:?} source_type={source_type} source_task_id={source_task_id:?} {details}",
-            self.session_id
-        );
-    }
-
     /// All attempts to end a shared session must go through this API!
     /// This is important to guarantee that we correctly close the socket and
     /// notify viewers with the session ended reason.
     pub fn end_session(&mut self, reason: SessionEndedReason) {
-        self.log_diagnostic("end_session_requested", format_args!("reason={reason:?}"));
+        log::info!("Ending shared session: reason={reason:?}");
         let message = UpstreamMessage::EndSession { reason };
         self.send_message_to_server(message);
         self.close_without_reconnection();
@@ -489,7 +466,6 @@ impl Network {
                 self.send_message_to_server(UpstreamMessage::Ping { data: vec![] });
             }
             HeartbeatEvent::Idle => {
-                self.log_diagnostic("reconnect_triggered", "trigger=heartbeat_idle_timeout");
                 log::info!("Sharer reconnecting: heartbeat idle timeout");
                 self.reconnect_websocket(ctx);
             }
@@ -777,15 +753,6 @@ impl Network {
         startup_retry.current_attempt += 1;
         let attempt = startup_retry.current_attempt;
         let max_attempts = startup_retry.max_attempts;
-        let source_type = match &config.source.source_type {
-            SessionSourceType::User => "user",
-            SessionSourceType::AmbientAgent { .. } => "ambient_agent",
-        };
-        let source_task_id = config.source.orchestrator_task_id().map(str::to_owned);
-        log::info!(
-            "Shared session sharer lifecycle: event=create_attempt_started session_id={:?} source_type={source_type} source_task_id={source_task_id:?} attempt={attempt} max_attempts={max_attempts}",
-            self.session_id
-        );
 
         if max_attempts > 1 {
             let timeout_handle = ctx.spawn(
@@ -803,7 +770,6 @@ impl Network {
         let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
         let connect_handle = ctx.spawn(
             async move {
-                log::info!("Preparing shared session creation auth");
                 let Some(create_endpoint) = connect_endpoint("/sessions/create".to_owned()) else {
                     anyhow::bail!("This channel does not support session-sharing.");
                 };
@@ -880,10 +846,6 @@ impl Network {
                         return;
                     }
                     network.clear_startup_transport_handle(attempt);
-                    network.log_diagnostic(
-                        "initial_websocket_connect_failed",
-                        "outcome=transport_error",
-                    );
                     let cause = Arc::new(e.context("Failed to create shared session"));
                     network.handle_startup_failure_with_cause(
                         StartupFailure::Transport,
@@ -972,12 +934,15 @@ impl Network {
             .map_or(1, |startup_retry| startup_retry.max_attempts);
         let reason = failure.diagnostic_label();
         if self.should_retry_startup_failure(&failure) {
-            self.log_diagnostic(
-                "create_attempt_failed",
-                format_args!(
-                    "attempt={attempt} max_attempts={max_attempts} reason={reason} outcome=retry_pending"
-                ),
-            );
+            if let Some(cause) = cause.as_ref() {
+                log::warn!(
+                    "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} reason={reason} cause={cause:#}"
+                );
+            } else {
+                log::warn!(
+                    "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} reason={reason}"
+                );
+            }
             self.abort_startup_handles();
             self.close_startup_transport(ctx);
 
@@ -986,12 +951,15 @@ impl Network {
             return;
         }
 
-        self.log_diagnostic(
-            "create_failed",
-            format_args!(
-                "attempt={attempt} max_attempts={max_attempts} reason={reason} outcome=final_failure"
-            ),
-        );
+        if let Some(cause) = cause.as_ref() {
+            log::warn!(
+                "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} reason={reason} cause={cause:#}"
+            );
+        } else {
+            log::warn!(
+                "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} reason={reason}"
+            );
+        }
         self.stage = Stage::Finished;
         self.abort_startup_handles();
         self.close_startup_transport(ctx);
@@ -1031,21 +999,14 @@ impl Network {
             log::error!("This channel does not support session-sharing.");
             return;
         };
-        self.log_diagnostic(
-            "reconnect_initiated",
-            "outcome=attempting_transport_recovery",
-        );
 
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-        let (source_type, source_task_id) = self.diagnostic_source_context();
-        let source_type = source_type.to_string();
-        let source_task_id = source_task_id.map(str::to_owned);
         let abort_handle = ctx
             .spawn_with_retry_on_error(
                 move || {
                     log::info!(
-                        "Shared session sharer lifecycle: event=reconnect_attempt session_id={session_id:?} source_type={source_type} source_task_id={source_task_id:?}"
+                        "Attempting to reconnect shared session as sharer; session_id={session_id:?}"
                     );
                     let reconnect_endpoint = reconnect_endpoint.clone();
                     let auth_state = auth_state.clone();
@@ -1066,9 +1027,8 @@ impl Network {
                 RECONNECT_RETRY_STRATEGY,
                 move |network, res, ctx| match res {
                     RequestState::RequestSucceeded(((sink, stream), user_id)) => {
-                        network.log_diagnostic(
-                            "reconnect_transport_connected",
-                            "outcome=waiting_for_server_confirmation",
+                        log::info!(
+                            "Connected to session sharing server for reconnect; waiting for server confirmation"
                         );
                         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
                         let latest_block_id =
@@ -1098,17 +1058,9 @@ impl Network {
                         network.on_websocket_connected(None, ws_proxy_rx, sink, stream, ctx);
                     }
                     RequestState::RequestFailedRetryPending(e) => {
-                        network.log_diagnostic(
-                            "reconnect_attempt_failed",
-                            "outcome=retry_pending",
-                        );
                         log::warn!("Failed to reconnect to shared session, will retry: {e}");
                     }
                     RequestState::RequestFailed(e) => {
-                        network.log_diagnostic(
-                            "reconnect_failed",
-                            "outcome=transport_retries_exhausted",
-                        );
                         log::warn!(
                             "Failed to reconnect to shared session, and retries exhausted: {e}"
                         );
@@ -1158,7 +1110,6 @@ impl Network {
                     {
                         return;
                     }
-                    network.log_diagnostic("websocket_error", "direction=downstream");
                     log::error!("Got error from shared session sharer websocket: {e}");
                     if startup_attempt.is_some() && matches!(network.stage, Stage::BeforeStarted) {
                         network.handle_startup_failure(StartupFailure::WebsocketError, ctx);
@@ -1171,16 +1122,14 @@ impl Network {
                 {
                     return;
                 }
-                let stage = network.diagnostic_stage();
-                network.log_diagnostic("websocket_closed", format_args!("stage={stage}"));
-                log::info!("Session sharing server closed websocket to sharer");
+                let stage = network.stage_label();
+                log::info!("Session sharing server closed websocket to sharer; stage={stage}");
                 // Close our current websocket proxy, because we may try to reconnect and that will create a new websocket proxy.
                 // This must be done before trying to reconnect.
                 network.close();
                 // The connection may have timed out or the server restarted.
                 // We don't emit this event if we haven't started successfully to avoid an infinite retry loop.
                 if matches!(network.stage, Stage::StartedSuccessfully) {
-                    network.log_diagnostic("reconnect_triggered", "trigger=websocket_closed");
                     log::info!("Sharer reconnecting: websocket closed by server");
                     network.reconnect_websocket(ctx);
                 } else if matches!(network.stage, Stage::BeforeStarted) {
@@ -1263,7 +1212,6 @@ impl Network {
                     log::warn!("Received unexpected SessionInitialized message when we weren't in BeforeStarted stage");
                     return;
                 }
-                log::info!("Successfully created shared session.");
                 let attempt = self
                     .startup_retry
                     .as_ref()
@@ -1272,9 +1220,8 @@ impl Network {
                     .startup_retry
                     .as_ref()
                     .map_or(1, |startup_retry| startup_retry.max_attempts);
-                self.log_diagnostic(
-                    "create_succeeded",
-                    format_args!("attempt={attempt} max_attempts={max_attempts}"),
+                log::info!(
+                    "Successfully created shared session; session_id={session_id:?} attempt={attempt} max_attempts={max_attempts}"
                 );
                 self.abort_startup_handles();
                 self.startup_config = None;
@@ -1285,7 +1232,6 @@ impl Network {
                 self.sharer_id = Some(sharer_id.clone());
 
                 self.stage = Stage::StartedSuccessfully;
-                self.log_diagnostic("session_initialized", "outcome=active_sharer");
 
                 // Flush all events starting from the very first event 0, since events were buffered before the session was initialized.
                 self.flush_terminal_events_to_server(0);
@@ -1310,7 +1256,6 @@ impl Network {
                     log::warn!("Received unexpected SessionReconnected message when we weren't reconnecting");
                     return;
                 }
-                self.log_diagnostic("reconnect_succeeded", "outcome=session_resumed");
                 log::info!("Successfully reconnected to shared session server as sharer.");
                 self.stage = Stage::StartedSuccessfully;
 
@@ -1324,17 +1269,17 @@ impl Network {
                     participant_list,
                 )));
             }
-            DownstreamMessage::FailedToReconnect { reason: _ } => {
-                self.log_diagnostic("reconnect_failed", "outcome=server_rejected_resume");
-                log::warn!("Failed to reconnect to shared session server as sharer");
+            DownstreamMessage::FailedToReconnect { reason } => {
+                log::warn!(
+                    "Session sharing server rejected sharer reconnect request: reason={reason:?}"
+                );
                 self.close_without_reconnection();
                 ctx.emit(NetworkEvent::FailedToReconnect);
             }
             DownstreamMessage::SessionTerminated { reason } => {
                 let reason_label = session_terminated_reason_diagnostic_label(&reason);
-                self.log_diagnostic(
-                    "server_terminated_session",
-                    format_args!("reason={reason_label}"),
+                log::warn!(
+                    "Session sharing server terminated sharer session: reason={reason_label}"
                 );
                 self.close_without_reconnection();
                 ctx.emit(NetworkEvent::SessionTerminated { reason });
@@ -1583,7 +1528,6 @@ impl Network {
         let num_bytes = event_type.num_bytes();
         self.num_bytes_shared = self.num_bytes_shared.add(num_bytes).unwrap_or(Byte::MAX);
         if self.num_bytes_shared > self.max_session_size {
-            self.log_diagnostic("local_policy_end_session", "reason=exceeded_size_limit");
             log::info!("Stopping shared session because max bytes exceeded.");
             self.end_session(SessionEndedReason::ExceededSizeLimit);
             return;
@@ -1811,8 +1755,11 @@ impl Entity for Network {
 
 impl Drop for Network {
     fn drop(&mut self) {
-        let stage = self.diagnostic_stage();
-        self.log_diagnostic("network_dropped", format_args!("stage={stage}"));
+        let stage = self.stage_label();
+        log::info!(
+            "Dropping shared session sharer network; session_id={:?} stage={stage}",
+            self.session_id
+        );
         // This is needed to gracefully close the websocket when Network is dropped.
         self.close();
         // We keep the same selection_throttled_tx even if we reconnect and replace the internal ws_proxy_tx,
