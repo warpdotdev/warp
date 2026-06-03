@@ -97,7 +97,6 @@ fn auggie_is_supported() {
     assert!(is_agent_supported(&CLIAgent::Auggie));
 }
 
-
 #[test]
 fn auggie_default_handler_skips_session_start() {
     let mut handler = DefaultSessionListener;
@@ -132,7 +131,6 @@ fn auggie_default_handler_forwards_stop() {
 fn pi_is_supported() {
     assert!(is_agent_supported(&CLIAgent::Pi));
 }
-
 
 #[test]
 fn pi_default_handler_skips_session_start() {

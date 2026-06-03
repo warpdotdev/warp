@@ -404,7 +404,7 @@ use crate::terminal::cli_agent_sessions::event::{
 };
 use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
 #[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
+use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
@@ -12964,12 +12964,17 @@ impl TerminalView {
         agent: CLIAgent,
         ctx: &mut ViewContext<Self>,
     ) {
-        // No SessionStart event in this path (mid-session install/update).
-        // Assume the just-installed plugin meets the minimum version for this agent
-        // so the update chip doesn't flash before the user runs /reload-plugins.
         #[cfg(not(target_family = "wasm"))]
-        let plugin_version =
-            plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned());
+        let plugin_version = if matches!(agent, CLIAgent::Codex) {
+            // We use the lack of a plugin version for codex to differentiate between
+			// OSC 9 notification fallback and real plugin.
+            None
+        } else {
+            // No SessionStart event in this path (mid-session install/update).
+            // Assume the just-installed plugin meets the minimum version for this agent
+            // so the update chip doesn't flash before the user runs /reload-plugins.
+            plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned())
+        };
         #[cfg(target_family = "wasm")]
         let plugin_version = None;
         let notification = CLIAgentEvent {
