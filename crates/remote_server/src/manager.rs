@@ -1225,9 +1225,10 @@ impl RemoteServerManager {
     /// it removes the pending entry, sends an `Abort` to the host so the daemon
     /// can stop work, and resolves the caller with `HostRequestError::Timeout`.
     ///
-    /// Only reachable off-wasm, where [`Self::schedule_host_request_timeout`]
-    /// arms the timer.
-    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    /// Only compiled off-wasm, where [`Self::schedule_host_request_timeout`]
+    /// arms the timer; the wasm scheduler is a no-op so nothing calls this and
+    /// it (along with `HOST_REQUEST_TIMEOUT`) isn't compiled there.
+    #[cfg(not(target_family = "wasm"))]
     fn timeout_host_request(&mut self, request_id: crate::protocol::RequestId, host_id: HostId) {
         let Some(pending) = self.pending_host_requests.remove(&request_id) else {
             // Already resolved by a response or a disconnect.
