@@ -365,7 +365,7 @@ impl ConversationUsageView {
         let spend_display = SpendDisplay::current();
         match spend_display {
             SpendDisplay::Dollars => {
-                self.append_dollar_spend_rows(&mut labels, &mut values, appearance)
+                self.append_dollar_spend_rows(&mut labels, &mut values, rollup.as_ref(), appearance)
             }
             SpendDisplay::Credits => {
                 self.append_credit_spend_rows(&mut labels, &mut values, rollup.as_ref(), appearance)
@@ -661,8 +661,33 @@ impl ConversationUsageView {
         &self,
         labels: &mut Vec<Box<dyn Element>>,
         values: &mut Vec<Box<dyn Element>>,
+        rollup: Option<&OrchestrationCreditRollup>,
         appearance: &Appearance,
     ) {
+        // Orchestrators roll the at-cost total up across their children,
+        // mirroring the credits view: one "Cost (total)" line with a per-agent
+        // dollar drill-down behind "View details".
+        if let Some(rollup) = rollup {
+            if let Some(total_cost_cents) = rollup.total_cost_cents {
+                labels.push(render_label_text("Cost (total)", appearance));
+                values.push(self.render_total_value_row(
+                    format_cents_as_dollars(total_cost_cents),
+                    Some(rollup),
+                    appearance,
+                ));
+                self.append_per_agent_rows(
+                    labels,
+                    values,
+                    Some(rollup),
+                    SpendDisplay::Dollars,
+                    appearance,
+                );
+                return;
+            }
+        }
+
+        // Single conversation (or no at-cost rollup): show the inference cost
+        // and platform fee as separate lines, each only when reported.
         for (label, cents) in self.usage_info.dollar_spend_rows() {
             labels.push(render_label_text(label, appearance));
             values.push(render_value_text(
@@ -703,15 +728,15 @@ impl ConversationUsageView {
             ));
 
             labels.push(render_label_text("Credits spent (total)", appearance));
-            values.push(self.render_total_credits_value_row(
-                total_credits_value,
+            values.push(self.render_total_value_row(
+                format_credits(total_credits_value),
                 rollup,
                 appearance,
             ));
         } else {
             labels.push(render_label_text("Credits spent", appearance));
-            values.push(self.render_total_credits_value_row(
-                total_credits_value,
+            values.push(self.render_total_value_row(
+                format_credits(total_credits_value),
                 rollup,
                 appearance,
             ));
@@ -723,7 +748,7 @@ impl ConversationUsageView {
         // of the card. The rows are pushed into the same two-column
         // label/value layout as the rest of the usage summary; the
         // existing flex spacing handles indentation.
-        self.append_per_agent_rows(labels, values, rollup, appearance);
+        self.append_per_agent_rows(labels, values, rollup, SpendDisplay::Credits, appearance);
     }
 
     /// Pushes the per-agent breakdown rows (and the optional "Show N
@@ -737,6 +762,7 @@ impl ConversationUsageView {
         labels: &mut Vec<Box<dyn Element>>,
         values: &mut Vec<Box<dyn Element>>,
         rollup: Option<&OrchestrationCreditRollup>,
+        spend_display: SpendDisplay,
         appearance: &Appearance,
     ) {
         let Some(rollup) = rollup else {
@@ -753,7 +779,7 @@ impl ConversationUsageView {
                 total_entries
             };
         for entry in rollup.per_agent.iter().take(shown_entries) {
-            let (label_el, value_el) = self.render_per_agent_row(entry, appearance);
+            let (label_el, value_el) = self.render_per_agent_row(entry, spend_display, appearance);
             labels.push(label_el);
             values.push(value_el);
         }
@@ -772,13 +798,13 @@ impl ConversationUsageView {
     /// Renders the "Credits spent (total)" value cell. When a rollup
     /// applies, the cell is a row with the value followed by a
     /// "View details ▾" / "Hide details ▴" toggle.
-    fn render_total_credits_value_row(
+    fn render_total_value_row(
         &self,
-        total_credits: f32,
+        value: String,
         rollup: Option<&OrchestrationCreditRollup>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let value_text = render_value_text(format_credits(total_credits), appearance);
+        let value_text = render_value_text(value, appearance);
         if rollup.is_none() {
             return value_text;
         }
@@ -862,6 +888,7 @@ impl ConversationUsageView {
     fn render_per_agent_row(
         &self,
         entry: &PerAgentCreditEntry,
+        spend_display: SpendDisplay,
         appearance: &Appearance,
     ) -> (Box<dyn Element>, Box<dyn Element>) {
         let theme = appearance.theme();
@@ -895,13 +922,13 @@ impl ConversationUsageView {
             .with_child(avatar)
             .with_child(name_element)
             .finish();
-        let value = Text::new(
-            format_credits(entry.credits_spent),
-            appearance.ui_font_family(),
-            font_size,
-        )
-        .with_color(blended_colors::text_sub(theme, bg))
-        .finish();
+        let value_text = match spend_display {
+            SpendDisplay::Credits => format_credits(entry.credits_spent),
+            SpendDisplay::Dollars => format_cents_as_dollars(entry.cost_cents),
+        };
+        let value = Text::new(value_text, appearance.ui_font_family(), font_size)
+            .with_color(blended_colors::text_sub(theme, bg))
+            .finish();
         (label, value)
     }
 

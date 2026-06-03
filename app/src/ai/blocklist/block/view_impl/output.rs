@@ -3319,14 +3319,27 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     // cost (inference + platform fee) in dollars. Fall back to credits when the
     // server has not reported at-cost values (e.g. pre-transparent conversations).
     let usage_text = if FeatureFlag::TransparentPricing.is_enabled() {
-        match (
-            conversation.cost_cents_spent(),
-            conversation.platform_fee_cents_spent(),
-        ) {
-            (None, None) => format_credits(total_credits_spent),
-            (inference_cents, platform_fee_cents) => format_cents_as_dollars(
-                inference_cents.unwrap_or(0.0) + platform_fee_cents.unwrap_or(0.0),
-            ),
+        // Prefer the rolled-up at-cost total across the orchestrator and its
+        // children (mirroring how the credits headline rolls up); fall back to
+        // this conversation's own cost, then to credits when no at-cost value
+        // was reported.
+        let total_cost_cents = rollup
+            .as_ref()
+            .and_then(|r| r.total_cost_cents)
+            .or_else(|| {
+                match (
+                    conversation.cost_cents_spent(),
+                    conversation.platform_fee_cents_spent(),
+                ) {
+                    (None, None) => None,
+                    (inference_cents, platform_fee_cents) => {
+                        Some(inference_cents.unwrap_or(0.0) + platform_fee_cents.unwrap_or(0.0))
+                    }
+                }
+            });
+        match total_cost_cents {
+            Some(cents) => format_cents_as_dollars(cents),
+            None => format_credits(total_credits_spent),
         }
     } else {
         let mut credit_usage_text = format_credits(total_credits_spent);
