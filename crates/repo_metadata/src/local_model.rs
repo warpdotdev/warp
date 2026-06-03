@@ -5,6 +5,8 @@
 //! all repositories tracked by Warp.
 
 use std::collections::HashMap;
+#[cfg(feature = "local_fs")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -140,7 +142,9 @@ impl IndexedRepoState {
             }
         }
     }
+}
 
+impl IndexedRepoState {
     pub(crate) fn complete_if_pending(&self) {
         if let Self::Pending(condition) = self {
             condition.set();
@@ -176,6 +180,13 @@ pub struct LocalRepoMetadataModel {
     force_included_paths: Vec<PathBuf>,
     /// Configured standing-query matchers.
     standing_query_definitions: StandingQueryDefinitions,
+    /// Resolved target `SKILL.md` paths for standing project-skill results reached through
+    /// lexical symlinks, mapped back to the logical repository path that consumers read.
+    #[cfg(feature = "local_fs")]
+    project_skill_symlink_dependencies: HashMap<PathBuf, HashSet<ProjectSkillSymlinkDependency>>,
+    /// Resolved target directories registered with the filesystem watcher.
+    #[cfg(feature = "local_fs")]
+    watched_project_skill_symlink_target_dirs: HashSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -183,6 +194,12 @@ struct RepoUpdate {
     added: Vec<PathBuf>,
     deleted: Vec<PathBuf>,
     moved: HashMap<PathBuf, PathBuf>,
+}
+#[cfg(feature = "local_fs")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ProjectSkillSymlinkDependency {
+    repo_path: StandardizedPath,
+    logical_skill_path: StandardizedPath,
 }
 
 /// Describes a single file-tree mutation computed on a background thread.
@@ -263,6 +280,10 @@ impl LocalRepoMetadataModel {
             emit_incremental_updates: false,
             force_included_paths: Vec::new(),
             standing_query_definitions: StandingQueryDefinitions::default(),
+            #[cfg(feature = "local_fs")]
+            project_skill_symlink_dependencies: HashMap::new(),
+            #[cfg(feature = "local_fs")]
+            watched_project_skill_symlink_target_dirs: HashSet::new(),
         };
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -321,6 +342,159 @@ impl LocalRepoMetadataModel {
             .set_project_skill_provider_paths(paths);
     }
 
+    /// Invalidates standing project-skill results whose resolved symlink target changed.
+    ///
+    /// The logical result path remains stable while the resolved file contents change, so an
+    /// upsert causes both local consumers and remote clients to reread the lexical skill path.
+    #[cfg(feature = "local_fs")]
+    fn handle_project_skill_symlink_target_event(
+        &mut self,
+        event: &BulkFilesystemWatcherEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let mut deltas_by_repo = HashMap::<StandardizedPath, StandingQueryResultsDelta>::new();
+        let mut append_dependencies = |target_path: &Path, removed: bool| {
+            let Some(dependencies) = self.project_skill_symlink_dependencies.get(target_path)
+            else {
+                return;
+            };
+            for dependency in dependencies {
+                let content =
+                    crate::StandingQueryContent::file(dependency.logical_skill_path.clone());
+                let delta = deltas_by_repo
+                    .entry(dependency.repo_path.clone())
+                    .or_default();
+                let entries = if removed {
+                    &mut delta.removed_project_skills
+                } else {
+                    &mut delta.upserted_project_skills
+                };
+                if !entries.contains(&content) {
+                    entries.push(content);
+                }
+            }
+        };
+
+        for path in event.added_or_updated_iter() {
+            append_dependencies(path, false);
+        }
+        for path in &event.deleted {
+            append_dependencies(path, true);
+        }
+        for (to_path, from_path) in &event.moved {
+            append_dependencies(from_path, true);
+            append_dependencies(to_path, false);
+        }
+
+        for (repo_path, delta) in deltas_by_repo {
+            let Some(results) = self.standing_results.get_mut(&repo_path) else {
+                continue;
+            };
+            results.apply_delta(&delta);
+            ctx.emit(RepositoryMetadataEvent::StandingQueryResultsUpdated {
+                path: repo_path.clone(),
+                delta: delta.clone(),
+            });
+            if self.emit_incremental_updates {
+                ctx.emit(RepositoryMetadataEvent::IncrementalUpdateReady {
+                    update: RepoMetadataUpdate {
+                        repo_path,
+                        remove_entries: Vec::new(),
+                        update_entries: Vec::new(),
+                        standing_results_delta: delta,
+                    },
+                });
+            }
+        }
+    }
+
+    /// Synchronizes producer-side target watches for symlinked standing project skills.
+    ///
+    /// Existing dependencies remain eligible after their `SKILL.md` target file is removed so
+    /// recreation of that file can emit an upsert without requiring a repository-tree change.
+    #[cfg(feature = "local_fs")]
+    fn refresh_project_skill_symlink_dependencies(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.emit_incremental_updates {
+            return;
+        }
+        let mut logical_skill_paths = self
+            .standing_results
+            .get(repo_path)
+            .into_iter()
+            .flat_map(StandingQueryResults::project_skills)
+            .filter(|content| !content.is_directory)
+            .map(|content| content.path.clone())
+            .collect::<HashSet<_>>();
+        logical_skill_paths.extend(
+            self.project_skill_symlink_dependencies
+                .values()
+                .flatten()
+                .filter(|dependency| &dependency.repo_path == repo_path)
+                .map(|dependency| dependency.logical_skill_path.clone()),
+        );
+
+        for dependencies in self.project_skill_symlink_dependencies.values_mut() {
+            dependencies.retain(|dependency| &dependency.repo_path != repo_path);
+        }
+        self.project_skill_symlink_dependencies
+            .retain(|_, dependencies| !dependencies.is_empty());
+
+        for logical_skill_path in logical_skill_paths {
+            let Some(logical_path) = logical_skill_path.to_local_path() else {
+                continue;
+            };
+            let Some(logical_skill_dir) = logical_path.parent() else {
+                continue;
+            };
+            if !logical_skill_dir.is_symlink() {
+                continue;
+            }
+            let Ok(target_skill_dir) = dunce::canonicalize(logical_skill_dir) else {
+                continue;
+            };
+            let target_skill_path = target_skill_dir.join("SKILL.md");
+            self.project_skill_symlink_dependencies
+                .entry(target_skill_path)
+                .or_default()
+                .insert(ProjectSkillSymlinkDependency {
+                    repo_path: repo_path.clone(),
+                    logical_skill_path,
+                });
+        }
+
+        let desired_target_dirs = self
+            .project_skill_symlink_dependencies
+            .keys()
+            .filter_map(|path| path.parent().map(Path::to_path_buf))
+            .collect::<HashSet<_>>();
+        if let Some(ref watcher) = self.watcher {
+            for target_dir in
+                desired_target_dirs.difference(&self.watched_project_skill_symlink_target_dirs)
+            {
+                watcher.update(ctx, |watcher, _ctx| {
+                    std::mem::drop(watcher.register_path(
+                        target_dir,
+                        repo_watch_filter(),
+                        RecursiveMode::NonRecursive,
+                    ));
+                });
+            }
+            for target_dir in self
+                .watched_project_skill_symlink_target_dirs
+                .difference(&desired_target_dirs)
+            {
+                watcher.update(ctx, |watcher, _ctx| {
+                    std::mem::drop(watcher.unregister_path(target_dir));
+                });
+            }
+        }
+        self.watched_project_skill_symlink_target_dirs = desired_target_dirs;
+    }
+
     /// Handles events from the BulkFilesystemWatcher.
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
@@ -328,6 +502,7 @@ impl LocalRepoMetadataModel {
         event: &BulkFilesystemWatcherEvent,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.handle_project_skill_symlink_target_event(event, ctx);
         // Create a map to collect changes per repository
         let mut repo_updates: HashMap<StandardizedPath, RepoUpdate> = HashMap::new();
 
@@ -346,7 +521,7 @@ impl LocalRepoMetadataModel {
             {
                 let repo_update = repo_updates.entry(repo_path).or_default();
                 repo_update.deleted.push(path.to_path_buf());
-            } else {
+            } else if !self.project_skill_symlink_dependencies.contains_key(path) {
                 log::warn!("Deleted file not found in any repo: {path:?} not found in any repo");
             }
         }
@@ -411,6 +586,7 @@ impl LocalRepoMetadataModel {
                                 .entry(repo_path.clone())
                                 .or_default()
                                 .replace_subtrees(&removed_roots, discovered_results);
+                            model.refresh_project_skill_symlink_dependencies(&repo_path, ctx);
                             update.standing_results_delta = standing_delta.clone();
                             ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
                                 path: repo_path.clone(),
@@ -522,6 +698,8 @@ impl LocalRepoMetadataModel {
         // Insert the repository state into the map
         let repo_path_for_event = repo_path.clone();
         self.replace_repository_state(repo_path, IndexedRepoState::Indexed(state));
+        #[cfg(feature = "local_fs")]
+        self.refresh_project_skill_symlink_dependencies(&repo_path_for_event, ctx);
 
         ctx.emit(RepositoryMetadataEvent::RepositoryUpdated {
             path: repo_path_for_event,
@@ -538,6 +716,8 @@ impl LocalRepoMetadataModel {
     ) -> Result<(), RepoMetadataError> {
         if self.remove_repository_state(repo_path).is_some() {
             self.standing_results.remove(repo_path);
+            #[cfg(feature = "local_fs")]
+            self.refresh_project_skill_symlink_dependencies(repo_path, ctx);
             // Unregister from watcher
             #[cfg(feature = "local_fs")]
             {
@@ -786,7 +966,7 @@ impl LocalRepoMetadataModel {
                             path_to_add,
                             standing_query_definitions,
                         );
-                        standing_results.record_symlinked_project_skill_directory(
+                        standing_results.record_followed_project_skill_directory(
                             path_to_add,
                             standing_query_definitions,
                         );
@@ -1243,6 +1423,8 @@ impl LocalRepoMetadataModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.standing_results.remove(&repo_path);
+        #[cfg(feature = "local_fs")]
+        self.refresh_project_skill_symlink_dependencies(&repo_path, ctx);
         self.replace_repository_state(repo_path.clone(), IndexedRepoState::Failed(error));
         ctx.emit(RepositoryMetadataEvent::UpdatingRepositoryFailed { path: repo_path });
     }

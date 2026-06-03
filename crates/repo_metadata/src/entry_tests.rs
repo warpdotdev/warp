@@ -443,6 +443,8 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
                     max_depth: 200,
                     current_depth: 0,
                     ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                    ignored_path_interests: &[],
+                    budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
                 },
                 &mut results,
                 &definitions,

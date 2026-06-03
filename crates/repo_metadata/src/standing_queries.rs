@@ -142,7 +142,10 @@ impl StandingQueryResults {
         }
     }
 
-    pub(crate) fn record_symlinked_project_skill_directory(
+    /// Records an eligible project skill reached through a directory symlink during standing
+    /// query evaluation. The lexical path is intentionally retained so consumers address the
+    /// skill through the provider entry rather than the symlink target.
+    pub(crate) fn record_followed_project_skill_directory(
         &mut self,
         path: &Path,
         definitions: &StandingQueryDefinitions,
@@ -153,9 +156,7 @@ impl StandingQueryResults {
 
         let skill_file = path.join("SKILL.md");
         if skill_file.is_file() {
-            self.project_skills.insert(StandingQueryContent::file(
-                StandardizedPath::from_local_absolute_unchecked(&skill_file),
-            ));
+            self.record_path(&skill_file, false, definitions);
         }
     }
     pub fn insert_project_skill(&mut self, content: StandingQueryContent) {

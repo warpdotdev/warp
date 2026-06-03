@@ -24,7 +24,9 @@ use crate::local_model::{
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
-use crate::{RepoMetadataError, StandingQueryContent, StandingQueryDefinitions};
+use crate::{
+    RepoMetadataError, StandingQueryContent, StandingQueryDefinitions, StandingQueryResults,
+};
 
 impl LocalRepoMetadataModel {
     fn new_for_test() -> Self {
@@ -37,6 +39,10 @@ impl LocalRepoMetadataModel {
             emit_incremental_updates: false,
             force_included_paths: Default::default(),
             standing_query_definitions: Default::default(),
+            #[cfg(feature = "local_fs")]
+            project_skill_symlink_dependencies: Default::default(),
+            #[cfg(feature = "local_fs")]
+            watched_project_skill_symlink_target_dirs: Default::default(),
         }
     }
 }
@@ -1405,6 +1411,220 @@ fn added_external_target_skill_symlink_routes_to_lexical_repository() {
                         .any(|content| content
                             == &StandingQueryContent::directory(provider_path.clone())));
                 });
+            });
+        },
+    );
+}
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn modified_external_symlink_target_upserts_lexical_project_skill() {
+    VirtualFS::test(
+        "modified_external_symlink_target_upserts_lexical_project_skill",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("outside/linked-skill")
+                .with_files(vec![Stub::FileWithContent(
+                    "outside/linked-skill/SKILL.md",
+                    "linked skill",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let logical_skill_dir = repo.join(".agents/skills/linked-skill");
+            let logical_skill_path = logical_skill_dir.join("SKILL.md");
+            let target_skill_path = dirs.tests().join("outside/linked-skill/SKILL.md");
+            std::os::unix::fs::symlink(
+                dirs.tests().join("outside/linked-skill"),
+                &logical_skill_dir,
+            )
+            .unwrap();
+
+            App::test((), |mut app| async move {
+                let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                let logical_skill_path =
+                    StandardizedPath::try_from_local(&logical_skill_path).unwrap();
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+                model_handle.update(&mut app, |model, ctx| {
+                    model.set_emit_incremental_updates(true);
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                    let mut results = StandingQueryResults::default();
+                    results.insert_project_skill(StandingQueryContent::file(
+                        logical_skill_path.clone(),
+                    ));
+                    model.standing_results.insert(repo_path.clone(), results);
+                    model.refresh_project_skill_symlink_dependencies(&repo_path, ctx);
+                });
+
+                let (tx, rx) = oneshot::channel();
+                let received_delta = Rc::new(RefCell::new(Some(tx)));
+                let received_delta_for_event = received_delta.clone();
+                let logical_skill_path_for_event = logical_skill_path.clone();
+                app.update(|ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                        if let RepositoryMetadataEvent::IncrementalUpdateReady { update } = event {
+                            if update
+                                .standing_results_delta
+                                .upserted_project_skills
+                                .iter()
+                                .any(|content| {
+                                    content
+                                        == &StandingQueryContent::file(
+                                            logical_skill_path_for_event.clone(),
+                                        )
+                                })
+                            {
+                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
+                                    let _ = tx.send(());
+                                }
+                            }
+                        }
+                    });
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            modified: std::collections::HashSet::from([target_skill_path]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                });
+
+                rx.with_timeout(Duration::from_secs(5))
+                    .await
+                    .expect("timed out waiting for symlink target upsert")
+                    .expect("symlink target upsert sender dropped");
+            });
+        },
+    );
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skill() {
+    VirtualFS::test(
+        "removed_then_recreated_external_symlink_target_refreshes_lexical_project_skill",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("outside/linked-skill")
+                .with_files(vec![Stub::FileWithContent(
+                    "outside/linked-skill/SKILL.md",
+                    "linked skill",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let logical_skill_dir = repo.join(".agents/skills/linked-skill");
+            let logical_skill_path = logical_skill_dir.join("SKILL.md");
+            let target_skill_path = dirs.tests().join("outside/linked-skill/SKILL.md");
+            std::os::unix::fs::symlink(
+                dirs.tests().join("outside/linked-skill"),
+                &logical_skill_dir,
+            )
+            .unwrap();
+
+            App::test((), |mut app| async move {
+                let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                let logical_skill_path =
+                    StandardizedPath::try_from_local(&logical_skill_path).unwrap();
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+                model_handle.update(&mut app, |model, ctx| {
+                    model.set_emit_incremental_updates(true);
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                    let mut results = StandingQueryResults::default();
+                    results.insert_project_skill(StandingQueryContent::file(
+                        logical_skill_path.clone(),
+                    ));
+                    model.standing_results.insert(repo_path.clone(), results);
+                    model.refresh_project_skill_symlink_dependencies(&repo_path, ctx);
+                });
+
+                let (tx, rx) = oneshot::channel();
+                let received_delta = Rc::new(RefCell::new(Some(tx)));
+                let received_delta_for_event = received_delta.clone();
+                let logical_skill_path_for_event = logical_skill_path.clone();
+                app.update(|ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                        if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
+                            delta, ..
+                        } = event
+                        {
+                            if delta.removed_project_skills.iter().any(|content| {
+                                content
+                                    == &StandingQueryContent::file(
+                                        logical_skill_path_for_event.clone(),
+                                    )
+                            }) {
+                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
+                                    let _ = tx.send(());
+                                }
+                            }
+                        }
+                    });
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            deleted: std::collections::HashSet::from([target_skill_path.clone()]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                });
+
+                rx.with_timeout(Duration::from_secs(5))
+                    .await
+                    .expect("timed out waiting for symlink target removal")
+                    .expect("symlink target removal sender dropped");
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(model
+                        .standing_query_results(&repo_path)
+                        .expect("standing results should remain tracked")
+                        .project_skills()
+                        .all(|content| content
+                            != &StandingQueryContent::file(logical_skill_path.clone())));
+                });
+
+                let (tx, rx) = oneshot::channel();
+                let received_delta = Rc::new(RefCell::new(Some(tx)));
+                let received_delta_for_event = received_delta.clone();
+                let logical_skill_path_for_event = logical_skill_path.clone();
+                app.update(|ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                        if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
+                            delta, ..
+                        } = event
+                        {
+                            if delta.upserted_project_skills.iter().any(|content| {
+                                content
+                                    == &StandingQueryContent::file(
+                                        logical_skill_path_for_event.clone(),
+                                    )
+                            }) {
+                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
+                                    let _ = tx.send(());
+                                }
+                            }
+                        }
+                    });
+                });
+                model_handle.update(&mut app, |model, ctx| {
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([target_skill_path]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                });
+                rx.with_timeout(Duration::from_secs(5))
+                    .await
+                    .expect("timed out waiting for recreated symlink target upsert")
+                    .expect("recreated symlink target upsert sender dropped");
             });
         },
     );

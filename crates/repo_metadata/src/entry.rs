@@ -121,7 +121,7 @@ impl Entry {
             if path.is_symlink() && path.is_dir() {
                 state
                     .results
-                    .record_symlinked_project_skill_directory(&path, state.definitions);
+                    .record_followed_project_skill_directory(&path, state.definitions);
                 continue;
             }
             let path = if path.is_symlink() {
@@ -389,13 +389,13 @@ impl Entry {
                         };
                         let entry_path = entry.path();
 
-                        // Skip symlinks to folders before canonicalization to
-                        // prevent duplicates. Symlinks to files are kept as-is,
-                        // since canonicalization would point at the real file.
+                        // Do not materialize directory symlinks in the canonical tree. Standing
+                        // project-skill queries still follow eligible provider children locally
+                        // and retain their lexical paths in the result set.
                         let canonical_path = if entry_path.is_symlink() {
                             if entry_path.is_dir() {
                                 if let Some(state) = standing_queries.as_deref_mut() {
-                                    state.results.record_symlinked_project_skill_directory(
+                                    state.results.record_followed_project_skill_directory(
                                         &entry_path,
                                         state.definitions,
                                     );
