@@ -681,11 +681,15 @@ struct PendingHostRequest {
     /// The session this request was most recently queued on. If that client's
     /// writer reports that the request failed before reaching the daemon, the
     /// manager retries the same request ID on another connected session for
-    /// the host.
+    /// the host. Only read off-wasm (the writer-failure retry path is
+    /// gated out on wasm), so it's write-only there.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     dispatched_session_id: SessionId,
     /// Original host-scoped message, including request ID, retained so a
     /// writer failure before daemon receipt can be retried through a sibling
     /// connection without changing the caller-visible request lifecycle.
+    /// Only read off-wasm (see `dispatched_session_id`).
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     msg: crate::proto::ClientMessage,
     /// Oneshot sender to resolve the caller's future with the raw
     /// `ServerMessage`. The caller parses the response variant.
@@ -1299,6 +1303,10 @@ impl RemoteServerManager {
     /// not be decoded. The daemon already produced a reply, so this is
     /// terminal — unlike a write failure, retrying wouldn't help. Resolving
     /// the caller now avoids waiting out the request timeout.
+    ///
+    /// Only compiled off-wasm: the sole caller is `forward_client_event`,
+    /// which is itself gated out on wasm.
+    #[cfg(not(target_family = "wasm"))]
     fn fail_host_request_decode_error(&mut self, request_id: crate::protocol::RequestId) {
         if let Some(pending) = self.pending_host_requests.remove(&request_id) {
             pending.cancel_timeout();
@@ -1317,6 +1325,10 @@ impl RemoteServerManager {
     /// queued on `session_id` but did not reach the daemon. Retries the same
     /// request ID through another connected session for the host if possible;
     /// otherwise fails the caller immediately instead of waiting for timeout.
+    ///
+    /// Only compiled off-wasm: the sole caller is `forward_client_event`,
+    /// which is itself gated out on wasm.
+    #[cfg(not(target_family = "wasm"))]
     fn handle_host_scoped_write_failed(
         &mut self,
         session_id: SessionId,
