@@ -187,15 +187,10 @@ async fn initialize_round_trip() {
 #[tokio::test]
 async fn initialize_sends_empty_auth_token_when_none() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
-        match &msg.message {
-            _ => {
-                let session_scoped_request::Message::Initialize(init) = unwrap_session_scoped(msg)
-                else {
-                    panic!("Expected Initialize");
-                };
-                assert!(init.auth_token.is_empty());
-            }
-        }
+        let session_scoped_request::Message::Initialize(init) = unwrap_session_scoped(msg) else {
+            panic!("Expected Initialize");
+        };
+        assert!(init.auth_token.is_empty());
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
             host_id: "test-host-id".to_string(),
@@ -219,15 +214,10 @@ async fn initialize_sends_empty_auth_token_when_none() {
 #[tokio::test]
 async fn initialize_sends_auth_token_when_provided() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|msg| {
-        match &msg.message {
-            _ => {
-                let session_scoped_request::Message::Initialize(init) = unwrap_session_scoped(msg)
-                else {
-                    panic!("Expected Initialize");
-                };
-                assert_eq!(init.auth_token, "secret-token");
-            }
-        }
+        let session_scoped_request::Message::Initialize(init) = unwrap_session_scoped(msg) else {
+            panic!("Expected Initialize");
+        };
+        assert_eq!(init.auth_token, "secret-token");
         server_message::Message::InitializeResponse(InitializeResponse {
             server_version: "test-0.1.0".to_string(),
             host_id: "test-host-id".to_string(),

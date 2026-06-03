@@ -1080,9 +1080,7 @@ impl RemoteServerManager {
         msg: &crate::proto::ClientMessage,
         exclude_session_id: Option<SessionId>,
     ) -> Option<SessionId> {
-        let Some(sessions) = self.host_to_sessions.get(host_id) else {
-            return None;
-        };
+        let sessions = self.host_to_sessions.get(host_id)?;
         let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
         for session_id in sessions.iter().copied() {
             if Some(session_id) == exclude_session_id {
@@ -2612,7 +2610,7 @@ impl RemoteServerManager {
         let result_rx = self.send_host_request(&host_id, msg);
 
         let repo_path_for_event = repo_path;
-        ctx.spawn(async move { result_rx.await }, move |_me, result, ctx| {
+        ctx.spawn(result_rx, move |_me, result, ctx| {
             let branches_result = match result {
                 Ok(Ok(msg)) => match msg.message {
                     Some(crate::proto::server_message::Message::GetBranchesResponse(resp)) => {
@@ -2687,7 +2685,7 @@ impl RemoteServerManager {
         let result_rx = self.send_host_request(&host_id, msg);
         let host_id_for_log = host_id;
 
-        ctx.spawn(async move { result_rx.await }, move |_me, result, _ctx| {
+        ctx.spawn(result_rx, move |_me, result, _ctx| {
             // A non-transport response can still carry a discard-specific
             // error nested in the DiscardFilesResponse; parse it before
             // treating the discard as successful.
