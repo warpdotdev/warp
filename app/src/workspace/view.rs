@@ -18909,37 +18909,26 @@ impl Workspace {
             )
             .finish();
 
-        // Skip the group `Draggable` while another drag (a member tab via the
-        // inner per-tab `Draggable`, a cross-window tab drag, or another
-        // group's drag) is already active, so the two drags don't fight for
-        // the same mouse input.
-        let is_this_group_dragging = group.draggable_state.is_dragging();
-        let skip_group_draggable =
-            tab_bar_state.is_any_tab_dragging && !is_this_group_dragging;
         let group_id = group.id;
         let group_draggable_state = group.draggable_state.clone();
-        let positioned_container: Box<dyn Element> = if skip_group_draggable {
-            container
-        } else {
-            Draggable::new(group_draggable_state, container)
-                .on_drag_start(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::StartGroupDrag(group_id));
-                })
-                .on_drag(move |ctx, _, rect, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::DragGroup {
-                        group_id,
-                        position: rect,
-                    });
-                })
-                .on_drop(move |ctx, _, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
-                })
-                .with_drag_axis(DragAxis::HorizontalOnly)
-                // Yield to a nested per-tab `Draggable` when it claims the mouse-down
-                // so dragging a member tab fires `DragTab`, not group drag.
-                .with_defer_to_handled_child_mouse_down()
-                .finish()
-        };
+        let positioned_container = Draggable::new(group_draggable_state, container)
+            .on_drag_start(move |ctx, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::StartGroupDrag(group_id));
+            })
+            .on_drag(move |ctx, _, rect, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::DragGroup {
+                    group_id,
+                    position: rect,
+                });
+            })
+            .on_drop(move |ctx, _, _, _| {
+                ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
+            })
+            .with_drag_axis(DragAxis::HorizontalOnly)
+            // Yield to a nested per-tab `Draggable` when it claims the mouse-down
+            // so dragging a member tab fires `DragTab`, not group drag.
+            .with_defer_to_handled_child_mouse_down()
+            .finish();
 
         let positioned_container =
             SavePosition::new(positioned_container, &htab_group_position_id(group_id)).finish();
