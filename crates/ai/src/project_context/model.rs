@@ -14,7 +14,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use async_channel::Sender;
         use ignore::gitignore::Gitignore;
-        use repo_metadata::entry::{Entry, FileMetadata};
+        use repo_metadata::entry::{BudgetExceededBehavior, Entry, FileMetadata};
         use repo_metadata::repository::RepositorySubscriber;
         use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
 
@@ -694,6 +694,7 @@ impl ProjectContextModel {
             MAX_SCAN_DEPTH,
             0,
             &ignore_behavior,
+            BudgetExceededBehavior::StopAndLazyLoad,
         )?;
 
         // Filter files to only include those matching RULES_FILE_PATTERN

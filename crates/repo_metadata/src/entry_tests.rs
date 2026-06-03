@@ -202,6 +202,7 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
             current_depth: 0,
             ignored_path_strategy: &super::IgnoredPathStrategy::IncludeLazy,
             ignored_path_interests: &[std::path::PathBuf::from(".agents/skills")],
+            budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
         },
     )
     .unwrap()
@@ -322,6 +323,7 @@ fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
         10,
         0,
         &IgnoredPathStrategy::Include,
+        super::BudgetExceededBehavior::StopAndLazyLoad,
     )
     .unwrap();
 
@@ -364,6 +366,7 @@ fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
         10,
         0,
         &IgnoredPathStrategy::IncludeLazy,
+        super::BudgetExceededBehavior::StopAndLazyLoad,
     )
     .unwrap();
 
@@ -513,4 +516,230 @@ fn test_extract_worktree_git_dir() {
         extract_worktree_git_dir(Path::new("/repo/.git/worktrees/foo")),
         None
     );
+}
+
+/// Builds a tree with an explicit file budget and ignored-path interests using
+/// the lazy ignored-path strategy.
+fn build_with_budget(
+    root: &std::path::Path,
+    budget: usize,
+    interests: &[std::path::PathBuf],
+) -> super::Entry {
+    let mut files = Vec::new();
+    let mut gitignores = Vec::new();
+    let mut file_limit = budget;
+    super::Entry::build_tree_with_ignored_path_interests(
+        root,
+        &mut files,
+        &mut gitignores,
+        Some(&mut file_limit),
+        super::BuildTreeOptions {
+            max_depth: 200,
+            current_depth: 0,
+            ignored_path_strategy: &super::IgnoredPathStrategy::IncludeLazy,
+            ignored_path_interests: interests,
+            budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn build_tree_budget_covers_breadth_first_and_leaves_remainder_unloaded() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+
+    // 5 top-level dirs, each with 2 direct files and a `sub` dir of 3 files.
+    for i in 0..5 {
+        let d = root.join(format!("d{i}"));
+        fs::create_dir(&d).unwrap();
+        fs::write(d.join("f0.txt"), "").unwrap();
+        fs::write(d.join("f1.txt"), "").unwrap();
+        let sub = d.join("sub");
+        fs::create_dir(&sub).unwrap();
+        for j in 0..3 {
+            fs::write(sub.join(format!("g{j}.txt")), "").unwrap();
+        }
+    }
+
+    // Budget exactly covers the 10 level-1 files; level-2 `sub` dirs are cut.
+    let tree = build_with_budget(&root, 10, &[]);
+
+    // Root stays loaded (no whole-tree depth-1 collapse on budget exhaustion).
+    let Entry::Directory(root_dir) = &tree else {
+        panic!("root should be a directory");
+    };
+    assert!(root_dir.loaded);
+
+    for i in 0..5 {
+        let d_path = root.join(format!("d{i}"));
+        let d = find_entry(&tree, &d_path).expect("level-1 dir present");
+        // All level-1 dirs are expanded before the budget is spent on level 2.
+        assert!(d.loaded(), "all level-1 dirs are covered breadth-first");
+        assert!(find_entry(&tree, &d_path.join("f0.txt")).is_some());
+
+        // Level-2 dirs beyond the budget remain unloaded placeholders.
+        let sub = find_entry(&tree, &d_path.join("sub")).expect("sub placeholder present");
+        assert!(
+            !sub.loaded(),
+            "level-2 dirs beyond the budget stay unloaded"
+        );
+        assert!(find_entry(&tree, &d_path.join("sub").join("g0.txt")).is_none());
+    }
+}
+
+#[test]
+fn build_tree_budget_does_not_prune_interest_paths() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+
+    // Files at the root so the budget is exhausted almost immediately.
+    for i in 0..5 {
+        fs::write(root.join(format!("f{i}.txt")), "").unwrap();
+    }
+    // A skill provider directory nested several levels under the root.
+    let skill_dir = root.join(".agents").join("skills").join("test");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "name: test").unwrap();
+
+    // Tiny budget: the root expands and is immediately exhausted, but the
+    // registered interest path must still be loaded all the way down.
+    let interests = [std::path::PathBuf::from(".agents/skills")];
+    let tree = build_with_budget(&root, 1, &interests);
+
+    assert!(
+        find_entry(&tree, &skill_dir.join("SKILL.md")).is_some(),
+        "interest-path files must load even when the budget is exhausted"
+    );
+}
+
+#[test]
+fn build_tree_full_coverage_reaches_full_depth_within_budget() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+
+    // Nested chain a/b/c/d with a file at the deepest level.
+    let deep = root.join("a").join("b").join("c").join("d");
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(deep.join("leaf.txt"), "").unwrap();
+    fs::write(root.join("top.txt"), "").unwrap();
+
+    // A generous budget must fully cover this small tree to its full depth.
+    let tree = build_with_budget(&root, 1000, &[]);
+
+    for dir in [
+        root.join("a"),
+        root.join("a").join("b"),
+        root.join("a").join("b").join("c"),
+        deep.clone(),
+    ] {
+        let entry = find_entry(&tree, &dir).expect("dir present");
+        assert!(
+            entry.loaded(),
+            "dirs are fully loaded under a generous budget"
+        );
+    }
+    assert!(find_entry(&tree, &deep.join("leaf.txt")).is_some());
+    assert!(find_entry(&tree, &root.join("top.txt")).is_some());
+}
+
+#[test]
+fn build_tree_directories_do_not_consume_budget() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+
+    // A deep chain of empty directories (no files at all).
+    let deep = root.join("l1").join("l2").join("l3").join("l4");
+    fs::create_dir_all(&deep).unwrap();
+
+    // Even a budget of 1 fully expands the tree, because only files — not
+    // directories — draw down the budget.
+    let tree = build_with_budget(&root, 1, &[]);
+    let leaf = find_entry(&tree, &deep).expect("deepest dir present");
+    assert!(
+        leaf.loaded(),
+        "directories must not consume the file budget"
+    );
+}
+
+#[test]
+fn build_tree_gitignored_files_do_not_consume_budget() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+
+    // A gitignored directory with many files (e.g. node_modules/target).
+    let ignored = root.join("ignored");
+    fs::create_dir(&ignored).unwrap();
+    for i in 0..50 {
+        fs::write(ignored.join(format!("big{i}.txt")), "").unwrap();
+    }
+    // Plus the tracked files at the root (`.gitignore` itself counts as one).
+    fs::write(root.join("tracked0.txt"), "").unwrap();
+    fs::write(root.join("tracked1.txt"), "").unwrap();
+
+    // Budget only covers the 3 tracked root files. The 50 gitignored files must
+    // not draw it down, so both tracked files are still indexed and the ignored
+    // directory stays a lazy (unloaded) placeholder.
+    let tree = build_with_budget(&root, 3, &[]);
+
+    assert!(find_entry(&tree, &root.join("tracked0.txt")).is_some());
+    assert!(find_entry(&tree, &root.join("tracked1.txt")).is_some());
+    let ignored_dir = find_entry(&tree, &ignored).expect("ignored dir placeholder present");
+    assert!(ignored_dir.ignored());
+    assert!(
+        !ignored_dir.loaded(),
+        "gitignored dirs stay lazy and never consume the budget"
+    );
+}
+
+#[test]
+fn build_tree_fail_fast_errors_when_budget_exceeded() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    for i in 0..10 {
+        fs::write(root.join(format!("f{i}.txt")), "").unwrap();
+    }
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::new();
+    let mut file_limit = 5;
+    let result = Entry::build_tree(
+        &root,
+        &mut files,
+        &mut gitignores,
+        Some(&mut file_limit),
+        200,
+        0,
+        &IgnoredPathStrategy::Exclude,
+        super::BudgetExceededBehavior::FailFast,
+    );
+    assert!(
+        matches!(result, Err(super::BuildTreeError::ExceededMaxFileLimit)),
+        "FailFast must abort when the file budget is exceeded"
+    );
+}
+
+#[test]
+fn build_tree_fail_fast_succeeds_within_budget() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    for i in 0..3 {
+        fs::write(root.join(format!("f{i}.txt")), "").unwrap();
+    }
+
+    let mut files = Vec::new();
+    let mut gitignores = Vec::new();
+    let mut file_limit = 10;
+    let result = Entry::build_tree(
+        &root,
+        &mut files,
+        &mut gitignores,
+        Some(&mut file_limit),
+        200,
+        0,
+        &IgnoredPathStrategy::Exclude,
+        super::BudgetExceededBehavior::FailFast,
+    );
+    assert!(result.is_ok(), "FailFast must succeed when within budget");
 }

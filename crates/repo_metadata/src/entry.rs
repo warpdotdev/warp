@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 
+use std::collections::VecDeque;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,6 +48,20 @@ pub enum IgnoredPathStrategy {
     Include,
 }
 
+/// What the tree builder does when the per-build file budget is exhausted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetExceededBehavior {
+    /// Stop descending and leave the remaining directories as unloaded
+    /// placeholders (lazy-loaded on demand). The build still succeeds with a
+    /// partial, breadth-first tree. This is the default for the shared file
+    /// tree, `@`-context, and skill discovery.
+    StopAndLazyLoad,
+    /// Abort the build and return [`BuildTreeError::ExceededMaxFileLimit`].
+    /// Use this for consumers that must not operate on a partial tree — e.g.
+    /// codebase embedding, where the file limit is an intentional cost cap.
+    FailFast,
+}
+
 /// Filesystem entry.
 #[derive(Debug, Clone)]
 pub enum Entry {
@@ -59,15 +74,7 @@ pub(crate) struct BuildTreeOptions<'a> {
     pub current_depth: usize,
     pub ignored_path_strategy: &'a IgnoredPathStrategy,
     pub ignored_path_interests: &'a [PathBuf],
-}
-
-impl<'a> BuildTreeOptions<'a> {
-    fn child(self) -> Self {
-        Self {
-            current_depth: self.current_depth + 1,
-            ..self
-        }
-    }
+    pub budget_exceeded_behavior: BudgetExceededBehavior,
 }
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
@@ -108,6 +115,9 @@ impl Entry {
     /// Builds a tree of entries from a given path, handling gitignored files and directories.
     /// After max_depth is reached, all children are lazy-loaded to prevent deeply nested trees.
     /// IgnoredPathStrategy determines what happens when ignored files are encountered.
+    /// `budget_exceeded_behavior` controls what happens once the file budget is
+    /// exhausted (see [`BudgetExceededBehavior`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn build_tree(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
@@ -116,6 +126,7 @@ impl Entry {
         max_depth: usize,
         current_depth: usize,
         ignored_path_strategy: &IgnoredPathStrategy,
+        budget_exceeded_behavior: BudgetExceededBehavior,
     ) -> Result<Self, BuildTreeError> {
         Self::build_tree_with_ignored_path_interests_and_ancestor(
             path,
@@ -127,6 +138,7 @@ impl Entry {
                 current_depth,
                 ignored_path_strategy,
                 ignored_path_interests: &[],
+                budget_exceeded_behavior,
             },
             false,
         )
@@ -172,6 +184,7 @@ impl Entry {
                 current_depth,
                 ignored_path_strategy,
                 ignored_path_interests: &[],
+                budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
             },
             ancestor_is_ignored,
         )
@@ -182,85 +195,114 @@ impl Entry {
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
-        mut remaining_file_quota: Option<&mut usize>,
+        remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
         ancestor_is_ignored: bool,
     ) -> Result<Self, BuildTreeError> {
-        let curr_path: PathBuf = path.into();
-        let is_dir = curr_path.is_dir();
+        let root_path: PathBuf = path.into();
 
-        // Only ignore symlinks to directories. Symlinks to files are preserved (e.g. WARP.md).
-        if curr_path.is_symlink() && is_dir {
-            return Err(BuildTreeError::Symlink);
-        }
+        // Local copy of the file budget. The builder spends it breadth-first;
+        // once it is exhausted, any remaining directories are left as unloaded
+        // placeholders (lazy-loaded on demand) instead of aborting the whole
+        // build. This keeps coverage even and shallow-biased rather than
+        // collapsing the entire tree to a single level.
+        let mut quota: Option<usize> = remaining_file_quota.as_deref().copied();
 
-        let gitignore_path = curr_path.join(".gitignore");
-        if gitignore_path.exists() {
-            let (gitignore, _) = Gitignore::new(gitignore_path);
-            gitignores.push(gitignore);
-        }
+        // Arena of partially-built nodes. A child is always discovered (and
+        // pushed) while expanding its parent, so a child's index is always
+        // greater than its parent's and the nested tree can be assembled
+        // bottom-up at the end.
+        let mut nodes: Vec<Option<NodeBuilder>> = Vec::new();
 
-        let path_is_ignored = ancestor_is_ignored
-            || is_git_internal_path(&curr_path)
-            || matches_gitignores(
-                &curr_path,
-                is_dir,
-                &*gitignores,
-                false, /* check_ancestors */
-            );
-
-        // If we've reached the max depth, force lazy-loading even of non-ignored folders.
-        let mut lazy_load = options.current_depth >= options.max_depth;
-
-        if path_is_ignored {
-            match options.ignored_path_strategy {
-                IgnoredPathStrategy::Exclude => {
-                    return Err(BuildTreeError::Ignored);
-                }
-                IgnoredPathStrategy::IncludeOnly(patterns) => {
-                    if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
-                        if !patterns.iter().any(|pattern| file_name == pattern) {
-                            return Err(BuildTreeError::Ignored);
-                        }
-                    }
-                }
-                IgnoredPathStrategy::IncludeLazy => {
-                    lazy_load =
-                        !matches_ignored_path_interest(&curr_path, options.ignored_path_interests);
-                }
-                IgnoredPathStrategy::Include => {}
-            }
-        }
-
-        if is_dir {
-            if lazy_load {
-                return Ok(Self::Directory(DirectoryEntry {
-                    children: vec![],
-                    path: StandardizedPath::from_local_absolute_unchecked(&curr_path),
-                    ignored: path_is_ignored,
-                    loaded: false,
-                }));
-            }
-
-            // If the path is a directory, process all the children under it.
-            let entries = std::fs::read_dir(&curr_path)?;
-            let mut children = Vec::new();
-
-            for entry in entries {
-                if remaining_file_quota
-                    .as_ref()
-                    .is_some_and(|x| **x < children.len())
+        // Classify the root. Unlike child entries (which are simply omitted when
+        // ignored/symlinked), a classification failure at the root propagates to
+        // the caller, preserving existing error behavior.
+        match evaluate_entry(
+            &root_path,
+            gitignores,
+            &options,
+            options.current_depth,
+            ancestor_is_ignored,
+        )? {
+            EvaluatedEntry::File { ignored } => {
+                if quota == Some(0)
+                    && options.budget_exceeded_behavior == BudgetExceededBehavior::FailFast
                 {
                     return Err(BuildTreeError::ExceededMaxFileLimit);
                 }
+                let metadata = consume_file(&root_path, ignored, files, &mut quota);
+                write_back_quota(remaining_file_quota, quota);
+                Ok(Self::File(metadata))
+            }
+            EvaluatedEntry::Directory { ignored, lazy } => {
+                nodes.push(Some(NodeBuilder::Dir {
+                    path: root_path.clone(),
+                    ignored,
+                    loaded: false,
+                    children: Vec::new(),
+                }));
 
-                if let Some(entry) = match entry {
-                    Ok(entry) => {
+                let mut queue: VecDeque<DirJob> = VecDeque::new();
+                if !lazy {
+                    queue.push_back(DirJob {
+                        index: 0,
+                        path: root_path,
+                        depth: options.current_depth,
+                        ignored,
+                        is_root: true,
+                    });
+                }
+
+                while let Some(job) = queue.pop_front() {
+                    // Budget handling. With `StopAndLazyLoad` (the default), once
+                    // the file quota is exhausted we stop expanding directories
+                    // and leave them as unloaded placeholders; directories on the
+                    // path to a registered ignored-path interest (e.g. skill
+                    // provider directories) are always expanded so
+                    // discovery-critical files stay reachable. With `FailFast` we
+                    // keep descending and abort below as soon as a file would
+                    // exceed the budget.
+                    let should_expand = match options.budget_exceeded_behavior {
+                        BudgetExceededBehavior::FailFast => true,
+                        BudgetExceededBehavior::StopAndLazyLoad => {
+                            quota.is_none_or(|remaining| remaining > 0)
+                                || matches_ignored_path_interest(
+                                    &job.path,
+                                    options.ignored_path_interests,
+                                )
+                        }
+                    };
+                    if !should_expand {
+                        continue;
+                    }
+
+                    let entries = match std::fs::read_dir(&job.path) {
+                        Ok(entries) => entries,
+                        Err(e) => {
+                            // Preserve existing behavior: failing to read the
+                            // root directory propagates, while an unreadable
+                            // nested directory is left as an unloaded placeholder.
+                            if job.is_root {
+                                return Err(BuildTreeError::IOError(e));
+                            }
+                            continue;
+                        }
+                    };
+
+                    if let Some(NodeBuilder::Dir { loaded, .. }) = nodes[job.index].as_mut() {
+                        *loaded = true;
+                    }
+
+                    let child_depth = job.depth + 1;
+                    for entry in entries {
+                        let Ok(entry) = entry else {
+                            continue;
+                        };
                         let entry_path = entry.path();
 
-                        // Skip symlinks to folders before canonicalization to prevent duplicates.
-                        // If it's a symlink to a file, we keep the path as is since canonicalization would
-                        // point its path to the actual file.
+                        // Skip symlinks to folders before canonicalization to
+                        // prevent duplicates. Symlinks to files are kept as-is,
+                        // since canonicalization would point at the real file.
                         let canonical_path = if entry_path.is_symlink() {
                             if entry_path.is_dir() {
                                 None
@@ -270,51 +312,64 @@ impl Entry {
                         } else {
                             dunce::canonicalize(entry_path).ok()
                         };
+                        let Some(child_path) = canonical_path else {
+                            continue;
+                        };
 
-                        if let Some(canonical_path) = canonical_path {
-                            match Entry::build_tree_with_ignored_path_interests_and_ancestor(
-                                canonical_path,
-                                files,
-                                gitignores,
-                                remaining_file_quota.as_deref_mut(),
-                                options.child(),
-                                path_is_ignored,
-                            ) {
-                                Ok(entry) => Some(entry),
-                                Err(BuildTreeError::ExceededMaxFileLimit) => {
-                                    return Err(BuildTreeError::ExceededMaxFileLimit)
+                        match evaluate_entry(
+                            &child_path,
+                            gitignores,
+                            &options,
+                            child_depth,
+                            job.ignored,
+                        ) {
+                            Ok(EvaluatedEntry::File { ignored }) => {
+                                if quota == Some(0)
+                                    && options.budget_exceeded_behavior
+                                        == BudgetExceededBehavior::FailFast
+                                {
+                                    return Err(BuildTreeError::ExceededMaxFileLimit);
                                 }
-                                Err(_) => None,
+                                let metadata =
+                                    consume_file(&child_path, ignored, files, &mut quota);
+                                let child_index = nodes.len();
+                                nodes.push(Some(NodeBuilder::File(metadata)));
+                                push_child(&mut nodes, job.index, child_index);
                             }
-                        } else {
-                            None
+                            Ok(EvaluatedEntry::Directory { ignored, lazy }) => {
+                                let child_index = nodes.len();
+                                nodes.push(Some(NodeBuilder::Dir {
+                                    path: child_path.clone(),
+                                    ignored,
+                                    loaded: false,
+                                    children: Vec::new(),
+                                }));
+                                push_child(&mut nodes, job.index, child_index);
+                                // Lazy directories (past max depth, or ignored
+                                // without a matching interest) stay unloaded.
+                                // Everything else is queued for expansion,
+                                // subject to the budget gate above.
+                                if !lazy {
+                                    queue.push_back(DirJob {
+                                        index: child_index,
+                                        path: child_path,
+                                        depth: child_depth,
+                                        ignored,
+                                        is_root: false,
+                                    });
+                                }
+                            }
+                            Err(_) => {
+                                // Ignored / excluded / symlinked-directory entries
+                                // are omitted from the tree.
+                            }
                         }
                     }
-                    Err(_) => None,
-                } {
-                    children.push(entry);
-                }
-            }
-
-            Ok(Self::Directory(DirectoryEntry {
-                children,
-                path: StandardizedPath::from_local_absolute_unchecked(&curr_path),
-                ignored: path_is_ignored,
-                loaded: true,
-            }))
-        } else if curr_path.is_file() {
-            if let Some(remaining_file_quota) = remaining_file_quota {
-                if *remaining_file_quota == 0 {
-                    return Err(BuildTreeError::ExceededMaxFileLimit);
                 }
 
-                *remaining_file_quota -= 1
+                write_back_quota(remaining_file_quota, quota);
+                Ok(assemble_node(&mut nodes, 0))
             }
-            let metadata = FileMetadata::new(curr_path, path_is_ignored);
-            files.push(metadata.clone());
-            Ok(Self::File(metadata))
-        } else {
-            Err(BuildTreeError::Symlink)
         }
     }
 
@@ -409,6 +464,158 @@ impl Entry {
 
         log::debug!("target path not found under the current directory node");
         None
+    }
+}
+
+/// A node in the breadth-first build arena. Directory children are referenced by
+/// arena index so the nested [`Entry`] tree can be assembled bottom-up.
+enum NodeBuilder {
+    File(FileMetadata),
+    Dir {
+        path: PathBuf,
+        ignored: bool,
+        loaded: bool,
+        children: Vec<usize>,
+    },
+}
+
+/// A directory queued for expansion during the breadth-first build.
+struct DirJob {
+    index: usize,
+    path: PathBuf,
+    depth: usize,
+    ignored: bool,
+    is_root: bool,
+}
+
+/// Classification of a single filesystem entry.
+enum EvaluatedEntry {
+    File { ignored: bool },
+    Directory { ignored: bool, lazy: bool },
+}
+
+/// Classifies a single path: rejects directory symlinks, loads any local
+/// `.gitignore`, computes gitignore status, and applies the ignored-path
+/// strategy. Returns `Err(Ignored)`/`Err(Symlink)` for entries that should be
+/// omitted; callers decide whether that is fatal (root) or a skip (child).
+fn evaluate_entry(
+    curr_path: &Path,
+    gitignores: &mut Vec<Gitignore>,
+    options: &BuildTreeOptions<'_>,
+    current_depth: usize,
+    ancestor_is_ignored: bool,
+) -> Result<EvaluatedEntry, BuildTreeError> {
+    let is_dir = curr_path.is_dir();
+
+    // Only ignore symlinks to directories. Symlinks to files are preserved (e.g. WARP.md).
+    if curr_path.is_symlink() && is_dir {
+        return Err(BuildTreeError::Symlink);
+    }
+
+    let gitignore_path = curr_path.join(".gitignore");
+    if gitignore_path.exists() {
+        let (gitignore, _) = Gitignore::new(gitignore_path);
+        gitignores.push(gitignore);
+    }
+
+    let path_is_ignored = ancestor_is_ignored
+        || is_git_internal_path(curr_path)
+        || matches_gitignores(
+            curr_path,
+            is_dir,
+            &*gitignores,
+            false, /* check_ancestors */
+        );
+
+    // If we've reached the max depth, force lazy-loading even of non-ignored folders.
+    let mut lazy = current_depth >= options.max_depth;
+
+    if path_is_ignored {
+        match options.ignored_path_strategy {
+            IgnoredPathStrategy::Exclude => return Err(BuildTreeError::Ignored),
+            IgnoredPathStrategy::IncludeOnly(patterns) => {
+                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
+                    if !patterns.iter().any(|pattern| file_name == pattern) {
+                        return Err(BuildTreeError::Ignored);
+                    }
+                }
+            }
+            IgnoredPathStrategy::IncludeLazy => {
+                lazy = !matches_ignored_path_interest(curr_path, options.ignored_path_interests);
+            }
+            IgnoredPathStrategy::Include => {}
+        }
+    }
+
+    if is_dir {
+        Ok(EvaluatedEntry::Directory {
+            ignored: path_is_ignored,
+            lazy,
+        })
+    } else if curr_path.is_file() {
+        Ok(EvaluatedEntry::File {
+            ignored: path_is_ignored,
+        })
+    } else {
+        Err(BuildTreeError::Symlink)
+    }
+}
+
+/// Records a file: decrements the budget (saturating), constructs metadata, and
+/// appends it to the flat `files` list.
+fn consume_file(
+    path: &Path,
+    ignored: bool,
+    files: &mut Vec<FileMetadata>,
+    quota: &mut Option<usize>,
+) -> FileMetadata {
+    if let Some(remaining) = quota.as_mut() {
+        *remaining = remaining.saturating_sub(1);
+    }
+    let metadata = FileMetadata::new(path.to_path_buf(), ignored);
+    files.push(metadata.clone());
+    metadata
+}
+
+/// Appends `child` to `parent`'s child list in the build arena.
+fn push_child(nodes: &mut [Option<NodeBuilder>], parent: usize, child: usize) {
+    if let Some(NodeBuilder::Dir { children, .. }) = nodes[parent].as_mut() {
+        children.push(child);
+    }
+}
+
+/// Recursively assembles the nested [`Entry`] tree from the build arena.
+/// Recursion depth is bounded by `BuildTreeOptions::max_depth`.
+fn assemble_node(nodes: &mut [Option<NodeBuilder>], index: usize) -> Entry {
+    match nodes[index]
+        .take()
+        .expect("each arena node is assembled exactly once")
+    {
+        NodeBuilder::File(metadata) => Entry::File(metadata),
+        NodeBuilder::Dir {
+            path,
+            ignored,
+            loaded,
+            children,
+        } => {
+            let children = children
+                .into_iter()
+                .map(|child| assemble_node(nodes, child))
+                .collect();
+            Entry::Directory(DirectoryEntry {
+                path: StandardizedPath::from_local_absolute_unchecked(&path),
+                children,
+                ignored,
+                loaded,
+            })
+        }
+    }
+}
+
+/// Writes the remaining budget back into the caller-provided slot, if any.
+fn write_back_quota(remaining_file_quota: Option<&mut usize>, quota: Option<usize>) {
+    if let (Some(slot), Some(value)) = (remaining_file_quota, quota) {
+        *slot = value;
     }
 }
 
