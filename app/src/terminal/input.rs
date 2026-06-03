@@ -1642,6 +1642,7 @@ pub struct Input {
 
     /// Inline model selector for choosing the Agent base model.
     inline_model_selector_view: ViewHandle<InlineModelSelectorView>,
+    restore_prompt_after_inline_model_selector_selection: bool,
     /// Inline profile selector for choosing the active execution profile.
     inline_profile_selector_view: ViewHandle<InlineProfileSelectorView>,
 
@@ -2503,26 +2504,7 @@ impl Input {
                     me.focus_input_box(ctx);
                 }
                 AgentInputFooterEvent::ToggleInlineModelSelector { initial_tab } => {
-                    if me
-                        .suggestions_mode_model
-                        .as_ref(ctx)
-                        .is_inline_model_selector()
-                    {
-                        me.suggestions_mode_model.update(ctx, |model, ctx| {
-                            model.set_mode(InputSuggestionsMode::Closed, ctx);
-                        });
-                        ctx.notify();
-                    } else {
-                        me.close_overlays(false, ctx);
-                        let has_input = !me.editor.as_ref(ctx).buffer_text(ctx).is_empty();
-                        me.inline_model_selector_view.update(ctx, |v, ctx| {
-                            if has_input {
-                                v.set_filter_results_by_input(false);
-                            }
-                            v.set_active_tab(*initial_tab, ctx);
-                        });
-                        me.open_model_selector(ctx);
-                    }
+                    me.toggle_inline_model_selector_from_chip(*initial_tab, ctx);
                 }
                 AgentInputFooterEvent::OpenSettings(section) => {
                     ctx.emit(Event::OpenSettings(*section));
@@ -3618,6 +3600,7 @@ impl Input {
             inline_plan_menu_view,
             inline_repos_menu_view,
             inline_model_selector_view,
+            restore_prompt_after_inline_model_selector_selection: false,
             inline_profile_selector_view,
             inline_prompts_menu_view,
             inline_skill_selector_view,
@@ -4581,10 +4564,11 @@ impl Input {
                     .suggestions_mode_model
                     .as_ref(ctx)
                     .is_inline_model_selector()
-                    && !self
-                        .inline_model_selector_view
-                        .as_ref(ctx)
-                        .filter_results_by_input()
+                    && (self.restore_prompt_after_inline_model_selector_selection
+                        || !self
+                            .inline_model_selector_view
+                            .as_ref(ctx)
+                            .filter_results_by_input())
                 {
                     // The user had a pre-existing prompt; restore it (do NOT clear buffer).
                     self.suggestions_mode_model.update(ctx, |model, ctx| {
@@ -4607,6 +4591,7 @@ impl Input {
                     }
                     self.clear_buffer_and_reset_undo_stack(ctx);
                 }
+                self.restore_prompt_after_inline_model_selector_selection = false;
             }
             InlineModelSelectorEvent::Dismissed => {
                 if self
@@ -4619,6 +4604,7 @@ impl Input {
                     });
                     ctx.notify();
                 }
+                self.restore_prompt_after_inline_model_selector_selection = false;
             }
         }
         self.focus_input_box(ctx);
@@ -4765,6 +4751,53 @@ impl Input {
         });
 
         ctx.notify();
+    }
+
+    fn toggle_inline_model_selector_from_chip(
+        &mut self,
+        initial_tab: InlineModelSelectorTab,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_inline_model_selector()
+        {
+            self.suggestions_mode_model.update(ctx, |model, ctx| {
+                model.set_mode(InputSuggestionsMode::Closed, ctx);
+            });
+            self.restore_prompt_after_inline_model_selector_selection = false;
+            ctx.notify();
+            return;
+        }
+
+        self.close_overlays(false, ctx);
+        let has_input = !self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
+        let should_clear_prompt_for_search =
+            has_input && FeatureFlag::RestorePromptOnInlineModelSelectorSearch.is_enabled();
+        self.inline_model_selector_view.update(ctx, |view, ctx| {
+            if has_input && !should_clear_prompt_for_search {
+                view.set_filter_results_by_input(false);
+            }
+            view.set_active_tab(initial_tab, ctx);
+        });
+        self.restore_prompt_after_inline_model_selector_selection = should_clear_prompt_for_search;
+        self.open_model_selector(ctx);
+        if should_clear_prompt_for_search {
+            self.editor.update(ctx, |editor, ctx| {
+                editor.system_clear_buffer(false, ctx);
+            });
+        }
+        self.focus_input_box(ctx);
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn integration_test_toggle_inline_model_selector_from_chip(
+        &mut self,
+        initial_tab: InlineModelSelectorTab,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.toggle_inline_model_selector_from_chip(initial_tab, ctx);
     }
 
     fn open_profile_selector(&mut self, ctx: &mut ViewContext<Self>) {
