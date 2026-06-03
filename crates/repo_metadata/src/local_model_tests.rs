@@ -20,7 +20,8 @@ use watcher::BulkFilesystemWatcherEvent;
 use crate::entry::{DirectoryEntry, Entry, FileMetadata};
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
 use crate::local_model::{
-    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate, RepositoryMetadataEvent,
+    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoUpdate, RepoWatchMode,
+    RepositoryMetadataEvent,
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
@@ -42,7 +43,7 @@ impl LocalRepoMetadataModel {
             #[cfg(feature = "local_fs")]
             symlink_targets: Default::default(),
             #[cfg(feature = "local_fs")]
-            lazy_watched_dirs: Default::default(),
+            repo_watch_modes: Default::default(),
         }
     }
 }
@@ -116,7 +117,7 @@ fn repository_indexed_waits_for_pending_repo() {
                     .add_repository_internal(
                         repo_path.clone(),
                         empty_repo_state(&repo_path),
-                        true,
+                        RepoWatchMode::RecursiveOnRoot,
                         ctx,
                     )
                     .expect("repository should index");
@@ -2043,7 +2044,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result1 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&real_repo).unwrap(),
                         state.clone(),
-                        true,
+                        RepoWatchMode::RecursiveOnRoot,
                         ctx,
                     );
                     assert!(result1.is_ok());
@@ -2052,7 +2053,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result2 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&symlink_repo).unwrap(),
                         state.clone(),
-                        true,
+                        RepoWatchMode::RecursiveOnRoot,
                         ctx,
                     );
                     assert!(result2.is_ok());
@@ -2061,7 +2062,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result3 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&relative_repo).unwrap(),
                         state.clone(),
-                        true,
+                        RepoWatchMode::RecursiveOnRoot,
                         ctx,
                     );
                     assert!(result3.is_ok());
@@ -2151,15 +2152,20 @@ fn index_lazy_loaded_path_tracks_only_root() {
 
             model_handle.read(&app, |model, _ctx| {
                 assert!(model.is_lazy_loaded_path(&root));
+                let mode = model
+                    .repo_watch_modes
+                    .get(&root)
+                    .expect("watch mode should be recorded");
                 if cfg!(target_os = "linux") {
-                    let watched = model
-                        .lazy_watched_dirs
-                        .get(&root)
-                        .expect("lazy root should be tracked on linux");
-                    assert_eq!(watched.len(), 1);
-                    assert!(watched.contains(&root));
+                    // Linux: only the root is watched initially.
+                    let RepoWatchMode::LazyNonRecursive { watched_dirs } = mode else {
+                        panic!("expected LazyNonRecursive on linux, got {mode:?}");
+                    };
+                    assert_eq!(watched_dirs.len(), 1);
+                    assert!(watched_dirs.contains(&root));
                 } else {
-                    assert!(model.lazy_watched_dirs.is_empty());
+                    // Other platforms: a single recursive watch on the root.
+                    assert!(matches!(mode, RepoWatchMode::RecursiveOnRoot));
                 }
             });
         });
@@ -2190,27 +2196,32 @@ fn load_directory_tracks_expanded_subdir_for_lazy_root() {
             });
 
             model_handle.read(&app, |model, _ctx| {
+                let mode = model
+                    .repo_watch_modes
+                    .get(&root)
+                    .expect("watch mode should be recorded");
                 if cfg!(target_os = "linux") {
-                    let watched = model
-                        .lazy_watched_dirs
-                        .get(&root)
-                        .expect("lazy root should be tracked on linux");
-                    assert!(watched.contains(&root));
-                    assert!(watched.contains(&sub));
+                    // Linux: the expanded subdir is now watched alongside the root.
+                    let RepoWatchMode::LazyNonRecursive { watched_dirs } = mode else {
+                        panic!("expected LazyNonRecursive on linux, got {mode:?}");
+                    };
+                    assert!(watched_dirs.contains(&root));
+                    assert!(watched_dirs.contains(&sub));
                 } else {
-                    assert!(model.lazy_watched_dirs.is_empty());
+                    // Other platforms: a single recursive watch on the root.
+                    assert!(matches!(mode, RepoWatchMode::RecursiveOnRoot));
                 }
             });
         });
     });
 }
 
-/// Indexing a git repo registers a recursive watch and must not populate the
-/// lazy per-directory tracking map on any platform.
+/// Indexing a git repo records a recursive watch mode (not a lazy one) and is
+/// not tracked as a lazy-loaded path, on any platform.
 #[cfg(feature = "local_fs")]
 #[test]
-fn recursive_repo_does_not_track_lazy_watched_dirs() {
-    VirtualFS::test("recursive_repo_no_lazy_tracking", |dirs, mut vfs| {
+fn recursive_repo_uses_recursive_watch_mode() {
+    VirtualFS::test("recursive_repo_watch_mode", |dirs, mut vfs| {
         vfs.mkdir("repo/src");
         let repo_path =
             StandardizedPath::from_local_canonicalized(&dirs.tests().join("repo")).unwrap();
@@ -2222,14 +2233,17 @@ fn recursive_repo_does_not_track_lazy_watched_dirs() {
                     .add_repository_internal(
                         repo_path.clone(),
                         empty_repo_state(&repo_path),
-                        /* recursive */ true,
+                        RepoWatchMode::RecursiveOnRoot,
                         ctx,
                     )
                     .expect("repo should index");
             });
 
             model_handle.read(&app, |model, _ctx| {
-                assert!(model.lazy_watched_dirs.is_empty());
+                assert!(matches!(
+                    model.repo_watch_modes.get(&repo_path),
+                    Some(RepoWatchMode::RecursiveOnRoot)
+                ));
                 assert!(!model.is_lazy_loaded_path(&repo_path));
             });
         });
@@ -2261,7 +2275,7 @@ fn remove_lazy_loaded_path_clears_tracked_watches() {
             });
 
             model_handle.read(&app, |model, _ctx| {
-                assert!(!model.lazy_watched_dirs.contains_key(&root));
+                assert!(!model.repo_watch_modes.contains_key(&root));
                 assert!(!model.is_lazy_loaded_path(&root));
                 assert!(model.repository_state(&root).is_none());
             });

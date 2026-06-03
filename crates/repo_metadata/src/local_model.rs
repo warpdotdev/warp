@@ -4,9 +4,7 @@
 //! This module provides a singleton model that manages repository metadata across
 //! all repositories tracked by Warp.
 
-use std::collections::HashMap;
-#[cfg(feature = "local_fs")]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -49,7 +47,6 @@ use crate::telemetry::RepoMetadataTelemetryEvent;
 use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
-        use std::collections::HashSet;
         use notify_debouncer_full::notify::RecursiveMode;
         use crate::entry::repo_watch_filter;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
@@ -167,6 +164,26 @@ impl IndexedRepoState {
     }
 }
 
+/// How a repository's root is registered with the filesystem watcher.
+#[derive(Debug)]
+enum RepoWatchMode {
+    /// A single recursive watch on the root covers the whole subtree. Used for
+    /// git repos (which rely on gitignore pruning) and, on macOS/Windows, for
+    /// lazy non-git roots where a recursive OS watch is cheap.
+    RecursiveOnRoot,
+    /// Each loaded directory is watched non-recursively, so the number of
+    /// watches scales with what the user expands rather than the whole subtree.
+    /// Used for lazy (non-git) roots on Linux, where per-directory inotify
+    /// watches are otherwise prohibitively expensive.
+    ///
+    /// Carries the set of directories currently watched under the root (the
+    /// root plus every expanded subdirectory) so they can all be unregistered
+    /// on teardown.
+    LazyNonRecursive {
+        watched_dirs: HashSet<StandardizedPath>,
+    },
+}
+
 /// Singleton model for managing local repository metadata.
 ///
 /// This model tracks repositories on the local filesystem, using file watchers
@@ -201,12 +218,12 @@ pub struct LocalRepoMetadataModel {
     /// alias rather than using a one-to-one bidirectional map.
     #[cfg(feature = "local_fs")]
     symlink_targets: HashMap<PathBuf, HashSet<SymlinkTarget>>,
-    /// For lazy-loaded (non-git) roots that are watched non-recursively (Linux
-    /// only), the set of directories currently registered with the watcher
-    /// under each root — the root plus every subdirectory expanded so far.
-    /// Used to unregister all per-directory watches when the root is torn down.
+    /// How each tracked repository's root is registered with the filesystem
+    /// watcher. [`RepoWatchMode::LazyNonRecursive`] additionally records the set
+    /// of directories watched under a lazy (non-git) root so they can all be
+    /// unregistered on teardown.
     #[cfg(feature = "local_fs")]
-    lazy_watched_dirs: HashMap<StandardizedPath, HashSet<StandardizedPath>>,
+    repo_watch_modes: HashMap<StandardizedPath, RepoWatchMode>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -303,7 +320,7 @@ impl LocalRepoMetadataModel {
             #[cfg(feature = "local_fs")]
             symlink_targets: HashMap::new(),
             #[cfg(feature = "local_fs")]
-            lazy_watched_dirs: HashMap::new(),
+            repo_watch_modes: HashMap::new(),
         };
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -572,10 +589,10 @@ impl LocalRepoMetadataModel {
                         // For lazy (non-git) roots watched non-recursively, collect the
                         // directories added by this batch so we can watch them after the
                         // tree mutations are applied (keeps live-created dirs fresh).
-                        let new_dirs: Vec<StandardizedPath> = if model
-                            .lazy_watched_dirs
-                            .contains_key(&repo_path)
-                        {
+                        let new_dirs: Vec<StandardizedPath> = if matches!(
+                            model.repo_watch_modes.get(&repo_path),
+                            Some(RepoWatchMode::LazyNonRecursive { .. })
+                        ) {
                             mutations
                                 .iter()
                                 .filter_map(|mutation| {
@@ -682,16 +699,17 @@ impl LocalRepoMetadataModel {
 
     /// Adds or updates a repository's file tree state.
     ///
-    /// `recursive` controls how the root is registered with the filesystem
-    /// watcher: git repos register recursively (and rely on gitignore pruning),
-    /// while lazy-loaded non-git roots on Linux register the root
-    /// non-recursively and watch expanded subdirectories individually.
+    /// `mode` controls how the root is registered with the filesystem watcher:
+    /// [`RepoWatchMode::RecursiveOnRoot`] registers a single recursive watch
+    /// (git repos, and lazy roots off Linux), while
+    /// [`RepoWatchMode::LazyNonRecursive`] registers the root non-recursively
+    /// so expanded subdirectories can be watched individually.
     #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
     fn add_repository_internal(
         &mut self,
         repo_path: StandardizedPath,
         state: FileTreeState,
-        recursive: bool,
+        mode: RepoWatchMode,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), RepoMetadataError> {
         let local_path = repo_path
@@ -709,9 +727,18 @@ impl LocalRepoMetadataModel {
             ));
         }
 
-        // Register this path with the watcher if we have one
+        // Record how this root is watched and register it with the watcher (if
+        // any).
         #[cfg(feature = "local_fs")]
         {
+            let recursive_mode = match &mode {
+                RepoWatchMode::RecursiveOnRoot => RecursiveMode::Recursive,
+                RepoWatchMode::LazyNonRecursive { .. } => RecursiveMode::NonRecursive,
+            };
+            // Capture any prior registration so we can drop stale per-directory
+            // watches when replacing a lazy registration (e.g. a lazy root being
+            // upgraded to a git repo).
+            let previous_mode = self.repo_watch_modes.insert(repo_path.clone(), mode);
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
                 // Build the gitignore set (root + global) and force-included
@@ -720,12 +747,14 @@ impl LocalRepoMetadataModel {
                 // skills).
                 let gitignores = crate::gitignores_for_directory(&watch_path);
                 let force_included_paths = self.force_included_paths.clone();
-                let recursive_mode = if recursive {
-                    RecursiveMode::Recursive
-                } else {
-                    RecursiveMode::NonRecursive
-                };
                 watcher.update(ctx, |watcher, _ctx| {
+                    if let Some(RepoWatchMode::LazyNonRecursive { watched_dirs }) = &previous_mode {
+                        for dir in watched_dirs {
+                            if let Some(dir_path) = dir.to_local_path() {
+                                std::mem::drop(watcher.unregister_path(&dir_path));
+                            }
+                        }
+                    }
                     std::mem::drop(watcher.register_path(
                         &watch_path,
                         repo_watch_filter(gitignores, force_included_paths),
@@ -758,17 +787,22 @@ impl LocalRepoMetadataModel {
             self.standing_results.remove(repo_path);
             #[cfg(feature = "local_fs")]
             self.clear_symlink_targets_for_repo(repo_path, ctx);
-            // Unregister from watcher
+            // Drop the recorded watch mode and unregister from the watcher.
             #[cfg(feature = "local_fs")]
             {
+                let watch_mode = self.repo_watch_modes.remove(repo_path);
                 if let Some(ref watcher) = self.watcher {
-                    // Lazy (non-git) roots watched non-recursively track every
-                    // per-directory watch they registered (root + expanded
-                    // subdirs); unregister all of them. Otherwise just the root.
-                    let watched_dirs = self.lazy_watched_dirs.remove(repo_path);
-                    let paths_to_unregister: Vec<PathBuf> = match watched_dirs {
-                        Some(dirs) => dirs.iter().filter_map(|dir| dir.to_local_path()).collect(),
-                        None => repo_path.to_local_path().into_iter().collect(),
+                    let paths_to_unregister: Vec<PathBuf> = match watch_mode {
+                        // Per-directory watches: unregister every tracked dir
+                        // (root + expanded subdirs).
+                        Some(RepoWatchMode::LazyNonRecursive { watched_dirs }) => watched_dirs
+                            .iter()
+                            .filter_map(|dir| dir.to_local_path())
+                            .collect(),
+                        // A single recursive watch lives on the root.
+                        Some(RepoWatchMode::RecursiveOnRoot) | None => {
+                            repo_path.to_local_path().into_iter().collect()
+                        }
                     };
                     watcher.update(ctx, |watcher, _ctx| {
                         for path in &paths_to_unregister {
@@ -887,15 +921,17 @@ impl LocalRepoMetadataModel {
         // Subdirectories get their own non-recursive watch as they are expanded
         // (see `load_directory`). macOS/Windows watch a whole tree with a single
         // OS handle, so recursive watching stays cheap there.
-        let recursive = !cfg!(target_os = "linux");
-        self.add_repository_internal(path.clone(), state, recursive, ctx)?;
+        let mode = if cfg!(target_os = "linux") {
+            // Start by watching just the root; expanded subdirectories are added
+            // to this set as they load (see `load_directory`).
+            RepoWatchMode::LazyNonRecursive {
+                watched_dirs: HashSet::from([path.clone()]),
+            }
+        } else {
+            RepoWatchMode::RecursiveOnRoot
+        };
+        self.add_repository_internal(path.clone(), state, mode, ctx)?;
         self.lazy_loaded_paths.insert(path.clone(), 1);
-        if !recursive {
-            // Track the root so teardown can unregister it along with any
-            // per-directory watches added as subdirectories are expanded.
-            self.lazy_watched_dirs
-                .insert(path.clone(), HashSet::from([path.clone()]));
-        }
         Ok(())
     }
 
@@ -960,10 +996,12 @@ impl LocalRepoMetadataModel {
         dir_path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(watched) = self.lazy_watched_dirs.get_mut(repo_root) else {
+        let Some(RepoWatchMode::LazyNonRecursive { watched_dirs }) =
+            self.repo_watch_modes.get_mut(repo_root)
+        else {
             return;
         };
-        if !watched.insert(dir_path.clone()) {
+        if !watched_dirs.insert(dir_path.clone()) {
             // Already watching this directory.
             return;
         }
@@ -1417,9 +1455,12 @@ impl LocalRepoMetadataModel {
                         let state =
                             FileTreeState::new(root_entry, gitignores_for_build, Some(repository_handle));
 
-                        if let Err(e) =
-                            model.add_repository_internal(std_repo_path.clone(), state, true, ctx)
-                        {
+                        if let Err(e) = model.add_repository_internal(
+                            std_repo_path.clone(),
+                            state,
+                            RepoWatchMode::RecursiveOnRoot,
+                            ctx,
+                        ) {
                             log::warn!("Failed to add repository {repo_path_str}: {e:?}");
                             // On failure, mark the repository as failed so waiters are notified.
                             model.mark_repository_failed(std_repo_path, e, ctx);
