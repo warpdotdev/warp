@@ -75,12 +75,20 @@ impl MatchedSuggestion {
 #[derive(Default)]
 pub struct MockGeneratorContext {
     expected_commands_to_output: HashMap<String, String>,
+    /// Commands that exit non-zero but still emit (partial) stdout, mapped to
+    /// that stdout. Models a generator whose underlying command partially
+    /// failed -- e.g. an ssh-host generator that `cat`s `~/.ssh/config` plus
+    /// its `Include`d files and hits one unreadable path (a Windows-style
+    /// `Include C:\Users\...` that the POSIX generator mis-resolves). The
+    /// command exits non-zero, yet the readable hosts are already on stdout.
+    failing_commands_to_output: HashMap<String, String>,
 }
 
 impl MockGeneratorContext {
     pub fn new() -> Self {
         Self {
             expected_commands_to_output: HashMap::new(),
+            failing_commands_to_output: HashMap::new(),
         }
     }
 
@@ -102,6 +110,20 @@ impl MockGeneratorContext {
             .insert(command.into(), output.into());
         self
     }
+
+    /// Register a command that exits non-zero while still producing the given
+    /// stdout. Takes precedence over [`Self::with_expected_command`] for the
+    /// same command, so a command registered by [`Self::for_test_signature`]
+    /// can be turned into a partial-failure for a single test.
+    pub fn with_failing_command(
+        mut self,
+        command: impl Into<String>,
+        partial_stdout: impl Into<String>,
+    ) -> Self {
+        self.failing_commands_to_output
+            .insert(command.into(), partial_stdout.into());
+        self
+    }
 }
 
 #[async_trait]
@@ -111,6 +133,15 @@ impl GeneratorContext for MockGeneratorContext {
         shell_command: &str,
         _session_env_vars: Option<HashMap<String, String>>,
     ) -> anyhow::Result<CommandOutput> {
+        if let Some(partial_stdout) = self.failing_commands_to_output.get(shell_command) {
+            return Ok(CommandOutput {
+                stdout: partial_stdout.clone().into_bytes(),
+                stderr: Vec::new(),
+                status: CommandExitStatus::Failure,
+                exit_code: Some(ExitCode::from(1)),
+            });
+        }
+
         Ok(CommandOutput {
             stdout: self
                 .expected_commands_to_output

@@ -664,59 +664,58 @@ async fn generate_suggestions_for_argument_value(
                 return vec![];
             };
 
-            match output.status {
-                CommandExitStatus::Success => {
-                    let Ok(output_string) = output.to_string() else {
+            // A generator command can exit non-zero yet still have written
+            // usable output before failing (see #9417: the ssh-host generator
+            // `cat`s `~/.ssh/config` plus every `Include`d file, so one
+            // unreadable `Include` fails the whole command while the readable
+            // hosts are already on stdout). Parse what we got instead of
+            // dropping every suggestion; only bail when a failing command
+            // produced nothing to parse.
+            let Ok(output_string) = output.to_string() else {
+                return vec![];
+            };
+            if output.status == CommandExitStatus::Failure && output_string.trim().is_empty() {
+                return vec![];
+            }
+
+            let results = match post_process {
+                Some(js_fn) => {
+                    let Ok(results) = call_js_function(&output_string, js_fn, js_ctx).await else {
                         return vec![];
                     };
+                    results
+                }
+                None => {
+                    let suggestions: Vec<signatures::Suggestion> = output_string
+                        .lines()
+                        .map(|line| signatures::Suggestion {
+                            value: line.to_owned(),
+                            display_value: None,
+                            description: None,
+                            priority: signatures::Priority::default(),
+                        })
+                        .collect();
 
-                    let results = match post_process {
-                        Some(js_fn) => {
-                            let Ok(results) = call_js_function(&output_string, js_fn, js_ctx).await
-                            else {
-                                return vec![];
-                            };
-                            results
-                        }
-                        None => {
-                            let suggestions: Vec<signatures::Suggestion> = output_string
-                                .lines()
-                                .map(|line| signatures::Suggestion {
-                                    value: line.to_owned(),
-                                    display_value: None,
-                                    description: None,
-                                    priority: signatures::Priority::default(),
-                                })
-                                .collect();
-
-                            GeneratorResults {
-                                suggestions,
-                                is_ordered: true,
-                            }
-                        }
-                    };
-                    let internal_suggestions = results
-                        .suggestions
-                        .into_iter()
-                        .map(Into::into)
-                        .filter_map(|suggestion: Suggestion| {
-                            let match_type = matcher
-                                .get_match_type(parsed_token.as_str(), suggestion.display.as_str());
-                            match_type
-                                .map(|match_type| MatchedSuggestion::new(suggestion, match_type))
-                        });
-
-                    if results.is_ordered {
-                        internal_suggestions.collect()
-                    } else {
-                        internal_suggestions
-                            .sorted_by(MatchedSuggestion::cmp_by_display)
-                            .collect()
+                    GeneratorResults {
+                        suggestions,
+                        is_ordered: true,
                     }
                 }
-                CommandExitStatus::Failure => {
-                    vec![]
-                }
+            };
+            let internal_suggestions = results.suggestions.into_iter().map(Into::into).filter_map(
+                |suggestion: Suggestion| {
+                    let match_type =
+                        matcher.get_match_type(parsed_token.as_str(), suggestion.display.as_str());
+                    match_type.map(|match_type| MatchedSuggestion::new(suggestion, match_type))
+                },
+            );
+
+            if results.is_ordered {
+                internal_suggestions.collect()
+            } else {
+                internal_suggestions
+                    .sorted_by(MatchedSuggestion::cmp_by_display)
+                    .collect()
             }
         }
         _ => {

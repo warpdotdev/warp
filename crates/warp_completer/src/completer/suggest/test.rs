@@ -16,6 +16,7 @@ use crate::meta::Span;
 use crate::signatures::testing::{
     cd_signature, create_test_command_registry, fuzzy_signature, git_signature, java_signature,
     ls_signature, npm_signature, signature_with_empty_positional, test_signature,
+    TEST_GENERATOR_1_COMMAND,
 };
 use crate::signatures::CommandRegistry;
 
@@ -1754,6 +1755,73 @@ fn test_completes_with_multiple_generators() {
             // so we should respect the order in which the generators were specified.
             "bar", "foo", // The first generator is not ordered, so we sort it.
             "def", "abc", // The second generator is already ordered.
+        ]
+    );
+}
+
+/// Regression test for warpdotdev/warp#9417.
+///
+/// When a generator's command exits non-zero it can still have written usable
+/// output to stdout before failing. The real-world case: the embedded ssh-host
+/// completion generator `cat`s `~/.ssh/config` and every `Include`d file, then
+/// pipes the result through awk. On Windows/Git Bash an `Include C:\Users\...`
+/// drive-letter path is mis-resolved as a relative path, so that one `cat`
+/// fails and the whole command exits non-zero -- even though the readable hosts
+/// are already on stdout. The engine currently maps `CommandExitStatus::Failure`
+/// to an empty result, so a single bad `Include` wipes out *all* ssh host
+/// suggestions instead of degrading to the hosts it could read.
+///
+/// Here `test five` runs two generators (`test1`, `test2`). We make only
+/// `test1`'s command fail-with-output; `test2` still succeeds. `test2`'s
+/// suggestions must survive and `test1`'s partial output is still parsed,
+/// yielding the same result as the all-success case.
+///
+/// Before the fix the failing generator contributed nothing (only
+/// `["def", "abc"]` came back); now the `CommandExitStatus::Failure` branch
+/// parses non-empty stdout instead of discarding it.
+#[test]
+fn test_generator_failure_with_partial_output_still_suggests() {
+    let registry = create_test_command_registry([test_signature()]);
+    // `test1`'s command exits non-zero but still printed "1" before failing;
+    // `test2` succeeds normally (set up by `for_test_signature`).
+    let generator_ctx = MockGeneratorContext::for_test_signature()
+        .with_failing_command(TEST_GENERATOR_1_COMMAND, "1");
+    let ctx = FakeCompletionContext::new(registry).with_generator_context(generator_ctx);
+
+    assert_eq!(
+        complete_at_end_of_line_with_options("test five ", MatchStrategy::CaseInsensitive, &ctx),
+        vec![
+            // test1 exited non-zero but produced output, so its suggestions
+            // should still be parsed rather than dropped wholesale...
+            "bar", "foo", // test1 is unordered, so we sort it.
+            // ...and test2 (which succeeded) must not be collateral damage.
+            "def", "abc", // test2 is already ordered.
+        ]
+    );
+}
+
+/// Companion to [`test_generator_failure_with_partial_output_still_suggests`],
+/// covering the other side of the #9417 guard: a generator whose command
+/// exits non-zero with *no usable* stdout must still contribute nothing, and
+/// must not become collateral damage for the generators that did succeed.
+///
+/// `test1`'s command fails while printing only whitespace -- this also pins the
+/// `trim()` in the guard: a bare `is_empty()` check would let `"  \n "` through
+/// and (on the line-splitting path) leak a bogus empty-value suggestion. Only
+/// `test2`'s ordered suggestions should come back.
+#[test]
+fn test_generator_failure_with_blank_output_suggests_nothing() {
+    let registry = create_test_command_registry([test_signature()]);
+    let generator_ctx = MockGeneratorContext::for_test_signature()
+        .with_failing_command(TEST_GENERATOR_1_COMMAND, "  \n ");
+    let ctx = FakeCompletionContext::new(registry).with_generator_context(generator_ctx);
+
+    assert_eq!(
+        complete_at_end_of_line_with_options("test five ", MatchStrategy::CaseInsensitive, &ctx),
+        vec![
+            // test1 failed with only-whitespace output, so it bails entirely...
+            // ...and test2 (which succeeded) is unaffected.
+            "def", "abc", // test2 is already ordered.
         ]
     );
 }

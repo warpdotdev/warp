@@ -718,36 +718,37 @@ async fn generate_suggestions_for_argument_type(
                 return vec![];
             };
 
-            match output.status {
-                CommandExitStatus::Success => {
-                    let Ok(output_string) = output.to_string() else {
-                        return vec![];
-                    };
+            // A generator command can exit non-zero yet still have written
+            // usable output before failing. The motivating case (#9417) is the
+            // ssh-host generator: it `cat`s `~/.ssh/config` and every `Include`d
+            // file, so one unreadable `Include` (e.g. a Windows `C:\Users\...`
+            // path the POSIX generator mis-resolves) fails the whole command --
+            // even though the readable hosts are already on stdout. Parse what
+            // we got instead of dropping every suggestion; only bail when a
+            // failing command produced nothing to parse.
+            let Ok(output_string) = output.to_string() else {
+                return vec![];
+            };
+            if output.status == CommandExitStatus::Failure && output_string.trim().is_empty() {
+                return vec![];
+            }
 
-                    let results = generator.on_complete(&output_string);
+            let results = generator.on_complete(&output_string);
 
-                    let internal_suggestions = results
-                        .suggestions
-                        .into_iter()
-                        .map(Into::into)
-                        .filter_map(|suggestion: Suggestion| {
-                            let match_type = matcher
-                                .get_match_type(parsed_token.as_str(), suggestion.display.as_str());
-                            match_type
-                                .map(|match_type| MatchedSuggestion::new(suggestion, match_type))
-                        });
+            let internal_suggestions = results.suggestions.into_iter().map(Into::into).filter_map(
+                |suggestion: Suggestion| {
+                    let match_type =
+                        matcher.get_match_type(parsed_token.as_str(), suggestion.display.as_str());
+                    match_type.map(|match_type| MatchedSuggestion::new(suggestion, match_type))
+                },
+            );
 
-                    if results.is_ordered {
-                        internal_suggestions.collect()
-                    } else {
-                        internal_suggestions
-                            .sorted_by(MatchedSuggestion::cmp_by_display)
-                            .collect()
-                    }
-                }
-                CommandExitStatus::Failure => {
-                    vec![]
-                }
+            if results.is_ordered {
+                internal_suggestions.collect()
+            } else {
+                internal_suggestions
+                    .sorted_by(MatchedSuggestion::cmp_by_display)
+                    .collect()
             }
         }
         _ => vec![],
