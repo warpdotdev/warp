@@ -97,10 +97,6 @@ fn auggie_is_supported() {
     assert!(is_agent_supported(&CLIAgent::Auggie));
 }
 
-#[test]
-fn auggie_uses_default_handler_with_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::Auggie));
-}
 
 #[test]
 fn auggie_default_handler_skips_session_start() {
@@ -137,10 +133,6 @@ fn pi_is_supported() {
     assert!(is_agent_supported(&CLIAgent::Pi));
 }
 
-#[test]
-fn pi_uses_default_handler_with_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::Pi));
-}
 
 #[test]
 fn pi_default_handler_skips_session_start() {

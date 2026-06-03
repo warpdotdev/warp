@@ -146,6 +146,7 @@ impl CLIAgentSession {
     pub fn is_remote(&self) -> bool {
         self.remote_host.is_some()
     }
+
     /// Whether this session is backed by a connected structured plugin (rich
     /// OSC 777 events) rather than command detection or Codex's OSC 9 fallback.
     /// Codex's structured plugin always reports a version on connect, so a
@@ -156,10 +157,12 @@ impl CLIAgentSession {
             && (!matches!(self.agent, CLIAgent::Codex) || self.plugin_version.is_some())
     }
 
+    /// Whether the session surfaces trustworthy fine-grained status
+    /// (in-progress / blocked / success). True exactly when a structured
+    /// plugin is connected; Codex's OSC 9 fallback only emits opaque `Stop`
+    /// notifications and so does not qualify.
     pub fn supports_rich_status(&self) -> bool {
         self.has_structured_plugin()
-            && (matches!(self.agent, CLIAgent::Codex)
-                || listener::agent_supports_rich_status(&self.agent))
     }
 
     /// Clears state populated by `PermissionRequest`. Called whenever the

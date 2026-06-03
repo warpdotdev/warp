@@ -23,20 +23,6 @@ trait CLIAgentSessionHandler {
     /// Decide whether a parsed event should be forwarded to the sessions model.
     /// Returns the event (possibly transformed) if it should be processed.
     fn handle_event(&mut self, event: CLIAgentEvent) -> Option<CLIAgentEvent>;
-
-    /// Whether this handler provides meaningful, fine-grained status
-    /// (e.g. in-progress / blocked / success) that should be shown in the UI.
-    /// Handlers backed by the structured plugin protocol report rich status;
-    /// handlers that only forward opaque OS notifications (e.g. Codex) do not.
-    fn supports_rich_status(&self) -> bool {
-        true
-    }
-}
-
-/// Whether the listener for the given agent provides rich status.
-/// Returns `false` for agents without a handler or whose handler opts out.
-pub fn agent_supports_rich_status(agent: &CLIAgent) -> bool {
-    create_handler(agent).is_some_and(|h| h.supports_rich_status())
 }
 
 /// Returns `true` if the given CLI agent has a supported session handler.
@@ -153,10 +139,6 @@ impl CLIAgentSessionHandler for CodexSessionHandler {
 
     fn handle_event(&mut self, event: CLIAgentEvent) -> Option<CLIAgentEvent> {
         Some(event)
-    }
-
-    fn supports_rich_status(&self) -> bool {
-        false
     }
 }
 
