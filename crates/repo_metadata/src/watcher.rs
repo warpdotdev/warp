@@ -15,6 +15,7 @@ use crate::{RepoMetadataError, Repository};
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
+        use ignore::gitignore::Gitignore;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
             extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
@@ -108,6 +109,10 @@ impl DirectoryWatcher {
     /// but applies to the watcher backing `Repository` subscribers (LSP, MCP).
     /// Must be called before repositories begin watching for the interest to
     /// take effect on already-registered watches.
+    ///
+    /// Kept as a `Vec` (deduped on insert): registration happens a handful of
+    /// times at startup, while `start_watching_directory` reads it far more
+    /// often and benefits from a cheap clone.
     pub fn register_ignored_path_interests(
         &mut self,
         interests: impl IntoIterator<Item = PathBuf>,
@@ -318,11 +323,12 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directories(
         &mut self,
         directory_paths: Vec<StandardizedPath>,
+        gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), RepoMetadataError>> {
         let futures: Vec<_> = directory_paths
             .into_iter()
-            .map(|path| self.start_watching_directory(&path, ctx))
+            .map(|path| self.start_watching_directory(&path, gitignores.clone(), ctx))
             .collect();
 
         async move {
@@ -340,15 +346,16 @@ impl DirectoryWatcher {
     pub(crate) fn start_watching_directory(
         &mut self,
         directory_path: &StandardizedPath,
+        gitignores: Vec<Gitignore>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), RepoMetadataError>> {
         let local_path = directory_path.to_local_path();
         let registration_future = if let Some(ref watcher) = self.watcher {
             if let Some(local_path) = local_path.clone() {
-                // Build the gitignore set (root + global) and interest list up
-                // front so the descend filter prunes gitignored subtrees while
-                // still watching registered interests.
-                let gitignores = crate::gitignores_for_directory(&local_path);
+                // `gitignores` are the repo's cached root + global gitignores,
+                // threaded in from `Repository::start_watching` so we neither
+                // re-read `.gitignore` from disk nor re-enter the (already
+                // borrowed) `Repository` model here.
                 let interests = self.ignored_path_interests.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     use notify_debouncer_full::notify::RecursiveMode;
