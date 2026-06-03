@@ -405,10 +405,19 @@ impl LocalRepoMetadataModel {
     }
 
     /// Adds or updates a repository's file tree state.
+    ///
+    /// When `skip_recursive_watch` is `true` the file-system watcher is
+    /// registered in non-recursive mode (root directory only). This prevents
+    /// the inotify backend from walking the entire directory tree and
+    /// allocating a watch descriptor for every subdirectory, which can
+    /// consume multiple gigabytes of memory on very large repositories that
+    /// exceed `MAX_FILES_PER_REPO`.
+    #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
     fn add_repository_internal(
         &mut self,
         repo_path: StandardizedPath,
         state: FileTreeState,
+        skip_recursive_watch: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), RepoMetadataError> {
         let local_path = repo_path
@@ -427,15 +436,27 @@ impl LocalRepoMetadataModel {
         }
 
         // Register this path with the watcher if we have one.
+        // For oversized repositories (indexed_with_limit), use NonRecursive
+        // mode to avoid the massive memory cost of adding inotify watches
+        // for every subdirectory in the tree.
         #[cfg(feature = "local_fs")]
         {
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
+                let mode = if skip_recursive_watch {
+                    log::info!(
+                        "Using non-recursive file watcher for oversized repository: {}",
+                        repo_path
+                    );
+                    RecursiveMode::NonRecursive
+                } else {
+                    RecursiveMode::Recursive
+                };
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         &watch_path,
                         repo_watch_filter(),
-                        RecursiveMode::Recursive,
+                        mode,
                     ));
                 });
             }
@@ -559,7 +580,7 @@ impl LocalRepoMetadataModel {
         .map_err(RepoMetadataError::BuildTree)?;
 
         let state = FileTreeState::new_lazy_loaded(root_entry);
-        self.add_repository_internal(path.clone(), state, ctx)?;
+        self.add_repository_internal(path.clone(), state, false, ctx)?;
         self.lazy_loaded_paths.insert(path.clone(), 1);
         Ok(())
     }
@@ -1022,7 +1043,7 @@ impl LocalRepoMetadataModel {
                             FileTreeState::new(root_entry, gitignores_for_build, Some(repository_handle));
 
                         if let Err(e) =
-                            model.add_repository_internal(std_repo_path.clone(), state, ctx)
+                            model.add_repository_internal(std_repo_path.clone(), state, indexed_with_limit, ctx)
                         {
                             log::warn!("Failed to add repository {repo_path_str}: {e:?}");
                             // On failure, mark the repository as failed so waiters are notified.

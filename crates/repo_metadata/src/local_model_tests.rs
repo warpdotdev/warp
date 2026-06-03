@@ -97,7 +97,7 @@ fn repository_indexed_waits_for_pending_repo() {
 
             model_handle.update(&mut app, |model, ctx| {
                 model
-                    .add_repository_internal(repo_path.clone(), empty_repo_state(&repo_path), ctx)
+                    .add_repository_internal(repo_path.clone(), empty_repo_state(&repo_path), false, ctx)
                     .expect("repository should index");
             });
 
@@ -1318,6 +1318,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result1 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&real_repo).unwrap(),
                         state.clone(),
+                        false,
                         ctx,
                     );
                     assert!(result1.is_ok());
@@ -1326,6 +1327,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result2 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&symlink_repo).unwrap(),
                         state.clone(),
+                        false,
                         ctx,
                     );
                     assert!(result2.is_ok());
@@ -1334,6 +1336,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result3 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&relative_repo).unwrap(),
                         state.clone(),
+                        false,
                         ctx,
                     );
                     assert!(result3.is_ok());
