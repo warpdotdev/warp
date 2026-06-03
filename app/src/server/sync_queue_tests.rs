@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::ops::Index;
 use std::sync::Arc;
 
-use super::QueueDependency;
 use anyhow::anyhow;
 use chrono::{DateTime, Duration, Utc};
 use cloud_object_client::MockObjectClient;
@@ -12,6 +11,7 @@ use itertools::Itertools;
 use warpui::r#async::Timer;
 use warpui::{App, Entity, ModelHandle, SingletonEntity};
 
+use super::QueueDependency;
 use crate::ai::facts::{AIFact, AIMemory, CloudAIFactModel};
 use crate::cloud_object::model::actions::{
     ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
