@@ -139,15 +139,9 @@ pub fn create_cloud_mode_view(
     (terminal_view, terminal_manager)
 }
 
-/// Returns `true` when a cloud agent is in any pre-first-exchange phase: first-time setup
-/// (`Setup`), still spawning (`WaitingForSession`, loading screen), or running env-setup
-/// commands before the first agent turn (`AgentRunning` with the startup-command flag).
-///
-/// This is the single predicate for "this cloud run hasn't produced its first exchange yet."
-/// It gates hiding the interactive input, rendering the loading footer, suppressing
-/// sharer-driven input sync / buffer clears, and holding back user submissions (queued for
-/// Oz, dropped for third-party). It requires a genuine cloud-agent/handoff pane and exits
-/// once a third-party harness CLI has started.
+/// Returns `true` when a cloud agent shared session is in any pre-first-exchange phase —
+/// either still spawning (loading screen) or running setup commands before the first
+/// agent turn. In this state, we hide the interactive input and render a loading footer.
 pub fn is_cloud_agent_pre_first_exchange(
     ambient_agent_view_model: Option<&ModelHandle<AmbientAgentViewModel>>,
     agent_view_controller: &ModelHandle<AgentViewController>,
@@ -166,7 +160,7 @@ pub fn is_cloud_agent_pre_first_exchange(
 
     let is_in_pre_first_exchange_status = matches!(
         view_model.status(),
-        Status::Setup | Status::WaitingForSession { .. } | Status::AgentRunning
+        Status::WaitingForSession { .. } | Status::AgentRunning
     );
     if !is_in_pre_first_exchange_status {
         return false;
@@ -191,12 +185,9 @@ pub fn is_cloud_agent_pre_first_exchange(
         return false;
     }
 
-    // Setup / loading phases (`Setup`, `WaitingForSession`): no env-setup commands have started
-    // yet, but we're still pre-first-exchange. Skip the block-list flag check.
-    if matches!(
-        view_model.status(),
-        Status::Setup | Status::WaitingForSession { .. }
-    ) {
+    // Loading phase (`WaitingForSession`): no setup commands have started yet, but we're
+    // still pre-first-exchange. Skip the block-list flag check.
+    if matches!(view_model.status(), Status::WaitingForSession { .. }) {
         return true;
     }
 
