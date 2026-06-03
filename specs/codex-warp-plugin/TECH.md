@@ -22,7 +22,7 @@ Relevant code:
 
 ## Proposed changes
 ### 1. Add `CodexPlugin` flag
-Add `codex_plugin = []` to `app/Cargo.toml`, add `FeatureFlag::CodexPlugin` to the app feature bridge, add it to `warp_features`, and enable it for dogfood builds.
+Add `FeatureFlag::CodexPlugin` and enable it for dogfood builds.
 When disabled:
 - Codex keeps the existing native OSC 9 behavior.
 - structured Codex events are ignored.
@@ -33,6 +33,8 @@ When enabled:
 - structured OSC 777 events unlock rich status.
 - OSC 9 remains fallback for older Codex clients.
 
+This means we can test this before releasing into the wild.
+
 ### 2. Make Codex listener protocol-aware
 `CLIAgentSessionHandler::try_parse` now takes `&mut self`. Codex uses that state to remember when it has seen a structured Codex plugin event.
 Codex parsing rules:
@@ -42,7 +44,6 @@ Codex parsing rules:
 - If it is a structured event for another agent, drop it.
 - If it is OSC 9 (`title == None`) and no structured plugin has been seen, convert text to `Stop`.
 - If structured plugin is active, ignore later OSC 9 so Warp does not emit duplicate status/notifications.
-OSC 9 remains intentionally lossy. It cannot encode permission/blocking/in-progress state, so it maps non-empty text to `Stop` with the body as `query`.
 
 ### 3. Move rich-status checks onto session state
 The old `agent_supports_rich_status(agent)` helper was static and could not distinguish Codex plugin from Codex OSC 9 fallback.
@@ -83,7 +84,6 @@ Key Codex differences:
 - User plugin command is `codex plugin add warp@codex-warp`, not `claude plugin install warp@claude-code-warp`.
 - Update removes marketplace `codex-warp`, re-adds `warpdotdev/codex-warp`, then runs `codex plugin add warp@codex-warp`.
 - User plugin key is `warp@codex-warp`.
-- Platform plugin key is `orchestration@codex-warp`.
 - Config root is `$CODEX_HOME` or `~/.codex`.
 - Install state reads `[plugins."warp@codex-warp"].enabled = true` from `config.toml`.
 - Version state reads cached manifests under `plugins/cache/codex-warp/warp/*/.codex-plugin/plugin.json`.
@@ -103,6 +103,7 @@ Unit coverage added/updated:
 - install detection reads `config.toml`.
 - version detection picks latest cached plugin manifest version.
 - `CODEX_HOME` overrides the default `~/.codex` path in install/update checks.
+
 Suggested local validation:
 - `cargo test -p warp --features test-util codex`
 - `cargo test -p warp --features test-util cli_agent_sessions`
@@ -111,6 +112,7 @@ Suggested local validation:
 - In plugin mode, verify Codex emitting both OSC 777 and OSC 9 does not produce duplicate notifications.
 - Verify footer install/update/restart UI remains visible for OSC 9 fallback, then hides after structured plugin connects after restart.
 - Verify vertical tabs and agent icon do not show rich status for OSC 9 fallback.
+
 ## Parallelization
 No sub-agents recommended for implementation. The change is tightly coupled around one invariant: whether a Codex session is OSC 9 fallback or structured OSC 777 plugin-backed.
 Best review split:
