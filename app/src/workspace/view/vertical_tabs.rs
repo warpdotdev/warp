@@ -35,6 +35,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
 
+use super::select_unique_pane_kinds;
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -764,7 +765,7 @@ enum VerticalTabsResolvedMode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SummaryPaneKind {
+pub(super) enum SummaryPaneKind {
     Terminal,
     OzAgent { is_ambient: bool },
     CLIAgent { agent: CLIAgent, is_ambient: bool },
@@ -998,9 +999,9 @@ fn summary_search_text_fragments(
 fn select_summary_pane_kind_icons(
     pane_kinds: impl IntoIterator<Item = (EntityId, SummaryPaneKind)>,
 ) -> Option<SummaryPaneKindIcons> {
-    let mut kinds = super::select_unique_pane_kinds(pane_kinds, 2).into_iter();
-    let primary = kinds.next()?;
-    match kinds.next() {
+    let mut unique_kinds = select_unique_pane_kinds(pane_kinds, 2).into_iter();
+    let primary = unique_kinds.next()?;
+    match unique_kinds.next() {
         Some(secondary) => Some(SummaryPaneKindIcons::Pair { primary, secondary }),
         None => Some(SummaryPaneKindIcons::Single(primary)),
     }
@@ -1012,15 +1013,8 @@ fn resolve_summary_pane_kind_icons(
     app: &AppContext,
 ) -> Option<SummaryPaneKindIcons> {
     select_summary_pane_kind_icons(visible_pane_ids.iter().filter_map(|pane_id| {
-        pane_group.pane_by_id(*pane_id).map(|pane| {
-            let pane_configuration = pane.pane_configuration();
-            let pane_configuration = pane_configuration.as_ref(app);
-            let typed = pane_group.resolve_pane_type(*pane_id, app);
-            (
-                pane_id.creation_order_id(),
-                typed.summary_pane_kind(pane_configuration.title().trim(), app),
-            )
-        })
+        let kind = pane_summary_kind(pane_group, *pane_id, app)?;
+        Some((pane_id.creation_order_id(), kind))
     }))
 }
 
@@ -3760,20 +3754,21 @@ impl PaneGroup {
 /// Summary mode. For Terminal panes, distinguishes Oz vs Oz cloud vs each
 /// known CLI agent (Claude, Codex, …) by routing through
 /// `terminal_view_agent_icon_variant`; for other pane types it falls back
-/// to `TypedPane::summary_pane_kind`.
-pub(crate) fn pane_summary_kind(
+/// to `TypedPane::summary_pane_kind`. Returns `None` when `pane_id` does
+/// not resolve to a pane in `pane_group` so callers can skip stale ids
+/// via `filter_map`; note this is distinct from a known pane that
+/// classifies as `SummaryPaneKind::Other`.
+pub(super) fn pane_summary_kind(
     pane_group: &PaneGroup,
     pane_id: PaneId,
     app: &AppContext,
-) -> SummaryPaneKind {
-    let Some(pane) = pane_group.pane_by_id(pane_id) else {
-        return SummaryPaneKind::Other;
-    };
+) -> Option<SummaryPaneKind> {
+    let pane = pane_group.pane_by_id(pane_id)?;
     let pane_configuration = pane.pane_configuration();
     let pane_configuration = pane_configuration.as_ref(app);
     let title = pane_configuration.title().trim();
     let typed = pane_group.resolve_pane_type(pane_id, app);
-    typed.summary_pane_kind(title, app)
+    Some(typed.summary_pane_kind(title, app))
 }
 
 /// Returns the best available working-directory string for a terminal pane,
@@ -4433,7 +4428,7 @@ pub(super) fn render_summary_pane_kind_icons(
 const SUMMARY_INLINE_ICON_RATIO: f32 = 2. / 3.;
 const SUMMARY_INLINE_PADDING_RATIO: f32 = (1. - SUMMARY_INLINE_ICON_RATIO) / 2.;
 
-pub(crate) fn render_summary_pane_kind_icon_circle(
+pub(super) fn render_summary_pane_kind_icon_circle(
     kind: SummaryPaneKind,
     total_size: f32,
     appearance: &Appearance,

@@ -18948,11 +18948,9 @@ impl Workspace {
             let pane_kinds: Vec<(EntityId, SummaryPaneKind)> = pane_group
                 .visible_pane_ids()
                 .iter()
-                .map(|pane_id| {
-                    (
-                        pane_id.creation_order_id(),
-                        pane_summary_kind(pane_group, *pane_id, ctx),
-                    )
+                .filter_map(|pane_id| {
+                    pane_summary_kind(pane_group, *pane_id, ctx)
+                        .map(|kind| (pane_id.creation_order_id(), kind))
                 })
                 .collect();
             for kind in select_unique_pane_kinds(pane_kinds, 2) {
@@ -27013,7 +27011,7 @@ fn render_group_member_icon_collage(
 /// `creation_order_id`, and takes the first `max_count`. Shared between
 /// the vertical-tabs Summary icon pair and the horizontal tab-group collage
 /// so both views select icons consistently for the same panes.
-pub(super) fn select_unique_pane_kinds(
+fn select_unique_pane_kinds(
     pane_kinds: impl IntoIterator<Item = (EntityId, SummaryPaneKind)>,
     max_count: usize,
 ) -> Vec<SummaryPaneKind> {
