@@ -1,7 +1,8 @@
+use std::fs;
+
 use super::CodexPluginManager;
 use crate::features::FeatureFlag;
 use crate::terminal::cli_agent_sessions::plugin_manager::CliAgentPluginManager;
-use std::fs;
 
 #[test]
 fn can_auto_install_is_true() {

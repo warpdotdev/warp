@@ -5,7 +5,7 @@ pub(crate) mod plugin_manager;
 
 use std::collections::{HashMap, HashSet};
 
-use event::{CLIAgentEvent, CLIAgentEventType};
+use event::{CLIAgentEvent, CLIAgentEventSource, CLIAgentEventType};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::listener::CLIAgentSessionListener;
@@ -140,6 +140,10 @@ pub struct CLIAgentSession {
     /// the first word of the command (the binary/alias the user typed).
     /// Used to customize plugin instructions and force manual install mode.
     pub custom_command_prefix: Option<String>,
+    /// Set once the session has received any structured OSC 777 (rich)
+    /// notification. Codex's OSC 9 fallback never sets it, so this is the
+    /// single source of truth for whether the session is plugin-backed.
+    pub received_rich_notification: bool,
 }
 
 impl CLIAgentSession {
@@ -147,22 +151,14 @@ impl CLIAgentSession {
         self.remote_host.is_some()
     }
 
-    /// Whether this session is backed by a connected structured plugin (rich
-    /// OSC 777 events) rather than command detection or Codex's OSC 9 fallback.
-    /// Codex's structured plugin always reports a version on connect, so a
-    /// present `plugin_version` distinguishes it from the versionless OSC 9
-    /// fallback. Other agents only ever connect via the structured plugin.
-    pub fn has_structured_plugin(&self) -> bool {
-        self.listener.is_some()
-            && (!matches!(self.agent, CLIAgent::Codex) || self.plugin_version.is_some())
-    }
-
     /// Whether the session surfaces trustworthy fine-grained status
-    /// (in-progress / blocked / success). True exactly when a structured
-    /// plugin is connected; Codex's OSC 9 fallback only emits opaque `Stop`
-    /// notifications and so does not qualify.
+    /// (in-progress / blocked / success). True only after receiving a rich OSC
+    /// 777 notification. Codex's OSC 9 fallback emits only opaque `Stop`
+    /// notifications and never sets `received_rich_notification`, so it does
+    /// not qualify. Synthetic listener registration also does not qualify until
+    /// an actual rich notification arrives.
     pub fn supports_rich_status(&self) -> bool {
-        self.has_structured_plugin()
+        self.received_rich_notification
     }
 
     /// Clears state populated by `PermissionRequest`. Called whenever the
@@ -395,6 +391,7 @@ impl CLIAgentSessionsModel {
                 remote_host,
                 draft_text: None,
                 custom_command_prefix: None,
+                received_rich_notification: false,
             },
             ctx,
         );
@@ -410,6 +407,8 @@ impl CLIAgentSessionsModel {
     }
 
     /// Updates the session's status and context from a parsed CLI agent event.
+    /// Rich plugin events latch `received_rich_notification` so rich-status
+    /// surfaces stay consistent even if the first event was not SessionStart.
     pub fn update_from_event(
         &mut self,
         terminal_view_id: EntityId,
@@ -419,6 +418,10 @@ impl CLIAgentSessionsModel {
         let Some(session) = self.sessions.get_mut(&terminal_view_id) else {
             return;
         };
+
+        if event.source == CLIAgentEventSource::RichPlugin {
+            session.received_rich_notification = true;
+        }
 
         let event_type = &event.event;
         if let Some(new_status) = session.apply_event(event) {
