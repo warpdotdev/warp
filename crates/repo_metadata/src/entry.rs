@@ -716,8 +716,31 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// so the allowlisted children remain reachable on Linux.
 #[cfg(feature = "local_fs")]
 pub fn repo_watch_filter() -> WatchFilter {
+    repo_watch_filter_with_gitignores(Vec::new())
+}
+
+/// Returns the [`WatchFilter`] used by repository file watchers, incorporating
+/// gitignore patterns to skip ignored directories during the recursive walk.
+///
+/// On Linux (inotify), recursive watching creates an individual kernel watch
+/// per directory. Skipping gitignored directories (e.g. `node_modules/`,
+/// `target/`, `.venv/`) dramatically reduces the number of inotify watches
+/// and associated memory usage.
+#[cfg(feature = "local_fs")]
+pub fn repo_watch_filter_with_gitignores(gitignores: Vec<Gitignore>) -> WatchFilter {
     WatchFilter::with_filter(
-        Arc::new(should_watch_directory_in_git_path),
+        Arc::new(move |path: &Path| {
+            // Always prune non-allowed .git/ internal paths.
+            if !should_watch_directory_in_git_path(path) {
+                return false;
+            }
+            // Skip gitignored directories to avoid registering unnecessary
+            // inotify watches on large ignored trees (node_modules, target, etc.).
+            if !gitignores.is_empty() && matches_gitignores(path, true, &gitignores, false) {
+                return false;
+            }
+            true
+        }),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),
     )
 }
