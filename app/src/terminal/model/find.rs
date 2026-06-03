@@ -1,4 +1,5 @@
-use std::{borrow::Cow, ops::RangeInclusive};
+use std::borrow::Cow;
+use std::ops::RangeInclusive;
 
 use regex::escape;
 use regex_automata::hybrid::dfa::{Cache, DFA};
