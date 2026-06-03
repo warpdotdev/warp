@@ -716,7 +716,6 @@ impl Network {
             .into_iter()
             .collect();
 
-
         // Get the selected model before spawning the async task
         let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
         let selected_model_id: String = llm_prefs
@@ -858,7 +857,10 @@ impl Network {
                         return;
                     }
                     network.clear_startup_transport_handle(attempt);
-                    network.log_diagnostic("initial_websocket_connect_failed", "outcome=transport_error");
+                    network.log_diagnostic(
+                        "initial_websocket_connect_failed",
+                        "outcome=transport_error",
+                    );
                     IapManager::handle(ctx).update(ctx, |manager, ctx| {
                         manager.check_ws_connect_error(&e, ctx);
                     });
