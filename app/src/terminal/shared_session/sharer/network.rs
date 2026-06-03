@@ -345,6 +345,29 @@ impl Network {
         let init_block_id = model.lock().block_list().active_block_id().clone();
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
         ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
+        let window_size = {
+            let size_info = *model.lock().block_list().size();
+            WindowSize {
+                num_rows: size_info.rows(),
+                num_cols: size_info.columns(),
+            }
+        };
+        let selected_model_id: String = crate::ai::llms::LLMPreferences::as_ref(ctx)
+            .get_active_base_model(ctx, Some(terminal_view_id))
+            .id
+            .clone()
+            .into();
+        let startup_retry = StartupRetryState::new(startup_max_attempts(&source));
+        let startup_config = StartupConfig {
+            scrollback: scrollback.clone(),
+            window_size,
+            init_block_id: init_block_id.clone(),
+            input_replica_id,
+            universal_developer_input_context: universal_developer_input_context.clone(),
+            lifetime,
+            source,
+            selected_model_id,
+        };
 
         let mut network = Network {
             heartbeat,
@@ -352,7 +375,7 @@ impl Network {
             selection_event_no: EventNumber::new(),
             model: model.clone(),
             ws_proxy_tx,
-            ws_proxy_rx: ws_proxy_rx.clone(),
+            ws_proxy_rx,
             selection_throttled_tx,
             num_bytes_shared: num_bytes_scrollback,
             max_session_size,
@@ -368,19 +391,10 @@ impl Network {
             session_id: None,
             reconnect_token: None,
             sharer_id: None,
-            source: Some(source.clone()),
-            startup_config: None,
-            startup_retry: None,
+            startup_config: Some(startup_config),
+            startup_retry: Some(startup_retry),
             unacked_terminal_events: HashMap::new(),
             next_buffer_seq_no: (init_block_id.clone(), InputOperationSeqNo::zero()),
-        };
-
-        let window_size = {
-            let size_info = *network.model.lock().block_list().size();
-            WindowSize {
-                num_rows: size_info.rows(),
-                num_cols: size_info.columns(),
-            }
         };
 
         // We should validate the scrollback is under the limit before creating the Network, but check here just to be safe.
@@ -392,18 +406,7 @@ impl Network {
             });
         } else {
             network.start_ordered_terminal_events_listener(ordered_events_rx, ctx);
-            network.start_websocket(
-                ws_proxy_rx,
-                scrollback,
-                window_size,
-                init_block_id,
-                input_replica_id,
-                terminal_view_id,
-                universal_developer_input_context,
-                lifetime,
-                source,
-                ctx,
-            );
+            network.start_create_session_attempt(ctx);
         }
         ctx.spawn_stream_local(
             selection_throttled_rx,
@@ -694,51 +697,6 @@ impl Network {
     }
 
     #[cfg(not(any(test, feature = "integration_tests")))]
-    #[allow(clippy::too_many_arguments)]
-    fn start_websocket(
-        &mut self,
-        ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
-        scrollback: Scrollback,
-        window_size: WindowSize,
-        init_block_id: BlockId,
-        input_replica_id: ReplicaId,
-        terminal_view_id: warpui::EntityId,
-        universal_developer_input_context: UniversalDeveloperInputContext,
-        lifetime: Lifetime,
-        source: SharedSessionSource,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
-        let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
-        let iap_headers: Vec<(&str, String)> = IapManager::as_ref(ctx)
-            .iap_state()
-            .and_then(|state| state.proxy_auth_header())
-            .into_iter()
-            .collect();
-
-        // Get the selected model before spawning the async task
-        let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
-        let selected_model_id: String = llm_prefs
-            .get_active_base_model(ctx, Some(terminal_view_id))
-            .id
-            .clone()
-            .into();
-        self.startup_config = Some(StartupConfig {
-            scrollback,
-            window_size,
-            init_block_id,
-            input_replica_id,
-            universal_developer_input_context,
-            lifetime,
-            source: source.clone(),
-            selected_model_id,
-        });
-        self.startup_retry = Some(StartupRetryState::new(startup_max_attempts(&source)));
-        self.ws_proxy_rx = ws_proxy_rx;
-        self.start_create_session_attempt(ctx);
-    }
-
-    #[cfg(not(any(test, feature = "integration_tests")))]
     fn start_create_session_attempt(&mut self, ctx: &mut ModelContext<Self>) {
         if !matches!(self.stage, Stage::BeforeStarted) {
             return;
@@ -777,6 +735,11 @@ impl Network {
 
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
+        let iap_headers: Vec<(&str, String)> = IapManager::as_ref(ctx)
+            .iap_state()
+            .and_then(|state| state.proxy_auth_header())
+            .into_iter()
+            .collect();
         let connect_handle = ctx.spawn(
             async move {
                 let Some(create_endpoint) = connect_endpoint("/sessions/create".to_owned()) else {
@@ -805,11 +768,6 @@ impl Network {
                     network.clear_startup_transport_handle(attempt);
                     // We don't use the `send_message_to_server` API here
                     // because we don't want to buffer this message.
-                    let Some(config) = network.startup_config.clone() else {
-                        log::error!("Cannot initialize shared session without startup config");
-                        network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
-                        return;
-                    };
                     let universal_developer_input_context = network
                         .cached_latest_state
                         .universal_developer_input_context
@@ -857,10 +815,6 @@ impl Network {
                         return;
                     }
                     network.clear_startup_transport_handle(attempt);
-                    network.log_diagnostic(
-                        "initial_websocket_connect_failed",
-                        "outcome=transport_error",
-                    );
                     IapManager::handle(ctx).update(ctx, |manager, ctx| {
                         manager.check_ws_connect_error(&e, ctx);
                     });
@@ -1021,9 +975,6 @@ impl Network {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let iap_state = IapManager::as_ref(ctx).iap_state();
-        let (source_type, source_task_id) = self.diagnostic_source_context();
-        let source_type = source_type.to_string();
-        let source_task_id = source_task_id.map(str::to_owned);
 
         let abort_handle = ctx
             .spawn_with_retry_on_error(
@@ -1094,10 +1045,6 @@ impl Network {
                         network.on_websocket_connected(None, ws_proxy_rx, sink, stream, ctx);
                     }
                     RequestState::RequestFailedRetryPending(e) => {
-                        network.log_diagnostic(
-                            "reconnect_attempt_failed",
-                            "outcome=retry_pending",
-                        );
                         IapManager::handle(ctx).update(ctx, |manager, ctx| {
                             manager.check_ws_connect_error(&e, ctx);
                         });
