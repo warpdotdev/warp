@@ -586,6 +586,8 @@ pub(super) struct VerticalTabsPanelState {
     pane_row_mouse_states: RefCell<HashMap<PaneId, MouseStateHandle>>,
     pane_title_mouse_states: RefCell<HashMap<PaneId, MouseStateHandle>>,
     pane_badge_mouse_states: RefCell<HashMap<PaneId, PaneRowBadgeMouseStates>>,
+    summary_branch_pull_request_mouse_states:
+        RefCell<HashMap<(EntityId, PathBuf, String), MouseStateHandle>>,
     detail_pane_badge_mouse_states: RefCell<HashMap<PaneId, PaneRowBadgeMouseStates>>,
     detail_scroll_state: ClippedScrollStateHandle,
     detail_sidecar_mouse_state: MouseStateHandle,
@@ -623,6 +625,7 @@ impl Default for VerticalTabsPanelState {
             pane_row_mouse_states: RefCell::default(),
             pane_title_mouse_states: RefCell::default(),
             pane_badge_mouse_states: RefCell::default(),
+            summary_branch_pull_request_mouse_states: RefCell::default(),
             detail_pane_badge_mouse_states: RefCell::default(),
             detail_scroll_state: ClippedScrollStateHandle::default(),
             detail_sidecar_mouse_state: Default::default(),
@@ -653,6 +656,22 @@ impl Default for VerticalTabsPanelState {
 }
 
 impl VerticalTabsPanelState {
+    fn summary_branch_pull_request_mouse_state(
+        &self,
+        pane_group_id: EntityId,
+        entry: &VerticalTabsSummaryBranchEntry,
+    ) -> MouseStateHandle {
+        self.summary_branch_pull_request_mouse_states
+            .borrow_mut()
+            .entry((
+                pane_group_id,
+                entry.repo_path.clone(),
+                entry.branch_name.clone(),
+            ))
+            .or_default()
+            .clone()
+    }
+
     /// Returns a lightweight handle bundle for workspace-level visibility reconciliation while the
     /// detail sidecar is active.
     pub(super) fn detail_hover_state(&self, window_id: WindowId) -> VerticalTabsDetailHoverState {
@@ -797,6 +816,7 @@ struct VerticalTabsSummaryBranchEntry {
     branch_name: String,
     diff_stats: Option<GitLineChanges>,
     pull_request_label: Option<String>,
+    pull_request_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -955,6 +975,9 @@ fn coalesce_summary_branch_entries(
             }
             if existing.pull_request_label.is_none() {
                 existing.pull_request_label = entry.pull_request_label;
+            }
+            if existing.pull_request_url.is_none() {
+                existing.pull_request_url = entry.pull_request_url;
             }
         } else {
             indices.insert(key, coalesced.len());
@@ -2017,6 +2040,7 @@ fn render_tab_group_internal(
                     return Empty::new().finish();
                 };
                 rows.add_child(render_summary_tab_item(
+                    state,
                     pane_props,
                     summary
                         .as_ref()
@@ -3286,15 +3310,17 @@ fn build_vertical_tabs_summary_data(
                         .current_git_branch(app)
                         .and_then(|branch| normalize_summary_text(&branch)),
                 ) {
+                    let pull_request_url = terminal_view.current_pull_request_url(app);
                     branch_entries.push(VerticalTabsSummaryBranchEntry {
                         repo_path,
                         branch_name,
                         diff_stats: terminal_view.current_diff_line_changes(app),
-                        pull_request_label: terminal_view
-                            .current_pull_request_url(app)
+                        pull_request_label: pull_request_url
                             .as_deref()
                             .map(terminal_pull_request_badge_label)
                             .and_then(|label| normalize_summary_text(&label)),
+                        pull_request_url: pull_request_url
+                            .and_then(|url| normalize_summary_text(&url)),
                     });
                 }
             }
@@ -4118,6 +4144,7 @@ fn render_pane_title_slot(
 }
 
 fn render_summary_tab_item(
+    state: &VerticalTabsPanelState,
     props: PaneProps<'_>,
     summary: &VerticalTabsSummaryData,
     summary_pane_kind_icons: Option<SummaryPaneKindIcons>,
@@ -4276,10 +4303,17 @@ fn render_summary_tab_item(
 
     // Branch region. Each branch line gets the existing 4px top margin from APP-3875.
     for branch_entry in summary.branch_entries.iter().take(MAX_VISIBLE_BRANCH_LINES) {
+        let pull_request_mouse_state = branch_entry.pull_request_url.as_ref().map(|_| {
+            state.summary_branch_pull_request_mouse_state(props.pane_group_id, branch_entry)
+        });
         text_col.add_child(
-            Container::new(render_summary_branch_line(branch_entry, appearance))
-                .with_margin_top(REGION_GAP)
-                .finish(),
+            Container::new(render_summary_branch_line(
+                branch_entry,
+                pull_request_mouse_state,
+                appearance,
+            ))
+            .with_margin_top(REGION_GAP)
+            .finish(),
         );
     }
 
@@ -4589,6 +4623,7 @@ fn summary_pane_kind_icon(
 
 fn render_summary_branch_line(
     entry: &VerticalTabsSummaryBranchEntry,
+    pull_request_mouse_state: Option<MouseStateHandle>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -4616,8 +4651,10 @@ fn render_summary_branch_line(
         has_right_badges = true;
     }
     if let Some(pull_request_label) = &entry.pull_request_label {
-        right_badges.add_child(render_passive_terminal_pull_request_badge(
+        right_badges.add_child(render_summary_pull_request_badge(
             pull_request_label,
+            entry.pull_request_url.as_deref(),
+            pull_request_mouse_state,
             appearance,
         ));
         has_right_badges = true;
@@ -4906,6 +4943,24 @@ fn render_passive_terminal_pull_request_badge(
         render_pull_request_badge_content(label, appearance),
         internal_colors::fg_overlay_1(appearance.theme()),
     )
+}
+
+fn render_summary_pull_request_badge(
+    label: &str,
+    url: Option<&str>,
+    mouse_state: Option<MouseStateHandle>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    match (url, mouse_state) {
+        (Some(url), Some(mouse_state)) => render_terminal_pull_request_badge(
+            label.to_string(),
+            url.to_string(),
+            VerticalTabsChipEntrypoint::Tab,
+            mouse_state,
+            appearance,
+        ),
+        _ => render_passive_terminal_pull_request_badge(label, appearance),
+    }
 }
 
 fn render_compact_non_terminal_title(
