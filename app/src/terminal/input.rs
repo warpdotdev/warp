@@ -1642,7 +1642,6 @@ pub struct Input {
 
     /// Inline model selector for choosing the Agent base model.
     inline_model_selector_view: ViewHandle<InlineModelSelectorView>,
-    restore_prompt_after_inline_model_selector_selection: bool,
     /// Inline profile selector for choosing the active execution profile.
     inline_profile_selector_view: ViewHandle<InlineProfileSelectorView>,
 
@@ -3600,7 +3599,6 @@ impl Input {
             inline_plan_menu_view,
             inline_repos_menu_view,
             inline_model_selector_view,
-            restore_prompt_after_inline_model_selector_selection: false,
             inline_profile_selector_view,
             inline_prompts_menu_view,
             inline_skill_selector_view,
@@ -4560,15 +4558,14 @@ impl Input {
                     }
                 }
                 // Accept path: close the model selector.
+                let selector_view = self.inline_model_selector_view.as_ref(ctx);
+                let should_restore_buffer = selector_view.prompt_parked_for_search()
+                    || !selector_view.filter_results_by_input();
                 if self
                     .suggestions_mode_model
                     .as_ref(ctx)
                     .is_inline_model_selector()
-                    && (self.restore_prompt_after_inline_model_selector_selection
-                        || !self
-                            .inline_model_selector_view
-                            .as_ref(ctx)
-                            .filter_results_by_input())
+                    && should_restore_buffer
                 {
                     // The user had a pre-existing prompt; restore it (do NOT clear buffer).
                     self.suggestions_mode_model.update(ctx, |model, ctx| {
@@ -4591,7 +4588,6 @@ impl Input {
                     }
                     self.clear_buffer_and_reset_undo_stack(ctx);
                 }
-                self.restore_prompt_after_inline_model_selector_selection = false;
             }
             InlineModelSelectorEvent::Dismissed => {
                 if self
@@ -4604,7 +4600,6 @@ impl Input {
                     });
                     ctx.notify();
                 }
-                self.restore_prompt_after_inline_model_selector_selection = false;
             }
         }
         self.focus_input_box(ctx);
@@ -4763,10 +4758,21 @@ impl Input {
             .as_ref(ctx)
             .is_inline_model_selector()
         {
-            self.suggestions_mode_model.update(ctx, |model, ctx| {
-                model.set_mode(InputSuggestionsMode::Closed, ctx);
-            });
-            self.restore_prompt_after_inline_model_selector_selection = false;
+            // Toggling closed via the chip: restore the parked prompt if we
+            // cleared it for search, otherwise just close.
+            if self
+                .inline_model_selector_view
+                .as_ref(ctx)
+                .prompt_parked_for_search()
+            {
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.close_and_restore_buffer(ctx);
+                });
+            } else {
+                self.suggestions_mode_model.update(ctx, |model, ctx| {
+                    model.set_mode(InputSuggestionsMode::Closed, ctx);
+                });
+            }
             ctx.notify();
             return;
         }
@@ -4779,9 +4785,9 @@ impl Input {
             if has_input && !should_clear_prompt_for_search {
                 view.set_filter_results_by_input(false);
             }
+            view.set_prompt_parked_for_search(should_clear_prompt_for_search);
             view.set_active_tab(initial_tab, ctx);
         });
-        self.restore_prompt_after_inline_model_selector_selection = should_clear_prompt_for_search;
         self.open_model_selector(ctx);
         if should_clear_prompt_for_search {
             self.editor.update(ctx, |editor, ctx| {
@@ -4789,15 +4795,6 @@ impl Input {
             });
         }
         self.focus_input_box(ctx);
-    }
-
-    #[cfg(feature = "integration_tests")]
-    pub fn integration_test_toggle_inline_model_selector_from_chip(
-        &mut self,
-        initial_tab: InlineModelSelectorTab,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.toggle_inline_model_selector_from_chip(initial_tab, ctx);
     }
 
     fn open_profile_selector(&mut self, ctx: &mut ViewContext<Self>) {
@@ -8656,11 +8653,12 @@ impl Input {
     fn should_restore_buffer_on_inline_menu_dismiss(&self, ctx: &ViewContext<Self>) -> bool {
         match self.suggestions_mode_model.as_ref(ctx).mode() {
             // If the input is not being used as a search on the model menu
-            // we should not restore/revert the changes to the input on-dismiss.
-            InputSuggestionsMode::ModelSelector => self
-                .inline_model_selector_view
-                .as_ref(ctx)
-                .filter_results_by_input(),
+            // we should not restore/revert the changes to the input on-dismiss,
+            // unless we parked a prompt to search (then we restore that prompt).
+            InputSuggestionsMode::ModelSelector => {
+                let view = self.inline_model_selector_view.as_ref(ctx);
+                view.prompt_parked_for_search() || view.filter_results_by_input()
+            }
             _ => true,
         }
     }

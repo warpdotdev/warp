@@ -4,7 +4,8 @@ use warp::features::FeatureFlag;
 use warp::integration_testing::clipboard::write_to_clipboard;
 use warp::integration_testing::input::{
     assert_autosuggestion_state, input_contains_string, input_is_empty,
-    latest_buffer_operations_are_empty, tab_completions_menu_is_open, AutosuggestionState,
+    latest_buffer_operations_are_empty, open_inline_model_selector_from_chip,
+    tab_completions_menu_is_open, toggle_inline_model_selector_from_chip, AutosuggestionState,
 };
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::util::{
@@ -16,8 +17,6 @@ use warp::integration_testing::terminal::{
 use warp::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab,
 };
-use warp::terminal::input::models::InlineModelSelectorTab;
-use warp::terminal::input::InputSuggestionsMode;
 use warp::terminal::shell::ShellType;
 use warpui_core::integration::TestStep;
 use warpui_core::{async_assert_eq, Event};
@@ -88,37 +87,6 @@ pub fn test_autosuggestions_are_hidden_when_opening_tab_completions() -> Builder
         )
 }
 
-fn inline_model_selector_is_open() -> warpui_core::integration::AssertionCallback {
-    Box::new(|app, window_id| {
-        let input = single_input_view_for_tab(app, window_id, 0);
-        input.read(app, |view, ctx| {
-            async_assert_eq!(
-                view.suggestions_mode_model().as_ref(ctx).mode(),
-                &InputSuggestionsMode::ModelSelector,
-                "Inline model selector should be open"
-            )
-        })
-    })
-}
-
-fn open_inline_model_selector_from_chip() -> TestStep {
-    new_step_with_default_assertions("Open inline model selector from model chip")
-        .with_action(|app, window_id, _| {
-            let input = single_input_view_for_tab(app, window_id, 0);
-            input.update(app, |view, ctx| {
-                view.integration_test_toggle_inline_model_selector_from_chip(
-                    InlineModelSelectorTab::BaseAgent,
-                    ctx,
-                );
-            });
-        })
-        .add_named_assertion(
-            "Inline model selector is open",
-            inline_model_selector_is_open(),
-        )
-        .add_named_assertion("Prompt is cleared for model search", input_is_empty(0))
-}
-
 pub fn test_inline_model_selector_restores_prompt_on_dismissal() -> Builder {
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch.set_enabled(true);
 
@@ -182,6 +150,37 @@ pub fn test_inline_model_selector_restores_prompt_on_model_selection() -> Builde
                     "Original prompt is restored after model selection",
                     input_contains_string(0, original_prompt.to_owned()),
                 ),
+        )
+}
+
+pub fn test_inline_model_selector_restores_prompt_on_chip_toggle_close() -> Builder {
+    FeatureFlag::RestorePromptOnInlineModelSelectorSearch.set_enabled(true);
+
+    let original_prompt = "refactor this into smaller modules";
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            new_step_with_default_assertions("Type prompt before opening model selector")
+                .with_typed_characters(&[original_prompt])
+                .add_named_assertion(
+                    "Prompt is present before opening selector",
+                    input_contains_string(0, original_prompt.to_owned()),
+                ),
+        )
+        .with_step(open_inline_model_selector_from_chip())
+        .with_step(
+            new_step_with_default_assertions("Type model search")
+                .with_typed_characters(&["claude"])
+                .add_named_assertion(
+                    "Model search text is in the input",
+                    input_contains_string(0, "claude".to_owned()),
+                ),
+        )
+        .with_step(
+            toggle_inline_model_selector_from_chip().add_named_assertion(
+                "Original prompt is restored after toggling closed",
+                input_contains_string(0, original_prompt.to_owned()),
+            ),
         )
 }
 
