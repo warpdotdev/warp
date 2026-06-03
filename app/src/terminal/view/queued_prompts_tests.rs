@@ -645,19 +645,36 @@ fn promptless_setup_complete_with_initial_prompt_does_not_drain_queue() {
             conversation_id
         });
 
+        // The `DispatchedAgent` subscription enqueues the non-empty initial
+        // prompt as an `InitialCloudMode` row once the spawn update flushes, so
+        // the queue holds both that row and the prompt queued during setup.
+        // Snapshot the queue before the drain to assert the drain leaves it
+        // untouched.
+        let queue_before = terminal.read(&app, |_, ctx| {
+            QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .iter()
+                .map(|q| q.text().to_owned())
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            queue_before.iter().any(|t| t == "queued during setup"),
+            "setup-queued prompt should be present before the drain"
+        );
+
         terminal.update(&mut app, |view, ctx| {
             view.maybe_drain_queue_after_promptless_setup(ctx);
         });
 
+        // The initial-prompt run is not promptless, so the drain is a no-op:
+        // the queue is identical before and after.
         terminal.read(&app, |_, ctx| {
-            assert_eq!(
-                QueuedQueryModel::as_ref(ctx)
-                    .queue(conversation_id)
-                    .iter()
-                    .map(|q| q.text().to_owned())
-                    .collect::<Vec<_>>(),
-                vec!["queued during setup".to_owned()],
-            );
+            let queue_after = QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .iter()
+                .map(|q| q.text().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(queue_after, queue_before);
         });
     });
 }
