@@ -59,6 +59,7 @@ use crate::{report_error, server::telemetry::telemetry_context};
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const AMBIENT_CREATE_SESSION_MAX_ATTEMPTS: usize = 3;
 /// Exponential backoff when retrying reconnection. This configuration has us retry for ~128 seconds before giving up,
 /// where the last interval between retries is 26s.
@@ -128,6 +129,7 @@ struct StartupRetryState {
 }
 
 impl StartupRetryState {
+    #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
     fn new(max_attempts: usize) -> Self {
         Self {
             current_attempt: 0,
@@ -139,6 +141,7 @@ impl StartupRetryState {
 }
 
 #[derive(Debug)]
+#[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 enum StartupFailure {
     Transport,
     InitializeSend,
@@ -201,6 +204,7 @@ impl StartupFailure {
     }
 }
 
+#[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 fn startup_max_attempts(source: &SharedSessionSource) -> usize {
     if matches!(source.source_type, SessionSourceType::AmbientAgent { .. }) {
         AMBIENT_CREATE_SESSION_MAX_ATTEMPTS
