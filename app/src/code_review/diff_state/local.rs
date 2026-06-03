@@ -252,7 +252,7 @@ impl LocalDiffStateModel {
                                 backend_origin: me.backend_origin,
                                 operation: DiffOperation::FileInvalidation,
                                 mode: me.mode.clone(),
-                                error: err.raw_message(),
+                                error: err.to_string(),
                                 // Per-file invalidation errors are not tied to a full
                                 // tracked load, so `load_duration` is intentionally `None`.
                                 load_duration: None,
@@ -1420,7 +1420,7 @@ impl LocalDiffStateModel {
                     CodeReviewTelemetryEvent::LoadMetadataFailed {
                         backend_origin: self.backend_origin,
                         mode: self.mode.clone(),
-                        error: err.raw_message(),
+                        error: err.to_string(),
                     },
                     ctx
                 );
@@ -1468,7 +1468,7 @@ impl LocalDiffStateModel {
                         backend_origin: self.backend_origin,
                         operation: DiffOperation::DiffLoad,
                         mode: self.mode.clone(),
-                        error: err.raw_message(),
+                        error: err.to_string(),
                         load_duration,
                     },
                     ctx

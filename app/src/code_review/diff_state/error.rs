@@ -9,14 +9,11 @@
 //! so a single classifier keeps the code DRY and ensures every site reports failures the same way.
 //!
 //! A [`DiffStateError`] pairs a sanitized [`DiffStateErrorKind`] with the raw
-//! underlying error and routes each half to the right place:
+//! underlying error, but only the sanitized half is ever emitted off-device:
 //! - [`std::fmt::Display`] renders only the sanitized `kind`, so passing this
-//!   through [`warp_core::report_error!`] keeps logs / Sentry free of repo
-//!   paths, refs, or command output. The raw cause is never exposed via
-//!   `Display` or `source`.
-//! - [`DiffStateError::raw_message`] returns the unsanitized text and is used
-//!   ONLY for telemetry, where the extra detail is needed to spot new failure
-//!   patterns and promote them to dedicated [`DiffStateErrorKind`] variants.
+//!   through [`warp_core::report_error!`] or code-review telemetry keeps logs,
+//!   Sentry, and analytics free of repo paths, refs, command output, or
+//!   secrets. The raw cause is never exposed via `Display` or `source`.
 //!
 //! For [`DiffStateErrorKind::Unknown`] the raw cause is additionally consulted
 //! via [`AnyhowErrorExt::is_actionable`] so registered non-actionable causes
@@ -124,10 +121,9 @@ impl DiffStateErrorKind {
 #[error("{kind}")]
 pub(crate) struct DiffStateError {
     kind: DiffStateErrorKind,
-    /// Raw underlying error. Surfaced ONLY through [`Self::raw_message`] for
-    /// telemetry, and consulted for [`DiffStateErrorKind::Unknown`]
-    /// actionability. Never exposed via `Display` or `source`, so logs and
-    /// Sentry only ever see the sanitized `kind`.
+    /// Raw underlying error. Consulted only for [`DiffStateErrorKind::Unknown`]
+    /// actionability and never exposed via `Display`, `source`, or telemetry,
+    /// so logs, Sentry, and analytics only ever see the sanitized `kind`.
     cause: anyhow::Error,
 }
 
@@ -149,14 +145,6 @@ impl DiffStateError {
         let kind = DiffStateErrorKind::EmptyDiffData;
         let cause = anyhow::anyhow!("{kind}");
         Self { kind, cause }
-    }
-
-    /// Raw, unsanitized error text, for telemetry ONLY. Not used for logs or
-    /// Sentry — those go through `Display`, which renders only the sanitized
-    /// `kind`. The extra detail lets us spot unclassified failures and promote
-    /// them to dedicated [`DiffStateErrorKind`] variants.
-    pub(crate) fn raw_message(&self) -> String {
-        format!("{:#}", self.cause)
     }
 }
 

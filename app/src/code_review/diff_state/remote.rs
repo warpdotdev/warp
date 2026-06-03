@@ -333,7 +333,7 @@ impl RemoteDiffStateModel {
                         backend_origin: BackendOrigin::ClientRemote,
                         operation: DiffOperation::RemoteDiff,
                         mode: self.mode.clone(),
-                        error: err.raw_message(),
+                        error: err.to_string(),
                         load_duration,
                     },
                     ctx
@@ -357,7 +357,7 @@ impl RemoteDiffStateModel {
                             backend_origin: BackendOrigin::ClientRemote,
                             operation: DiffOperation::RemoteDiff,
                             mode: self.mode.clone(),
-                            error: err.raw_message(),
+                            error: err.to_string(),
                             load_duration,
                         },
                         ctx
