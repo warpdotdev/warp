@@ -293,7 +293,16 @@ impl EventLoop {
                 OrderedTerminalEventType::Resize { window_size } => {
                     self.process_resize_event(window_size, ctx)
                 }
-                OrderedTerminalEventType::CommandExecutionFinished { .. } => (),
+                OrderedTerminalEventType::CommandExecutionFinished { .. } => {
+                    // Advance the queued-prompts queue when a remote command the queue dispatched
+                    // finishes. No-ops unless a queued command is in flight for the active
+                    // conversation (see `TerminalView::on_queued_command_finished`).
+                    if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        view.update(ctx, |view, ctx| {
+                            view.on_queued_command_finished(ctx);
+                        });
+                    }
+                }
                 OrderedTerminalEventType::AgentResponseEvent {
                     response_initiator,
                     response_event,

@@ -1206,6 +1206,101 @@ fn send_now_event_submits_through_active_pane_and_preserves_draft() {
 }
 
 #[test]
+fn shell_submission_queues_as_command_row_when_gated_under_v2() {
+    // A shell-mode submission while a queued command is already in flight is captured as a
+    // command row (not executed and not interrupting the queue), carries no attachments, and
+    // clears the editor. AgentView is disabled so `selected_conversation_id` resolves from the
+    // pending-query state we set directly.
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_slash_command = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        // Select a conversation (pending-query state), turn on auto-queue, and mark a command as
+        // in flight so the gate keeps queueing while the agent is idle.
+        let conversation_id = AIConversationId::new();
+        terminal.update(&mut app, |view, ctx| {
+            view.ai_context_model().update(ctx, |context_model, ctx| {
+                context_model.set_pending_query_state_for_existing_conversation(
+                    conversation_id,
+                    AgentViewEntryOrigin::Input {
+                        was_prompt_autodetected: false,
+                    },
+                    ctx,
+                );
+            });
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.toggle_queue_next_prompt(conversation_id, ctx);
+            model.arm_command_in_flight(conversation_id);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_terminal(/* steal_focus */ false, ctx);
+            input.replace_buffer_content("echo 1", ctx);
+            input.input_enter(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert!(queue[0].is_command());
+            assert_eq!(queue[0].text(), "echo 1");
+            assert!(queue[0].attachments().is_empty());
+        });
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty())
+        });
+    });
+}
+
+#[test]
+fn shell_submission_is_not_queued_when_v2_disabled() {
+    // With QueuedPromptsV2 off, a shell submission is never captured as a command row even when
+    // every other queue condition is met; it falls through to normal execution.
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_slash_command = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(false);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let conversation_id = AIConversationId::new();
+        terminal.update(&mut app, |view, ctx| {
+            view.ai_context_model().update(ctx, |context_model, ctx| {
+                context_model.set_pending_query_state_for_existing_conversation(
+                    conversation_id,
+                    AgentViewEntryOrigin::Input {
+                        was_prompt_autodetected: false,
+                    },
+                    ctx,
+                );
+            });
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.toggle_queue_next_prompt(conversation_id, ctx);
+            model.arm_command_in_flight(conversation_id);
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_terminal(/* steal_focus */ false, ctx);
+            input.replace_buffer_content("echo 1", ctx);
+            input.input_enter(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
 fn test_history_up_multiline() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

@@ -13,6 +13,7 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -763,6 +764,7 @@ impl View for QueuedPromptsPanelView {
                         panel_view_id,
                         index,
                         origin: query.origin(),
+                        is_command: query.is_command(),
                         is_in_edit_mode,
                         is_being_dragged,
                         show_drag_handle,
@@ -904,6 +906,8 @@ struct RenderRowProps<'a> {
     panel_view_id: EntityId,
     index: usize,
     origin: QueuedQueryOrigin,
+    /// Whether this row is a shell command (rendered with a blue `!` prefix) vs an agent prompt.
+    is_command: bool,
     is_in_edit_mode: bool,
     is_being_dragged: bool,
     show_drag_handle: bool,
@@ -919,6 +923,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
         panel_view_id,
         index,
         origin,
+        is_command,
         is_in_edit_mode,
         is_being_dragged,
         show_drag_handle,
@@ -931,7 +936,12 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     // Match the prompt input, which renders at the monospace font size.
-    let prompt_font_size = appearance.monospace_font_size();
+    let queued_input_font_size = appearance.monospace_font_size();
+    // Blue used for the `!` prefix on command rows, matching shell-mode input styling.
+    let command_prefix_color: ColorU = {
+        let blue = AnsiColorIdentifier::Blue.to_ansi_color(&theme.terminal_colors().normal);
+        ColorU::new(blue.r, blue.g, blue.b, 255)
+    };
 
     let row_action_button_size = ButtonSize::XSmall.button_height(appearance, app);
     let editor_handle = edit_editor.clone();
@@ -975,20 +985,39 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
                     .with_horizontal_padding(4.)
                     .finish(),
             )
-            .with_max_height(prompt_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO * MAX_PROMPT_LINES)
+            .with_max_height(
+                queued_input_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO * MAX_PROMPT_LINES,
+            )
             .finish()
         } else {
             // Single-line preview that truncates by width with a trailing ellipsis.
-            Text::new(
+            let preview = Text::new(
                 preview_text.clone(),
                 appearance.ui_font_family(),
-                prompt_font_size,
+                queued_input_font_size,
             )
             .with_color(theme.foreground().into())
             .with_selectable(false)
             .soft_wrap(false)
             .with_clip(ClipConfig::ellipsis())
-            .finish()
+            .finish();
+            // Command rows are prefaced with a blue `!` so they read as shell commands; prompt
+            // rows render their text directly.
+            if is_command {
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(4.)
+                    .with_child(
+                        Text::new("!", appearance.ui_font_family(), queued_input_font_size)
+                            .with_color(command_prefix_color)
+                            .with_selectable(false)
+                            .finish(),
+                    )
+                    .with_child(Expanded::new(1., preview).finish())
+                    .finish()
+            } else {
+                preview
+            }
         };
 
         let drag_handle: Box<dyn Element> = if !show_drag_handle {

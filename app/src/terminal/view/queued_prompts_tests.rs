@@ -19,6 +19,8 @@ use super::TerminalView;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{ImageContext, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::{
     AutofireAction, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
     PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin,
@@ -33,6 +35,10 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
+}
+
+fn command_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new_command(text.to_owned(), QueuedQueryOrigin::AutoQueueToggle)
 }
 
 fn image_attachment(file_name: &str) -> PendingAttachment {
@@ -70,6 +76,49 @@ fn drain_one(
         }
         action
     })
+}
+
+/// Mirrors the full Complete drain including the command path: a fired command row is removed
+/// AND arms the in-flight flag, so the next row only fires once the command finishes. Prompt and
+/// edit-mode rows behave exactly like [`drain_one`].
+fn drain_complete(
+    model: &warpui::ModelHandle<QueuedQueryModel>,
+    app: &mut App,
+    conv: AIConversationId,
+) -> Option<AutofireAction> {
+    model.update(app, |m, ctx| {
+        let action = m.peek_autofire(conv);
+        match &action {
+            Some(
+                AutofireAction::Submit { query_id, .. }
+                | AutofireAction::PopFromEditMode { query_id, .. },
+            ) => {
+                m.remove_fired_row(conv, *query_id, ctx);
+            }
+            Some(AutofireAction::ExecuteCommand { query_id, .. }) => {
+                m.remove_fired_row(conv, *query_id, ctx);
+                m.arm_command_in_flight(conv);
+            }
+            None => {}
+        }
+        action
+    })
+}
+
+/// Mirrors `TerminalView::on_queued_command_finished`: when a command is in flight, clear the flag
+/// and drain the next row. No-ops when no command is in flight, which keeps it idempotent if both
+/// the local `AfterBlockCompleted` and shared-session `CommandExecutionFinished` signals fire for
+/// the same command.
+fn finish_command(
+    model: &warpui::ModelHandle<QueuedQueryModel>,
+    app: &mut App,
+    conv: AIConversationId,
+) -> Option<AutofireAction> {
+    if !model.read(app, |m, _| m.has_command_in_flight(conv)) {
+        return None;
+    }
+    model.update(app, |m, _| m.clear_command_in_flight(conv));
+    drain_complete(model, app, conv)
 }
 
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
@@ -729,7 +778,12 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
 
         let action = drain_one(&model, &mut app, conv);
         match action {
-            Some(AutofireAction::PopFromEditMode { text, .. }) => assert_eq!(text, "first"),
+            Some(AutofireAction::PopFromEditMode {
+                text, is_command, ..
+            }) => {
+                assert_eq!(text, "first");
+                assert!(!is_command);
+            }
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
         // Edit mode is cleared after pop.
@@ -737,6 +791,96 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
             assert_eq!(m.editing_row(conv), None);
             assert_eq!(m.queue(conv).len(), 1);
             assert_eq!(m.queue(conv)[0].text(), "second");
+        });
+    });
+}
+
+#[test]
+fn complete_drain_of_edited_command_restores_text_in_shell_mode() {
+    // A command row being edited when the agent finishes cleanly is popped into the input in
+    // shell mode, so the restored text stays a command rather than being submitted as a prompt.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        // Entering agent view puts the input in agent (AI) mode, so the drain must actively
+        // switch it to shell mode for the restored command.
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            })
+        });
+        terminal.read(&app, |view, ctx| {
+            assert!(view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            let id = model.append(conversation_id, command_query("echo 1"), ctx);
+            model.enter_edit_mode(conversation_id, id, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "echo 1");
+            assert!(!view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn error_drain_of_command_restores_text_in_shell_mode() {
+    // On a non-clean finish, the head command is popped into the empty input in shell mode, so a
+    // restored command stays a command.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        // The cancel restore path only fires for the conversation the user is viewing; entering
+        // agent view makes `conversation_id` active and puts the input in agent (AI) mode.
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            })
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, command_query("echo 1"), ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.drain_queued_prompts(conversation_id, FinishReason::Cancelled, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "echo 1");
+            assert!(!view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
         });
     });
 }
@@ -1163,6 +1307,109 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
                 Some(false)
             );
         });
+    });
+}
+
+#[test]
+fn complete_drain_executes_command_and_arms_in_flight() {
+    // A command head fires via ExecuteCommand, is removed immediately, and arms the in-flight
+    // flag so the next row waits for the command to finish.
+    with_singleton(|mut app, model, conv| {
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, command_query("echo 1"), ctx)
+        });
+
+        match drain_complete(&model, &mut app, conv) {
+            Some(AutofireAction::ExecuteCommand { command, .. }) => assert_eq!(command, "echo 1"),
+            other => panic!("expected ExecuteCommand, got {other:?}"),
+        }
+        model.read(&app, |m, _| {
+            assert!(m.queue(conv).is_empty());
+            assert!(m.has_command_in_flight(conv));
+        });
+    });
+}
+
+#[test]
+fn command_finished_clears_in_flight_and_drains_next_row() {
+    // While a command runs the next row stays queued; when the command finishes the flag clears
+    // and the following prompt fires.
+    with_singleton(|mut app, model, conv| {
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, command_query("echo 1"), ctx);
+            m.append(conv, user_query("after the command"), ctx);
+        });
+
+        drain_complete(&model, &mut app, conv);
+        model.read(&app, |m, _| {
+            assert!(m.has_command_in_flight(conv));
+            assert_eq!(m.queue(conv).len(), 1);
+            assert_eq!(m.queue(conv)[0].text(), "after the command");
+        });
+
+        match finish_command(&model, &mut app, conv) {
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "after the command"),
+            other => panic!("expected Submit, got {other:?}"),
+        }
+        model.read(&app, |m, _| {
+            assert!(!m.has_command_in_flight(conv));
+            assert!(m.queue(conv).is_empty());
+        });
+    });
+}
+
+#[test]
+fn command_finished_is_idempotent_across_both_signals() {
+    // The local AfterBlockCompleted and shared-session CommandExecutionFinished signals can both
+    // arrive for the same command. The first clears the flag and drains; the second no-ops.
+    with_singleton(|mut app, model, conv| {
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, command_query("echo 1"), ctx);
+            m.append(conv, user_query("after the command"), ctx);
+        });
+        drain_complete(&model, &mut app, conv);
+
+        let first = finish_command(&model, &mut app, conv);
+        assert!(matches!(first, Some(AutofireAction::Submit { .. })));
+
+        // Second signal: no command in flight, so it must not double-drain.
+        let second = finish_command(&model, &mut app, conv);
+        assert!(second.is_none());
+        model.read(&app, |m, _| assert!(m.queue(conv).is_empty()));
+    });
+}
+
+#[test]
+fn prompt_command_prompt_fire_in_strict_fifo_order() {
+    // The spec's worked example: a prompt, then a command, then a prompt. The command fires only
+    // after the first prompt's conversation completes, and the last prompt fires only after the
+    // command finishes.
+    with_singleton(|mut app, model, conv| {
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, user_query("haiku about Rust"), ctx);
+            m.append(conv, command_query("echo 1"), ctx);
+            m.append(conv, user_query("say hello world"), ctx);
+        });
+
+        // First prompt fires on completion.
+        match drain_complete(&model, &mut app, conv) {
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "haiku about Rust"),
+            other => panic!("expected Submit(haiku), got {other:?}"),
+        }
+
+        // Prompt's conversation completes -> the command fires and arms in-flight.
+        match drain_complete(&model, &mut app, conv) {
+            Some(AutofireAction::ExecuteCommand { command, .. }) => assert_eq!(command, "echo 1"),
+            other => panic!("expected ExecuteCommand(echo 1), got {other:?}"),
+        }
+        model.read(&app, |m, _| assert!(m.has_command_in_flight(conv)));
+
+        // Command finishes -> the last prompt fires.
+        match finish_command(&model, &mut app, conv) {
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "say hello world"),
+            other => panic!("expected Submit(hello), got {other:?}"),
+        }
+        model.read(&app, |m, _| assert!(m.queue(conv).is_empty()));
     });
 }
 

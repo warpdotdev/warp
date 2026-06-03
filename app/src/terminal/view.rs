@@ -4840,6 +4840,26 @@ impl TerminalView {
         self.drain_queued_prompts(conversation_id, finish_reason, ctx);
     }
 
+    /// Advances the queued-prompts queue after a dispatched queued command finishes. Shared by the
+    /// local `AfterBlockCompleted` path and the shared-session `CommandExecutionFinished` path.
+    /// No-ops unless a queued command is in flight for the active conversation; clearing the flag
+    /// before draining keeps it idempotent if both signals arrive for the same command.
+    pub(crate) fn on_queued_command_finished(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.view_id)
+            .map(|conversation| conversation.id())
+        else {
+            return;
+        };
+        if !QueuedQueryModel::as_ref(ctx).has_command_in_flight(conversation_id) {
+            return;
+        }
+        QueuedQueryModel::handle(ctx).update(ctx, |model, _ctx| {
+            model.clear_command_in_flight(conversation_id);
+        });
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+    }
+
     #[cfg(feature = "local_fs")]
     fn handle_git_repo_status_event(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(deferred) = self.deferred_code_review_open.take() {
@@ -5304,19 +5324,55 @@ impl TerminalView {
                             model.remove_fired_row(conversation_id, query_id, ctx);
                         });
                     }
+                    Some(AutofireAction::ExecuteCommand { query_id, command }) => {
+                        // Remove the row immediately (like a fired prompt) and arm the in-flight
+                        // flag: the queue keeps accepting rows while the command runs and the next
+                        // item only fires once the command finishes (see
+                        // `on_queued_command_finished`).
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
+                            model.arm_command_in_flight(conversation_id);
+                        });
+                        let started = self
+                            .input
+                            .update(ctx, |input, ctx| input.try_execute_command(&command, ctx));
+                        // If the command couldn't start (e.g. precmd not yet received) no
+                        // completion will arrive, so don't wedge the queue: clear the flag and
+                        // restore the command text into an empty input.
+                        if !started {
+                            QueuedQueryModel::handle(ctx).update(ctx, |model, _ctx| {
+                                model.clear_command_in_flight(conversation_id);
+                            });
+                            if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
+                                self.input.update(ctx, |input, ctx| {
+                                    input.replace_buffer_content(&command, ctx);
+                                });
+                            }
+                        }
+                    }
                     Some(AutofireAction::PopFromEditMode {
                         query_id,
                         text,
                         attachments,
+                        is_command,
                     }) => {
                         if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
                             self.input.update(ctx, |input, ctx| {
                                 input.replace_buffer_content(&text, ctx);
-                                input.focus_input_box(ctx);
+                                if is_command {
+                                    // Keep a restored command in shell mode so it stays a command
+                                    // rather than being submitted as an agent prompt.
+                                    input.set_input_mode_terminal(/* steal_focus */ true, ctx);
+                                } else {
+                                    input.focus_input_box(ctx);
+                                }
                             });
-                            self.ai_context_model.update(ctx, |context_model, ctx| {
-                                context_model.append_pending_attachments(attachments, ctx);
-                            });
+                            // Commands never carry attachments; only restore them for prompts.
+                            if !is_command {
+                                self.ai_context_model.update(ctx, |context_model, ctx| {
+                                    context_model.append_pending_attachments(attachments, ctx);
+                                });
+                            }
                         }
                         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                             model.remove_fired_row(conversation_id, query_id, ctx);
@@ -5352,13 +5408,23 @@ impl TerminalView {
                 let popped = QueuedQueryModel::handle(ctx)
                     .update(ctx, |model, ctx| model.pop_front(conversation_id, ctx));
                 if let Some(query) = popped {
+                    let is_command = query.is_command();
                     self.input.update(ctx, |input, ctx| {
                         input.replace_buffer_content(query.text(), ctx);
+                        if is_command {
+                            // Keep a restored command in shell mode so it stays a command
+                            // rather than being submitted as an agent prompt.
+                            input.set_input_mode_terminal(/* steal_focus */ false, ctx);
+                        }
                     });
-                    // Re-stage the restored row's attachments so a manual re-submit keeps them.
-                    self.ai_context_model.update(ctx, |context_model, ctx| {
-                        context_model.append_pending_attachments(query.attachments().to_vec(), ctx);
-                    });
+                    // Commands never carry attachments; only restore them for prompts.
+                    if !is_command {
+                        // Re-stage the restored row's attachments so a manual re-submit keeps them.
+                        self.ai_context_model.update(ctx, |context_model, ctx| {
+                            context_model
+                                .append_pending_attachments(query.attachments().to_vec(), ctx);
+                        });
+                    }
                 }
             }
         }
@@ -12154,6 +12220,16 @@ impl TerminalView {
                                 );
                             }
                         }
+                    }
+                }
+
+                // Advance the queued-prompts queue when a dispatched queued command's block
+                // completes. `on_queued_command_finished` no-ops unless a queued command is in
+                // flight, and the `!was_part_of_agent_interaction` filter keeps agent-executed
+                // command blocks (including LRC snapshots) from advancing the queue.
+                if let BlockType::User(user_block_completed) = block_type {
+                    if !user_block_completed.was_part_of_agent_interaction {
+                        self.on_queued_command_finished(ctx);
                     }
                 }
 

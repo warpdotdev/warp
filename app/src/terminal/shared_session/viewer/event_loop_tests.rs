@@ -6,9 +6,10 @@ use session_sharing_protocol::common::{
 };
 use warpui::platform::WindowStyle;
 use warpui::units::Lines;
-use warpui::{App, ViewHandle};
+use warpui::{App, SingletonEntity, ViewHandle};
 
 use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
@@ -554,6 +555,69 @@ fn test_out_of_order_buffering() {
             .trim()
             .to_string();
         assert_eq!(command_grid, "abc");
+    })
+}
+
+#[test]
+fn command_execution_finished_advances_queued_command_idempotently() {
+    // The viewer receives `CommandExecutionFinished` when a remote command finishes. When the
+    // queue dispatched that command (in-flight flag armed), the first event clears the flag so the
+    // queue can advance; a duplicate event (the local + shared-session signals can both arrive)
+    // is a no-op.
+    App::test((), |mut app| async move {
+        let channel_event_proxy = ChannelEventListener::new_for_test();
+        let model = Arc::new(FairMutex::new(terminal_model_for_viewer(
+            channel_event_proxy.clone(),
+        )));
+
+        let terminal_view = terminal_view(&mut app);
+        let terminal_view_id = terminal_view.read(&app, |view, _| view.id());
+
+        // Start a conversation, make it the view's active conversation, and arm an in-flight
+        // queued command for it.
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, _| {
+            model.arm_command_in_flight(conversation_id);
+        });
+
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::new(
+                model.clone(),
+                terminal_view.downgrade(),
+                channel_event_proxy.clone(),
+                WindowSize {
+                    num_rows: 0,
+                    num_cols: 0,
+                },
+                empty_scrollback(),
+                None,
+                SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                ctx,
+            )
+        });
+
+        for event_no in 0..2 {
+            event_loop.update(&mut app, |event_loop, ctx| {
+                event_loop.process_ordered_terminal_event(
+                    OrderedTerminalEvent {
+                        event_no,
+                        event_type: OrderedTerminalEventType::CommandExecutionFinished {
+                            next_block_id: Default::default(),
+                        },
+                    },
+                    ctx,
+                );
+            });
+        }
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(!model.has_command_in_flight(conversation_id))
+        });
     })
 }
 
