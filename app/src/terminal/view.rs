@@ -5320,6 +5320,33 @@ impl TerminalView {
         }
     }
 
+    /// Drains one queued prompt when the cloud setup phase completes for a promptless handoff run
+    /// (a prompt will not be auto-sent by the worker so there's no normal event to initiate a queued prompt sending).
+    pub(crate) fn maybe_drain_queue_after_promptless_setup(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_promptless_run = self
+            .ambient_agent_view_model()
+            .and_then(|model| {
+                model
+                    .as_ref(ctx)
+                    .request()
+                    .map(|request| request.prompt.is_none())
+            })
+            .unwrap_or(false);
+        if !is_promptless_run {
+            return;
+        }
+
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return;
+        };
+
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+    }
+
     fn handle_legacy_passive_suggestions_event(
         &mut self,
         _: ModelHandle<LegacyPassiveSuggestionsModel>,

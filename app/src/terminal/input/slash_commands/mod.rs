@@ -921,10 +921,7 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
-                } else if BlocklistAIHistoryModel::as_ref(ctx)
-                    .active_conversation(self.terminal_view_id)
-                    .is_some_and(|c| !c.is_empty())
-                {
+                } else if self.source_conversation_has_content(ctx) {
                     // Empty `/handoff` with a non-empty source conversation:
                     // dispatch the immediate empty-prompt handoff (continue /
                     // snapshot rehydration); the workspace synthesizes the

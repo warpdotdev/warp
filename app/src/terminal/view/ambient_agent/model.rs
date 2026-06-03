@@ -50,6 +50,20 @@ use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
 
+/// Wire prompt substituted for an empty-prompt handoff against an active source
+/// conversation that also carries uploaded snapshot content.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+const HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT: &str =
+    "Continue. Apply the workspace changes from my previous session.";
+/// Wire prompt substituted for an empty-prompt handoff against an active source
+/// conversation with no snapshot content.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
+/// Wire prompt substituted for an empty-prompt handoff against an idle source
+/// conversation that carries uploaded snapshot content.
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
+
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
 pub struct AgentProgress {
@@ -671,15 +685,12 @@ impl AmbientAgentViewModel {
             .as_ref()
             .is_some_and(|token| !token.as_str().is_empty());
 
+        let prompt = prompt.filter(|p| !p.trim().is_empty());
         let raw_wire_prompt = match (prompt, should_inject_continue, has_snapshot_content) {
             (Some(p), _, _) => Some(p),
-            (None, true, true) => {
-                Some("Continue. Apply the workspace changes from my previous session.".to_owned())
-            }
-            (None, true, false) => Some("Continue".to_owned()),
-            (None, false, true) => {
-                Some("Apply the workspace changes from my previous session.".to_owned())
-            }
+            (None, true, true) => Some(HANDOFF_CONTINUE_WITH_SNAPSHOT_PROMPT.to_owned()),
+            (None, true, false) => Some(HANDOFF_CONTINUE_PROMPT.to_owned()),
+            (None, false, true) => Some(HANDOFF_APPLY_SNAPSHOT_PROMPT.to_owned()),
             (None, false, false) => None,
         };
 

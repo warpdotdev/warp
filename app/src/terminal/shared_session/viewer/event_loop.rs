@@ -369,6 +369,10 @@ impl EventLoop {
                     if let Some(view) = self.terminal_view.upgrade(ctx) {
                         view.update(ctx, |view, ctx| {
                             view.tear_down_cloud_mode_setup_phase(ctx);
+                            // A promptless handoff run never fires a first turn,
+                            // so this is the only point a prompt queued during
+                            // setup can be auto-sent.
+                            view.maybe_drain_queue_after_promptless_setup(ctx);
                         });
                     }
                 }
