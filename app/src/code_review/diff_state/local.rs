@@ -55,9 +55,11 @@ cfg_if::cfg_if! {
         use warpui::{ModelHandle, SingletonEntity};
     }
 }
+#[cfg(feature = "local_fs")]
+use super::DiffOperation;
 use super::{
     BackendOrigin, DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase,
-    DiffMode, DiffOperation, DiffState, DiffStateError, DiffStateModelEvent, DiffStats, FileDiff,
+    DiffMode, DiffState, DiffStateError, DiffStateModelEvent, DiffStats, FileDiff,
     FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent, GitFileStatus,
 };
 
