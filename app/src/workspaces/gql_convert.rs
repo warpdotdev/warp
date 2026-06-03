@@ -244,6 +244,12 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
         let persistence::model::ConversationUsageMetadata {
             credits_spent,
             platform_credits_spent,
+            cost_cents,
+            platform_fee_cents,
+            total_input_tokens,
+            total_output_tokens,
+            total_cache_read_tokens,
+            total_cache_write_tokens,
             token_usage: models,
             tool_usage_metadata: tool,
             context_window_usage,
@@ -253,6 +259,12 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             credits_spent,
             platform_credits_spent,
             credits_spent_for_last_block: None,
+            cost_cents,
+            platform_fee_cents,
+            total_input_tokens,
+            total_output_tokens,
+            total_cache_read_tokens,
+            total_cache_write_tokens,
             tool_calls: tool.total_tool_calls(),
             models,
             context_window_usage,
@@ -513,6 +525,10 @@ fn convert_billing_cycle_usage(history: GqlBillingCycleUsageHistory) -> BillingC
                         usage_source: entry.usage_source,
                         credits_used: entry.credits_used,
                         cost_cents: entry.cost_cents,
+                        input_tokens: entry.input_tokens,
+                        output_tokens: entry.output_tokens,
+                        cache_read_tokens: entry.cache_read_tokens,
+                        cache_write_tokens: entry.cache_write_tokens,
                     })
                     .collect(),
             })
@@ -595,6 +611,8 @@ impl BonusGrant {
             user_facing_message: bonus_grant.user_facing_message,
             request_credits_granted: bonus_grant.request_credits_granted,
             request_credits_remaining: bonus_grant.request_credits_remaining,
+            granted_cents: bonus_grant.granted_cents,
+            remaining_cents: bonus_grant.remaining_cents,
             scope,
         }
     }

@@ -96,6 +96,7 @@ use crate::ai::blocklist::inline_action::web_fetch::WebFetchView;
 use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
+use crate::ai::blocklist::usage::conversation_usage_view::format_cents_as_dollars;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
@@ -3311,28 +3312,57 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
     };
 
     let total_credits_spent = headline_credits;
-    let mut credit_usage_text = format_credits(total_credits_spent);
-    if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
-        // Only show the credits spent for the last block if it is different from the total credits spent
-        // and we spent a non-zero amount of credits for the last block.
-        // Avoid showing the credits spent for the last block if the request failed, as we refund user
-        // credits in that case (so no credits were in fact spent).
-        if credits_spent_for_last_block > 0.0
-            && total_credits_spent != credits_spent_for_last_block
-            && props.model.status(app).error().is_none()
-        {
-            // If the first part of the decimal is 0, we just display the whole number.
-            if credits_spent_for_last_block.fract() < 0.1 {
-                credit_usage_text = format!(
-                    "{credit_usage_text} (+{})",
-                    credits_spent_for_last_block.trunc() as i32
-                );
-            } else {
-                credit_usage_text =
-                    format!("{credit_usage_text} (+{credits_spent_for_last_block:.1})");
+    // Transparent at-cost view: the toggle headlines the conversation's total
+    // cost (inference + platform fee) in dollars. Fall back to credits when the
+    // server has not reported at-cost values (e.g. pre-transparent conversations).
+    let usage_text = if FeatureFlag::TransparentPricing.is_enabled() {
+        // Prefer the rolled-up at-cost total across the orchestrator and its
+        // children (mirroring how the credits headline rolls up); fall back to
+        // this conversation's own cost, then to credits when no at-cost value
+        // was reported.
+        let total_cost_cents = rollup
+            .as_ref()
+            .and_then(|r| r.total_cost_cents)
+            .or_else(|| {
+                match (
+                    conversation.cost_cents_spent(),
+                    conversation.platform_fee_cents_spent(),
+                ) {
+                    (None, None) => None,
+                    (inference_cents, platform_fee_cents) => {
+                        Some(inference_cents.unwrap_or(0.0) + platform_fee_cents.unwrap_or(0.0))
+                    }
+                }
+            });
+        match total_cost_cents {
+            Some(cents) => format_cents_as_dollars(cents),
+            None => format_credits(total_credits_spent),
+        }
+    } else {
+        let mut credit_usage_text = format_credits(total_credits_spent);
+        if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
+            // Only show the credits spent for the last block if it is different from the total credits spent
+            // and we spent a non-zero amount of credits for the last block.
+            // Avoid showing the credits spent for the last block if the request failed, as we refund user
+            // credits in that case (so no credits were in fact spent).
+            if credits_spent_for_last_block > 0.0
+                && total_credits_spent != credits_spent_for_last_block
+                && props.model.status(app).error().is_none()
+            {
+                // If the first part of the decimal is 0, we just display the whole number.
+                if credits_spent_for_last_block.fract() < 0.1 {
+                    credit_usage_text = format!(
+                        "{credit_usage_text} (+{})",
+                        credits_spent_for_last_block.trunc() as i32
+                    );
+                } else {
+                    credit_usage_text =
+                        format!("{credit_usage_text} (+{credits_spent_for_last_block:.1})");
+                }
             }
         }
-    }
+        credit_usage_text
+    };
 
     let icon_size = icon_size(app);
     let button_row = Flex::row()
@@ -3341,7 +3371,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         .with_child(
             Container::new(
                 Text::new_inline(
-                    credit_usage_text,
+                    usage_text,
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -3397,7 +3427,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
                 // Show tooltip on hover or while clicked
                 let mut stack = Stack::new().with_child(content.finish());
                 let tooltip = ui_builder
-                    .tool_tip("Show credit usage details".to_string())
+                    .tool_tip("Show usage details".to_string())
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

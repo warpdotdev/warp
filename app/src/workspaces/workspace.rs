@@ -531,6 +531,10 @@ pub struct BillingCycleUsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub cache_read_tokens: i32,
+    pub cache_write_tokens: i32,
 }
 
 /// Per-cycle bucket of redacted usage entries with explicit period bounds.

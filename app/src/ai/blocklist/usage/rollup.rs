@@ -4,8 +4,8 @@
 //! Pure function — no I/O, no GraphQL. Walks
 //! [`BlocklistAIHistoryModel`] using the shared
 //! [`descendant_conversation_ids_in_spawn_order`] helper, sums each loaded
-//! conversation's `credits_spent`, and emits a per-agent breakdown for the
-//! footer's "View details" list.
+//! conversation's `credits_spent` and at-cost dollars, and emits a per-agent
+//! breakdown for the footer's "View details" list.
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
@@ -27,13 +27,18 @@ pub enum AgentAvatar {
     Child,
 }
 
-/// One row in the per-agent credit breakdown list.
+/// One row in the per-agent spend breakdown list. Carries both the credit
+/// total and the at-cost dollar total so the footer can render whichever the
+/// transparent-pricing flag selects.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PerAgentCreditEntry {
     pub conversation_id: AIConversationId,
     pub display_name: String,
     pub avatar: AgentAvatar,
     pub credits_spent: f32,
+    /// Total at-cost spend for this agent in USD cents (inference cost +
+    /// platform fee). Unreported components count as zero.
+    pub cost_cents: f64,
 }
 
 /// Aggregated credit usage for an orchestrator and its locally-loaded
@@ -43,6 +48,11 @@ pub struct OrchestrationCreditRollup {
     /// Sum of `credits_spent` across the orchestrator and every
     /// locally-loaded descendant.
     pub total_credits: f32,
+    /// Sum of at-cost spend (inference cost + platform fee, in USD cents)
+    /// across the orchestrator and every locally-loaded descendant. `None`
+    /// when no conversation in the rollup reported an at-cost value (e.g.
+    /// pre-transparent-pricing), so callers can fall back to credits.
+    pub total_cost_cents: Option<f64>,
     /// One entry per agent that has spent > 0 credits, sorted by
     /// `credits_spent` descending. Ties are broken by spawn order (earlier
     /// spawn first; orchestrator always sorts before its descendants in a
@@ -72,11 +82,16 @@ pub fn compute_orchestration_rollup(
     }
 
     let mut total_credits: f32 = 0.0;
+    let mut total_cost_cents: f64 = 0.0;
+    let mut any_cost_reported = false;
     let mut entries: Vec<(usize, PerAgentCreditEntry)> = Vec::new();
 
     if let Some(orchestrator) = history.conversation(&parent_id) {
         let credits = orchestrator.credits_spent();
         total_credits += credits;
+        let (cost_cents, reported) = agent_at_cost_cents(orchestrator);
+        total_cost_cents += cost_cents;
+        any_cost_reported |= reported;
         if credits > 0.0 {
             entries.push((
                 0,
@@ -85,6 +100,7 @@ pub fn compute_orchestration_rollup(
                     display_name: orchestrator_display_name(orchestrator),
                     avatar: AgentAvatar::Orchestrator,
                     credits_spent: credits,
+                    cost_cents,
                 },
             ));
         }
@@ -97,6 +113,9 @@ pub fn compute_orchestration_rollup(
         };
         let credits = descendant.credits_spent();
         total_credits += credits;
+        let (cost_cents, reported) = agent_at_cost_cents(descendant);
+        total_cost_cents += cost_cents;
+        any_cost_reported |= reported;
         if credits > 0.0 {
             entries.push((
                 spawn_idx + 1,
@@ -105,6 +124,7 @@ pub fn compute_orchestration_rollup(
                     display_name: child_display_name(descendant),
                     avatar: AgentAvatar::Child,
                     credits_spent: credits,
+                    cost_cents,
                 },
             ));
         }
@@ -125,8 +145,20 @@ pub fn compute_orchestration_rollup(
 
     Some(OrchestrationCreditRollup {
         total_credits,
+        total_cost_cents: any_cost_reported.then_some(total_cost_cents),
         per_agent: entries.into_iter().map(|(_, entry)| entry).collect(),
     })
+}
+
+/// Returns an agent's total at-cost spend in USD cents (inference cost +
+/// platform fee) and whether the server reported any at-cost value for it.
+/// Unreported components count as zero so a partially-reported agent still
+/// contributes its known cost.
+fn agent_at_cost_cents(conversation: &AIConversation) -> (f64, bool) {
+    let inference = conversation.cost_cents_spent();
+    let platform = conversation.platform_fee_cents_spent();
+    let reported = inference.is_some() || platform.is_some();
+    (inference.unwrap_or(0.0) + platform.unwrap_or(0.0), reported)
 }
 
 /// Display name for the orchestrator row. Prefers the explicitly assigned

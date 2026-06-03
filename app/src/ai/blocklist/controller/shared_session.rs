@@ -527,6 +527,18 @@ impl BlocklistAIController {
                         .iter()
                         .filter_map(|u| u.to_proto_custom_endpoint_usage())
                         .collect(),
+                    cost_cents: conversation
+                        .cost_cents_spent()
+                        .map(|c| c.to_string())
+                        .unwrap_or_default(),
+                    platform_fee_cents: conversation
+                        .platform_fee_cents_spent()
+                        .map(|c| c.to_string())
+                        .unwrap_or_default(),
+                    total_input_tokens: conversation.total_input_tokens(),
+                    total_output_tokens: conversation.total_output_tokens(),
+                    total_cache_read_tokens: conversation.total_cache_read_tokens(),
+                    total_cache_write_tokens: conversation.total_cache_write_tokens(),
                 })
         });
 

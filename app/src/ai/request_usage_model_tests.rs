@@ -97,6 +97,9 @@ fn test_request_limit_info() {
                 num_requests_used_since_refresh: 39,
                 next_refresh_time: ServerTimestamp::new(Utc::now() + Duration::days(1)),
                 is_unlimited: false,
+                allowance_cents: 0,
+                used_cents: 0,
+                remaining_cents: 0,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
                 is_unlimited_voice: false,
                 voice_request_limit: 100,
@@ -123,6 +126,9 @@ fn test_request_limit_info_with_limit() {
                 num_requests_used_since_refresh: 39,
                 next_refresh_time: ServerTimestamp::new(Utc::now() + Duration::minutes(1)),
                 is_unlimited: false,
+                allowance_cents: 0,
+                used_cents: 0,
+                remaining_cents: 0,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
                 is_unlimited_voice: false,
                 voice_request_limit: 100,
@@ -149,6 +155,9 @@ fn test_request_limit_info_past_refresh_time() {
                 num_requests_used_since_refresh: 39,
                 next_refresh_time: ServerTimestamp::new(Utc::now() - Duration::seconds(1)),
                 is_unlimited: false,
+                allowance_cents: 0,
+                used_cents: 0,
+                remaining_cents: 0,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
                 is_unlimited_voice: false,
                 voice_request_limit: 100,
@@ -175,6 +184,9 @@ fn test_request_limit_info_is_unlimited_true() {
                 num_requests_used_since_refresh: 39,
                 next_refresh_time: ServerTimestamp::new(Utc::now() + Duration::minutes(1)),
                 is_unlimited: true,
+                allowance_cents: 0,
+                used_cents: 0,
+                remaining_cents: 0,
                 request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
                 is_unlimited_voice: false,
                 voice_request_limit: 100,
@@ -228,6 +240,8 @@ fn test_buy_credits_banner_shows_with_only_ambient_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 1000,
                 request_credits_remaining: 1000,
+                granted_cents: 0,
+                remaining_cents: 0,
                 scope: BonusGrantScope::User,
             }];
 
@@ -262,6 +276,8 @@ fn test_buy_credits_banner_hidden_with_non_ambient_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 100,
                 request_credits_remaining: 100,
+                granted_cents: 0,
+                remaining_cents: 0,
                 scope: BonusGrantScope::User,
             }];
 
@@ -296,6 +312,8 @@ fn test_buy_credits_banner_shows_when_non_ambient_bonus_credits_are_depleted() {
                 user_facing_message: None,
                 request_credits_granted: 100,
                 request_credits_remaining: 0,
+                granted_cents: 0,
+                remaining_cents: 0,
                 scope: BonusGrantScope::User,
             }];
 
@@ -340,6 +358,8 @@ fn test_has_any_ai_remaining_true_with_user_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 5,
                 request_credits_remaining: 5,
+                granted_cents: 0,
+                remaining_cents: 0,
                 scope: BonusGrantScope::User,
             }];
 
@@ -404,6 +424,8 @@ fn test_has_any_ai_remaining_true_with_workspace_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 5,
                 request_credits_remaining: 5,
+                granted_cents: 0,
+                remaining_cents: 0,
                 scope: BonusGrantScope::Workspace(uid),
             }];
 
@@ -762,6 +784,8 @@ fn test_has_any_ai_remaining_false_with_only_ambient_bonus_credits() {
                 user_facing_message: None,
                 request_credits_granted: 1000,
                 request_credits_remaining: 1000,
+                granted_cents: 0,
+                remaining_cents: 0,
                 scope: BonusGrantScope::User,
             }];
 

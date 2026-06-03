@@ -23,6 +23,10 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
     }
 }
 

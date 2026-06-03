@@ -989,6 +989,9 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
+                                // The client does not enumerate windows for the
+                                // initial computer-use approval screenshot.
+                                windows: vec![],
                             },
                         )),
                     },
@@ -1033,6 +1036,10 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
+                                // The client does not yet report focused-window
+                                // capture or the window list in computer-use results.
+                                captured_window: None,
+                                windows: vec![],
                             },
                         )),
                     },

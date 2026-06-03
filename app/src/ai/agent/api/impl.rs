@@ -109,6 +109,8 @@ pub async fn generate_multi_agent_output(
             supports_orchestration_v2: params.orchestration_enabled
                 && FeatureFlag::OrchestrationV2.is_enabled(),
             custom_model_providers: params.custom_model_providers,
+            // Background computer use is not supported by the desktop client.
+            supports_background_computer_use: false,
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,

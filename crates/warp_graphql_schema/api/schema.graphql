@@ -106,6 +106,12 @@ enum AICreditsUsageBucket {
   AI
   COMPUTE
   PLATFORM
+
+  """
+  The transparent at-cost platform fee, surfaced as its own line item.
+  Distinct from the legacy PLATFORM credits bucket.
+  """
+  PLATFORM_FEE
   SUGGESTED_CODE_DIFFS
   VOICE
 }
@@ -551,16 +557,25 @@ type BonusGrant {
   costCents: Int!
   createdAt: Time!
   expiration: Time
+
+  """Dollar allowance granted by this bonus grant, in whole USD cents."""
+  grantedCents: Int!
   grantType: BonusGrantType!
   reason: String!
-  requestCreditsGranted: Int!
-  requestCreditsRemaining: Int!
+
+  """Remaining dollar balance of this bonus grant, in whole USD cents."""
+  remainingCents: Int!
+  requestCreditsGranted: Int! @deprecated(reason: "Bonus grants are now dollar allowances; use grantedCents.")
+  requestCreditsRemaining: Int! @deprecated(reason: "Bonus grants are now dollar allowances; use remainingCents.")
   userFacingMessage: String
 }
 
 type BonusGrantSpendingInfo {
-  currentMonthCreditsPurchased: Int!
+  currentMonthCreditsPurchased: Int! @deprecated(reason: "Use currentMonthPurchasedCents for the dollar amount purchased.")
   currentMonthPeriodEnd: Time!
+
+  """Dollar value of bonus allowance purchased in the current month, in whole USD cents."""
+  currentMonthPurchasedCents: Int!
   currentMonthSpendCents: Int!
 }
 
@@ -795,10 +810,34 @@ type ConversationUsageMetadata {
   contextWindowUsage: Float!
 
   """The total number of inference credits spent so far in the conversation"""
-  creditsSpent: Float!
+  creditsSpent: Float! @deprecated(reason: "Legacy shadow credits; use costCents for the at-cost charged amount.")
 
   """The total number of platform credits spent so far in the conversation."""
-  platformCreditsSpent: Float!
+  platformCreditsSpent: Float! @deprecated(reason: "Legacy shadow credits; use platformFeeCents for the at-cost platform fee.")
+
+  """
+  Exact at-cost inference cost spent so far in the conversation, in USD cents,
+  as a decimal string that preserves fractional cents. Null when not yet computed.
+  """
+  costCents: String
+
+  """
+  Exact transparent platform fee spent so far in the conversation, in USD cents,
+  as a decimal string. Null when not yet computed.
+  """
+  platformFeeCents: String
+
+  """Total input tokens across all models and API keys used in the conversation."""
+  totalInputTokens: Int
+
+  """Total output tokens across all models and API keys used in the conversation."""
+  totalOutputTokens: Int
+
+  """Total cache-read input tokens across the conversation (Anthropic only)."""
+  totalCacheReadTokens: Int
+
+  """Total cache-write input tokens across the conversation (Anthropic only)."""
+  totalCacheWriteTokens: Int
   summarized: Boolean!
 
   """
@@ -2124,7 +2163,24 @@ type LlmSpec {
 }
 
 type LlmUsageMetadata {
-  creditMultiplier: Float
+  """Cache-read input tokens for the most recent turn (Anthropic only). Null when unknown."""
+  cacheReadTokens: Int
+
+  """Cache-write input tokens for the most recent turn (Anthropic only). Null when unknown."""
+  cacheWriteTokens: Int
+
+  """
+  Exact at-cost dollar cost for the most recent turn using this model, in USD
+  cents, as a decimal string that preserves fractional cents. Null when not yet computed.
+  """
+  costCents: String
+  creditMultiplier: Float @deprecated(reason: "Credit multipliers are replaced by at-cost pricing; use costCents.")
+
+  """Input tokens for the most recent turn using this model. Null when unknown."""
+  inputTokens: Int
+
+  """Output tokens for the most recent turn using this model. Null when unknown."""
+  outputTokens: Int
   requestMultiplier: Int! @deprecated(reason: "Use creditMultiplier instead")
 }
 
@@ -2734,10 +2790,28 @@ type RequestLimitInfo {
   maxCodebaseIndices: Int!
   maxFilesPerRepo: Int!
   nextRefreshTime: Time!
-  requestLimit: Int!
+
+  """
+  Total dollar allowance for the current period, in whole USD cents.
+  Free tier is 0. At-cost replacement for requestLimit.
+  """
+  allowanceCents: Int!
+
+  """
+  Remaining dollar allowance for the current period, in whole USD cents
+  (allowanceCents - usedCents, floored at 0).
+  """
+  remainingCents: Int!
+
+  """
+  Dollars spent against the allowance so far this period, in whole USD cents.
+  At-cost replacement for requestsUsedSinceLastRefresh.
+  """
+  usedCents: Int!
+  requestLimit: Int! @deprecated(reason: "Quotas are now dollar allowances; use allowanceCents.")
   requestLimitPooling: PoolingType! @deprecated(reason: "Only user pooling is available")
   requestLimitRefreshDuration: RequestLimitRefreshDuration!
-  requestsUsedSinceLastRefresh: Int!
+  requestsUsedSinceLastRefresh: Int! @deprecated(reason: "Quotas are now dollar allowances; use usedCents.")
   suggestedCodeDiffsLimit: Int!
   suggestedCodeDiffsSurfacedSinceLastRefresh: Int!
   voiceRequestLimit: Int!
@@ -4038,9 +4112,20 @@ input UsageBasedPricingSettingsInput {
 }
 
 type UsageEntry {
+  """Total cache-read input tokens attributed to this entry (Anthropic only)."""
+  cacheReadTokens: Int!
+
+  """Total cache-write input tokens attributed to this entry (Anthropic only)."""
+  cacheWriteTokens: Int!
   costCents: Int!
   costType: AICreditsUsageAndCostType!
-  creditsUsed: Int!
+  creditsUsed: Int! @deprecated(reason: "Legacy shadow credits; use costCents for the at-cost charged amount.")
+
+  """Total input tokens attributed to this entry."""
+  inputTokens: Int!
+
+  """Total output tokens attributed to this entry."""
+  outputTokens: Int!
   subjectDisplayName: String
   subjectType: AICreditsUsageAndCostSubjectType!
   subjectUid: String

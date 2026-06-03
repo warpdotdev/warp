@@ -39,6 +39,7 @@ const BUCKET_ORDER: &[AiCreditsUsageBucket] = &[
     AiCreditsUsageBucket::Ai,
     AiCreditsUsageBucket::Compute,
     AiCreditsUsageBucket::Platform,
+    AiCreditsUsageBucket::PlatformFee,
 ];
 
 /// One colored slice of the stacked bar. `cost_type` drives color; `usage_bucket`
@@ -107,6 +108,7 @@ fn bucket_label(bucket: &AiCreditsUsageBucket) -> &'static str {
         AiCreditsUsageBucket::Ai => "AI",
         AiCreditsUsageBucket::Compute => "Compute",
         AiCreditsUsageBucket::Platform => "Platform",
+        AiCreditsUsageBucket::PlatformFee => "Platform fee",
         AiCreditsUsageBucket::SuggestedCodeDiffs => "Suggested code diffs",
         AiCreditsUsageBucket::Voice => "Voice",
         AiCreditsUsageBucket::Aggregate => "Total",

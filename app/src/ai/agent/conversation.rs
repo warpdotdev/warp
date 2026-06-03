@@ -689,6 +689,39 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent
     }
 
+    /// Exact at-cost inference cost spent so far in the conversation, in USD
+    /// cents (may be fractional). `None` when the server has not reported a
+    /// transparent at-cost value. Display-only on the client.
+    pub fn cost_cents_spent(&self) -> Option<f64> {
+        self.conversation_usage_metadata.cost_cents
+    }
+
+    /// Exact transparent platform fee spent so far in the conversation, in USD
+    /// cents (may be fractional). `None` when not yet reported.
+    pub fn platform_fee_cents_spent(&self) -> Option<f64> {
+        self.conversation_usage_metadata.platform_fee_cents
+    }
+
+    /// Total input (prompt) tokens reported across the conversation.
+    pub fn total_input_tokens(&self) -> u64 {
+        self.conversation_usage_metadata.total_input_tokens
+    }
+
+    /// Total output (completion) tokens reported across the conversation.
+    pub fn total_output_tokens(&self) -> u64 {
+        self.conversation_usage_metadata.total_output_tokens
+    }
+
+    /// Total cache-read input tokens reported across the conversation.
+    pub fn total_cache_read_tokens(&self) -> u64 {
+        self.conversation_usage_metadata.total_cache_read_tokens
+    }
+
+    /// Total cache-write input tokens reported across the conversation.
+    pub fn total_cache_write_tokens(&self) -> u64 {
+        self.conversation_usage_metadata.total_cache_write_tokens
+    }
+
     /// Test-only helper that sets the conversation's credit total directly.
     /// Used by unit tests that exercise downstream credit-aware logic
     /// (e.g. the orchestration credit rollup) without having to wire up a
@@ -1917,6 +1950,20 @@ impl AIConversation {
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
             self.conversation_usage_metadata.platform_credits_spent =
                 usage_metadata.platform_credits_spent;
+            // At-cost dollar amounts arrive as decimal strings (USD cents) to
+            // preserve fractional cents; an empty/unparseable string means
+            // "not reported" so we surface `None` rather than a misleading 0.
+            self.conversation_usage_metadata.cost_cents =
+                usage_metadata.cost_cents.trim().parse::<f64>().ok();
+            self.conversation_usage_metadata.platform_fee_cents =
+                usage_metadata.platform_fee_cents.trim().parse::<f64>().ok();
+            self.conversation_usage_metadata.total_input_tokens = usage_metadata.total_input_tokens;
+            self.conversation_usage_metadata.total_output_tokens =
+                usage_metadata.total_output_tokens;
+            self.conversation_usage_metadata.total_cache_read_tokens =
+                usage_metadata.total_cache_read_tokens;
+            self.conversation_usage_metadata.total_cache_write_tokens =
+                usage_metadata.total_cache_write_tokens;
             let llm_preferences = LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
                 footer_model_token_usage(&usage_metadata, llm_preferences);

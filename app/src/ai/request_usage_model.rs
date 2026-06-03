@@ -46,6 +46,12 @@ pub struct BonusGrant {
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
+    /// Dollar allowance granted by this bonus grant, in whole USD cents.
+    /// At-cost replacement for `request_credits_granted`.
+    pub granted_cents: i32,
+    /// Remaining dollar balance of this bonus grant, in whole USD cents.
+    /// At-cost replacement for `request_credits_remaining`.
+    pub remaining_cents: i32,
     pub scope: BonusGrantScope,
 }
 
@@ -66,6 +72,18 @@ pub struct RequestLimitInfo {
     pub num_requests_used_since_refresh: usize,
     pub next_refresh_time: ServerTimestamp,
     pub is_unlimited: bool,
+    /// Total dollar allowance for the current period, in whole USD cents.
+    /// Free tier is 0. At-cost replacement for `limit`.
+    #[serde(default)]
+    pub allowance_cents: i64,
+    /// Dollars spent against the allowance so far this period, in whole USD cents.
+    /// At-cost replacement for `num_requests_used_since_refresh`.
+    #[serde(default)]
+    pub used_cents: i64,
+    /// Remaining dollar allowance for the current period, in whole USD cents
+    /// (`allowance_cents - used_cents`, floored at 0 by the server).
+    #[serde(default)]
+    pub remaining_cents: i64,
     pub request_limit_refresh_duration: RequestLimitRefreshDuration,
     pub is_unlimited_voice: bool,
     #[serde(default)]
@@ -94,6 +112,10 @@ impl Default for RequestLimitInfo {
             num_requests_used_since_refresh: 0,
             next_refresh_time: ServerTimestamp::new(Utc::now() + chrono::Duration::days(30)),
             is_unlimited: false,
+            // Free tier defaults to a $0 allowance until the server reports otherwise.
+            allowance_cents: 0,
+            used_cents: 0,
+            remaining_cents: 0,
             request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
             is_unlimited_voice: false,
             voice_request_limit: default_voice_requests_limit(),
@@ -137,6 +159,9 @@ impl RequestLimitInfo {
             num_requests_used_since_refresh: 0,
             next_refresh_time: ServerTimestamp::new(Utc::now() + chrono::Duration::days(30)),
             is_unlimited: true,
+            allowance_cents: 100_000_00,
+            used_cents: 0,
+            remaining_cents: 100_000_00,
             request_limit_refresh_duration: RequestLimitRefreshDuration::Monthly,
             is_unlimited_voice: true,
             voice_request_limit: 999999,
@@ -438,6 +463,32 @@ impl AIRequestUsageModel {
 
     pub fn request_limit(&self) -> usize {
         self.request_limit_info.limit
+    }
+
+    /// Total dollar allowance for the current period, in whole USD cents.
+    /// Free tier is 0. At-cost replacement for [`Self::request_limit`].
+    pub fn allowance_cents(&self) -> i64 {
+        self.request_limit_info.allowance_cents
+    }
+
+    /// Remaining dollar allowance for the current period, in whole USD cents.
+    /// Mirrors [`Self::requests_remaining`]: past the refresh time, or when the
+    /// plan is unlimited, the full allowance is reported as available again.
+    pub fn remaining_cents(&self) -> i64 {
+        if self.is_unlimited() || self.next_refresh_time() <= Utc::now() {
+            self.request_limit_info.allowance_cents
+        } else {
+            self.request_limit_info.remaining_cents
+        }
+    }
+
+    /// Dollars spent against the allowance so far this period, in whole USD cents.
+    /// At-cost replacement for [`Self::requests_used`].
+    pub fn used_cents(&self) -> i64 {
+        if self.next_refresh_time() <= Utc::now() {
+            return 0;
+        }
+        self.request_limit_info.used_cents
     }
 
     /// Returns the number of indices the user's tier allows them to create and the number of files

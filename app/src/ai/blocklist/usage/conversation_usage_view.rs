@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use thousands::Separable;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::elements::{
@@ -24,6 +25,7 @@ use crate::ai::blocklist::usage::rollup::{
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
 use crate::persistence::model::{
     token_usage_category_display_name, ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY,
     PRIMARY_AGENT_CATEGORY,
@@ -36,12 +38,44 @@ pub enum DisplayMode {
     Footer,
 }
 
+/// Selects how spend is shown in the usage summary. Transparent pricing makes
+/// the at-cost dollar view and the credits view mutually exclusive, so the
+/// summary renders exactly one of them — never both at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpendDisplay {
+    /// At-cost dollars, with inference cost and the platform fee shown as
+    /// separate lines.
+    Dollars,
+    /// Warp credits (the pre-transparent-pricing view).
+    Credits,
+}
+
+impl SpendDisplay {
+    /// Resolves the active spend view from the transparent-pricing flag.
+    fn current() -> Self {
+        if FeatureFlag::TransparentPricing.is_enabled() {
+            Self::Dollars
+        } else {
+            Self::Credits
+        }
+    }
+}
+
 pub struct ConversationUsageInfo {
     pub credits_spent: f32,
     pub platform_credits_spent: f32,
     // Credits spent over the last block, where the block comprises
     // all agent outputs since the most recent user input.
     pub credits_spent_for_last_block: Option<f32>,
+    /// Exact at-cost inference cost so far, in USD cents (may be fractional).
+    /// `None` when the server has not reported a transparent at-cost value.
+    pub cost_cents: Option<f64>,
+    /// Exact transparent platform fee so far, in USD cents.
+    pub platform_fee_cents: Option<f64>,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_cache_read_tokens: u64,
+    pub total_cache_write_tokens: u64,
     pub tool_calls: i32,
     pub models: Vec<ModelTokenUsage>,
     pub context_window_usage: f32,
@@ -49,6 +83,36 @@ pub struct ConversationUsageInfo {
     pub lines_added: i32,
     pub lines_removed: i32,
     pub commands_executed: i32,
+}
+
+impl ConversationUsageInfo {
+    /// At-cost dollar rows for the spend summary, as `(label, cents)` pairs.
+    /// Inference cost and the platform fee are reported and rendered as
+    /// separate lines (mirroring how inference and platform credits are
+    /// tracked separately server-side); each is included only when the server
+    /// has sent a value for it.
+    fn dollar_spend_rows(&self) -> Vec<(&'static str, f64)> {
+        let mut rows = Vec::new();
+        if let Some(inference_cents) = self.cost_cents {
+            rows.push(("Inference cost", inference_cents));
+        }
+        if let Some(platform_fee_cents) = self.platform_fee_cents {
+            rows.push(("Platform fee", platform_fee_cents));
+        }
+        rows
+    }
+}
+
+/// Formats an at-cost amount given in USD cents as a dollar string. Uses four
+/// decimal places for sub-cent amounts so fractional costs stay visible, and
+/// two places otherwise.
+pub(crate) fn format_cents_as_dollars(cents: f64) -> String {
+    let dollars = cents / 100.0;
+    if dollars != 0.0 && dollars.abs() < 0.01 {
+        format!("${dollars:.4}")
+    } else {
+        format!("${dollars:.2}")
+    }
 }
 
 /// Timing information for the last set of agent responses
@@ -294,49 +358,39 @@ impl ConversationUsageView {
         ));
         values.push(render_section_header("".to_string(), appearance));
 
-        // "Credits spent (total)" value: use the rollup total when available,
-        // otherwise the orchestrator's own self total (today's behavior).
-        // PRODUCT invariants 2a, 11.
-        let total_credits_value = rollup
-            .as_ref()
-            .map(|r| r.total_credits)
-            .unwrap_or(self.usage_info.credits_spent + self.usage_info.platform_credits_spent);
-
-        if self.display_mode == DisplayMode::Footer
-            && self.usage_info.credits_spent_for_last_block.is_some()
-        {
-            let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
-            labels.push(render_label_text(
-                "Credits spent (last response)",
-                appearance,
-            ));
-            values.push(render_value_text(
-                format_credits(last_block_credits),
-                appearance,
-            ));
-
-            labels.push(render_label_text("Credits spent (total)", appearance));
-            values.push(self.render_total_credits_value_row(
-                total_credits_value,
-                rollup.as_ref(),
-                appearance,
-            ));
-        } else {
-            labels.push(render_label_text("Credits spent", appearance));
-            values.push(self.render_total_credits_value_row(
-                total_credits_value,
-                rollup.as_ref(),
-                appearance,
-            ));
+        // Spend renders as either at-cost dollars or credits, never both:
+        // transparent pricing swaps the legacy credits rows for the dollar
+        // rows and additionally surfaces token totals (below). Tool calls,
+        // models, and timing are unaffected and render the same in both views.
+        let spend_display = SpendDisplay::current();
+        match spend_display {
+            SpendDisplay::Dollars => {
+                self.append_dollar_spend_rows(&mut labels, &mut values, rollup.as_ref(), appearance)
+            }
+            SpendDisplay::Credits => {
+                self.append_credit_spend_rows(&mut labels, &mut values, rollup.as_ref(), appearance)
+            }
         }
 
-        // Per-agent breakdown rows render immediately beneath the
-        // "Credits spent (total)" row so they read as a drill-down of
-        // that value, not as a separate section appended at the bottom
-        // of the card. The rows are pushed into the same two-column
-        // label/value layout as the rest of the usage summary; the
-        // existing flex spacing handles indentation.
-        self.append_per_agent_rows(&mut labels, &mut values, rollup.as_ref(), appearance);
+        // Aggregate token totals belong to the transparent at-cost view only. In the
+        // credits view the footer matches its pre-transparent-pricing form, which did
+        // not surface these rows.
+        if matches!(spend_display, SpendDisplay::Dollars) {
+            for (label, tokens) in [
+                ("Input tokens", self.usage_info.total_input_tokens),
+                ("Output tokens", self.usage_info.total_output_tokens),
+                ("Cache read tokens", self.usage_info.total_cache_read_tokens),
+                (
+                    "Cache write tokens",
+                    self.usage_info.total_cache_write_tokens,
+                ),
+            ] {
+                if tokens > 0 {
+                    labels.push(render_label_text(label, appearance));
+                    values.push(render_value_text(tokens.separate_with_commas(), appearance));
+                }
+            }
+        }
 
         labels.push(render_label_text("Tool calls", appearance));
         values.push(render_value_text(
@@ -599,6 +653,104 @@ impl ConversationUsageView {
         .finish()
     }
 
+    /// Pushes the at-cost dollar rows (inference cost and the separate
+    /// platform fee) into the usage summary's two-column layout. Each line
+    /// renders only when the server has reported it, so conversations
+    /// predating transparent pricing fall through to just the token totals.
+    fn append_dollar_spend_rows(
+        &self,
+        labels: &mut Vec<Box<dyn Element>>,
+        values: &mut Vec<Box<dyn Element>>,
+        rollup: Option<&OrchestrationCreditRollup>,
+        appearance: &Appearance,
+    ) {
+        // Orchestrators roll the at-cost total up across their children,
+        // mirroring the credits view: one "Cost (total)" line with a per-agent
+        // dollar drill-down behind "View details".
+        if let Some(rollup) = rollup {
+            if let Some(total_cost_cents) = rollup.total_cost_cents {
+                labels.push(render_label_text("Cost (total)", appearance));
+                values.push(self.render_total_value_row(
+                    format_cents_as_dollars(total_cost_cents),
+                    Some(rollup),
+                    appearance,
+                ));
+                self.append_per_agent_rows(
+                    labels,
+                    values,
+                    Some(rollup),
+                    SpendDisplay::Dollars,
+                    appearance,
+                );
+                return;
+            }
+        }
+
+        // Single conversation (or no at-cost rollup): show the inference cost
+        // and platform fee as separate lines, each only when reported.
+        for (label, cents) in self.usage_info.dollar_spend_rows() {
+            labels.push(render_label_text(label, appearance));
+            values.push(render_value_text(
+                format_cents_as_dollars(cents),
+                appearance,
+            ));
+        }
+    }
+
+    /// Pushes the credits rows (and the per-agent orchestration drill-down)
+    /// into the usage summary's two-column layout. This is the
+    /// pre-transparent-pricing view, shown only when the dollar view is off.
+    fn append_credit_spend_rows(
+        &self,
+        labels: &mut Vec<Box<dyn Element>>,
+        values: &mut Vec<Box<dyn Element>>,
+        rollup: Option<&OrchestrationCreditRollup>,
+        appearance: &Appearance,
+    ) {
+        // "Credits spent (total)" value: use the rollup total when available,
+        // otherwise the orchestrator's own self total (today's behavior).
+        // PRODUCT invariants 2a, 11.
+        let total_credits_value = rollup
+            .map(|r| r.total_credits)
+            .unwrap_or(self.usage_info.credits_spent + self.usage_info.platform_credits_spent);
+
+        if self.display_mode == DisplayMode::Footer
+            && self.usage_info.credits_spent_for_last_block.is_some()
+        {
+            let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
+            labels.push(render_label_text(
+                "Credits spent (last response)",
+                appearance,
+            ));
+            values.push(render_value_text(
+                format_credits(last_block_credits),
+                appearance,
+            ));
+
+            labels.push(render_label_text("Credits spent (total)", appearance));
+            values.push(self.render_total_value_row(
+                format_credits(total_credits_value),
+                rollup,
+                appearance,
+            ));
+        } else {
+            labels.push(render_label_text("Credits spent", appearance));
+            values.push(self.render_total_value_row(
+                format_credits(total_credits_value),
+                rollup,
+                appearance,
+            ));
+        }
+
+        // Per-agent breakdown rows render immediately beneath the
+        // "Credits spent (total)" row so they read as a drill-down of
+        // that value, not as a separate section appended at the bottom
+        // of the card. The rows are pushed into the same two-column
+        // label/value layout as the rest of the usage summary; the
+        // existing flex spacing handles indentation.
+        self.append_per_agent_rows(labels, values, rollup, SpendDisplay::Credits, appearance);
+    }
+
     /// Pushes the per-agent breakdown rows (and the optional "Show N
     /// more" link) into the two-column layout when the rollup is active
     /// and the user has expanded the details. Pushed in two-column
@@ -610,6 +762,7 @@ impl ConversationUsageView {
         labels: &mut Vec<Box<dyn Element>>,
         values: &mut Vec<Box<dyn Element>>,
         rollup: Option<&OrchestrationCreditRollup>,
+        spend_display: SpendDisplay,
         appearance: &Appearance,
     ) {
         let Some(rollup) = rollup else {
@@ -626,7 +779,7 @@ impl ConversationUsageView {
                 total_entries
             };
         for entry in rollup.per_agent.iter().take(shown_entries) {
-            let (label_el, value_el) = self.render_per_agent_row(entry, appearance);
+            let (label_el, value_el) = self.render_per_agent_row(entry, spend_display, appearance);
             labels.push(label_el);
             values.push(value_el);
         }
@@ -645,13 +798,13 @@ impl ConversationUsageView {
     /// Renders the "Credits spent (total)" value cell. When a rollup
     /// applies, the cell is a row with the value followed by a
     /// "View details ▾" / "Hide details ▴" toggle.
-    fn render_total_credits_value_row(
+    fn render_total_value_row(
         &self,
-        total_credits: f32,
+        value: String,
         rollup: Option<&OrchestrationCreditRollup>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let value_text = render_value_text(format_credits(total_credits), appearance);
+        let value_text = render_value_text(value, appearance);
         if rollup.is_none() {
             return value_text;
         }
@@ -735,6 +888,7 @@ impl ConversationUsageView {
     fn render_per_agent_row(
         &self,
         entry: &PerAgentCreditEntry,
+        spend_display: SpendDisplay,
         appearance: &Appearance,
     ) -> (Box<dyn Element>, Box<dyn Element>) {
         let theme = appearance.theme();
@@ -768,13 +922,13 @@ impl ConversationUsageView {
             .with_child(avatar)
             .with_child(name_element)
             .finish();
-        let value = Text::new(
-            format_credits(entry.credits_spent),
-            appearance.ui_font_family(),
-            font_size,
-        )
-        .with_color(blended_colors::text_sub(theme, bg))
-        .finish();
+        let value_text = match spend_display {
+            SpendDisplay::Credits => format_credits(entry.credits_spent),
+            SpendDisplay::Dollars => format_cents_as_dollars(entry.cost_cents),
+        };
+        let value = Text::new(value_text, appearance.ui_font_family(), font_size)
+            .with_color(blended_colors::text_sub(theme, bg))
+            .finish();
         (label, value)
     }
 

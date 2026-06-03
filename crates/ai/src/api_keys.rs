@@ -342,6 +342,9 @@ impl ApiKeyManager {
                 open_router,
                 allow_use_of_warp_credits: false,
                 aws_credentials,
+                // BYOK Google Cloud (Vertex) credentials are not yet wired up on
+                // the client.
+                google_cloud_credentials: None,
             })
         }
     }

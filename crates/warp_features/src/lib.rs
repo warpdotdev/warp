@@ -885,6 +885,12 @@ pub enum FeatureFlag {
 
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
+
+    /// Gates the transparent at-cost pricing UI. When enabled, usage and
+    /// billing surfaces show at-cost dollar amounts; when disabled they show
+    /// Warp credits. The two views are mutually exclusive — dollars are shown
+    /// only when this is enabled, credits only when it is disabled.
+    TransparentPricing,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

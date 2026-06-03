@@ -26,6 +26,12 @@ query GetConversationUsage(
             contextWindowUsage
             creditsSpent
             platformCreditsSpent
+            costCents
+            platformFeeCents
+            totalInputTokens
+            totalOutputTokens
+            totalCacheReadTokens
+            totalCacheWriteTokens
             summarized
             tokenUsage { modelId totalTokens }
             warpTokenUsage { modelId totalTokens tokenUsageByCategory { category tokens } }
@@ -116,6 +122,12 @@ pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
+    pub cost_cents: Option<String>,
+    pub platform_fee_cents: Option<String>,
+    pub total_input_tokens: Option<i32>,
+    pub total_output_tokens: Option<i32>,
+    pub total_cache_read_tokens: Option<i32>,
+    pub total_cache_write_tokens: Option<i32>,
     pub summarized: bool,
     pub token_usage: Vec<ModelTokenUsage>,
     pub warp_token_usage: Vec<TokenUsage>,
@@ -174,6 +186,18 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             credits_spent: gql.credits_spent as f32,
             platform_credits_spent: gql.platform_credits_spent as f32,
             credits_spent_for_last_block: None,
+            cost_cents: gql
+                .cost_cents
+                .as_deref()
+                .and_then(|s| s.parse::<f64>().ok()),
+            platform_fee_cents: gql
+                .platform_fee_cents
+                .as_deref()
+                .and_then(|s| s.parse::<f64>().ok()),
+            total_input_tokens: gql.total_input_tokens.unwrap_or(0).max(0) as u64,
+            total_output_tokens: gql.total_output_tokens.unwrap_or(0).max(0) as u64,
+            total_cache_read_tokens: gql.total_cache_read_tokens.unwrap_or(0).max(0) as u64,
+            total_cache_write_tokens: gql.total_cache_write_tokens.unwrap_or(0).max(0) as u64,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
         }

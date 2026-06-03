@@ -4,6 +4,7 @@ use itertools::Itertools as _;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
@@ -572,11 +573,19 @@ fn render_row_card(
         .with_child(Container::new(cost_text).with_margin_left(4.).finish())
         .finish();
 
-    let credits_and_cost = Flex::row()
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(credits_cluster)
-        .with_child(Container::new(cost_cluster).with_margin_left(6.).finish())
-        .finish();
+    // Transparent pricing shows the at-cost dollar amount in place of the
+    // credit count; the two clusters are mutually exclusive per row.
+    let credits_and_cost = if FeatureFlag::TransparentPricing.is_enabled() {
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(cost_cluster)
+            .finish()
+    } else {
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(credits_cluster)
+            .finish()
+    };
 
     let body = Container::new(
         Flex::row()

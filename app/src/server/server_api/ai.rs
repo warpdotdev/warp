@@ -2955,6 +2955,12 @@ fn convert_usage_metadata(
         credits_spent: credits_spent as f32,
         platform_credits_spent: platform_credits_spent as f32,
         credits_spent_for_last_block: None,
+        cost_cents: None,
+        platform_fee_cents: None,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_tokens: 0,
+        total_cache_write_tokens: 0,
         token_usage: vec![],
         tool_usage_metadata: Default::default(),
     }

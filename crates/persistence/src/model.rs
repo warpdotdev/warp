@@ -1361,6 +1361,24 @@ pub struct ConversationUsageMetadata {
     pub platform_credits_spent: f32,
     #[serde(default)]
     pub credits_spent_for_last_block: Option<f32>,
+    /// Exact at-cost inference cost spent so far in the conversation, in USD
+    /// cents (may be fractional). `None` when the server has not reported a
+    /// transparent at-cost value yet. Display-only on the client; the server
+    /// owns the charged path.
+    #[serde(default)]
+    pub cost_cents: Option<f64>,
+    /// Exact transparent platform fee spent so far in the conversation, in USD
+    /// cents (may be fractional). `None` when not yet reported.
+    #[serde(default)]
+    pub platform_fee_cents: Option<f64>,
+    #[serde(default)]
+    pub total_input_tokens: u64,
+    #[serde(default)]
+    pub total_output_tokens: u64,
+    #[serde(default)]
+    pub total_cache_read_tokens: u64,
+    #[serde(default)]
+    pub total_cache_write_tokens: u64,
     #[serde(default)]
     pub token_usage: Vec<ModelTokenUsage>,
     #[serde(default)]

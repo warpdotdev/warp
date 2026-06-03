@@ -17,6 +17,12 @@ pub struct RequestLimitInfo {
     pub next_refresh_time: Time,
     pub request_limit: i32,
     pub requests_used_since_last_refresh: i32,
+    /// Total dollar allowance for the current period, in whole USD cents (free tier is 0).
+    pub allowance_cents: i32,
+    /// Dollars spent against the allowance so far this period, in whole USD cents.
+    pub used_cents: i32,
+    /// Remaining dollar allowance for the current period, in whole USD cents.
+    pub remaining_cents: i32,
     pub request_limit_refresh_duration: RequestLimitRefreshDuration,
     pub is_unlimited_voice: bool,
     pub voice_request_limit: i32,
@@ -169,5 +175,15 @@ pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
+    /// Exact at-cost inference cost so far in the conversation, in USD cents, as a
+    /// decimal string preserving fractional cents. None when not yet computed.
+    pub cost_cents: Option<String>,
+    /// Exact transparent platform fee so far in the conversation, in USD cents, as a
+    /// decimal string. None when not yet computed.
+    pub platform_fee_cents: Option<String>,
+    pub total_input_tokens: Option<i32>,
+    pub total_output_tokens: Option<i32>,
+    pub total_cache_read_tokens: Option<i32>,
+    pub total_cache_write_tokens: Option<i32>,
     pub summarized: bool,
 }

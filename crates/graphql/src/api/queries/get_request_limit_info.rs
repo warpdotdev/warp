@@ -21,11 +21,14 @@ query GetRequestLimitInfo($requestContext: RequestContext!) {
               userFacingMessage
               requestCreditsGranted
               requestCreditsRemaining
+              grantedCents
+              remainingCents
             }
             spendingInfo {
               currentMonthCreditsPurchased
               currentMonthPeriodEnd
               currentMonthSpendCents
+              currentMonthPurchasedCents
             }
           }
         }
@@ -33,6 +36,9 @@ query GetRequestLimitInfo($requestContext: RequestContext!) {
           isUnlimited
           requestsUsedSinceLastRefresh
           requestLimit
+          allowanceCents
+          usedCents
+          remainingCents
           nextRefreshTime
           requestLimitRefreshDuration
         }
@@ -45,6 +51,8 @@ query GetRequestLimitInfo($requestContext: RequestContext!) {
           userFacingMessage
           requestCreditsGranted
           requestCreditsRemaining
+          grantedCents
+          remainingCents
         }
       }
     }

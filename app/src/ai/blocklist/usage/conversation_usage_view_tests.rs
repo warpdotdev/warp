@@ -29,6 +29,7 @@ use warpui::platform::WindowStyle;
 use warpui::App;
 
 use super::*;
+use crate::features::FeatureFlag;
 use crate::persistence::model::{ModelTokenUsage, PRIMARY_AGENT_CATEGORY};
 
 fn placeholder_usage_info() -> ConversationUsageInfo {
@@ -36,6 +37,12 @@ fn placeholder_usage_info() -> ConversationUsageInfo {
         credits_spent: 0.0,
         platform_credits_spent: 0.0,
         credits_spent_for_last_block: None,
+        cost_cents: None,
+        platform_fee_cents: None,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        total_cache_read_tokens: 0,
+        total_cache_write_tokens: 0,
         tool_calls: 0,
         models: Vec::new(),
         context_window_usage: 0.0,
@@ -175,4 +182,53 @@ fn show_all_agent_rows_is_independent_of_details_expanded() {
             );
         });
     });
+}
+
+#[test]
+fn spend_display_follows_transparent_pricing_flag() {
+    // Flag off (the default everywhere but dogfood): the legacy credits view.
+    {
+        let _guard = FeatureFlag::TransparentPricing.override_enabled(false);
+        assert_eq!(SpendDisplay::current(), SpendDisplay::Credits);
+    }
+    // Flag on: the at-cost dollar view. The two are mutually exclusive by
+    // construction, so flipping the flag is the only thing that swaps views.
+    {
+        let _guard = FeatureFlag::TransparentPricing.override_enabled(true);
+        assert_eq!(SpendDisplay::current(), SpendDisplay::Dollars);
+    }
+}
+
+#[test]
+fn dollar_spend_rows_keep_inference_and_platform_fee_separate() {
+    // Both present: two separate rows, inference before platform fee.
+    let info = ConversationUsageInfo {
+        cost_cents: Some(12.0),
+        platform_fee_cents: Some(3.0),
+        ..placeholder_usage_info()
+    };
+    assert_eq!(
+        info.dollar_spend_rows(),
+        vec![("Inference cost", 12.0), ("Platform fee", 3.0)]
+    );
+
+    // Platform-only: the enterprise-BYOK case where the platform fee is the
+    // only charge. The platform fee must still surface on its own.
+    let info = ConversationUsageInfo {
+        cost_cents: None,
+        platform_fee_cents: Some(3.0),
+        ..placeholder_usage_info()
+    };
+    assert_eq!(info.dollar_spend_rows(), vec![("Platform fee", 3.0)]);
+
+    // Inference-only.
+    let info = ConversationUsageInfo {
+        cost_cents: Some(12.0),
+        platform_fee_cents: None,
+        ..placeholder_usage_info()
+    };
+    assert_eq!(info.dollar_spend_rows(), vec![("Inference cost", 12.0)]);
+
+    // Neither (pre-transparent-pricing conversations): no dollar rows.
+    assert!(placeholder_usage_info().dollar_spend_rows().is_empty());
 }

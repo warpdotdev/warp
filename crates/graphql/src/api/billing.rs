@@ -29,6 +29,8 @@ pub struct BonusGrantSpendingInfo {
     pub current_month_credits_purchased: i32,
     pub current_month_period_end: Time,
     pub current_month_spend_cents: i32,
+    /// Dollar value of bonus allowance purchased this month, in whole USD cents.
+    pub current_month_purchased_cents: i32,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +49,10 @@ pub struct BonusGrant {
     pub user_facing_message: Option<String>,
     pub request_credits_granted: i32,
     pub request_credits_remaining: i32,
+    /// Dollar allowance granted by this bonus grant, in whole USD cents.
+    pub granted_cents: i32,
+    /// Remaining dollar balance of this bonus grant, in whole USD cents.
+    pub remaining_cents: i32,
 }
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
@@ -339,6 +345,10 @@ pub struct UsageEntry {
     pub usage_source: AiCreditsUsageSource,
     pub credits_used: i32,
     pub cost_cents: i32,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub cache_read_tokens: i32,
+    pub cache_write_tokens: i32,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
@@ -369,6 +379,7 @@ pub enum AiCreditsUsageBucket {
     Ai,
     Compute,
     Platform,
+    PlatformFee,
     SuggestedCodeDiffs,
     Voice,
     Aggregate,
