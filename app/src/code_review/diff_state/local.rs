@@ -45,7 +45,7 @@ use crate::util::git::{
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use std::collections::HashSet;
-        use crate::code_review::file_invalidation_queue::{FileInvalidationError, FileInvalidationTask};
+        use crate::code_review::file_invalidation_queue::FileInvalidationTask;
         use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
         use repo_metadata::{
             repository::{RepositorySubscriber, SubscriberId},
@@ -55,10 +55,12 @@ cfg_if::cfg_if! {
         use warpui::{ModelHandle, SingletonEntity};
     }
 }
+#[cfg(feature = "local_fs")]
+use super::DiffOperation;
 use super::{
-    DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
-    DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData,
-    GitDiffWithBaseContent, GitFileStatus,
+    BackendOrigin, DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase,
+    DiffMode, DiffState, DiffStateError, DiffStateModelEvent, DiffStats, FileDiff,
+    FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent, GitFileStatus,
 };
 
 // Unicode bidirectional characters that should be flagged
@@ -189,6 +191,7 @@ pub struct LocalDiffStateModel {
     #[cfg(feature = "local_fs")]
     subscriber_id: Option<SubscriberId>,
     state: InternalDiffState,
+    backend_origin: BackendOrigin,
     mode: DiffMode,
     metadata: Option<DiffMetadata>,
     computing_diffs_abort_handle: Option<SpawnedFutureHandle>,
@@ -216,7 +219,11 @@ struct GitNumStatMetadata {
 
 impl LocalDiffStateModel {
     #[cfg(feature = "local_fs")]
-    pub fn new(repo_path: Option<String>, ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        repo_path: Option<String>,
+        backend_origin: BackendOrigin,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         // Set up file invalidation queue and subscribe to results
         // so the model can emit SingleFileUpdated events.
         let queue = SyncQueue::new_streaming(&ctx.background_executor());
@@ -224,7 +231,7 @@ impl LocalDiffStateModel {
 
         ctx.spawn_stream_local(
             rx,
-            |me, broadcast_result: Result<_, Arc<FileInvalidationError>>, ctx| {
+            |me, broadcast_result: Result<_, Arc<DiffStateError>>, ctx| {
                 if me.file_invalidation.invalidate_all_pending {
                     return;
                 }
@@ -244,9 +251,10 @@ impl LocalDiffStateModel {
                         warp_core::report_error!(err.as_ref());
                         send_telemetry_from_ctx!(
                             CodeReviewTelemetryEvent::LoadDiffFailed {
-                                is_local: Some(true),
+                                backend_origin: me.backend_origin,
+                                operation: DiffOperation::FileInvalidation,
                                 mode: me.mode.clone(),
-                                error: err.kind.to_string(),
+                                error: err.to_string(),
                                 // Per-file invalidation errors are not tied to a full
                                 // tracked load, so `load_duration` is intentionally `None`.
                                 load_duration: None,
@@ -268,6 +276,7 @@ impl LocalDiffStateModel {
             },
             subscriber_id: None,
             mode: DiffMode::default(),
+            backend_origin,
             metadata: None,
             computing_diffs_abort_handle: None,
             computing_metadata_abort_handle: None,
@@ -310,9 +319,14 @@ impl LocalDiffStateModel {
     }
 
     #[cfg(not(feature = "local_fs"))]
-    pub fn new(_repo_path: Option<String>, _ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        _repo_path: Option<String>,
+        backend_origin: BackendOrigin,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Self {
         Self {
             state: InternalDiffState::default(),
+            backend_origin,
             mode: DiffMode::default(),
             metadata: None,
             computing_diffs_abort_handle: None,
@@ -1402,11 +1416,13 @@ impl LocalDiffStateModel {
                 self.metadata = Some(metadata);
             }
             Err(e) => {
+                let err = DiffStateError::from(e);
+                warp_core::report_error!(&err);
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadMetadataFailed {
-                        is_local: Some(true),
+                        backend_origin: self.backend_origin,
                         mode: self.mode.clone(),
-                        error: e.to_string(),
+                        error: err.to_string(),
                     },
                     ctx
                 );
@@ -1447,11 +1463,14 @@ impl LocalDiffStateModel {
                     .tracked_diff_load_start_time
                     .take()
                     .map(|start| start.elapsed());
+                let err = DiffStateError::from_message(e);
+                warp_core::report_error!(&err);
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
-                        is_local: Some(true),
+                        backend_origin: self.backend_origin,
+                        operation: DiffOperation::DiffLoad,
                         mode: self.mode.clone(),
-                        error: e.to_string(),
+                        error: err.to_string(),
                         load_duration,
                     },
                     ctx
@@ -2656,6 +2675,7 @@ impl LocalDiffStateModel {
             state: InternalDiffState::default(),
             #[cfg(feature = "local_fs")]
             subscriber_id: None,
+            backend_origin: BackendOrigin::ClientLocal,
             mode: DiffMode::default(),
             metadata: None,
             computing_diffs_abort_handle: None,

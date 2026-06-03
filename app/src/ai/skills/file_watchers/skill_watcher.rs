@@ -1066,12 +1066,10 @@ fn read_project_skill_contents(
             Ok(read_local_project_skill_contents(skill_paths))
         })),
         LocalOrRemotePath::Remote(remote) => {
-            let client = RemoteServerManager::as_ref(ctx)
-                .client_for_host(&remote.host_id)?
-                .clone();
+            let handle = RemoteServerManager::as_ref(ctx).host_request_handle(&remote.host_id);
             Some(Box::pin(async move {
                 let request = remote_skill_read_request(&skill_paths);
-                let response = client.read_file_context(request).await?;
+                let response = handle.read_file_context(request).await?;
                 Ok(read_remote_project_skill_contents(
                     skill_paths,
                     response.file_contexts,

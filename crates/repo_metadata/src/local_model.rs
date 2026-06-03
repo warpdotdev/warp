@@ -22,7 +22,9 @@ pub enum RepoContent<'a> {
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::entry::{BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy};
+use crate::entry::{
+    BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
+};
 use crate::repository::Repository;
 use crate::telemetry::RepoMetadataTelemetryEvent;
 use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
@@ -54,8 +56,15 @@ use crate::file_tree_update::{
 /// Maximum depth to traverse when building file trees
 const MAX_TREE_DEPTH: usize = 200;
 
-/// Maximum number of files to index per repository to guard against really large codebases
-const MAX_FILES_PER_REPO: usize = 100_000;
+/// Maximum number of non-ignored files to index eagerly per repository.
+///
+/// This is a high safety ceiling, not the common case: gitignored directories
+/// are lazy placeholders and never consume this budget, so only repositories
+/// with an enormous number of *tracked* files reach it. When the budget is
+/// exhausted the builder stops descending breadth-first and leaves the
+/// remaining directories as unloaded placeholders (lazy-loaded on demand)
+/// rather than failing or collapsing the tree to a single level.
+const MAX_FILES_PER_REPO: usize = 200_000;
 
 /// Maximum number of results to return from get_repo_contents to prevent accidentally
 /// materializing the entire repository
@@ -555,6 +564,7 @@ impl LocalRepoMetadataModel {
             1, // max_depth — only first level
             0,
             &IgnoredPathStrategy::Include,
+            BudgetExceededBehavior::StopAndLazyLoad,
         )
         .map_err(RepoMetadataError::BuildTree)?;
 
@@ -656,6 +666,7 @@ impl LocalRepoMetadataModel {
                         current_depth: 0,
                         ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
                         ignored_path_interests,
+                        budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
                     is_ignored,
                 ) {
@@ -946,14 +957,16 @@ impl LocalRepoMetadataModel {
             async move {
                 let mut files: Vec<crate::entry::FileMetadata> = Vec::new();
                 let mut gitignores_for_build = gitignores_for_build;
-                // Snapshot the initial gitignores so we can retry from a clean
-                // state if the full-depth build is partially populated before
-                // it hits the file limit.
-                let initial_gitignores = gitignores_for_build.clone();
 
+                // Budget for non-ignored files. When it is exhausted the builder
+                // stops descending breadth-first and leaves the remaining
+                // directories as unloaded placeholders (lazy-loaded on demand)
+                // instead of failing the whole build. Gitignored subtrees stay
+                // lazy and registered ignored-path interests are always loaded;
+                // both are handled inside the builder.
                 let mut file_limit = MAX_FILES_PER_REPO;
 
-                let mut build_result = Entry::build_tree_with_ignored_path_interests(
+                let build_result = Entry::build_tree_with_ignored_path_interests(
                     &repo_path_for_build,
                     &mut files,
                     &mut gitignores_for_build,
@@ -963,37 +976,14 @@ impl LocalRepoMetadataModel {
                         current_depth: 0,
                         ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
                         ignored_path_interests: &ignored_path_interests,
+                        budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
                 );
 
-                // Repos with more than MAX_FILES_PER_REPO tracked files can't
-                // be indexed at full depth. Fall back to a single-level scan
-                // (with the file quota disabled — direct-child files at
-                // depth=1 still consume the quota, so reusing it would
-                // re-trigger ExceededMaxFileLimit on repos with >MAX_FILES_PER_REPO
-                // files directly under the root) so the user can still browse
-                // the tree; subdirectories are loaded on expand via
-                // LAZY_LOAD_FILE_LIMIT.
-                let mut indexed_with_limit = false;
-                if matches!(build_result, Err(BuildTreeError::ExceededMaxFileLimit)) {
-                    files.clear();
-                    gitignores_for_build = initial_gitignores;
-                    build_result = Entry::build_tree_with_ignored_path_interests(
-                        &repo_path_for_build,
-                        &mut files,
-                        &mut gitignores_for_build,
-                        None,
-                        BuildTreeOptions {
-                            max_depth: 1, // Only first level.
-                            current_depth: 0,
-                            ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
-                            ignored_path_interests: &ignored_path_interests,
-                        },
-                    );
-                    if build_result.is_ok() {
-                        indexed_with_limit = true;
-                    }
-                }
+                // A fully-exhausted budget means the repo was too large to index
+                // eagerly: the tree is partial (with a lazy-loaded remainder)
+                // but still browsable and searchable as far as it goes.
+                let indexed_with_limit = file_limit == 0;
 
                 (
                     build_result,
@@ -1029,8 +1019,8 @@ impl LocalRepoMetadataModel {
                             model.mark_repository_failed(std_repo_path, e, ctx);
                         } else if indexed_with_limit {
                             safe_warn!(
-                                safe: ("Repository exceeded max file limit; indexed in degraded mode"),
-                                full: ("Repository {repo_path_str} exceeded max file limit ({MAX_FILES_PER_REPO}); indexed only first level — subdirectories load on expand")
+                                safe: ("Repository exceeded max file budget; indexed with partial coverage"),
+                                full: ("Repository {repo_path_str} exceeded the max file budget ({MAX_FILES_PER_REPO}); indexed breadth-first up to the budget — remaining directories load on expand")
                             );
                             send_telemetry_from_ctx!(RepoMetadataTelemetryEvent::BuildTreeFailed { error: format!("{:#}", BuildTreeError::ExceededMaxFileLimit) }, ctx);
                         } else {

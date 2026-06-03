@@ -951,7 +951,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
-    FeatureFlag::OrchestrationViewerStreamer,
     FeatureFlag::GPTConfigurableContextWindow,
 ];
 
