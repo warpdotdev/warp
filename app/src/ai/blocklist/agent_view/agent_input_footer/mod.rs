@@ -942,27 +942,31 @@ impl AgentInputFooter {
         #[cfg(not(feature = "voice_input"))]
         let _ = app;
 
-        let mut left = Flex::row()
+        let mut left = Wrap::row()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_run_spacing(CLOUD_MODE_V2_FOOTER_GAP)
             .with_spacing(CLOUD_MODE_V2_FOOTER_GAP);
         if let Some(environment_selector) = self.environment_selector.as_ref() {
-            left = left.with_child(ChildView::new(environment_selector).finish());
+            left.add_child(ChildView::new(environment_selector).finish());
         }
 
-        let mut right = Flex::row()
+        let mut right = Wrap::row()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::Start)
+            .with_run_spacing(CLOUD_MODE_V2_FOOTER_GAP)
             .with_spacing(CLOUD_MODE_V2_FOOTER_GAP);
 
         // Only show the mic button when voice input is compiled in *and* the
         // user has voice input enabled in settings, matching V1's behavior.
         #[cfg(feature = "voice_input")]
         if AISettings::as_ref(app).is_voice_input_enabled(app) {
-            right = right.with_child(ChildView::new(&self.mic_button).finish());
+            right.add_child(ChildView::new(&self.mic_button).finish());
         }
 
-        right = right.with_child(ChildView::new(&self.file_button).finish());
+        right.add_child(ChildView::new(&self.file_button).finish());
 
         if let Some(model_selector) = self.v2_model_selector.as_ref() {
             // Only show the model selector when the active harness has available models.
@@ -978,16 +982,18 @@ impl AgentInputFooter {
                         .is_some_and(|models| !models.is_empty()),
                 });
             if show_selector {
-                right = right.with_child(ChildView::new(model_selector).finish());
+                right.add_child(ChildView::new(model_selector).finish());
             }
         }
 
-        Flex::row()
+        Wrap::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(left.finish())
-            .with_child(right.finish())
+            .with_spacing(CLOUD_MODE_V2_FOOTER_GAP)
+            .with_run_spacing(context_chips::spacing::UDI_ROW_RUN_SPACING)
+            .with_child(WrapFill::new(0., left.finish()).finish())
+            .with_child(WrapFill::new(0., right.finish()).finish())
             .finish()
     }
 
