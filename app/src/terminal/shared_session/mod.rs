@@ -106,8 +106,8 @@ pub enum SharedSessionStatus {
     /// established the connection with the server yet, or have not received all the events that occurred before the viewer joined yet.
     ViewPending,
     /// We failed to join the session before receiving its initial content.
-    /// The pane remains available for a same-pane retry.
-    FailedViewerJoin { error: String },
+    /// Retryable failures remain available for a same-pane retry.
+    FailedViewerJoin { error: String, can_retry: bool },
 
     /// This session is a shared session that we are actively viewing.
     /// We have received all the scrollback and events for the shared session that occurred before the viewer joined, and are caught up and receiving events live.
@@ -150,9 +150,19 @@ impl SharedSessionStatus {
     }
     pub fn failed_viewer_join_error(&self) -> Option<&str> {
         match self {
-            SharedSessionStatus::FailedViewerJoin { error } => Some(error),
+            SharedSessionStatus::FailedViewerJoin { error, .. } => Some(error),
             _ => None,
         }
+    }
+
+    pub fn can_retry_failed_viewer_join(&self) -> bool {
+        matches!(
+            self,
+            SharedSessionStatus::FailedViewerJoin {
+                can_retry: true,
+                ..
+            }
+        )
     }
 
     pub fn is_finished_viewer(&self) -> bool {

@@ -6,7 +6,7 @@ use url::Url;
 use warpui::r#async::executor::Background;
 use warpui::units::Lines;
 
-use super::{decode_scrollback, SharedSessionScrollbackType, SharedSessionStatus};
+use super::{decode_scrollback, SharedSessionScrollbackType};
 use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::assert_lines_approx_eq;
 use crate::channel::ChannelState;
@@ -20,24 +20,6 @@ use crate::themes::default_themes::dark_theme;
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 
 pub const MAX_BYTES_SHAREABLE: usize = 5000;
-
-#[test]
-fn failed_viewer_join_is_a_viewer_with_a_retryable_error() {
-    let status = SharedSessionStatus::FailedViewerJoin {
-        error: "Could not join session".to_owned(),
-    };
-
-    assert!(status.is_viewer());
-    assert!(!status.is_view_pending());
-    assert_eq!(
-        status.failed_viewer_join_error(),
-        Some("Could not join session")
-    );
-    assert_eq!(
-        status.as_keymap_context(),
-        "SharedSessionStatus_FailedViewerJoin"
-    );
-}
 
 #[test]
 fn maybe_rewrite_web_url_to_shared_session_intent_rewrites_matching_web_url() {

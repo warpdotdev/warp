@@ -924,10 +924,11 @@ impl TerminalManager {
                     log::debug!("Ignoring failed join from stale shared session viewer network");
                     return;
                 }
+                let can_retry = reason.is_retryable();
                 let error = reason.user_facing_error_message().to_string();
                 log::warn!(
                     "viewer TerminalManager: NetworkEvent::FailedToJoin \
-                     session_id={session_id} reason={reason:?}; exposing same-pane retry"
+                     session_id={session_id} reason={reason:?} can_retry={can_retry}"
                 );
                 model
                     .lock()
@@ -936,6 +937,7 @@ impl TerminalManager {
                     .lock()
                     .set_shared_session_status(SharedSessionStatus::FailedViewerJoin {
                         error,
+                        can_retry,
                     });
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
@@ -1512,12 +1514,15 @@ impl TerminalManager {
                 }
             }
             TerminalViewEvent::RejoinCurrentSession => {
-                let failed_initial_join = model
-                    .lock()
-                    .shared_session_status()
-                    .failed_viewer_join_error()
-                    .is_some();
-                if failed_initial_join {
+                let (failed_initial_join, can_retry_failed_initial_join) = {
+                    let model = model.lock();
+                    let status = model.shared_session_status();
+                    (
+                        status.failed_viewer_join_error().is_some(),
+                        status.can_retry_failed_viewer_join(),
+                    )
+                };
+                if can_retry_failed_initial_join {
                     Self::update_current_network(&current_network, ctx, |network, ctx| {
                         model.lock().set_write_to_pty_events_for_shared_session_tx(
                             network.write_to_pty_events_tx(),
@@ -1527,6 +1532,8 @@ impl TerminalManager {
                             .set_shared_session_status(SharedSessionStatus::ViewPending);
                         network.retry_initial_join(ctx);
                     });
+                } else if failed_initial_join {
+                    log::debug!("Ignoring retry request for non-retryable failed viewer join");
                 } else {
                     Self::update_current_network(&current_network, ctx, |network, ctx| {
                         network.reauthenticate_viewer(ctx);

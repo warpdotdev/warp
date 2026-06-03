@@ -2,7 +2,7 @@
 
 ## Summary
 
-When a user opens a live shared session, including a Cloud Mode session, transient failures while joining should recover automatically when possible. If the session still cannot be joined, the pane should show a stable failure state with an in-pane retry action rather than remaining indefinitely on `Loading session...`.
+When a user opens a live shared session, including a Cloud Mode session, transient failures while joining should recover automatically when possible. If the session still cannot be joined, the pane should show a stable failure state rather than remaining indefinitely on `Loading session...`, with an in-pane retry action only when trying again may recover.
 
 ## Problem
 
@@ -18,7 +18,7 @@ Figma: none provided. The screenshot associated with REMOTE-1661 documents the b
 
 - Recover transparently from transient connection interruptions during initial session join.
 - Ensure an unsuccessful join always settles into an actionable, understandable state.
-- Make retry possible without closing or recreating the pane.
+- Make retry possible without closing or recreating the pane when the failure is retryable.
 
 ### Non-goals
 
@@ -38,13 +38,13 @@ Figma: none provided. The screenshot associated with REMOTE-1661 documents the b
 
 5. If an automatic retry succeeds, the existing pane transitions to the successfully joined session with the same behavior the user would have received from a successful first attempt. In Cloud Mode/handoff flows, existing local pane context must not be discarded merely because joining required a retry.
 
-6. If the system determines that the initial join was rejected for a terminal reason, such as a session that is unavailable or access that is not allowed, it does not continue automatic retries. The pane moves promptly to the failure state and communicates the applicable user-facing failure reason.
+6. If the system determines that the initial join was rejected for a terminal reason, such as a session that is unavailable or access that is not allowed, it does not continue automatic retries. The pane moves promptly to the failure state, communicates the applicable user-facing failure reason, and does not offer an explicit retry action.
 
 7. If bounded recovery is exhausted for a transient failure, the pane moves to a failure state that communicates that the session could not be loaded and offers a retry action. It must not continue showing `Loading session...` as though work is still underway.
 
 8. The failed-initial-join state is distinct from an ended live session: the user is not told that a viewed session ended when the session was never displayed, and ended-session affordances or history must not be shown solely because the initial join failed.
 
-9. Activating retry from the failure state begins a new attempt to load the same session in the same pane and returns the pane to the joining/loading state while that attempt is active. Retry may later succeed or return to an updated failure state under these same rules.
+9. Activating retry from a retryable failure state begins a new attempt to load the same session in the same pane and returns the pane to the joining/loading state while that attempt is active. Retry may later succeed or return to an updated failure state under these same rules.
 
 10. Repeated failures for one join attempt must not create duplicate viewer panes or stack multiple simultaneous recovery surfaces. The user sees one coherent state for the pane they opened.
 

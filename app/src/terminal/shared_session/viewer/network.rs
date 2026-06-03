@@ -1185,6 +1185,7 @@ impl Network {
 pub enum FailedToJoinReason {
     Unknown,
     FailedToConnectToServer,
+    InternalServerError,
     SessionNotFound,
     WrongPassword,
     MaxNumberOfParticipantsReached,
@@ -1192,12 +1193,21 @@ pub enum FailedToJoinReason {
 }
 
 impl FailedToJoinReason {
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::FailedToConnectToServer | Self::InternalServerError
+        )
+    }
     /// This error message will be displayed to the user.
     pub fn user_facing_error_message(&self) -> &str {
         match self {
             FailedToJoinReason::Unknown => "Failed to join shared session.",
             FailedToJoinReason::FailedToConnectToServer => {
                 "Failed to connect. Please try again later."
+            }
+            FailedToJoinReason::InternalServerError => {
+                "Failed to join shared session. Please try again."
             }
             FailedToJoinReason::SessionNotFound => "Shared session not found.",
             FailedToJoinReason::WrongPassword => "Invalid session sharing link.",
@@ -1212,8 +1222,10 @@ impl FailedToJoinReason {
 impl From<session_sharing_protocol::viewer::FailedToJoinReason> for FailedToJoinReason {
     fn from(reason: session_sharing_protocol::viewer::FailedToJoinReason) -> Self {
         match reason {
-            session_sharing_protocol::viewer::FailedToJoinReason::Invalid |
-            session_sharing_protocol::viewer::FailedToJoinReason::InternalServerError => Self::Unknown,
+            session_sharing_protocol::viewer::FailedToJoinReason::Invalid => Self::Unknown,
+            session_sharing_protocol::viewer::FailedToJoinReason::InternalServerError => {
+                Self::InternalServerError
+            }
             session_sharing_protocol::viewer::FailedToJoinReason::SessionNotFound => Self::SessionNotFound,
             session_sharing_protocol::viewer::FailedToJoinReason::WrongPassword => Self::WrongPassword,
             session_sharing_protocol::viewer::FailedToJoinReason::MaxNumberOfParticipantsReached => Self::MaxNumberOfParticipantsReached,

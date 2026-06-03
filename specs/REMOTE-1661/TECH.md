@@ -37,7 +37,7 @@ In `app/src/terminal/shared_session/viewer/network.rs`, add a separate initial-j
 - Retry only transport failures; do not retry explicit `FailedToJoin` protocol responses.
 - On each retry, re-send the original `Initialize` message.
 - Preserve Cloud Mode `initial_load_mode` and connection parameters across retries.
-- Emit `NetworkEvent::FailedToJoin` when retries are exhausted or a terminal failure is encountered.
+- Emit `NetworkEvent::FailedToJoin` when retries are exhausted or a terminal failure is encountered, preserving whether a failed state can be retried manually.
 
 ### 2. Complete and race-safe cleanup
 
@@ -51,8 +51,8 @@ In `app/src/terminal/shared_session/mod.rs` and `app/src/terminal/view.rs`:
 
 - Add a failed-initial-join viewer state distinct from `ViewPending` and `FinishedViewer`.
 - On terminal failure, clear `SharedSessionStatus::ViewPending` and transition to the new failed state.
-- Render an explicit error/recovery surface that communicates the join could not be completed and offers a same-pane retry action.
-- On retry activation from the failed state, start a new initial-join attempt and return to joining/loading UI.
+- Render an explicit error/recovery surface that communicates the join could not be completed and offers a same-pane retry action only for retryable failures (for example, exhausted transport attempts or an internal server error).
+- On retry activation from a retryable failed state, start a new initial-join attempt and return to joining/loading UI; reject the retry action for terminal failures such as unavailable sessions, invalid links, access denial, or capacity limits.
 
 ### 4. Post-join behavior unchanged
 

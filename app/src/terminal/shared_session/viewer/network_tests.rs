@@ -8,7 +8,7 @@ use parking_lot::FairMutex;
 use session_sharing_protocol::viewer::UpstreamMessage;
 use warpui::{App, ModelHandle};
 
-use super::{Network, PtyBytesBatchStatus, Stage};
+use super::{FailedToJoinReason, Network, PtyBytesBatchStatus, Stage};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::TerminalModel;
 use crate::test_util::add_window_with_terminal;
@@ -62,6 +62,17 @@ fn test_initial_join_failure_only_schedules_one_pending_retry() {
             assert!(network.initial_join_retry_timer.is_some());
         });
     });
+}
+
+#[test]
+fn test_failed_initial_join_only_allows_retry_for_transient_failures() {
+    assert!(FailedToJoinReason::FailedToConnectToServer.is_retryable());
+    assert!(FailedToJoinReason::InternalServerError.is_retryable());
+    assert!(!FailedToJoinReason::Unknown.is_retryable());
+    assert!(!FailedToJoinReason::SessionNotFound.is_retryable());
+    assert!(!FailedToJoinReason::WrongPassword.is_retryable());
+    assert!(!FailedToJoinReason::MaxNumberOfParticipantsReached.is_retryable());
+    assert!(!FailedToJoinReason::SessionNotAccessible.is_retryable());
 }
 
 #[test]

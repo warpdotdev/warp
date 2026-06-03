@@ -22819,7 +22819,12 @@ impl TerminalView {
         .finish()
     }
 
-    fn render_failed_viewer_join(&self, error: &str, app: &AppContext) -> Box<dyn Element> {
+    fn render_failed_viewer_join(
+        &self,
+        error: &str,
+        can_retry: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let text_color = appearance
             .theme()
@@ -22827,25 +22832,24 @@ impl TerminalView {
         let sub_text_color = appearance
             .theme()
             .sub_text_color(appearance.theme().background());
+        let mut content = Flex::column()
+            .with_child(
+                Text::new_inline("Unable to load session", appearance.ui_font_family(), 14.)
+                    .with_color(text_color.into())
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(error.to_owned(), appearance.ui_font_family(), 13.)
+                    .with_color(sub_text_color.into())
+                    .finish(),
+            );
+        if can_retry {
+            content.add_child(ChildView::new(&self.failed_viewer_join_retry_button).finish());
+        }
 
         SavePosition::new(
             Align::new(
-                Flex::column()
-                    .with_child(
-                        Text::new_inline(
-                            "Unable to load session",
-                            appearance.ui_font_family(),
-                            14.,
-                        )
-                        .with_color(text_color.into())
-                        .finish(),
-                    )
-                    .with_child(
-                        Text::new_inline(error.to_owned(), appearance.ui_font_family(), 13.)
-                            .with_color(sub_text_color.into())
-                            .finish(),
-                    )
-                    .with_child(ChildView::new(&self.failed_viewer_join_retry_button).finish())
+                content
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .finish(),
             )
@@ -27056,16 +27060,25 @@ impl View for TerminalView {
             TerminalSizeElement::new(resize_tx.clone(), element).finish()
         }
 
-        let failed_viewer_join_error = model.shared_session_status().failed_viewer_join_error();
+        let failed_viewer_join_error = model
+            .shared_session_status()
+            .failed_viewer_join_error()
+            .map(|error| {
+                (
+                    error,
+                    model.shared_session_status().can_retry_failed_viewer_join(),
+                )
+            });
         let mut stack = match (
             input_mode,
             model.block_list().active_gap(),
             is_alt_screen_active,
             failed_viewer_join_error,
         ) {
-            (_, _, _, Some(error)) => {
+            (_, _, _, Some((error, can_retry))) => {
                 column.add_child(
-                    Expanded::new(1., self.render_failed_viewer_join(error, app)).finish(),
+                    Expanded::new(1., self.render_failed_viewer_join(error, can_retry, app))
+                        .finish(),
                 );
 
                 Stack::new()
