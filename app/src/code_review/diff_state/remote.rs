@@ -18,8 +18,8 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{ModelContext, SingletonEntity};
 
 use super::{
-    DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, DiffStats, FileDiffAndContent,
-    GitDiffData, GitDiffWithBaseContent,
+    BackendOrigin, DiffMetadata, DiffMode, DiffOperation, DiffState, DiffStateError,
+    DiffStateModelEvent, DiffStats, FileDiffAndContent, GitDiffData, GitDiffWithBaseContent,
 };
 use crate::code_review::telemetry_event::CodeReviewTelemetryEvent;
 use crate::remote_server::diff_state_proto::{try_decode_file_delta, try_decode_snapshot};
@@ -326,11 +326,14 @@ impl RemoteDiffStateModel {
                     .tracked_diff_load_start_time
                     .take()
                     .map(|start| start.elapsed());
+                let err = DiffStateError::from_message(&msg);
+                warp_core::report_error!(&err);
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
-                        is_local: Some(false),
+                        backend_origin: BackendOrigin::ClientRemote,
+                        operation: DiffOperation::RemoteDiff,
                         mode: self.mode.clone(),
-                        error: "Server reported diff error".to_string(),
+                        error: err.raw_message(),
                         load_duration,
                     },
                     ctx
@@ -343,22 +346,23 @@ impl RemoteDiffStateModel {
             }
             DiffState::Loaded => {
                 let Some(base_content) = diffs else {
-                    let error =
-                        "Server reported loaded state but no diff data was available".to_string();
                     let load_duration = self
                         .tracked_diff_load_start_time
                         .take()
                         .map(|start| start.elapsed());
+                    let err = DiffStateError::empty_diff_data();
+                    warp_core::report_error!(&err);
                     send_telemetry_from_ctx!(
                         CodeReviewTelemetryEvent::LoadDiffFailed {
-                            is_local: Some(false),
+                            backend_origin: BackendOrigin::ClientRemote,
+                            operation: DiffOperation::RemoteDiff,
                             mode: self.mode.clone(),
-                            error: "Empty diff data".to_string(),
+                            error: err.raw_message(),
                             load_duration,
                         },
                         ctx
                     );
-                    self.state = InternalRemoteDiffState::Error(error);
+                    self.state = InternalRemoteDiffState::Error(err.to_string());
                     ctx.emit(DiffStateModelEvent::NewDiffsComputed {
                         diffs: None,
                         load_duration: None,
