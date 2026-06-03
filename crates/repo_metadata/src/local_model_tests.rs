@@ -41,6 +41,8 @@ impl LocalRepoMetadataModel {
             standing_query_definitions: Default::default(),
             #[cfg(feature = "local_fs")]
             symlink_targets: Default::default(),
+            #[cfg(feature = "local_fs")]
+            lazy_watched_dirs: Default::default(),
         }
     }
 }
@@ -111,7 +113,12 @@ fn repository_indexed_waits_for_pending_repo() {
 
             model_handle.update(&mut app, |model, ctx| {
                 model
-                    .add_repository_internal(repo_path.clone(), empty_repo_state(&repo_path), ctx)
+                    .add_repository_internal(
+                        repo_path.clone(),
+                        empty_repo_state(&repo_path),
+                        true,
+                        ctx,
+                    )
                     .expect("repository should index");
             });
 
@@ -2036,6 +2043,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result1 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&real_repo).unwrap(),
                         state.clone(),
+                        true,
                         ctx,
                     );
                     assert!(result1.is_ok());
@@ -2044,6 +2052,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result2 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&symlink_repo).unwrap(),
                         state.clone(),
+                        true,
                         ctx,
                     );
                     assert!(result2.is_ok());
@@ -2052,6 +2061,7 @@ fn test_repository_operations_with_standardized_paths() {
                     let result3 = model.add_repository_internal(
                         StandardizedPath::from_local_canonicalized(&relative_repo).unwrap(),
                         state.clone(),
+                        true,
                         ctx,
                     );
                     assert!(result3.is_ok());
@@ -2116,5 +2126,145 @@ fn test_standardized_path_edge_cases() {
         // Test Debug trait
         let debug_str = format!("{canonical1:?}");
         assert!(debug_str.contains("StandardizedPath"));
+    });
+}
+
+/// On Linux, a lazy (non-git) root is watched non-recursively, so only the root
+/// itself should be tracked initially. On other platforms the root is watched
+/// recursively and nothing is tracked for per-directory teardown.
+#[cfg(feature = "local_fs")]
+#[test]
+fn index_lazy_loaded_path_tracks_only_root() {
+    VirtualFS::test("lazy_root_tracking", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub")
+            .with_files(vec![Stub::FileWithContent("workspace/file.txt", "x")]);
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                assert!(model.is_lazy_loaded_path(&root));
+                if cfg!(target_os = "linux") {
+                    let watched = model
+                        .lazy_watched_dirs
+                        .get(&root)
+                        .expect("lazy root should be tracked on linux");
+                    assert_eq!(watched.len(), 1);
+                    assert!(watched.contains(&root));
+                } else {
+                    assert!(model.lazy_watched_dirs.is_empty());
+                }
+            });
+        });
+    });
+}
+
+/// Expanding a subdirectory of a lazy root should add a per-directory watch for
+/// it on Linux (so its children stay fresh) while leaving non-Linux untouched.
+#[cfg(feature = "local_fs")]
+#[test]
+fn load_directory_tracks_expanded_subdir_for_lazy_root() {
+    VirtualFS::test("lazy_load_subdir_tracking", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner");
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+                model
+                    .load_directory(&root, &sub, ctx)
+                    .expect("should load subdir");
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                if cfg!(target_os = "linux") {
+                    let watched = model
+                        .lazy_watched_dirs
+                        .get(&root)
+                        .expect("lazy root should be tracked on linux");
+                    assert!(watched.contains(&root));
+                    assert!(watched.contains(&sub));
+                } else {
+                    assert!(model.lazy_watched_dirs.is_empty());
+                }
+            });
+        });
+    });
+}
+
+/// Indexing a git repo registers a recursive watch and must not populate the
+/// lazy per-directory tracking map on any platform.
+#[cfg(feature = "local_fs")]
+#[test]
+fn recursive_repo_does_not_track_lazy_watched_dirs() {
+    VirtualFS::test("recursive_repo_no_lazy_tracking", |dirs, mut vfs| {
+        vfs.mkdir("repo/src");
+        let repo_path =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("repo")).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .add_repository_internal(
+                        repo_path.clone(),
+                        empty_repo_state(&repo_path),
+                        /* recursive */ true,
+                        ctx,
+                    )
+                    .expect("repo should index");
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                assert!(model.lazy_watched_dirs.is_empty());
+                assert!(!model.is_lazy_loaded_path(&repo_path));
+            });
+        });
+    });
+}
+
+/// Tearing down a lazy root clears all of its tracked per-directory watches and
+/// removes the repository state.
+#[cfg(feature = "local_fs")]
+#[test]
+fn remove_lazy_loaded_path_clears_tracked_watches() {
+    VirtualFS::test("lazy_remove_clears_tracking", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub");
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+                model
+                    .load_directory(&root, &sub, ctx)
+                    .expect("should load subdir");
+                model.remove_lazy_loaded_path(&root, ctx);
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                assert!(!model.lazy_watched_dirs.contains_key(&root));
+                assert!(!model.is_lazy_loaded_path(&root));
+                assert!(model.repository_state(&root).is_none());
+            });
+        });
     });
 }
