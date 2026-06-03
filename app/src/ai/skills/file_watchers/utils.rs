@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
@@ -6,8 +5,7 @@ use ai::skills::{
     ParsedSkill, SkillProvider, SKILL_PROVIDER_DEFINITIONS,
 };
 use anyhow::Error;
-use repo_metadata::file_tree_update::RepoNodeMetadata;
-use repo_metadata::{RepoMetadataModel, RepoMetadataUpdate, RepositoryIdentifier};
+use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use walkdir::{DirEntry, WalkDir};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -28,44 +26,6 @@ fn local_or_remote_path_for_repo_path(
     }
 }
 
-/// Returns whether an incremental metadata update can alter project skills for a repository.
-///
-/// Local provider-directory changes are included because symlinked skill directories are
-/// hydrated from the local filesystem rather than represented directly in repo metadata.
-pub(super) fn update_might_affect_project_skills(
-    repo_id: &RepositoryIdentifier,
-    update: &RepoMetadataUpdate,
-    known_skill_files: Option<&HashSet<LocalOrRemotePath>>,
-) -> bool {
-    if update.remove_entries.iter().any(|removed_path| {
-        let removed_path = local_or_remote_path_for_repo_path(repo_id, removed_path);
-        known_skill_files
-            .into_iter()
-            .flatten()
-            .any(|known_skill_file| known_skill_file.starts_with(&removed_path))
-    }) {
-        return true;
-    }
-
-    let is_local_repo = matches!(repo_id, RepositoryIdentifier::Local(_));
-    update.update_entries.iter().any(|entry_update| {
-        if is_local_repo
-            && is_project_provider_path(&entry_update.parent_path_to_replace.to_local_path_lossy())
-        {
-            return true;
-        }
-
-        entry_update.subtree_metadata.iter().any(|node| match node {
-            RepoNodeMetadata::File(file) => {
-                let path = local_or_remote_path_for_repo_path(repo_id, &file.path);
-                extract_skill_parent_directory(&path).is_ok()
-            }
-            RepoNodeMetadata::Directory(directory) => {
-                is_local_repo && is_project_provider_path(&directory.path.to_local_path_lossy())
-            }
-        })
-    })
-}
 /// Finds project skill files and local symlinked skill files from stored standing results.
 ///
 /// Local provider directories are included in the metadata query so filesystem hydration can
@@ -102,18 +62,34 @@ pub(super) fn find_project_skill_files_in_tree(
     skill_files
 }
 
-/// Reads local project skills by discovering provider directories on the filesystem.
+/// Finds local project skill files by discovering provider directories on the filesystem.
 ///
 /// This is a local-only fallback for repositories whose repo metadata indexing fails. Successful
 /// local and remote project refreshes should use [`find_project_skill_files_in_tree`] so the
 /// normal metadata-backed path remains shared.
-pub(super) fn read_local_project_skills_from_filesystem(scan_root: &Path) -> Vec<ParsedSkill> {
+pub(super) fn find_local_project_skill_files_on_filesystem(
+    scan_root: &Path,
+) -> Vec<LocalOrRemotePath> {
     let direct_skill_file = scan_root.join("SKILL.md");
     if is_skill_file(&direct_skill_file) {
-        return read_skills_from_files([direct_skill_file]);
+        return vec![LocalOrRemotePath::Local(direct_skill_file)];
     }
 
-    read_skills_from_directories(find_local_provider_directories_on_filesystem(scan_root))
+    find_local_provider_directories_on_filesystem(scan_root)
+        .into_iter()
+        .flat_map(|provider_dir| std::fs::read_dir(provider_dir).into_iter().flatten())
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let skill_dir = entry.path();
+            if !skill_dir.is_dir() {
+                return None;
+            }
+            let skill_file = skill_dir.join("SKILL.md");
+            skill_file
+                .exists()
+                .then_some(LocalOrRemotePath::Local(skill_file))
+        })
+        .collect()
 }
 
 fn find_local_provider_directories_on_filesystem(scan_root: &Path) -> Vec<PathBuf> {

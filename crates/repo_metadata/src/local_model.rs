@@ -296,7 +296,6 @@ impl LocalRepoMetadataModel {
     pub fn set_emit_incremental_updates(&mut self, enabled: bool) {
         self.emit_incremental_updates = enabled;
     }
-
     /// Registers component-sequence paths that should be loaded even when ignored.
     ///
     /// This stays intentionally generic: consumers own the meaning of the paths,
@@ -334,7 +333,7 @@ impl LocalRepoMetadataModel {
 
         // Process added or updated files
         for path in event.added_or_updated_iter() {
-            if let Some(repo_path) = self.find_repository_for_path(path) {
+            if let Some(repo_path) = self.find_repository_for_watcher_entry_path(path) {
                 let repo_update = repo_updates.entry(repo_path).or_default();
                 repo_update.added.push(path.to_path_buf());
             }
@@ -354,7 +353,7 @@ impl LocalRepoMetadataModel {
 
         // Process moved files
         for (to_path, from_path) in &event.moved {
-            if let Some(repo_path) = self.find_repository_for_path(to_path) {
+            if let Some(repo_path) = self.find_repository_for_watcher_entry_path(to_path) {
                 let repo_update = repo_updates.entry(repo_path).or_default();
                 repo_update
                     .moved
@@ -448,9 +447,31 @@ impl LocalRepoMetadataModel {
     }
 
     #[cfg(feature = "local_fs")]
+    fn find_repository_for_standardized_path(
+        &self,
+        path: &StandardizedPath,
+    ) -> Option<StandardizedPath> {
+        self.repositories
+            .iter()
+            .filter(|(repo_path, state)| {
+                path.starts_with(repo_path) && matches!(state, IndexedRepoState::Indexed(_))
+            })
+            .max_by_key(|(repo_path, _)| repo_path.as_str().len())
+            .map(|(repo_path, _)| repo_path.clone())
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn find_repository_for_watcher_entry_path(&self, path: &Path) -> Option<StandardizedPath> {
+        StandardizedPath::try_from_local(path)
+            .ok()
+            .and_then(|path| self.find_repository_for_standardized_path(&path))
+            .or_else(|| self.find_repository_for_path(path))
+    }
+
+    #[cfg(feature = "local_fs")]
     pub fn find_repository_for_path(&self, path: &Path) -> Option<StandardizedPath> {
         match StandardizedPath::from_local_canonicalized(path) {
-            Ok(std_path) => self.find_repository_for_path_string(std_path.as_str()),
+            Ok(std_path) => self.find_repository_for_standardized_path(&std_path),
             Err(_) => None,
         }
     }
@@ -710,12 +731,27 @@ impl LocalRepoMetadataModel {
             if let Ok(path) = StandardizedPath::try_from_local(path_to_remove) {
                 removed_roots.push(path);
             }
+            // A removed direct provider child may have been a symlinked skill directory,
+            // which is intentionally absent from the canonical tree and standing file matches.
+            standing_results.record_direct_project_skill_provider_child_change(
+                path_to_remove,
+                standing_query_definitions,
+            );
         }
 
         // Additions for new and moved-to paths
         for path_to_add in update.added.iter().chain(update.moved.keys()) {
             if !path_to_add.exists() {
                 continue;
+            }
+            // Directory symlinks are intentionally absent from the canonical tree.
+            // Re-hydrate only when the changed entry itself can introduce a
+            // symlinked skill; ordinary descendants should not wake consumers.
+            if path_to_add.is_symlink() && path_to_add.is_dir() {
+                standing_results.record_direct_project_skill_provider_child_change(
+                    path_to_add,
+                    standing_query_definitions,
+                );
             }
 
             let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
@@ -745,6 +781,7 @@ impl LocalRepoMetadataModel {
                             subtree,
                         });
                     }
+                    Err(BuildTreeError::Symlink) => {}
                     Err(e) => {
                         log::warn!("Failed to build subtree for directory {path_to_add:?}: {e:?}");
                         mutations.push(FileTreeMutation::AddEmptyDirectory {

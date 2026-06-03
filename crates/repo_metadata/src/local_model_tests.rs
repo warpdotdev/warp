@@ -14,6 +14,8 @@ use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::FutureExt as _;
 use warpui_core::App;
+#[cfg(all(unix, feature = "local_fs"))]
+use watcher::BulkFilesystemWatcherEvent;
 
 use crate::entry::{DirectoryEntry, Entry, FileMetadata};
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
@@ -22,7 +24,7 @@ use crate::local_model::{
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
-use crate::RepoMetadataError;
+use crate::{RepoMetadataError, StandingQueryContent, StandingQueryDefinitions};
 
 impl LocalRepoMetadataModel {
     fn new_for_test() -> Self {
@@ -33,7 +35,7 @@ impl LocalRepoMetadataModel {
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
-            ignored_path_interests: Vec::new(),
+            ignored_path_interests: Default::default(),
             standing_query_definitions: Default::default(),
         }
     }
@@ -1222,6 +1224,185 @@ fn collect_paths_recursive(
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn added_symlinked_skill_directory_refreshes_provider_without_canonical_tree_mutation() {
+    VirtualFS::test("added_symlinked_skill_directory", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills")
+            .mkdir("linked-skill-target")
+            .with_files(vec![Stub::FileWithContent(
+                "linked-skill-target/SKILL.md",
+                "linked skill",
+            )]);
+        let repo = dirs.tests().join("repo");
+        let provider = repo.join(".agents/skills");
+        let linked_skill = provider.join("linked-skill");
+        std::os::unix::fs::symlink(dirs.tests().join("linked-skill-target"), &linked_skill)
+            .unwrap();
+
+        let mut definitions = StandingQueryDefinitions::default();
+        definitions.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
+        let update = RepoUpdate {
+            added: vec![linked_skill],
+            ..Default::default()
+        };
+        let (mutations, discovered, removed_roots) = block_on(
+            LocalRepoMetadataModel::compute_file_tree_mutations(&update, &[], &[], &definitions),
+        );
+
+        assert!(mutations.is_empty());
+        assert!(removed_roots.is_empty());
+        assert!(discovered.project_skills().any(|content| {
+            content
+                == &StandingQueryContent::directory(
+                    StandardizedPath::try_from_local(&provider).unwrap(),
+                )
+        }));
+    });
+}
+
+#[test]
+fn unrelated_skill_support_file_does_not_refresh_project_skills() {
+    VirtualFS::test("unrelated_skill_support_file", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills/review")
+            .with_files(vec![Stub::FileWithContent(
+                "repo/.agents/skills/review/README.md",
+                "notes",
+            )]);
+        let repo = dirs.tests().join("repo");
+        let support_file = repo.join(".agents/skills/review/README.md");
+
+        let mut definitions = StandingQueryDefinitions::default();
+        definitions.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
+        let update = RepoUpdate {
+            added: vec![support_file],
+            ..Default::default()
+        };
+        let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+            &update,
+            &[],
+            &[],
+            &definitions,
+        ));
+
+        assert!(discovered.project_skills().next().is_none());
+    });
+}
+
+#[test]
+fn removed_direct_skill_child_refreshes_provider_for_possible_symlink_removal() {
+    VirtualFS::test("removed_direct_skill_child", |dirs, mut vfs| {
+        vfs.mkdir("repo/.agents/skills");
+        let provider = dirs.tests().join("repo/.agents/skills");
+
+        let mut definitions = StandingQueryDefinitions::default();
+        definitions.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
+        let update = RepoUpdate {
+            deleted: vec![provider.join("removed-skill")],
+            ..Default::default()
+        };
+        let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+            &update,
+            &[],
+            &[],
+            &definitions,
+        ));
+
+        assert!(discovered.project_skills().any(|content| {
+            content
+                == &StandingQueryContent::directory(
+                    StandardizedPath::try_from_local(&provider).unwrap(),
+                )
+        }));
+    });
+}
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn added_external_target_skill_symlink_routes_to_lexical_repository() {
+    VirtualFS::test(
+        "added_external_target_skill_symlink_routing",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("outside/linked-skill")
+                .with_files(vec![Stub::FileWithContent(
+                    "outside/linked-skill/SKILL.md",
+                    "linked skill",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let provider = repo.join(".agents/skills");
+            let linked_skill = provider.join("linked-skill");
+            std::os::unix::fs::symlink(dirs.tests().join("outside/linked-skill"), &linked_skill)
+                .unwrap();
+
+            App::test((), |mut app| async move {
+                let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                let provider_path = StandardizedPath::try_from_local(&provider).unwrap();
+                let model_handle = app.add_model(|_| {
+                    let mut model = LocalRepoMetadataModel::new_for_test();
+                    model.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
+                    model
+                });
+                model_handle.update(&mut app, |model, _ctx| {
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                });
+
+                let (tx, rx) = oneshot::channel();
+                let received_delta = Rc::new(RefCell::new(Some(tx)));
+                let received_delta_for_event = received_delta.clone();
+                let repo_path_for_event = repo_path.clone();
+                let provider_path_for_event = provider_path.clone();
+                app.update(|ctx| {
+                    ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                        if let RepositoryMetadataEvent::StandingQueryResultsUpdated {
+                            path,
+                            delta,
+                        } = event
+                        {
+                            if path == &repo_path_for_event
+                                && delta.upserted_project_skills.iter().any(|content| {
+                                    content
+                                        == &StandingQueryContent::directory(
+                                            provider_path_for_event.clone(),
+                                        )
+                                })
+                            {
+                                if let Some(tx) = received_delta_for_event.borrow_mut().take() {
+                                    let _ = tx.send(());
+                                }
+                            }
+                        }
+                    });
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model.handle_watcher_event(
+                        &BulkFilesystemWatcherEvent {
+                            added: std::collections::HashSet::from([linked_skill]),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                });
+                rx.with_timeout(Duration::from_secs(5))
+                    .await
+                    .expect("timed out waiting for standing project-skill update")
+                    .expect("standing project-skill update sender dropped");
+
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(model
+                        .standing_query_results(&repo_path)
+                        .expect("standing results should be retained for the repository")
+                        .project_skills()
+                        .any(|content| content
+                            == &StandingQueryContent::directory(provider_path.clone())));
+                });
+            });
+        },
+    );
+}
 #[test]
 fn test_canonicalized_path_functionality() {
     use warp_util::standardized_path::StandardizedPath;

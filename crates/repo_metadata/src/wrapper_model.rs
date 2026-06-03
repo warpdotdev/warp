@@ -336,7 +336,6 @@ impl RepoMetadataModel {
             local.load_directory(&repo_root, &dir_path, ctx)
         })
     }
-
     /// Registers component-sequence paths that should be loaded even when ignored.
     ///
     /// This delegates to the local model because ignored-path matching happens

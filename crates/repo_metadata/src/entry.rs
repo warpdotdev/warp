@@ -12,6 +12,7 @@ use ignore::gitignore::Gitignore;
 use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
+
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
 
 /// Maximum file size allowed for treesitter parsing (3MB).
@@ -214,6 +215,7 @@ impl Entry {
 
     /// Builds a tree of entries from a given path, loading ignored paths that match
     /// one of the supplied component-sequence interests instead of leaving them lazy.
+    #[allow(dead_code)]
     pub(crate) fn build_tree_with_ignored_path_interests(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
@@ -261,7 +263,7 @@ impl Entry {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_tree_with_ignored_path_interests_and_ancestor(
+    fn build_tree_with_ignored_path_interests_and_ancestor(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,

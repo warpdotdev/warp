@@ -300,3 +300,7 @@ impl RemoteRepoMetadataModel {
         self.replace_repository_state(id, IndexedRepoState::Indexed(state));
     }
 }
+
+#[cfg(test)]
+#[path = "remote_model_tests.rs"]
+mod tests;

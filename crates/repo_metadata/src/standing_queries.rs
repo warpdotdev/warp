@@ -43,6 +43,10 @@ impl StandingQueryDefinitions {
         path.ancestors()
             .find(|ancestor| self.is_project_skill_provider_directory(ancestor))
     }
+    fn is_direct_project_skill_provider_child(&self, path: &Path) -> bool {
+        path.parent()
+            .is_some_and(|parent| self.is_project_skill_provider_directory(parent))
+    }
 
     fn is_project_skill_file(&self, path: &Path) -> bool {
         path.file_name().and_then(|name| name.to_str()) == Some("SKILL.md")
@@ -122,14 +126,19 @@ impl StandingQueryResults {
             self.project_rules
                 .insert(StandingQueryContent::file(standardized));
         }
+    }
 
-        // Changes beneath a local skill provider directory need to wake consumers
-        // even when the changed path is a symlinked skill directory that is not
-        // represented in the canonical tree.
-        if let Some(provider_root) = definitions.project_skill_provider_ancestor(path) {
-            self.project_skills.insert(StandingQueryContent::directory(
-                StandardizedPath::from_local_absolute_unchecked(provider_root),
-            ));
+    pub(crate) fn record_direct_project_skill_provider_child_change(
+        &mut self,
+        path: &Path,
+        definitions: &StandingQueryDefinitions,
+    ) {
+        if definitions.is_direct_project_skill_provider_child(path) {
+            if let Some(provider_root) = definitions.project_skill_provider_ancestor(path) {
+                self.project_skills.insert(StandingQueryContent::directory(
+                    StandardizedPath::from_local_absolute_unchecked(provider_root),
+                ));
+            }
         }
     }
 
@@ -225,3 +234,7 @@ impl StandingQueryResultsDelta {
         !self.upserted_project_rules.is_empty() || !self.removed_project_rules.is_empty()
     }
 }
+
+#[cfg(test)]
+#[path = "standing_queries_tests.rs"]
+mod tests;

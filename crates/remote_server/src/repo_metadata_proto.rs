@@ -34,6 +34,10 @@ impl From<&RepoMetadataUpdate> for proto::RepoMetadataUpdatePush {
     }
 }
 
+#[cfg(test)]
+#[path = "repo_metadata_proto_tests.rs"]
+mod tests;
+
 impl From<&StandingQueryContent> for proto::StandingQueryContent {
     fn from(content: &StandingQueryContent) -> Self {
         Self {
