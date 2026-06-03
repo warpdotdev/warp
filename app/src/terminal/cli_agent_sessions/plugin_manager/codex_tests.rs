@@ -67,11 +67,7 @@ fn install_instructions_has_steps() {
         instructions.steps[0].command,
         "codex plugin marketplace add warpdotdev/codex-warp"
     );
-    assert_eq!(
-        instructions.steps[1].command,
-        "codex plugin add warp@codex-warp"
-    );
-    assert!(!instructions.steps.is_empty());
+    assert_eq!(instructions.steps.len(), 1);
     assert!(!instructions.title.is_empty());
 }
 
@@ -83,11 +79,7 @@ fn update_instructions_has_steps() {
         instructions.steps[0].command,
         "codex plugin marketplace upgrade codex-warp"
     );
-    assert_eq!(
-        instructions.steps[1].command,
-        "codex plugin add warp@codex-warp"
-    );
-    assert!(!instructions.steps.is_empty());
+    assert_eq!(instructions.steps.len(), 1);
     assert!(!instructions.title.is_empty());
 }
 
@@ -106,11 +98,26 @@ fn installed_when_config_enabled() {
 
     assert!(super::check_installed(dir.path()));
 }
+#[test]
+fn installed_when_marketplace_manifest_present() {
+    let dir = tempfile::tempdir().unwrap();
+    write_marketplace_manifest(dir.path(), super::PLUGIN_NAME, "0.4.0");
+
+    assert!(super::check_installed(dir.path()));
+}
 
 #[test]
 fn platform_plugin_installed_when_config_enabled() {
     let dir = tempfile::tempdir().unwrap();
     write_enabled_platform_plugin_config(dir.path());
+
+    assert!(super::check_platform_plugin_installed(dir.path()));
+}
+
+#[test]
+fn platform_plugin_installed_when_marketplace_manifest_present() {
+    let dir = tempfile::tempdir().unwrap();
+    write_marketplace_manifest(dir.path(), super::PLATFORM_PLUGIN_NAME, "0.4.0");
 
     assert!(super::check_platform_plugin_installed(dir.path()));
 }
@@ -164,6 +171,16 @@ fn installed_version_returns_latest_manifest_version() {
     );
 }
 
+#[test]
+fn installed_version_reads_marketplace_manifest_version() {
+    let dir = tempfile::tempdir().unwrap();
+    write_marketplace_manifest(dir.path(), super::PLUGIN_NAME, "0.4.0");
+
+    assert_eq!(
+        super::installed_version(dir.path()).as_deref(),
+        Some("0.4.0")
+    );
+}
 #[test]
 fn installed_platform_plugin_version_returns_latest_manifest_version() {
     let dir = tempfile::tempdir().unwrap();
@@ -445,6 +462,23 @@ fn needs_update_via_trait_when_installed_without_manifest() {
     assert!(result);
 }
 
+#[test]
+#[serial_test::serial]
+fn does_not_need_update_for_non_git_marketplace_override() {
+    let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
+    let dir = tempfile::tempdir().unwrap();
+    write_marketplace_config(dir.path(), "directory");
+    write_marketplace_manifest(dir.path(), super::PLUGIN_NAME, "0.2.0");
+
+    std::env::set_var("CODEX_HOME", dir.path());
+    let result = CodexPluginManager::new(None, None, None).needs_update();
+    let has_override = CodexPluginManager::new(None, None, None).has_local_marketplace_override();
+    std::env::remove_var("CODEX_HOME");
+
+    assert!(!result);
+    assert!(has_override);
+}
+
 fn write_enabled_config(dir: &std::path::Path) {
     write_enabled_plugin_config(dir, super::PLUGIN_KEY);
 }
@@ -457,6 +491,36 @@ fn write_enabled_plugin_config(dir: &std::path::Path, plugin_key: &str) {
     fs::write(
         dir.join("config.toml"),
         format!("[plugins.\"{plugin_key}\"]\nenabled = true\n"),
+    )
+    .unwrap();
+}
+
+fn write_marketplace_config(dir: &std::path::Path, source_type: &str) {
+    fs::write(
+        dir.join("config.toml"),
+        format!(
+            "[marketplaces.codex-warp]\nsource_type = \"{source_type}\"\nsource = \"/tmp/codex-warp\"\n"
+        ),
+    )
+    .unwrap();
+}
+
+fn write_marketplace_manifest(dir: &std::path::Path, plugin_name: &str, version: &str) {
+    let manifest_dir = dir
+        .join(".tmp")
+        .join("marketplaces")
+        .join("codex-warp")
+        .join("plugins")
+        .join(plugin_name)
+        .join(".codex-plugin");
+    fs::create_dir_all(&manifest_dir).unwrap();
+    fs::write(
+        manifest_dir.join("plugin.json"),
+        serde_json::json!({
+            "name": plugin_name,
+            "version": version
+        })
+        .to_string(),
     )
     .unwrap();
 }
