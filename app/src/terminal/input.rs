@@ -4740,14 +4740,6 @@ impl Input {
         }
     }
 
-    fn open_model_selector(&mut self, ctx: &mut ViewContext<Self>) {
-        self.suggestions_mode_model.update(ctx, |model, ctx| {
-            model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
-        });
-
-        ctx.notify();
-    }
-
     fn toggle_inline_model_selector_from_chip(
         &mut self,
         initial_tab: InlineModelSelectorTab,
@@ -4777,6 +4769,18 @@ impl Input {
             return;
         }
 
+        self.open_model_selector_and_snapshot_prompt(initial_tab, ctx);
+    }
+
+    /// Opens the inline model selector, parking any pre-existing prompt so the
+    /// input can be used to search models. The parked prompt is restored when the
+    /// selector closes (on model selection or dismissal). Shared by the model
+    /// chip, the `/model` keybinding, and the OpenModelSelector action.
+    fn open_model_selector_and_snapshot_prompt(
+        &mut self,
+        initial_tab: InlineModelSelectorTab,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.close_overlays(false, ctx);
         let has_input = !self.editor.as_ref(ctx).buffer_text(ctx).is_empty();
         let should_clear_prompt_for_search =
@@ -4788,7 +4792,10 @@ impl Input {
             view.set_prompt_parked_for_search(should_clear_prompt_for_search);
             view.set_active_tab(initial_tab, ctx);
         });
-        self.open_model_selector(ctx);
+        self.suggestions_mode_model.update(ctx, |model, ctx| {
+            model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
+        });
+        ctx.notify();
         if should_clear_prompt_for_search {
             self.editor.update(ctx, |editor, ctx| {
                 editor.system_clear_buffer(false, ctx);
@@ -15367,7 +15374,10 @@ impl TypedActionView for Input {
                 }
             }
             InputAction::OpenModelSelector => {
-                self.open_model_selector(ctx);
+                self.open_model_selector_and_snapshot_prompt(
+                    InlineModelSelectorTab::BaseAgent,
+                    ctx,
+                );
             }
             InputAction::FigmaAddButtonClicked => {
                 TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, ctx| {

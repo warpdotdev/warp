@@ -256,8 +256,8 @@ impl InlineModelSelectorView {
             if model.as_ref(ctx).is_inline_model_selector() {
                 me.rerun_query(ctx);
             } else if model.as_ref(ctx).is_closed() {
-                me.filter_results_by_input = true;
-                me.prompt_parked_for_search = false;
+                me.set_filter_results_by_input(true);
+                me.set_prompt_parked_for_search(false);
                 me.mixer.update(ctx, |mixer, ctx| {
                     mixer.reset_results(ctx);
                 });
