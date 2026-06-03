@@ -17,7 +17,7 @@ Relevant code:
 - [`app/src/terminal/cli_agent_sessions/plugin_manager/mod.rs:222`](https://github.com/warpdotdev/warp/blob/68acdf7601cc1824d4f4dd250485aca8329efc17/app/src/terminal/cli_agent_sessions/plugin_manager/mod.rs#L222) — Codex manager now receives shell path/type/PATH like Claude/Gemini.
 - `app/src/terminal/view.rs:11680` — command-detected Codex still proactively registers a listener, but without seeding a plugin version.
 - `app/src/terminal/view.rs:12753` — OSC 777 Codex events are ignored when `CodexPlugin` is disabled.
-- `app/src/terminal/view.rs:12825` — mid-session plugin install/update can seed minimum plugin version, while OSC 9 fallback cannot.
+- `app/src/terminal/view.rs:12825` — listener registration without `SessionStart` never seeds a plugin version. Codex remains OSC 9 fallback until a real structured plugin event reports version.
 - [`crates/warp_features/src/lib.rs:789`](https://github.com/warpdotdev/warp/blob/68acdf7601cc1824d4f4dd250485aca8329efc17/crates/warp_features/src/lib.rs#L789) and [`app/src/features.rs:480`](https://github.com/warpdotdev/warp/blob/68acdf7601cc1824d4f4dd250485aca8329efc17/app/src/features.rs#L480) — new `CodexPlugin` flag is wired into shared/app feature plumbing.
 
 ## Proposed changes
@@ -49,14 +49,16 @@ The old `agent_supports_rich_status(agent)` helper was static and could not dist
 `CLIAgentSession` now owns the distinction:
 - `has_structured_plugin()` is true when a listener exists and, for Codex, a plugin version exists.
 - `supports_rich_status()` delegates to `has_structured_plugin()`.
-This works because the Codex structured plugin reports a version on connect, while OSC 9 fallback does not.
+This works because the Codex structured plugin reports a version on `session_start`, while OSC 9 fallback does not.
 `apply_event()` now records `payload.plugin_version` from any event, and `update_from_event()` emits `SessionUpdated` when the version changes. This lets footer/UI surfaces re-evaluate chip/status state after the structured plugin connects.
 
 ### 4. Keep Codex command detection fallback
 Codex command detection still registers a listener immediately, because OSC 9 has no `SessionStart` sentinel.
 Important distinction:
-- Command-detected Codex calls `register_cli_agent_listener_without_session_start_event(CLIAgent::Codex, false, ctx)`, so no plugin version is seeded. This is fallback mode.
-- The `RegisterPluginListener` action after install/update calls the same helper with `seed_plugin_version = true`, so the new plugin is treated as current and the update chip does not flash before restart/reload.
+- Command-detected Codex calls `register_cli_agent_listener_without_session_start_event(CLIAgent::Codex, ctx)`.
+- `RegisterPluginListener` after install/update uses the same helper and also does not seed a plugin version.
+- Installing the plugin mid-session does not make the running Codex process emit OSC 777. Codex must be restarted to load hooks and start structured notifications.
+- Until restart, Warp should keep treating the session as OSC 9 fallback. Disk install state can drive install/update/restart UI, but not `has_structured_plugin()`.
 
 ### 5. Update UI consumers to use rich-status semantics
 All surfaces that previously treated `listener.is_some()` plus static agent support as rich-status now use `session.supports_rich_status()`:
@@ -105,9 +107,9 @@ Suggested local validation:
 - `cargo test -p warp --features test-util codex`
 - `cargo test -p warp --features test-util cli_agent_sessions`
 - Run Warp with `CodexPlugin` disabled, start Codex with native notifications, verify one completion notification and no rich status.
-- Run Warp with `CodexPlugin` enabled and plugin installed, verify permission requests show rich blocked state.
+- Run Warp with `CodexPlugin` enabled and plugin active after Codex restart, verify permission requests show rich blocked state.
 - In plugin mode, verify Codex emitting both OSC 777 and OSC 9 does not produce duplicate notifications.
-- Verify footer install/update chip remains visible for OSC 9 fallback, then hides after structured plugin connects.
+- Verify footer install/update/restart UI remains visible for OSC 9 fallback, then hides after structured plugin connects after restart.
 - Verify vertical tabs and agent icon do not show rich status for OSC 9 fallback.
 ## Parallelization
 No sub-agents recommended for implementation. The change is tightly coupled around one invariant: whether a Codex session is OSC 9 fallback or structured OSC 777 plugin-backed.

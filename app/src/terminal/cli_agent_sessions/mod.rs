@@ -179,9 +179,6 @@ impl CLIAgentSession {
     /// Applies an event to this session, updating context and status.
     /// Returns the new status if it changed, or `None` if the event was irrelevant.
     fn apply_event(&mut self, event: &CLIAgentEvent) -> Option<CLIAgentSessionStatus> {
-        if let Some(plugin_version) = &event.payload.plugin_version {
-            self.plugin_version = Some(plugin_version.clone());
-        }
         self.session_context.cwd = event.cwd.clone().or(self.session_context.cwd.take());
         self.session_context.project = event
             .project
@@ -237,6 +234,7 @@ impl CLIAgentSession {
             // This should not affect status — otherwise it would override Success after a Stop event.
             CLIAgentEventType::IdlePrompt => return None,
             CLIAgentEventType::SessionStart => {
+                self.plugin_version = event.payload.plugin_version.clone();
                 return None;
             }
             CLIAgentEventType::Unknown(_) => return None,
@@ -423,7 +421,6 @@ impl CLIAgentSessionsModel {
         };
 
         let event_type = &event.event;
-        let old_plugin_version = session.plugin_version.clone();
         if let Some(new_status) = session.apply_event(event) {
             let agent = session.agent;
             ctx.emit(CLIAgentSessionsModelEvent::StatusChanged {
@@ -439,8 +436,7 @@ impl CLIAgentSessionsModel {
             CLIAgentEventType::SessionStart
                 | CLIAgentEventType::PromptSubmit
                 | CLIAgentEventType::ToolComplete
-        ) || session.plugin_version != old_plugin_version
-        {
+        ) {
             ctx.emit(CLIAgentSessionsModelEvent::SessionUpdated {
                 terminal_view_id,
                 agent: session.agent,
@@ -508,7 +504,6 @@ impl CLIAgentSessionsModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let agent = session.agent;
-
         // Close any open rich input before replacing, so subscribers can
         // restore input config before the session ends.
         self.close_input(terminal_view_id, false, ctx);

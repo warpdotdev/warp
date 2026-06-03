@@ -404,7 +404,7 @@ use crate::terminal::cli_agent_sessions::event::{
 };
 use crate::terminal::cli_agent_sessions::listener::{is_agent_supported, CLIAgentSessionListener};
 #[cfg(not(target_family = "wasm"))]
-use crate::terminal::cli_agent_sessions::plugin_manager::{plugin_manager_for, PluginModalKind};
+use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
@@ -11819,7 +11819,6 @@ impl TerminalView {
                                     if matches!(detection, Some((CLIAgent::Codex, _))) {
                                         me.register_cli_agent_listener_without_session_start_event(
                                             CLIAgent::Codex,
-                                            false,
                                             ctx,
                                         );
                                     }
@@ -12965,16 +12964,8 @@ impl TerminalView {
     fn register_cli_agent_listener_without_session_start_event(
         &mut self,
         agent: CLIAgent,
-        seed_plugin_version: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        #[cfg(not(target_family = "wasm"))]
-        let plugin_version = seed_plugin_version
-            .then(|| plugin_manager_for(agent).map(|m| m.minimum_plugin_version().to_owned()))
-            .flatten();
-        #[cfg(target_family = "wasm")]
-        let plugin_version = None;
-
         let notification = CLIAgentEvent {
             v: 1,
             agent,
@@ -12983,7 +12974,7 @@ impl TerminalView {
             cwd: None,
             project: None,
             payload: CLIAgentEventPayload {
-                plugin_version,
+                plugin_version: None,
                 ..Default::default()
             },
         };
@@ -21357,7 +21348,7 @@ impl TerminalView {
                 self.enter_environment_setup_selector(repos.clone(), ctx);
             }
             InputEvent::RegisterPluginListener(agent) => {
-                self.register_cli_agent_listener_without_session_start_event(*agent, true, ctx);
+                self.register_cli_agent_listener_without_session_start_event(*agent, ctx);
             }
             #[cfg(not(target_family = "wasm"))]
             InputEvent::OpenPluginInstructionsPane(agent, kind) => {

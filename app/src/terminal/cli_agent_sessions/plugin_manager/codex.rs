@@ -142,11 +142,7 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     fn install_success_message(&self) -> &'static str {
-        if FeatureFlag::CodexPlugin.is_enabled() {
-            "Warp plugin installed. Please restart Codex to activate."
-        } else {
-            "Warp notifications enabled. Please restart Codex to activate."
-        }
+        "Warp plugin installed. Please restart Codex to activate."
     }
 
     fn update_success_message(&self) -> &'static str {
