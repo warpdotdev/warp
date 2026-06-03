@@ -70,6 +70,7 @@ use crate::resource_center::TipsCompleted;
 use crate::search::files::model::FileSearchModel;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::iap::IapManager;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
@@ -108,6 +109,9 @@ fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
     app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
+    // Disabled (`None`) IapManager so shared-session viewer code that reads the
+    // singleton doesn't panic in tests; it is an inert no-op.
+    app.add_singleton_model(|ctx| IapManager::new(None, ctx));
     app.add_singleton_model(|ctx| ChangelogModel::new(ServerApiProvider::as_ref(ctx).get()));
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);

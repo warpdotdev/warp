@@ -130,7 +130,9 @@ use super::shell::ShellType;
 use super::universal_developer_input::{
     UniversalDeveloperInputButtonBar, UniversalDeveloperInputButtonBarEvent,
 };
-use super::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use super::view::ambient_agent::{
+    is_cloud_agent_pre_first_exchange, AmbientAgentViewModel, AmbientAgentViewModelEvent,
+};
 use super::view::inline_banner::{
     PromptSuggestionBannerState, ZeroStatePromptSuggestionTriggeredFrom,
     ZeroStatePromptSuggestionType,
@@ -2559,8 +2561,29 @@ impl Input {
                 AgentInputFooterEvent::OpenPluginInstructionsPane(agent, kind) => {
                     ctx.emit(Event::OpenPluginInstructionsPane(*agent, *kind));
                 }
-                AgentInputFooterEvent::OpenHandoffPane => {
-                    me.activate_cloud_handoff_compose(HandoffEntryPoint::FooterChip, ctx);
+                AgentInputFooterEvent::HandoffChipClicked => {
+                    // Auto-handoff only when the input buffer is empty and the
+                    // source conversation has content. Otherwise enter `&`
+                    // compose mode so any in-flight prompt is preserved and
+                    // the user can refine before forking.
+                    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+                    let auto_handoff = me.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty()
+                        && me.source_conversation_has_content(ctx);
+                    #[cfg(not(all(feature = "local_fs", not(target_family = "wasm"))))]
+                    let auto_handoff = false;
+
+                    if auto_handoff {
+                        #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+                        ctx.dispatch_typed_action_deferred(
+                            WorkspaceAction::OpenLocalToCloudHandoffPane {
+                                launch: None,
+                                environment_id: None,
+                                entry_point: HandoffEntryPoint::FooterChip,
+                            },
+                        );
+                    } else {
+                        me.activate_cloud_handoff_compose(HandoffEntryPoint::FooterChip, ctx);
+                    }
                 }
             }
         });
@@ -3486,7 +3509,7 @@ impl Input {
             BlocklistAIStatusBar::new(
                 ai_controller.clone(),
                 agent_view_controller.clone(),
-                cli_subagent_controller,
+                cli_subagent_controller.clone(),
                 ai_action_model.clone(),
                 ai_context_model.clone(),
                 ai_input_model.clone(),
@@ -3505,8 +3528,14 @@ impl Input {
         });
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
+            let cli_subagent_controller = cli_subagent_controller.clone();
             let panel = ctx.add_typed_action_view(|ctx| {
-                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model.clone(), ctx)
+                QueuedPromptsPanelView::new(
+                    terminal_view_id,
+                    suggestions_mode_model.clone(),
+                    cli_subagent_controller,
+                    ctx,
+                )
             });
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
@@ -3686,10 +3715,7 @@ impl Input {
                 self.submit_queued_prompt_for_active_pane(text.clone(), ctx);
                 self.focus_input_box(ctx);
             }
-            QueuedPromptsPanelEvent::RowDeleted { text } => {
-                if self.buffer_text(ctx).is_empty() {
-                    self.replace_buffer_content(text, ctx);
-                }
+            QueuedPromptsPanelEvent::RowDeleted => {
                 self.focus_input_box(ctx);
             }
             QueuedPromptsPanelEvent::EditEnded => {
@@ -4067,6 +4093,16 @@ impl Input {
         }
     }
 
+    /// Source-content guardrail shared by the three local-to-cloud handoff entry
+    /// points (footer chip, `&` compose, `/handoff`): true when this terminal's
+    /// active source conversation has at least one exchange to hand off.
+    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    fn source_conversation_has_content(&self, ctx: &AppContext) -> bool {
+        BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.terminal_view_id)
+            .is_some_and(|c| !c.is_empty())
+    }
+
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
     fn maybe_launch_cloud_handoff_request(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         use crate::cloud_object::CloudObjectLookup as _;
@@ -4080,7 +4116,29 @@ impl Input {
         }
 
         let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
+        // Empty buffer + source conversation with content launches an immediate empty-prompt handoff.
         if prompt.is_empty() {
+            if !self.source_conversation_has_content(ctx) {
+                return true;
+            }
+
+            if CloudAmbientAgentEnvironment::get_all(ctx).is_empty() {
+                ctx.emit(Event::OpenHandoffEnvironmentCreationModal);
+                return true;
+            }
+
+            let environment_id = self
+                .handoff_compose_state
+                .as_ref(ctx)
+                .selected_environment_id()
+                .cloned();
+            let entry_point = self.handoff_compose_state.as_ref(ctx).entry_point();
+            self.exit_cloud_handoff_compose_and_clear(ctx);
+            ctx.dispatch_typed_action_deferred(WorkspaceAction::OpenLocalToCloudHandoffPane {
+                launch: None,
+                environment_id,
+                entry_point,
+            });
             return true;
         }
 
@@ -6648,20 +6706,6 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.set_interaction_state(InteractionState::Editable, ctx);
         });
-    }
-
-    fn should_block_cloud_mode_setup_submission(&self, app: &AppContext) -> bool {
-        if !FeatureFlag::CloudModeSetupV2.is_enabled() {
-            return false;
-        }
-
-        self.ambient_agent_view_model()
-            .is_some_and(|ambient_agent_model| {
-                let ambient_agent_model = ambient_agent_model.as_ref(app);
-                ambient_agent_model.is_ambient_agent()
-                    && !ambient_agent_model.is_configuring_ambient_agent()
-                    && !ambient_agent_model.is_agent_running()
-            })
     }
 
     /// Try to execute a command in the local session that was
@@ -11183,9 +11227,26 @@ impl Input {
             pending_command_execution_request: None,
         });
 
-        // Set the server-assigned replica ID on the input buffer.
+        // Reinitializing for the server replica ID empties the buffer. During cloud setup the
+        // sharer's input sync is skipped, so preserve the viewer's in-progress follow-up instead
+        // of discarding it.
+        let cloud_setup_pre_first_exchange = FeatureFlag::CloudModeSetupV2.is_enabled()
+            && is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model(),
+                &self.agent_view_controller,
+                &self.model.lock(),
+                ctx,
+            );
+        let preserved_text = if cloud_setup_pre_first_exchange {
+            self.editor().as_ref(ctx).buffer_text(ctx)
+        } else {
+            String::new()
+        };
         self.editor().update(ctx, |editor, ctx| {
             editor.reinitialize_buffer(Some(replica_id), ctx);
+            if !preserved_text.is_empty() {
+                editor.set_buffer_text(&preserved_text, ctx);
+            }
         });
     }
 
@@ -12717,7 +12778,16 @@ impl Input {
             self.input_suggestions.update(ctx, |suggestions, ctx| {
                 suggestions.confirm(ctx);
             });
-        } else if self.should_block_cloud_mode_setup_submission(ctx) {
+        } else if FeatureFlag::CloudModeSetupV2.is_enabled()
+            && is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model(),
+                &self.agent_view_controller,
+                &self.model.lock(),
+                ctx,
+            )
+        {
+            // During cloud-mode setup, non-queued submissions (e.g. third-party harness runs that
+            // don't queue) are dropped rather than sent as live prompts the sharer can't accept.
             return;
         } else if FeatureFlag::HandoffCloudCloud.is_enabled()
             && self
@@ -13416,14 +13486,20 @@ impl Input {
             return false;
         }
 
-        let should_queue = self
-            .ambient_agent_view_model()
-            .is_some_and(|ambient_agent_model| {
-                let ambient_agent_model = ambient_agent_model.as_ref(ctx);
-                ambient_agent_model.is_ambient_agent()
-                    && !ambient_agent_model.is_configuring_ambient_agent()
-                    && !ambient_agent_model.is_agent_running()
-            });
+        // Third-party (non-Oz) harnesses don't support prompt queueing, so leave the input
+        // alone; the submission then falls through to being blocked during setup.
+        let is_third_party_harness =
+            self.ambient_agent_view_model()
+                .is_some_and(|ambient_agent_model| {
+                    ambient_agent_model.as_ref(ctx).is_third_party_harness()
+                });
+        let should_queue = !is_third_party_harness
+            && is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model(),
+                &self.agent_view_controller,
+                &self.model.lock(),
+                ctx,
+            );
         if !should_queue {
             return false;
         }
@@ -14213,8 +14289,20 @@ impl Input {
         // off the screen because we were forcing the long running command to be the same
         // size of the cleared input box.
         if let BlockType::User(user_block) = &block_completed_event.block_type {
+            // During cloud-mode setup (before the first exchange) the cloud agent (sharer) runs
+            // environment setup commands the viewer never requested. Each completed setup block
+            // would otherwise reinitialize the buffer and wipe a follow-up the viewer is composing,
+            // so skip the clear for that window.
+            let cloud_setup_pre_first_exchange = FeatureFlag::CloudModeSetupV2.is_enabled()
+                && is_cloud_agent_pre_first_exchange(
+                    self.ambient_agent_view_model(),
+                    &self.agent_view_controller,
+                    &self.model.lock(),
+                    ctx,
+                );
             // Only clear the input buffer for user-executed commands, not agent-executed ones.
-            let should_clear_buffer = !user_block.was_part_of_agent_interaction;
+            let should_clear_buffer =
+                !user_block.was_part_of_agent_interaction && !cloud_setup_pre_first_exchange;
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
             let input_contents_before_prompt_chip_command =
                 self.input_contents_before_prompt_chip_command.take();

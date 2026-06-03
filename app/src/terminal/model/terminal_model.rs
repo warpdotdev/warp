@@ -1411,6 +1411,23 @@ impl TerminalModel {
         }
     }
 
+    /// Signal to viewers that the Cloud Mode Setup V2 phase is complete and no
+    /// follow-up `AppendedExchange` is coming (e.g. because the AgentDriver is
+    /// short-circuiting an empty-prompt handoff via `skip_initial_turn`).
+    /// Viewers use this to clear `BlockList::is_executing_oz_environment_startup_commands`
+    /// and tear down the "Running setup commands…" chip.
+    pub fn send_cloud_mode_setup_phase_ended_for_shared_session(&mut self) {
+        if self.shared_session_status().is_sharer() {
+            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
+                if let Err(e) = tx.try_send(OrderedTerminalEventType::CloudModeSetupPhaseEnded) {
+                    log::warn!(
+                        "Failed to send OrderedTerminalEventType::CloudModeSetupPhaseEnded: {e}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Whether the session sharing server is currently replaying
     /// conversation events (for conversation reconstruction).
     pub fn is_receiving_agent_conversation_replay(&self) -> bool {

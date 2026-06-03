@@ -278,7 +278,6 @@ use crate::root_view::{
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
-#[cfg(not(target_family = "wasm"))]
 use crate::server::iap::IapManager;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 pub use crate::server::telemetry::{
@@ -1151,8 +1150,6 @@ pub(crate) fn initialize_app(
         move |ctx| ServerApiProvider::new(auth_state, agent_source, iap_state, ctx)
     });
 
-    #[cfg(not(target_family = "wasm"))]
-    ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
     let server_api = server_api_provider.as_ref(ctx).get();
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
 
@@ -1880,6 +1877,17 @@ pub(crate) fn initialize_app(
         ctx.add_singleton_model(LocalShellState::new);
         ctx.add_singleton_model(system::SystemInfo::new);
     }
+
+    // `IapManager` drives gcloud-based IAP token refresh for staging builds.
+    // Register it after `LocalShellState`: the Manager needs to know where the gcloud
+    // cli lives & thus needs PATH config set by ~/.zshrc et al.
+    //
+    // Registered on all targets (including wasm) so consumers such as the
+    // shared-session viewer network — which compiles and runs on wasm — can
+    // read the singleton without panicking. On wasm `iap_state` is always
+    // `None`, making this an inert no-op: `IapManager::new` early-returns from
+    // its refresh loop and `iap_state()` yields no proxy-auth header.
+    ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
 
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);

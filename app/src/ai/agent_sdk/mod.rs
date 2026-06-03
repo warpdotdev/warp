@@ -933,6 +933,7 @@ impl AgentDriverRunner {
                         .snapshot
                         .snapshot_script_timeout
                         .map(|duration| duration.into()),
+                    skip_initial_turn: args.skip_initial_turn,
                 };
 
                 Ok((merged_config, task, driver_options))

@@ -99,13 +99,13 @@ impl Index {
     pub fn rebuild(old_index: &Index, columns: usize) -> Self {
         let mut index = Self::new(columns, Some(old_index.len()));
         // Update the content length to be the start offset of the first row,
-        // to ensure we properly handle resizing after truncation.
+        // or preserve the old content offset if no rows remain, to ensure we
+        // properly handle resizing after truncation.
         index.content_len = old_index
             .rows
             .front()
-            .map(|entry| entry.content_offset)
-            .unwrap_or_default()
-            .as_usize();
+            .map(|entry| entry.content_offset.as_usize())
+            .unwrap_or(old_index.content_len);
 
         let mut entry_builder = EntryBuilder::new();
 

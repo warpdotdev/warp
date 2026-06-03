@@ -164,9 +164,9 @@ use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
 use crate::ai::agent_management::AgentManagementEvent;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffInjectionPath};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
@@ -750,6 +750,7 @@ struct LocalToCloudHandoffOpenParams {
     launch: Option<PendingCloudLaunch>,
     environment_id: Option<SyncId>,
     intent: LocalToCloudHandoffIntent,
+    should_inject_continue: bool,
 }
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -14539,6 +14540,7 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             orchestration_handoff: None,
+            should_inject_continue: false,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);
@@ -14665,12 +14667,57 @@ impl Workspace {
             }
         };
 
+        // Chip, `&` Enter, and `/handoff` with no arg dispatch `launch: None`;
+        // synthesize an empty `PendingCloudLaunch` so auto-submit fires. The
+        // empty-prompt substitution happens in `build_handoff_spawn_request`.
+        // Attachments come from the source input for symmetry across entry points.
+        let launch = match (launch, intent) {
+            (
+                None,
+                LocalToCloudHandoffIntent::UserInitiated(
+                    HandoffEntryPoint::FooterChip
+                    | HandoffEntryPoint::Ampersand
+                    | HandoffEntryPoint::SlashCommand,
+                ),
+            ) => {
+                let attachments = source_view.update(ctx, |view, ctx| {
+                    let input = view.input().clone();
+                    input.update(ctx, |input, ctx| {
+                        input.collect_cloud_launch_attachments(ctx)
+                    })
+                });
+                Some(PendingCloudLaunch {
+                    prompt: String::new(),
+                    attachments,
+                })
+            }
+            (launch, _) => launch,
+        };
+
         let has_existing_conversation = source_conversation.as_ref().is_some_and(|c| !c.is_empty());
+
+        // Capture the source-conversation state once. An "active" source is
+        // non-empty AND in-progress/blocked; the wire-level substitution and
+        // the telemetry injection_path read the same bool so the two cannot
+        // drift across the in-progress cancellation below.
+        let source_conversation_active = source_conversation.as_ref().is_some_and(|c| {
+            !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+        });
+        let empty_prompt = launch.as_ref().is_none_or(|l| l.prompt.is_empty());
+        let injection_path = if !empty_prompt {
+            HandoffInjectionPath::None
+        } else if source_conversation_active {
+            HandoffInjectionPath::Continue
+        } else {
+            HandoffInjectionPath::SnapshotRehydration
+        };
 
         send_telemetry_from_ctx!(
             CloudAgentTelemetryEvent::HandoffInitiated {
                 entry_point: intent.entry_point(),
                 forked_existing_conversation: has_existing_conversation,
+                empty_prompt,
+                injection_path,
             },
             ctx
         );
@@ -14696,9 +14743,7 @@ impl Workspace {
             return;
         }
 
-        if source_conversation.status().is_in_progress()
-            || source_conversation.status().is_blocked()
-        {
+        if source_conversation_active {
             let has_long_running_command =
                 source_view.as_ref(ctx).has_active_long_running_command();
 
@@ -14780,6 +14825,7 @@ impl Workspace {
                             launch,
                             environment_id,
                             intent,
+                            should_inject_continue: source_conversation_active,
                         },
                         ctx,
                     );
@@ -14816,6 +14862,7 @@ impl Workspace {
     /// Finishes the handoff after the fork RPC returns by restoring the forked
     /// conversation in a cloud pane and starting snapshot prep.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    #[allow(clippy::too_many_arguments)]
     fn complete_local_to_cloud_handoff_open(
         &mut self,
         source_view: ViewHandle<TerminalView>,
@@ -14828,6 +14875,7 @@ impl Workspace {
             launch,
             environment_id,
             intent,
+            should_inject_continue,
         } = params;
         let show_user_feedback = intent.shows_user_feedback();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
@@ -14946,6 +14994,7 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             orchestration_handoff,
+            should_inject_continue,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);

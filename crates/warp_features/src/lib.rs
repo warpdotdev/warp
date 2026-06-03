@@ -932,8 +932,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::OzLaunchModal,
-    FeatureFlag::QueueSlashCommand,
-    FeatureFlag::QueuedPromptsV2,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
     FeatureFlag::CrossRepoContext,

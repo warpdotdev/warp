@@ -5320,6 +5320,33 @@ impl TerminalView {
         }
     }
 
+    /// Drains one queued prompt when the cloud setup phase completes for a promptless handoff run
+    /// (a prompt will not be auto-sent by the worker so there's no normal event to initiate a queued prompt sending).
+    pub(crate) fn maybe_drain_queue_after_promptless_setup(&mut self, ctx: &mut ViewContext<Self>) {
+        let is_promptless_run = self
+            .ambient_agent_view_model()
+            .and_then(|model| {
+                model
+                    .as_ref(ctx)
+                    .request()
+                    .map(|request| request.prompt.is_none())
+            })
+            .unwrap_or(false);
+        if !is_promptless_run {
+            return;
+        }
+
+        let Some(conversation_id) = self
+            .ai_context_model
+            .as_ref(ctx)
+            .selected_conversation_id(ctx)
+        else {
+            return;
+        };
+
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+    }
+
     fn handle_legacy_passive_suggestions_event(
         &mut self,
         _: ModelHandle<LegacyPassiveSuggestionsModel>,
@@ -7484,6 +7511,24 @@ impl TerminalView {
         &self,
     ) -> Option<&ModelHandle<ambient_agent::AmbientAgentViewModel>> {
         self.ambient_agent_view_model.as_ref()
+    }
+
+    /// Tear down the Cloud Mode Setup V2 UI in response to a
+    /// setup-phase-ended signal: clear the BlockList
+    /// executing-startup-commands flag AND finish/collapse the active
+    /// ambient setup command group. Owns both pieces of state so callers
+    /// (the shared-session viewer arm, legacy fallbacks) don't have to
+    /// orchestrate two unrelated mutations. Idempotent across both.
+    pub(crate) fn tear_down_cloud_mode_setup_phase(&mut self, ctx: &mut ViewContext<Self>) {
+        self.model
+            .lock()
+            .block_list_mut()
+            .set_is_executing_oz_environment_startup_commands(false);
+        if let Some(ambient_model) = self.ambient_agent_view_model.clone() {
+            ambient_model.update(ctx, |model, ctx| {
+                model.tear_down_active_setup_command_group(ctx);
+            });
+        }
     }
 
     fn ambient_agent_task_id_for_details_panel_from_model(

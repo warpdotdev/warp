@@ -670,6 +670,8 @@ default = [
     "orchestration_viewer_streamer",
     "run_agents_tool",
     "pending_user_query_indicator",
+    "queue_slash_command",
+    "queued_prompts_v2",
     "cloud_mode_input_v2",
     "cloud_mode_setup_v2",
     "handoff_cloud_cloud",
@@ -711,6 +713,7 @@ grep_tool = []
 gui = ["voice_input"]
 nld_classifier_v1 = ["input_classifier/nld_classifier_v1"]
 nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
+nld_classifier_v3 = ["input_classifier/nld_classifier_v3"]
 nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 msys2_shells = []

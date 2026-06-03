@@ -260,7 +260,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 serde_with = "2.0.1"
 serde_yaml = "0.8"
-session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "9e437df5be3c318999a9c94dba1826ebb33ad679" }
+session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d" }
 similar = { version = "2.7", features = ["inline"] }
 simplelog = "0.12.2"
 smallvec = "1.6.1"

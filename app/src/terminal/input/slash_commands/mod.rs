@@ -921,10 +921,27 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
+                } else if self.source_conversation_has_content(ctx) {
+                    // Empty `/handoff` with a non-empty source conversation:
+                    // dispatch the immediate empty-prompt handoff (continue /
+                    // snapshot rehydration); the workspace synthesizes the
+                    // launch and collects attachments.
+                    ctx.dispatch_typed_action_deferred(
+                        WorkspaceAction::OpenLocalToCloudHandoffPane {
+                            launch: None,
+                            environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
+                        },
+                    );
                 } else {
-                    // `/handoff` with no query enters `&` compose mode,
-                    // same as the footer chip.
-                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
+                    // Empty `/handoff` with no source content — surface a toast
+                    // so the user knows why nothing happened. The chip falls
+                    // back to `&` compose mode here; the slash-command flow
+                    // does not because it has no compose-draft state to seed.
+                    show_error_toast(
+                        "Nothing to hand off — start a conversation first.".to_owned(),
+                        ctx,
+                    );
                 }
             }
             fork if command.name == commands::FORK.name => {
@@ -1061,12 +1078,16 @@ impl Input {
                 };
 
                 let history = BlocklistAIHistoryModel::handle(ctx);
-                let is_in_progress = history
+                // An empty conversation defaults to `InProgress` even though nothing is
+                // running, so exclude it here to auto-send rather than queue.
+                let should_queue = history
                     .as_ref(ctx)
                     .conversation(&conversation_id)
-                    .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
+                    .is_some_and(|c| {
+                        !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+                    });
 
-                if is_in_progress {
+                if should_queue {
                     QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                         model.append(
                             conversation_id,

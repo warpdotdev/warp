@@ -31,6 +31,7 @@ use warpui::{
 };
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, QueuedQueryEvent, QueuedQueryId,
     QueuedQueryModel, QueuedQueryOrigin,
@@ -53,6 +54,7 @@ const PROMPT_PREVIEW_MAX_CHARS: usize = 500;
 const INITIAL_CLOUD_MODE_PROMPT_TOOLTIP: &str = "The first cloud-mode prompt cannot be changed.";
 const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
     "Prompts cannot be sent until environment setup is complete.";
+const SEND_NOW_TO_FULL_TERMINAL_USE_AGENT_TOOLTIP: &str = "Send to full terminal use agent";
 
 /// Returns the position-cache id used to look up a row's bounding rect during a drag.
 /// Indexed by the row's current visual index so swaps maintain stable lookups.
@@ -164,6 +166,9 @@ pub struct QueuedPromptsPanelView {
     row_states: HashMap<QueuedQueryId, QueuedPromptRowState>,
     dragging_query_id: Option<QueuedQueryId>,
     drag_start_index: Option<usize>,
+    /// Controller for the active long-running-command subagent (the "full terminal use agent").
+    /// Used to retarget the send-now tooltip while that subagent is in control.
+    cli_subagent_controller: ModelHandle<CLISubagentController>,
 }
 
 #[derive(Clone, Debug)]
@@ -182,9 +187,8 @@ pub enum QueuedPromptsPanelAction {
 pub enum QueuedPromptsPanelEvent {
     /// A row was removed via its send-now button. The host should immediately submit `text`.
     SendNow { text: String },
-    /// A row was deleted via the trash button. The host should place `text` into the input editor
-    /// when the editor is empty, and focus the input.
-    RowDeleted { text: String },
+    /// A row was deleted via the trash button. The host should refocus the input.
+    RowDeleted,
     /// An inline edit was committed or cancelled. The host should refocus the input.
     EditEnded,
 }
@@ -197,6 +201,7 @@ impl QueuedPromptsPanelView {
     pub fn new(
         terminal_view_id: EntityId,
         suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
+        cli_subagent_controller: ModelHandle<CLISubagentController>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let edit_editor = build_edit_editor(ctx);
@@ -218,6 +223,10 @@ impl QueuedPromptsPanelView {
             me.handle_queued_query_event(event, ctx);
         });
 
+        ctx.subscribe_to_model(&cli_subagent_controller, |me, _, event, ctx| {
+            me.handle_cli_subagent_event(event, ctx);
+        });
+
         let mut me = Self {
             view_id: ctx.view_id(),
             terminal_view_id,
@@ -231,6 +240,7 @@ impl QueuedPromptsPanelView {
             row_states: HashMap::new(),
             dragging_query_id: None,
             drag_start_index: None,
+            cli_subagent_controller,
         };
         if let Some(conv_id) = active_conversation_id {
             me.seed_row_states_for(conv_id, ctx);
@@ -263,7 +273,9 @@ impl QueuedPromptsPanelView {
     /// Updates each row's "send now" button: disabled, with a tooltip explaining the wait, for the
     /// locked initial cloud-mode prompt and for every row while that locked row sits at the head of
     /// the queue — i.e. while the cloud environment is still setting up, with no live agent yet to
-    /// receive an immediate submission. Otherwise it is enabled with the default "Send now" tooltip.
+    /// receive an immediate submission. When a long-running-command subagent (the "full terminal
+    /// use agent") is in control, the enabled tooltip explains that send-now targets that subagent.
+    /// Otherwise it is enabled with the default "Send now" tooltip.
     fn update_send_now_availability(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(conv_id) = self.active_conversation_id else {
             return;
@@ -277,6 +289,10 @@ impl QueuedPromptsPanelView {
         let cloud_setup_in_progress = rows
             .first()
             .is_some_and(|(_, origin)| *origin == QueuedQueryOrigin::InitialCloudMode);
+        let lrc_subagent_in_progress = self
+            .cli_subagent_controller
+            .as_ref(ctx)
+            .is_agent_in_control();
         for (query_id, origin) in &rows {
             let Some(send_now_button) = self
                 .row_states
@@ -289,6 +305,8 @@ impl QueuedPromptsPanelView {
                 *origin == QueuedQueryOrigin::InitialCloudMode || cloud_setup_in_progress;
             let tooltip = if disabled {
                 SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP
+            } else if lrc_subagent_in_progress {
+                SEND_NOW_TO_FULL_TERMINAL_USE_AGENT_TOOLTIP
             } else {
                 "Send now"
             };
@@ -296,6 +314,21 @@ impl QueuedPromptsPanelView {
                 button.set_disabled(disabled, ctx);
                 button.set_tooltip(Some(tooltip), ctx);
             });
+        }
+    }
+
+    /// Recomputes send-now availability when the long-running-command subagent's control state
+    /// changes, so the send-now tooltip stays in sync with whether the full terminal use agent
+    /// is currently in control.
+    fn handle_cli_subagent_event(&mut self, event: &CLISubagentEvent, ctx: &mut ViewContext<Self>) {
+        match event {
+            CLISubagentEvent::SpawnedSubagent { .. }
+            | CLISubagentEvent::FinishedSubagent { .. }
+            | CLISubagentEvent::UpdatedControl { .. }
+            | CLISubagentEvent::ControlHandedBackAfterTransfer => {
+                self.update_send_now_availability(ctx);
+            }
+            CLISubagentEvent::UpdatedLastSnapshot | CLISubagentEvent::ToggledHideResponses => {}
         }
     }
 
@@ -378,7 +411,6 @@ impl QueuedPromptsPanelView {
                 self.edit_editor_is_single_logical_line = !initial_text.contains('\n');
                 self.edit_editor.update(ctx, |editor, ctx| {
                     editor.system_reset_buffer_text(&initial_text, ctx);
-                    editor.select_all(ctx);
                 });
                 ctx.focus(&self.edit_editor);
             }
@@ -588,9 +620,7 @@ impl TypedActionView for QueuedPromptsPanelView {
                         },
                         ctx
                     );
-                    ctx.emit(QueuedPromptsPanelEvent::RowDeleted {
-                        text: removed.text().to_owned(),
-                    });
+                    ctx.emit(QueuedPromptsPanelEvent::RowDeleted);
                 }
             }
             QueuedPromptsPanelAction::StartDrag(query_id) => {

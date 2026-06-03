@@ -522,9 +522,9 @@ impl ServerApi {
     /// TODO(isaiah): implement retries on IAP challenge failures so the
     /// triggering request transparently succeeds after the refresh
     /// completes instead of bubbling up a one-off error to the caller.
-    fn check_for_iap_challenge(&self, response: &http_client::Response) -> bool {
+    fn check_for_iap_challenge(&self, response: &http_client::Response) {
         if self.iap_state.is_none() {
-            return false;
+            return;
         }
         if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
             log::warn!(
@@ -534,9 +534,6 @@ impl ServerApi {
             if let Err(err) = self.event_sender.try_send(AuthEvent::IapChallengeReceived) {
                 log::warn!("Failed to enqueue IapChallengeReceived event: {err}");
             }
-            true
-        } else {
-            false
         }
     }
 
@@ -579,6 +576,24 @@ impl ServerApi {
             }
         }
     }
+
+    /// Inspects a websocket *handshake* connect error for an IAP challenge and
+    /// enqueues an `IapChallengeReceived` event if detected.
+    #[cfg(not(target_family = "wasm"))]
+    fn report_ws_iap_challenge(&self, err: &anyhow::Error) {
+        if self.iap_state.is_none() {
+            return;
+        }
+        if super::iap::ws_connect_is_iap_challenge(err) {
+            log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
+            if let Err(err) = self.event_sender.try_send(AuthEvent::IapChallengeReceived) {
+                log::warn!("Failed to enqueue IapChallengeReceived: {err}");
+            }
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn report_ws_iap_challenge(&self, _err: &anyhow::Error) {}
 
     /// Returns ambient agent headers to attach to requests.
     async fn ambient_agent_headers(&self) -> Result<Vec<(&'static str, String)>> {
@@ -763,7 +778,7 @@ impl ServerApi {
             request = request.header(name, value);
         }
 
-        Ok(request.eventsource())
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
     pub async fn stream_agent_events_for_task(
@@ -797,7 +812,7 @@ impl ServerApi {
             request = request.header(name, value);
         }
 
-        Ok(request.eventsource())
+        Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
     /// Sends a POST request to a public API endpoint and returns the raw response on success.
