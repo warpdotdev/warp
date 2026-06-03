@@ -8209,15 +8209,14 @@ impl TerminalView {
             return;
         }
         let target_needs_attention = block.as_ref(ctx).is_blocked_on_user_confirmation(ctx);
-        if !target_needs_attention && self.is_navigating_ai_block(ctx) {
-            return;
+        if target_needs_attention || !self.is_any_ai_block_focused(ctx) {
+            block.update(ctx, |block, ctx| block.try_steal_focus(ctx));
         }
-        block.update(ctx, |block, ctx| block.try_steal_focus(ctx));
     }
 
     /// Returns `true` if focus is inside any AI block (e.g. the user is arrowing
     /// through a code diff's hunks).
-    fn is_navigating_ai_block(&self, ctx: &mut ViewContext<Self>) -> bool {
+    fn is_any_ai_block_focused(&self, ctx: &mut ViewContext<Self>) -> bool {
         self.rich_content_views.iter().any(|rich_content| {
             rich_content
                 .ai_block_metadata()
@@ -10796,7 +10795,7 @@ impl TerminalView {
         let reset_focus = ctx.is_self_or_child_focused()
             && !self.find_bar.is_self_or_child_focused(ctx)
             && !self.block_filter_editor.is_self_or_child_focused(ctx)
-            && !self.is_navigating_ai_block(ctx);
+            && !self.is_any_ai_block_focused(ctx);
         if reset_focus {
             self.redetermine_global_focus(ctx);
         }
