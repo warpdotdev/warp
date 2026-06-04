@@ -683,13 +683,8 @@ pub fn is_git_internal_path(path: &Path) -> bool {
 }
 
 /// Returns `true` when `path` is, contains, or lies on the way to one of the
-/// `force_included_paths`. Each force-included path is a relative component
-/// sequence (e.g. `.agents/skills`) matched against the tail of `path`, so a
-/// match also holds for the ancestor prefixes leading to it.
-///
-/// Also used as `matches_ignored_path_interest` for the failed-walk-path cache
-/// exception: an interest path overrides the cache even when its ancestor
-/// previously exceeded the file limit.
+/// `force_included_paths` (component-aware tail match). Also used for the
+/// failed-walk-cache exception: an interest path overrides the cache.
 pub(crate) fn matches_ignored_path_interest(path: &Path, ignored_path_interests: &[PathBuf]) -> bool {
     let path_components: Vec<_> = path
         .components()

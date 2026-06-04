@@ -180,19 +180,8 @@ pub struct LocalRepoMetadataModel {
     standing_results: HashMap<StandardizedPath, StandingQueryResults>,
     /// Refcounts for lazily-loaded standalone paths tracked in the model.
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
-    /// Paths that previously caused `Entry::build_tree` to return
-    /// `ExceededMaxFileLimit`. Subsequent watcher events targeting any path
-    /// that descends from a cached entry are short-circuited before starting
-    /// a new walk, eliminating the hot-loop on directories like
-    /// `AppData\Local\Temp` that are guaranteed to exceed the quota.
-    ///
-    /// The cache is currently unbounded — each distinct over-limit subtree
-    /// the user encounters during a session adds one entry. In typical use
-    /// (a handful of system or build directories under any given workspace
-    /// root) growth is negligible, but for very long-lived sessions that
-    /// traverse many large subtrees an eviction policy (e.g. LRU with a
-    /// reasonable cap) could be added without changing the short-circuit
-    /// semantics. Deferred until measured pressure justifies the complexity.
+    /// Paths that previously hit `ExceededMaxFileLimit`; descendant events are
+    /// short-circuited without re-walking. Unbounded; entries are few in practice.
     failed_walk_paths: HashSet<StandardizedPath>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
@@ -934,20 +923,8 @@ impl LocalRepoMetadataModel {
         entry.get(&parent).is_some_and(|state| state.loaded())
     }
 
-    /// Phase 1: Computes file-tree mutations on a background thread.
-    ///
-    /// Performs all filesystem I/O (`exists()`, `is_dir()`, `build_tree()`,
-    /// gitignore checks) and returns:
-    /// - A lightweight list of mutations that can be applied to the tree on
-    ///   the main thread without cloning it.
-    /// - A list of paths for which `build_tree` returned
-    ///   [`BuildTreeError::ExceededMaxFileLimit`] during this call. The caller
-    ///   should insert these into [`Self::failed_walk_paths`] so future events
-    ///   for the same subtree are short-circuited.
-    ///
-    /// Any path in `path_to_add` that descends from a path already in
-    /// `failed_walk_paths` is skipped entirely, avoiding repeated O(N) walks
-    /// of directories that are guaranteed to exceed the quota.
+    /// Phase 1: performs all filesystem I/O and produces a lightweight mutation list
+    /// for the main thread, plus newly-exceeded paths for the failed-walk cache.
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
         gitignores: &[Gitignore],
@@ -985,22 +962,8 @@ impl LocalRepoMetadataModel {
                 continue;
             }
 
-            // Short-circuit: skip any path that descends from a directory that
-            // previously exceeded the file limit.  `StandardizedPath::starts_with`
-            // performs a component-aware prefix check, so a cached entry for
-            // `/home/user/AppData/Local/Temp` will suppress events for
-            // `/home/user/AppData/Local/Temp/foo.tmp` without false-positives
-            // against unrelated siblings like `/home/user/AppData/Local/Tempest/`.
-            //
-            // EXCEPTION: if the path matches a registered `ignored_path_interest`
-            // (e.g. a skill provider path from SKILL_PROVIDER_DEFINITIONS), the
-            // caller explicitly wants it eager-loaded — do NOT skip it even if its
-            // ancestor exceeded the file limit.  The interest overrides the cache.
-            //
-            // Known edge: if an interest path *itself* exceeds MAX_FILES_PER_REPO
-            // it will be re-walked on each event.  This is acceptable because
-            // interest subtrees (skill directories) are small; no extra machinery
-            // is needed here to handle that case.
+            // Skip descendants of known over-limit directories unless the path
+            // matches an ignored_path_interest (interest overrides the cache).
             if let Ok(std_path) = StandardizedPath::try_from_local(path_to_add) {
                 if failed_walk_paths
                     .iter()
@@ -1548,34 +1511,11 @@ impl warpui_core::Entity for LocalRepoMetadataModel {
     type Event = RepositoryMetadataEvent;
 }
 
-/// Returns `true` when a filesystem path falls inside a known OS system
-/// directory that should be excluded from the file-tree watcher.
-///
-/// These directories receive constant background writes (temp files, caches,
-/// thumbnails, …) that generate watcher events but are never part of a user's
-/// project. Filtering them out prevents `compute_file_tree_mutations` from
-/// being driven into a hot busy-loop on machines where the file-tree view is
-/// rooted at the user's home directory.
-///
-/// ## Windows
-///
-/// Matching is **anchored to the user's real `AppData` root** (`%USERPROFILE%\AppData`)
-/// and is **case-insensitive and component-aware** (NTFS is case-insensitive,
-/// and Office/Windows writes these paths in mixed case).  The implementation
-/// compares each individual path component rather than the full string, so a
-/// folder named `Tempest` next to `Temp` does *not* match, and a workspace
-/// subtree like `fixtures\AppData\Local\Temp` that is not inside the user's
-/// real AppData directory is also not excluded.
-///
-/// The excluded subtrees are:
-/// - `%USERPROFILE%\AppData\Local\Temp`
-/// - `%USERPROFILE%\AppData\Local\Microsoft\Windows`
-/// - `%USERPROFILE%\AppData\LocalLow`
-///
-/// ## Other platforms
-///
-/// No system directories are excluded by this function on non-Windows targets.
-/// Platform-specific entries for macOS and Linux are tracked in follow-up work.
+/// Returns `true` when `path` is inside a high-noise OS system directory that
+/// should be excluded from file-tree watcher events (e.g. `AppData\Local\Temp`).
+/// On Windows, matching is anchored to `%USERPROFILE%\AppData` and is
+/// case-insensitive and component-aware to avoid false positives on workspace
+/// subtrees that happen to contain the same segment sequence.
 pub(crate) fn is_system_dir_excluded(path: &Path) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -1588,27 +1528,10 @@ pub(crate) fn is_system_dir_excluded(path: &Path) -> bool {
     }
 }
 
-/// Windows-specific implementation of [`is_system_dir_excluded`].
-///
-/// Checks whether `path` is rooted inside the user's real `AppData` directory
-/// **and** matches one of the known high-noise/high-churn subtrees:
-///
-/// - `%USERPROFILE%\AppData\Local\Temp`
-/// - `%USERPROFILE%\AppData\Local\Microsoft\Windows`
-/// - `%USERPROFILE%\AppData\LocalLow`
-///
-/// The anchoring step (checking that the path actually starts with the user's
-/// `AppData` root) is critical: without it, a workspace subtree whose path
-/// happens to contain the segment sequence `AppData\Local\Temp` (e.g.
-/// `C:\workspace\fixtures\AppData\Local\Temp`) would be silently excluded from
-/// file-tree watcher events.
-///
-/// The sub-path matching is **case-insensitive and component-aware** (NTFS is
-/// case-insensitive; Office/Windows writes these paths in mixed case).
-///
-/// If `%USERPROFILE%` is not set (unusual, but possible in some CI or service
-/// environments), the function falls back to the unanchored pattern scan so
-/// that real system directories are still excluded on best-effort.
+/// Windows implementation of [`is_system_dir_excluded`].
+/// Anchors to `%USERPROFILE%\AppData` before pattern-matching so workspace
+/// subtrees that happen to contain `AppData\Local\Temp` are not excluded.
+/// Falls back to an unanchored scan when `%USERPROFILE%` is unset.
 #[cfg(target_os = "windows")]
 fn is_system_dir_excluded_windows(path: &Path) -> bool {
     // Resolve the user's AppData root from %USERPROFILE%.
@@ -1657,11 +1580,8 @@ fn is_system_dir_excluded_windows(path: &Path) -> bool {
     })
 }
 
-/// Returns `true` if `relative` (a path already stripped of the
-/// `%USERPROFILE%\AppData` prefix) matches one of the excluded subtrees.
-///
-/// Patterns are matched as an anchored prefix: `["Local", "Temp"]` matches
-/// `Local\Temp\foo.tmp` but not `SomeDir\Local\Temp\foo.tmp`.
+/// Returns `true` if `relative` (path already stripped of `%USERPROFILE%\AppData`)
+/// matches one of the excluded subtrees as an anchored prefix.
 #[cfg(target_os = "windows")]
 fn is_appdata_subpath_excluded(relative: &Path) -> bool {
     /// Patterns relative to `%USERPROFILE%\AppData\`.
@@ -1690,12 +1610,8 @@ fn is_appdata_subpath_excluded(relative: &Path) -> bool {
     })
 }
 
-/// Helper function to recursively collect contents (files and optionally directories) from an Entry tree.
-///
-/// Collects at most [`MAX_REPO_CONTENTS_RESULTS`] entries into `contents`.
-/// Returns `true` if traversal stopped early because that cap was reached,
-/// indicating the collected `contents` are truncated and more matching entries
-/// exist.
+/// Recursively collects repo contents, capped at [`MAX_REPO_CONTENTS_RESULTS`].
+/// Returns `true` when the cap was hit (results are truncated).
 pub(crate) fn collect_contents_recursive<'a>(
     entry: &'a FileTreeEntry,
     current_path: &'a StandardizedPath,

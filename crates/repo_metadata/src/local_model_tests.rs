@@ -1368,12 +1368,8 @@ fn test_failed_walk_path_does_not_block_unrelated_paths() {
     });
 }
 
-/// A path that shares a string prefix with a failed walk path but is NOT
-/// a true component-wise descendant must still be processed normally.
-/// This is a regression guard against `StandardizedPath::starts_with`
-/// (delegating to `typed_path::TypedPath::starts_with`) silently switching
-/// to byte-prefix semantics in a future version — today it is documented
-/// as component-aware, and this test pins that contract for the cache.
+/// Sibling of a failed-walk path (e.g. `Tempest` vs `Temp`) must not be
+/// short-circuited — pins the component-aware contract of `starts_with`.
 #[test]
 fn test_failed_walk_cache_respects_component_boundaries() {
     VirtualFS::test("failed_walk_cache_substring", |dirs, mut vfs| {
@@ -1422,14 +1418,8 @@ fn test_failed_walk_cache_respects_component_boundaries() {
     });
 }
 
-/// Regression guard for the bug where `failed_walk_paths` short-circuited
-/// BEFORE the interest-aware `build_tree` call, silently dropping any
-/// `ignored_path_interests` that lived under a cached failed-walk directory.
-///
-/// A `path_to_add` that descends from a `failed_walk_paths` entry must
-/// still be processed when it (or one of its ancestors up to itself) matches
-/// a registered `ignored_path_interest`.  The short-circuit must only fire
-/// when the path is NOT on/under an interest path.
+/// A path under a failed-walk directory must still be processed when it
+/// matches a registered ignored_path_interest (interest overrides the cache).
 #[test]
 fn test_failed_walk_cache_does_not_skip_ignored_path_interest() {
     VirtualFS::test("failed_walk_interest_override", |dirs, mut vfs| {
@@ -1571,15 +1561,8 @@ fn test_watch_filter_does_not_match_substring_false_positives() {
     );
 }
 
-/// Regression test for oz-bot review suggestion on PR #11448:
-/// A workspace subtree whose path *contains* the AppData segment sequence
-/// but is **not** inside the user's real AppData root must NOT be excluded.
-///
-/// Previously `is_system_dir_excluded_windows` scanned anywhere in the path
-/// component list, so `fixtures\AppData\Local\Temp` (a test-fixture dir)
-/// would silently suppress watcher events.  After the fix the function is
-/// anchored to `%USERPROFILE%\AppData`, so only paths that literally start
-/// with the user's AppData directory are excluded.
+/// A workspace fixture path that contains `AppData\Local\Temp` as a middle
+/// segment must not be excluded — anchoring to `%USERPROFILE%\AppData` is required.
 #[cfg(target_os = "windows")]
 #[test]
 fn test_watch_filter_workspace_appdata_subtree_not_excluded() {
