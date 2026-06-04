@@ -115,6 +115,30 @@ pub(crate) enum GitWriteOp {
     RebaseOntoBranch { branch: String },
     /// `git reset --soft|--mixed|--hard <hash>` — move the current branch ref.
     Reset { hash: String, mode: ResetMode },
+    /// `git clean -f` (or `git clean -fd` when `directories`) — removes untracked
+    /// files from the working tree. `-f` is mandatory (git refuses to clean
+    /// without it); `directories` adds `-d` to also remove untracked directories,
+    /// surfaced as the confirm dialog's (default-on) checkbox.
+    CleanUntracked { directories: bool },
+    /// `git stash push` with an optional message (`-m`) and `--include-untracked`
+    /// when `include_untracked`. Restorable later with `git stash pop`. Reached
+    /// through the stash dialog (message input + untracked checkbox), so it gates
+    /// itself there — no confirm message, no Confirm-dialog checkbox of its own.
+    Stash {
+        message: Option<String>,
+        include_untracked: bool,
+    },
+    /// `git stash apply <selector>` — apply a stash onto the working tree, keeping
+    /// the stash in the list. `selector` is `stash@{n}`.
+    StashApply { selector: String },
+    /// `git stash pop <selector>` — apply a stash and drop it on success.
+    StashPop { selector: String },
+    /// `git stash drop <selector>` — delete a stash without applying it.
+    StashDrop { selector: String },
+    /// `git stash branch <name> <selector>` — create a branch at the stash's base
+    /// commit, apply the stash onto it, and drop the stash. Reached through a
+    /// text-input dialog (the branch name), so it has no confirm message.
+    StashBranch { selector: String, name: String },
     /// `git checkout [--force] <branch>` — check out a (remote) branch by its
     /// short name, letting git set up tracking; `force` discards uncommitted
     /// changes that would otherwise block the switch.
@@ -203,6 +227,39 @@ impl GitWriteOp {
             GitWriteOp::Reset { hash, mode } => {
                 vec!["reset".into(), mode.flag().into(), hash.clone()]
             }
+            GitWriteOp::CleanUntracked { directories } => {
+                let flag = if *directories { "-fd" } else { "-f" };
+                vec!["clean".into(), flag.into()]
+            }
+            GitWriteOp::Stash {
+                message,
+                include_untracked,
+            } => {
+                let mut args = vec!["stash".into(), "push".into()];
+                if let Some(msg) = message {
+                    args.push("-m".into());
+                    args.push(msg.clone());
+                }
+                if *include_untracked {
+                    args.push("--include-untracked".into());
+                }
+                args
+            }
+            GitWriteOp::StashApply { selector } => {
+                vec!["stash".into(), "apply".into(), selector.clone()]
+            }
+            GitWriteOp::StashPop { selector } => {
+                vec!["stash".into(), "pop".into(), selector.clone()]
+            }
+            GitWriteOp::StashDrop { selector } => {
+                vec!["stash".into(), "drop".into(), selector.clone()]
+            }
+            GitWriteOp::StashBranch { selector, name } => vec![
+                "stash".into(),
+                "branch".into(),
+                name.clone(),
+                selector.clone(),
+            ],
             GitWriteOp::CheckoutBranch { branch, force } => {
                 let mut args = vec!["checkout".into()];
                 if *force {
@@ -281,6 +338,8 @@ impl GitWriteOp {
             GitWriteOp::AddTag { .. }
             | GitWriteOp::CreateBranch { .. }
             | GitWriteOp::RenameBranch { .. }
+            | GitWriteOp::Stash { .. }
+            | GitWriteOp::StashBranch { .. }
             | GitWriteOp::Archive { .. } => None,
             GitWriteOp::CheckoutCommit { hash, .. } => Some(format!(
                 "Check out commit {} as a detached HEAD?",
@@ -324,6 +383,19 @@ impl GitWriteOp {
             GitWriteOp::CheckoutBranch { branch, .. } => {
                 Some(format!("Check out branch \"{branch}\"?"))
             }
+            GitWriteOp::CleanUntracked { .. } => Some(
+                "Remove all untracked files from the working tree? This cannot be undone."
+                    .to_string(),
+            ),
+            GitWriteOp::StashApply { selector } => {
+                Some(format!("Apply stash \"{selector}\" onto the working tree?"))
+            }
+            GitWriteOp::StashPop { selector } => Some(format!(
+                "Pop stash \"{selector}\"? It is applied to the working tree and then removed."
+            )),
+            GitWriteOp::StashDrop { selector } => {
+                Some(format!("Drop stash \"{selector}\"? This cannot be undone."))
+            }
             GitWriteOp::DeleteRemoteBranch { remote, branch } => Some(format!(
                 "Delete branch \"{branch}\" from remote \"{remote}\"? This cannot be undone."
             )),
@@ -342,38 +414,41 @@ impl GitWriteOp {
         }
     }
 
-    /// The force-toggle state for this op as shown by the confirmation dialog's
-    /// checkbox: `None` for ops with no force option (the checkbox is hidden),
-    /// otherwise `Some(checked)`.
-    pub(crate) fn force_state(&self) -> Option<bool> {
+    /// State of the confirmation dialog's optional checkbox for this op: `None`
+    /// hides the checkbox, `Some(checked)` shows it pre-set to `checked`. Covers
+    /// the force flag on checkout/delete/push and the "clean untracked
+    /// directories" toggle on clean.
+    pub(crate) fn option_state(&self) -> Option<bool> {
         match self {
             GitWriteOp::CheckoutCommit { force, .. }
             | GitWriteOp::CheckoutBranch { force, .. }
             | GitWriteOp::DeleteLocalBranch { force, .. }
             | GitWriteOp::PushBranch { force, .. }
             | GitWriteOp::PushTag { force, .. } => Some(*force),
+            GitWriteOp::CleanUntracked { directories } => Some(*directories),
             _ => None,
         }
     }
 
-    /// Returns this op with its force flag set to `value`; a no-op for ops that
-    /// have no force option.
-    pub(crate) fn with_force(mut self, value: bool) -> Self {
+    /// Returns this op with its dialog-checkbox flag set to `value`; a no-op for
+    /// ops that have no such option.
+    pub(crate) fn with_option(mut self, value: bool) -> Self {
         match &mut self {
             GitWriteOp::CheckoutCommit { force, .. }
             | GitWriteOp::CheckoutBranch { force, .. }
             | GitWriteOp::DeleteLocalBranch { force, .. }
             | GitWriteOp::PushBranch { force, .. }
             | GitWriteOp::PushTag { force, .. } => *force = value,
+            GitWriteOp::CleanUntracked { directories } => *directories = value,
             _ => {}
         }
         self
     }
 
-    /// Label for the force checkbox, naming the consequence of forcing this
-    /// specific op (only ever shown for ops where [`Self::force_state`] is
+    /// Label for the confirmation dialog's checkbox, naming what toggling it does
+    /// for this specific op (only ever shown where [`Self::option_state`] is
     /// `Some`).
-    pub(crate) fn force_label(&self) -> &'static str {
+    pub(crate) fn option_label(&self) -> &'static str {
         match self {
             GitWriteOp::CheckoutCommit { .. } | GitWriteOp::CheckoutBranch { .. } => {
                 "Force (discard local changes)"
@@ -381,6 +456,7 @@ impl GitWriteOp {
             GitWriteOp::DeleteLocalBranch { .. } => "Force (delete unmerged branch)",
             GitWriteOp::PushBranch { .. } => "Force (overwrite remote)",
             GitWriteOp::PushTag { .. } => "Force (overwrite remote tag)",
+            GitWriteOp::CleanUntracked { .. } => "Clean untracked directories",
             _ => "Force",
         }
     }

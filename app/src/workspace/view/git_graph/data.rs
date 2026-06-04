@@ -57,6 +57,9 @@ pub(crate) enum RefKind {
     LocalBranch,
     RemoteBranch,
     Tag,
+    /// A stash entry (`stash@{n}`). Synthetic: injected from `git stash list`
+    /// rather than parsed from a `git log` decorate string.
+    Stash,
 }
 
 /// A single ref label pointing at a commit.
@@ -160,11 +163,10 @@ pub(crate) fn parse_decorate(decorate: &str) -> Vec<RefLabel> {
                 });
             }
             if let Some(remote) = token.strip_prefix("refs/remotes/") {
-                // Hide a remote's symbolic HEAD (e.g. origin/HEAD); it is
-                // meaningless for browsing history.
-                if remote.ends_with("/HEAD") {
-                    return None;
-                }
+                // A remote's symbolic HEAD (e.g. origin/HEAD) is shown like any
+                // other remote branch so the remote's default branch is visible
+                // at a glance. (The branch *filter* list still omits it — see
+                // `parse_branch_refs` — since it isn't independently selectable.)
                 return Some(RefLabel {
                     kind: RefKind::RemoteBranch,
                     name: remote.to_string(),
@@ -213,7 +215,15 @@ pub(crate) async fn load_commit_graph(
     // The selected branch refs follow the options as revisions; fall back to
     // --all when None.
     match branch_refs {
-        None => args.push("--all"),
+        None => {
+            // `--all` walks every ref under refs/ — which includes `refs/stash`,
+            // surfacing the stash commit *and* its index/untracked auxiliary
+            // commits as stray graph nodes. Exclude it; stashes are loaded and
+            // injected separately (see `load_stashes`) as clean single-parent
+            // nodes. `--exclude` must precede the `--all` it filters.
+            args.push("--exclude=refs/stash");
+            args.push("--all");
+        }
         Some(refs) => {
             if refs.is_empty() {
                 return Ok(Vec::new());
@@ -223,6 +233,105 @@ pub(crate) async fn load_commit_graph(
     }
     let stdout = warp_util::git::run_git_command(repo_root, &args).await?;
     Ok(parse_commit_log(&stdout))
+}
+
+/// `git stash list` format string; the field order matches [`parse_stash_record`]:
+/// selector (`%gd`, e.g. `stash@{0}`) / hash / parents / author name / email /
+/// time / subject.
+#[cfg(not(target_family = "wasm"))]
+const STASH_FORMAT: &str = "--format=%gd%x1f%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s%x1e";
+
+/// True when this node is a synthetic stash entry (carries a [`RefKind::Stash`]
+/// label) rather than a real `git log` commit. Used to keep stashes out of the
+/// pagination skip count.
+pub(crate) fn is_stash_node(commit: &CommitNode) -> bool {
+    commit.refs.iter().any(|r| r.kind == RefKind::Stash)
+}
+
+/// Parse `git stash list` output (in [`STASH_FORMAT`]) into synthetic commit
+/// nodes. Each stash keeps only its base (first) parent — the index/untracked
+/// auxiliary parents are dropped so they don't show up as stray nodes that
+/// pollute the lane layout — and is tagged with a [`RefKind::Stash`] label.
+pub(crate) fn parse_stash_list(stdout: &str) -> Vec<CommitNode> {
+    stdout
+        .split(RECORD_SEP)
+        .filter_map(|record| {
+            let record = record.trim_matches(|c: char| c == '\n' || c == '\r');
+            if record.is_empty() {
+                return None;
+            }
+            parse_stash_record(record)
+        })
+        .collect()
+}
+
+/// Parse a single `git stash list` record into a synthetic commit node.
+fn parse_stash_record(record: &str) -> Option<CommitNode> {
+    let mut fields = record.splitn(7, UNIT_SEP);
+    let selector = fields.next()?.trim().to_string();
+    let hash = fields.next()?.to_string();
+    let parents_raw = fields.next()?;
+    let author_name = fields.next()?.to_string();
+    let author_email = fields.next()?.to_string();
+    let author_time = fields.next()?.trim().parse::<i64>().ok()?;
+    let subject = fields.next().unwrap_or("").to_string();
+
+    // Only the base (first) parent matters for the graph; the index/untracked
+    // parents are stash internals and would otherwise draw bogus nodes.
+    let base = parents_raw.split_whitespace().next()?.to_string();
+    let short_hash = hash.chars().take(7).collect::<String>();
+    Some(CommitNode {
+        hash,
+        short_hash,
+        parents: vec![base],
+        author_name,
+        author_email,
+        author_time,
+        subject,
+        refs: vec![RefLabel {
+            kind: RefKind::Stash,
+            name: selector,
+        }],
+    })
+}
+
+/// Merge stash nodes into a commit list (both already newest→oldest) by author
+/// time descending, so each stash appears near where it was created. Stable on
+/// ties: a stash sorts ahead of a commit with the same time.
+pub(crate) fn merge_stashes(
+    commits: Vec<CommitNode>,
+    stashes: Vec<CommitNode>,
+) -> Vec<CommitNode> {
+    if stashes.is_empty() {
+        return commits;
+    }
+    let mut merged = Vec::with_capacity(commits.len() + stashes.len());
+    let mut commits = commits.into_iter().peekable();
+    let mut stashes = stashes.into_iter().peekable();
+    loop {
+        match (stashes.peek(), commits.peek()) {
+            (Some(s), Some(c)) => {
+                if s.author_time >= c.author_time {
+                    merged.push(stashes.next().unwrap());
+                } else {
+                    merged.push(commits.next().unwrap());
+                }
+            }
+            (Some(_), None) => merged.push(stashes.next().unwrap()),
+            (None, Some(_)) => merged.push(commits.next().unwrap()),
+            (None, None) => break,
+        }
+    }
+    merged
+}
+
+/// Loads the repo's stashes as synthetic commit nodes (see [`parse_stash_list`]).
+/// A repo with no stashes returns an empty list.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) async fn load_stashes(repo_root: &Path) -> Result<Vec<CommitNode>> {
+    let stdout =
+        warp_util::git::run_git_command(repo_root, &["stash", "list", STASH_FORMAT]).await?;
+    Ok(parse_stash_list(&stdout))
 }
 
 /// How long the manual-refresh `git fetch` may run before we give up. A private
@@ -674,16 +783,27 @@ pub(crate) async fn load_uncommitted_detail(repo_root: &Path) -> Result<CommitDe
             .await
             .unwrap_or_default();
     let mut files = parse_numstat(&numstat);
-    // Untracked files aren't part of `git diff`; list and append them as new
-    // files (no line counts).
+    // Untracked files aren't part of `git diff HEAD`; list them and diff each
+    // against an empty base so its lines count as additions (a new file is all
+    // additions, no deletions; binary → 0, like `parse_numstat`).
     let untracked =
         warp_util::git::run_git_command(repo_root, &["ls-files", "--others", "--exclude-standard"])
             .await
             .unwrap_or_default();
     for path in untracked.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let numstat = warp_util::git::run_git_command(
+            repo_root,
+            &["diff", "--no-index", "--numstat", "--no-color", "/dev/null", path],
+        )
+        .await
+        .unwrap_or_default();
+        let additions = parse_numstat(&numstat)
+            .first()
+            .map(|f| f.additions)
+            .unwrap_or(0);
         files.push(ChangedFile {
             path: path.to_string(),
-            additions: 0,
+            additions,
             deletions: 0,
         });
     }

@@ -172,12 +172,15 @@ fn parse_decorate_local_branch_with_slash() {
 }
 
 #[test]
-fn parse_decorate_hides_remote_symbolic_head() {
-    // Symbolic refs like origin/HEAD are meaningless for browsing history and
-    // should be filtered out.
+fn parse_decorate_shows_remote_symbolic_head() {
+    // A remote's symbolic HEAD (origin/HEAD) is surfaced like any other remote
+    // branch so the remote's default branch is visible on the graph.
     let refs = parse_decorate("refs/remotes/origin/HEAD, refs/remotes/origin/main");
-    assert_eq!(refs.len(), 1);
-    assert_eq!(refs[0].name, "origin/main");
+    assert_eq!(refs.len(), 2);
+    assert_eq!(refs[0].kind, RefKind::RemoteBranch);
+    assert_eq!(refs[0].name, "origin/HEAD");
+    assert_eq!(refs[1].kind, RefKind::RemoteBranch);
+    assert_eq!(refs[1].name, "origin/main");
 }
 
 #[test]
@@ -425,4 +428,57 @@ fn symlink_target_reads_the_pointed_to_path() {
                    -CLAUDE.md\n\
                    \\ No newline at end of file\n";
     assert_eq!(symlink_target(deleted), "CLAUDE.md");
+}
+
+#[test]
+fn parse_stash_list_keeps_only_base_parent() {
+    let us = UNIT_SEP;
+    let rs = RECORD_SEP;
+    // selector / hash / "base index untracked" / author / email / time / subject
+    let record = format!(
+        "stash@{{0}}{us}aaaa1111{us}base222 idx333 unt444{us}Ada{us}a@x{us}1000{us}WIP on main{rs}"
+    );
+    let nodes = parse_stash_list(&record);
+    assert_eq!(nodes.len(), 1);
+    let n = &nodes[0];
+    assert_eq!(n.hash, "aaaa1111");
+    assert_eq!(n.short_hash, "aaaa111");
+    // Only the base parent survives; the index/untracked parents are dropped so
+    // they don't draw stray nodes.
+    assert_eq!(n.parents, vec!["base222".to_string()]);
+    assert_eq!(n.author_time, 1000);
+    assert_eq!(n.subject, "WIP on main");
+    assert_eq!(n.refs.len(), 1);
+    assert_eq!(n.refs[0].kind, RefKind::Stash);
+    assert_eq!(n.refs[0].name, "stash@{0}");
+    assert!(is_stash_node(n));
+}
+
+#[test]
+fn merge_stashes_orders_by_time_desc() {
+    let commit = |hash: &str, t: i64| CommitNode {
+        hash: hash.into(),
+        short_hash: hash.into(),
+        parents: vec![],
+        author_name: String::new(),
+        author_email: String::new(),
+        author_time: t,
+        subject: String::new(),
+        refs: vec![],
+    };
+    let stash = |hash: &str, t: i64| CommitNode {
+        refs: vec![RefLabel {
+            kind: RefKind::Stash,
+            name: "stash@{0}".into(),
+        }],
+        ..commit(hash, t)
+    };
+    let commits = vec![commit("c30", 30), commit("c10", 10)];
+    let stashes = vec![stash("s20", 20)];
+    let order: Vec<String> = merge_stashes(commits, stashes)
+        .into_iter()
+        .map(|c| c.hash)
+        .collect();
+    // 30 (commit) > 20 (stash) > 10 (commit).
+    assert_eq!(order, vec!["c30", "s20", "c10"]);
 }

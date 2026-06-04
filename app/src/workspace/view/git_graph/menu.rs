@@ -34,6 +34,12 @@ pub(crate) enum MenuKind {
         name: String,
         is_current: bool,
     },
+    /// A stash entry badge (`stash@{n}`). `index` is the stash's row; `name` is the
+    /// selector (`stash@{0}`) used by stash operations and the "copy name" item.
+    Stash { index: usize, name: String },
+    /// The synthetic "uncommitted changes" row. Its menu offers working-tree
+    /// operations (clean untracked files) and has no anchor commit.
+    Uncommitted,
 }
 
 impl MenuKind {
@@ -43,7 +49,11 @@ impl MenuKind {
             | MenuKind::ShortHash { index }
             | MenuKind::Tag { index, .. }
             | MenuKind::RemoteBranch { index, .. }
-            | MenuKind::LocalBranch { index, .. } => *index,
+            | MenuKind::LocalBranch { index, .. }
+            | MenuKind::Stash { index, .. } => *index,
+            // The uncommitted row sits above the newest commit; its menu ignores
+            // the anchor commit, so index 0 (newest) is a harmless placeholder.
+            MenuKind::Uncommitted => 0,
         }
     }
 }
@@ -56,6 +66,8 @@ pub(crate) enum PromptKind {
     AddTag { hash: String },
     CreateBranch { hash: String },
     RenameBranch { old: String },
+    /// Create a branch from a stash; `selector` is the `stash@{n}` to apply.
+    StashBranch { selector: String },
 }
 
 impl PromptKind {
@@ -65,13 +77,16 @@ impl PromptKind {
             PromptKind::AddTag { .. } => "Add tag",
             PromptKind::CreateBranch { .. } => "Create branch",
             PromptKind::RenameBranch { .. } => "Rename branch",
+            PromptKind::StashBranch { .. } => "Create branch from stash",
         }
     }
 
     /// The pre-filled text (e.g. the existing branch name, for rename).
     pub(crate) fn initial_text(&self) -> String {
         match self {
-            PromptKind::AddTag { .. } | PromptKind::CreateBranch { .. } => String::new(),
+            PromptKind::AddTag { .. }
+            | PromptKind::CreateBranch { .. }
+            | PromptKind::StashBranch { .. } => String::new(),
             PromptKind::RenameBranch { old } => old.clone(),
         }
     }
@@ -87,6 +102,10 @@ impl PromptKind {
             },
             PromptKind::CreateBranch { hash } => GitWriteOp::CreateBranch { hash, name: text },
             PromptKind::RenameBranch { old } => GitWriteOp::RenameBranch { old, new: text },
+            PromptKind::StashBranch { selector } => GitWriteOp::StashBranch {
+                selector,
+                name: text,
+            },
         }
     }
 }
@@ -146,7 +165,90 @@ pub(crate) fn build_menu(
         MenuKind::LocalBranch {
             name, is_current, ..
         } => build_local_branch_menu(name, *is_current, write_enabled),
+        MenuKind::Stash { name, .. } => build_stash_menu(name, commit, write_enabled),
+        MenuKind::Uncommitted => build_uncommitted_menu(write_enabled),
     }
+}
+
+/// The menu for a stash badge (`name` is the `stash@{n}` selector). When writing
+/// is enabled it offers apply / create-branch / pop / drop; the read-only copy
+/// items (selector + full commit hash) are always present.
+fn build_stash_menu(
+    name: &str,
+    commit: &CommitNode,
+    write_enabled: bool,
+) -> Vec<MenuItem<GitGraphAction>> {
+    let mut ops = vec![];
+    if write_enabled {
+        ops.push(item(
+            "Apply Stash…",
+            GitGraphAction::BeginWriteOp(GitWriteOp::StashApply {
+                selector: name.to_string(),
+            }),
+        ));
+        ops.push(item(
+            "Create Branch from Stash…",
+            GitGraphAction::PromptInput(PromptKind::StashBranch {
+                selector: name.to_string(),
+            }),
+        ));
+        ops.push(item(
+            "Pop Stash…",
+            GitGraphAction::BeginWriteOp(GitWriteOp::StashPop {
+                selector: name.to_string(),
+            }),
+        ));
+        ops.push(item(
+            "Drop Stash…",
+            GitGraphAction::BeginWriteOp(GitWriteOp::StashDrop {
+                selector: name.to_string(),
+            }),
+        ));
+    }
+
+    let copy = vec![
+        item(
+            "Copy Stash Name to Clipboard",
+            GitGraphAction::CopyToClipboard(name.to_string()),
+        ),
+        item(
+            "Copy Stash Hash to Clipboard",
+            GitGraphAction::CopyToClipboard(commit.hash.clone()),
+        ),
+    ];
+
+    join_groups(vec![ops, copy])
+}
+
+/// The menu for the synthetic "uncommitted changes" row: stash, working-tree
+/// reset, and cleanup. Empty when writing is disabled (the view then opens no
+/// menu), since it offers no read-only items.
+///
+/// - "Stash uncommitted changes…" opens the stash dialog (a message input plus an
+///   Include-untracked checkbox, checked by default).
+/// - "Reset uncommitted changes…" opens a Mixed/Hard picker (a soft reset to HEAD
+///   is a no-op, so it's omitted).
+/// - "Clean untracked files…" seeds [`GitWriteOp::CleanUntracked`] with
+///   `directories: true`, so its confirm dialog's checkbox starts checked.
+fn build_uncommitted_menu(write_enabled: bool) -> Vec<MenuItem<GitGraphAction>> {
+    if !write_enabled {
+        return vec![];
+    }
+    let stash = vec![item(
+        "Stash uncommitted changes…",
+        GitGraphAction::PromptStash,
+    )];
+    let reset_clean = vec![
+        item(
+            "Reset uncommitted changes…",
+            GitGraphAction::PromptResetUncommitted,
+        ),
+        item(
+            "Clean untracked files…",
+            GitGraphAction::BeginWriteOp(GitWriteOp::CleanUntracked { directories: true }),
+        ),
+    ];
+    join_groups(vec![stash, reset_clean])
 }
 
 fn build_commit_menu(commit: &CommitNode, write_enabled: bool) -> Vec<MenuItem<GitGraphAction>> {

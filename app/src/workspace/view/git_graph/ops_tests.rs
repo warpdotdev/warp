@@ -176,14 +176,14 @@ fn push_tag_force_uses_plain_force() {
 }
 
 #[test]
-fn force_state_is_some_only_for_force_capable_ops() {
+fn option_state_is_some_only_for_checkbox_capable_ops() {
     assert_eq!(
         GitWriteOp::PushBranch {
             remote: "o".into(),
             branch: "b".into(),
             force: true,
         }
-        .force_state(),
+        .option_state(),
         Some(true)
     );
     assert_eq!(
@@ -191,24 +191,156 @@ fn force_state_is_some_only_for_force_capable_ops() {
             branch: "b".into(),
             force: false,
         }
-        .force_state(),
+        .option_state(),
         Some(false)
     );
-    // An op with no force option shows no checkbox.
-    assert_eq!(GitWriteOp::Merge { rev: "r".into() }.force_state(), None);
+    // Clean exposes its "directories" toggle through the same checkbox.
+    assert_eq!(
+        GitWriteOp::CleanUntracked { directories: true }.option_state(),
+        Some(true)
+    );
+    // An op with no optional flag shows no checkbox.
+    assert_eq!(GitWriteOp::Merge { rev: "r".into() }.option_state(), None);
 }
 
 #[test]
-fn with_force_sets_flag_and_is_noop_for_unsupported() {
+fn with_option_sets_flag_and_is_noop_for_unsupported() {
     let forced = GitWriteOp::DeleteLocalBranch {
         name: "b".into(),
         force: false,
     }
-    .with_force(true);
-    assert_eq!(forced.force_state(), Some(true));
-    // No force option → still none after with_force.
-    let merge = GitWriteOp::Merge { rev: "r".into() }.with_force(true);
-    assert_eq!(merge.force_state(), None);
+    .with_option(true);
+    assert_eq!(forced.option_state(), Some(true));
+    // Clean's directories toggle flows through the same setter.
+    let cleaned = GitWriteOp::CleanUntracked { directories: true }.with_option(false);
+    assert_eq!(cleaned.option_state(), Some(false));
+    // No optional flag → still none after with_option.
+    let merge = GitWriteOp::Merge { rev: "r".into() }.with_option(true);
+    assert_eq!(merge.option_state(), None);
+}
+
+#[test]
+fn stash_builds_args_from_message_and_untracked() {
+    let plain = GitWriteOp::Stash {
+        message: None,
+        include_untracked: false,
+    };
+    assert_eq!(plain.args(), vec!["stash", "push"]);
+    let untracked_only = GitWriteOp::Stash {
+        message: None,
+        include_untracked: true,
+    };
+    assert_eq!(
+        untracked_only.args(),
+        vec!["stash", "push", "--include-untracked"]
+    );
+    // Message comes before the untracked flag.
+    let full = GitWriteOp::Stash {
+        message: Some("wip".into()),
+        include_untracked: true,
+    };
+    assert_eq!(
+        full.args(),
+        vec!["stash", "push", "-m", "wip", "--include-untracked"]
+    );
+}
+
+#[test]
+fn stash_ops_build_expected_args() {
+    assert_eq!(
+        GitWriteOp::StashApply {
+            selector: "stash@{0}".into()
+        }
+        .args(),
+        vec!["stash", "apply", "stash@{0}"]
+    );
+    assert_eq!(
+        GitWriteOp::StashPop {
+            selector: "stash@{1}".into()
+        }
+        .args(),
+        vec!["stash", "pop", "stash@{1}"]
+    );
+    assert_eq!(
+        GitWriteOp::StashDrop {
+            selector: "stash@{0}".into()
+        }
+        .args(),
+        vec!["stash", "drop", "stash@{0}"]
+    );
+    // branch name precedes the selector.
+    assert_eq!(
+        GitWriteOp::StashBranch {
+            selector: "stash@{0}".into(),
+            name: "feature".into(),
+        }
+        .args(),
+        vec!["stash", "branch", "feature", "stash@{0}"]
+    );
+}
+
+#[test]
+fn stash_ops_confirm_except_branch() {
+    assert!(GitWriteOp::StashApply {
+        selector: "stash@{0}".into()
+    }
+    .confirm_message()
+    .is_some());
+    // Pop warns it removes the stash.
+    assert!(GitWriteOp::StashPop {
+        selector: "stash@{0}".into()
+    }
+    .confirm_message()
+    .unwrap()
+    .contains("removed"));
+    // Drop warns it cannot be undone.
+    assert!(GitWriteOp::StashDrop {
+        selector: "stash@{0}".into()
+    }
+    .confirm_message()
+    .unwrap()
+    .contains("cannot be undone"));
+    // Create-branch gates through its name dialog, so no confirm.
+    assert_eq!(
+        GitWriteOp::StashBranch {
+            selector: "stash@{0}".into(),
+            name: "x".into(),
+        }
+        .confirm_message(),
+        None
+    );
+}
+
+#[test]
+fn stash_gates_through_its_dialog_not_confirm() {
+    // The stash dialog gates the op, so it shows no confirm message and no
+    // Confirm-dialog checkbox of its own.
+    let op = GitWriteOp::Stash {
+        message: None,
+        include_untracked: true,
+    };
+    assert_eq!(op.confirm_message(), None);
+    assert_eq!(op.option_state(), None);
+}
+
+#[test]
+fn clean_untracked_dir_toggle_adds_d_flag() {
+    let files_only = GitWriteOp::CleanUntracked { directories: false };
+    assert_eq!(files_only.args(), vec!["clean", "-f"]);
+    let with_dirs = GitWriteOp::CleanUntracked { directories: true };
+    assert_eq!(with_dirs.args(), vec!["clean", "-fd"]);
+}
+
+#[test]
+fn clean_untracked_confirms_irreversible() {
+    let msg = GitWriteOp::CleanUntracked { directories: true }
+        .confirm_message()
+        .expect("clean must confirm");
+    assert!(msg.contains("cannot be undone"));
+    assert_eq!(
+        GitWriteOp::CleanUntracked { directories: true }.option_label(),
+        "Clean untracked directories"
+    );
 }
 
 #[test]

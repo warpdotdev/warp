@@ -35,7 +35,7 @@ use warpui::geometry::vector::{vec2f, Vector2F};
 use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
 use warpui::scene::DropShadow;
-use warpui::text_layout::{ClipConfig, ClipDirection, ClipStyle};
+use warpui::text_layout::ClipConfig;
 use warpui::units::Pixels;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
@@ -72,6 +72,12 @@ use crate::view_components::dropdown::{Dropdown, DropdownAction};
 
 /// Number of commits loaded per page.
 const COMMIT_PAGE_SIZE: usize = 200;
+
+/// Per-depth horizontal indent (px) of rows in the detail area's file tree
+/// (matches the Project Explorer's folder indent).
+const FILE_TREE_INDENT: f32 = 16.;
+/// Size (px) of the disclosure chevron / type icon columns on each file-tree row.
+const FILE_TREE_ICON_SIZE: f32 = 16.;
 
 /// Prefetch the next page once the viewport gets within this many rows of the
 /// list end (infinite-scroll lead so we don't wait until the very bottom).
@@ -127,6 +133,9 @@ pub(crate) enum GitGraphAction {
     /// Open the Nth changed file's diff from the detail area in a read-only
     /// diff pane in the main area.
     OpenFileDiff(usize),
+    /// Toggle a directory row in the detail area's file tree between expanded and
+    /// collapsed (the value is the full directory path, e.g. `src/foo`).
+    ToggleDir(String),
 
     // --- Right-click context menu & write operations (gated at build time by
     // [`FeatureFlag::GitGraphWrite`] for the mutating items). ---
@@ -140,17 +149,28 @@ pub(crate) enum GitGraphAction {
     PromptInput(PromptKind),
     /// Submit the text-input dialog: build the op from the entered text and run.
     SubmitInput,
+    /// Open the stash dialog for the uncommitted-changes row (message input +
+    /// Include-untracked checkbox).
+    PromptStash,
+    /// Toggle the "Include untracked" checkbox in the open stash dialog.
+    ToggleStashUntracked,
+    /// Submit the stash dialog: build the stash op from the entered message and
+    /// the untracked toggle, then run it.
+    SubmitStash,
     /// Open the reset-mode dialog (soft / mixed / hard) for the commit.
     PromptResetMode { hash: String },
+    /// Open the reset dialog for the uncommitted-changes row (mixed / hard reset
+    /// to HEAD, discarding working-tree / index changes; soft is a no-op here).
+    PromptResetUncommitted,
     /// Run a write op, first showing a confirmation dialog when the op requires
     /// one ([`GitWriteOp::confirm_message`]).
     BeginWriteOp(GitWriteOp),
     /// Run a write op now (dispatched by the confirm dialog's "Confirm" button,
     /// the reset-mode dialog's buttons, and the archive save callback).
     RunOp(GitWriteOp),
-    /// Toggle the force checkbox in the open confirmation dialog (shown only for
-    /// ops that support a force flag, e.g. push / checkout / delete branch).
-    ToggleConfirmForce,
+    /// Toggle the optional checkbox in the open confirmation dialog (the force
+    /// flag on push / checkout / delete branch, or "clean untracked directories").
+    ToggleConfirmOption,
     /// Open the OS save dialog for "Create Archive"; the chosen path drives the
     /// archive format and the actual run.
     BeginArchive { rev: String, suggested_name: String },
@@ -213,10 +233,16 @@ enum DialogState {
     /// A single-line text prompt (tag / branch name, rename) — the entered text
     /// is read from `dialog_input` on submit.
     Input(PromptKind),
+    /// The stash dialog: a message input (read from `dialog_input`, optional) plus
+    /// an Include-untracked checkbox whose state is held here.
+    Stash { include_untracked: bool },
     /// A yes/no confirmation for a (typically destructive) op.
     Confirm { op: GitWriteOp, message: String },
     /// The reset-mode picker for "Reset current branch to this Commit".
     ResetMode { hash: String },
+    /// The reset picker for the uncommitted-changes row: mixed / hard reset to
+    /// HEAD (no commit hash, no soft option).
+    ResetUncommitted,
 }
 
 /// How a (re)load positions the commit list afterward.
@@ -358,6 +384,14 @@ pub(crate) struct GitGraphView {
     /// Mouse state of the detail area's changed-file rows (for hover highlight /
     /// click to open diff), same length as the current detail's files.
     detail_file_mouse_states: Arc<Vec<MouseStateHandle>>,
+    /// Full directory paths (e.g. `src/foo`) currently collapsed in the detail
+    /// area's file tree. Empty = every directory expanded (the default). Reset
+    /// whenever a different commit / the uncommitted row is selected.
+    detail_collapsed_dirs: HashSet<String>,
+    /// Hover mouse-state per directory row in the file tree, keyed by full
+    /// directory path. Built alongside [`Self::detail_file_mouse_states`] when a
+    /// commit's detail loads.
+    detail_dir_mouse_states: Arc<HashMap<String, MouseStateHandle>>,
 
     // --- Right-click context menu & write operations ---
     /// Stable position id for the panel root, so a right-click can compute the
@@ -578,6 +612,8 @@ impl GitGraphView {
             detail_selection_handle: SelectionHandle::default(),
             detail_selected_text: Arc::new(RwLock::new(None)),
             detail_file_mouse_states: Arc::new(Vec::new()),
+            detail_collapsed_dirs: HashSet::new(),
+            detail_dir_mouse_states: Arc::new(HashMap::new()),
             position_id: format!("git_graph_{}", ctx.view_id()),
             context_menu,
             open_menu: None,
@@ -1170,12 +1206,18 @@ impl GitGraphView {
                         0,
                     )
                     .await?;
+                    // `has_more` is decided by the raw page size, before stashes
+                    // are mixed in (they don't count toward pagination).
+                    let has_more = commits.len() == COMMIT_PAGE_SIZE;
+                    // Inject stashes as graph nodes, ordered into the page by time.
+                    let stashes = super::data::load_stashes(&dir).await.unwrap_or_default();
+                    let commits = super::data::merge_stashes(commits, stashes);
                     // Bundle the cheap status query so the uncommitted row lands
                     // together with the first page (no second flash).
                     let uncommitted = super::data::load_working_tree_status(&dir)
                         .await
                         .unwrap_or(0);
-                    Ok::<_, anyhow::Error>((commits, uncommitted))
+                    Ok::<_, anyhow::Error>((commits, has_more, uncommitted))
                 },
                 move |view, result, ctx| {
                     #[cfg(not(feature = "local_fs"))]
@@ -1185,8 +1227,8 @@ impl GitGraphView {
                         return;
                     }
                     match result {
-                        Ok((commits, uncommitted)) => {
-                            view.has_more = commits.len() == COMMIT_PAGE_SIZE;
+                        Ok((commits, has_more, uncommitted)) => {
+                            view.has_more = has_more;
                             view.uncommitted_count = uncommitted;
                             view.layout = Arc::new(build_layout(&commits, uncommitted > 0));
                             view.row_mouse_states = Arc::new(
@@ -1260,7 +1302,13 @@ impl GitGraphView {
         let Some(dir) = self.current_repo_path() else {
             return;
         };
-        let skip = self.commits.len();
+        // Stash nodes are injected client-side and aren't part of `git log`'s
+        // output, so they must not count toward the pagination skip.
+        let skip = self
+            .commits
+            .iter()
+            .filter(|c| !super::data::is_stash_node(c))
+            .count();
         self.loading_more = true;
         ctx.notify();
 
@@ -1276,9 +1324,15 @@ impl GitGraphView {
                 move |view, result, ctx| {
                     view.loading_more = false;
                     // Discard the stale result if the repo has switched or the
-                    // start offset has changed (interrupted by a reload).
+                    // start offset has changed (interrupted by a reload). Count
+                    // real commits only, matching how `skip` was computed.
+                    let real_count = view
+                        .commits
+                        .iter()
+                        .filter(|c| !super::data::is_stash_node(c))
+                        .count();
                     if view.current_repo_path().as_deref() != Some(expected.as_path())
-                        || view.commits.len() != skip
+                        || real_count != skip
                     {
                         ctx.notify();
                         return;
@@ -1347,6 +1401,8 @@ impl GitGraphView {
         self.uncommitted_selected = false;
         self.detail = DetailState::Loading;
         self.clear_detail_text_selection();
+        // A new commit has its own file set, so start its tree fully expanded.
+        self.detail_collapsed_dirs.clear();
         // After switching commits the detail content is replaced wholesale, so
         // reset the scroll position to the top (otherwise it would stay at the
         // previous commit's offset).
@@ -1367,17 +1423,11 @@ impl GitGraphView {
                     }
                     view.detail = match result {
                         Ok(detail) => {
-                            // Prepare mouse state for each changed-file row
-                            // (hover highlight / click to open diff).
-                            view.detail_file_mouse_states = Arc::new(
-                                (0..detail.files.len())
-                                    .map(|_| MouseStateHandle::default())
-                                    .collect(),
-                            );
+                            view.rebuild_detail_mouse_states(&detail.files);
                             DetailState::Loaded(detail)
                         }
                         Err(err) => {
-                            view.detail_file_mouse_states = Arc::new(Vec::new());
+                            view.clear_detail_mouse_states();
                             DetailState::Error(err.to_string())
                         }
                     };
@@ -1401,6 +1451,8 @@ impl GitGraphView {
         self.uncommitted_selected = true;
         self.detail = DetailState::Loading;
         self.clear_detail_text_selection();
+        // A fresh file set starts its tree fully expanded.
+        self.detail_collapsed_dirs.clear();
         self.detail_scroll_state.scroll_to(Pixels::zero());
         ctx.notify();
 
@@ -1418,15 +1470,11 @@ impl GitGraphView {
                     }
                     view.detail = match result {
                         Ok(detail) => {
-                            view.detail_file_mouse_states = Arc::new(
-                                (0..detail.files.len())
-                                    .map(|_| MouseStateHandle::default())
-                                    .collect(),
-                            );
+                            view.rebuild_detail_mouse_states(&detail.files);
                             DetailState::Loaded(detail)
                         }
                         Err(err) => {
-                            view.detail_file_mouse_states = Arc::new(Vec::new());
+                            view.clear_detail_mouse_states();
                             DetailState::Error(err.to_string())
                         }
                     };
@@ -1513,6 +1561,36 @@ impl GitGraphView {
     #[cfg(target_family = "wasm")]
     fn open_file_diff(&mut self, _file_index: usize, _ctx: &mut ViewContext<Self>) {}
 
+    /// Rebuilds the detail area's hover mouse-states for a freshly loaded file
+    /// set: one per file row (indexed parallel to `files`) plus one per
+    /// directory row in the file tree (keyed by full directory path).
+    fn rebuild_detail_mouse_states(&mut self, files: &[ChangedFile]) {
+        self.detail_file_mouse_states =
+            Arc::new((0..files.len()).map(|_| MouseStateHandle::default()).collect());
+        self.detail_dir_mouse_states = Arc::new(
+            super::file_tree::all_dir_paths(files)
+                .into_iter()
+                .map(|path| (path, MouseStateHandle::default()))
+                .collect(),
+        );
+    }
+
+    /// Clears the detail area's mouse-states (used when the detail load failed,
+    /// so there are no rows to hover).
+    fn clear_detail_mouse_states(&mut self) {
+        self.detail_file_mouse_states = Arc::new(Vec::new());
+        self.detail_dir_mouse_states = Arc::new(HashMap::new());
+    }
+
+    /// Toggles a file-tree directory between expanded and collapsed (membership
+    /// in [`Self::detail_collapsed_dirs`]).
+    fn toggle_dir(&mut self, path: String, ctx: &mut ViewContext<Self>) {
+        if !self.detail_collapsed_dirs.remove(&path) {
+            self.detail_collapsed_dirs.insert(path);
+        }
+        ctx.notify();
+    }
+
     /// Renders the clickable commit list (each row = lane + text, wrapped in a
     /// [`Hoverable`] that dispatches the selection). When there are more pages, a
     /// "load more" indicator row with a pulse animation is appended at the end;
@@ -1550,6 +1628,7 @@ impl GitGraphView {
                     if offset == 1 && i == 0 {
                         let element =
                             render_uncommitted_row(row, lane_count, uncommitted_count, appearance);
+                        let row_position_id = position_id.clone();
                         return Some(
                             Hoverable::new(state, move |mouse_state| {
                                 let highlight =
@@ -1566,6 +1645,20 @@ impl GitGraphView {
                             .on_click(move |ctx, _, _| {
                                 ctx.dispatch_typed_action(GitGraphAction::SelectUncommitted);
                             })
+                            // Right-click opens the working-tree menu (clean
+                            // untracked files).
+                            .on_right_click(move |ctx, _, position| {
+                                let Some(bounds) = ctx.element_position_by_id(&row_position_id)
+                                else {
+                                    return;
+                                };
+                                let menu_offset = position - bounds.origin();
+                                ctx.dispatch_typed_action(GitGraphAction::OpenMenu {
+                                    kind: MenuKind::Uncommitted,
+                                    x: menu_offset.x(),
+                                    y: menu_offset.y(),
+                                });
+                            })
                             .finish(),
                         );
                     }
@@ -1581,6 +1674,14 @@ impl GitGraphView {
                     );
                     let is_selected = selected == Some(commit_idx);
                     let row_position_id = position_id.clone();
+                    // A stash node carries a stash@{n} label; right-clicking
+                    // anywhere on its row opens the stash menu (matching the
+                    // badge), not the commit menu whose ops don't apply here.
+                    let stash_selector = commit
+                        .refs
+                        .iter()
+                        .find(|r| r.kind == RefKind::Stash)
+                        .map(|r| r.name.clone());
                     Some(
                         // Wrap a highlight background on hover/selection (reusing
                         // the left panel list's common [`ItemHighlightState`]:
@@ -1600,14 +1701,21 @@ impl GitGraphView {
                             ctx.dispatch_typed_action(GitGraphAction::SelectCommit(commit_idx));
                         })
                         // Right-click the row (off any ref badge) opens the
-                        // commit context menu.
+                        // commit menu — or the stash menu for a stash row.
                         .on_right_click(move |ctx, _, position| {
                             let Some(bounds) = ctx.element_position_by_id(&row_position_id) else {
                                 return;
                             };
                             let menu_offset = position - bounds.origin();
+                            let kind = match &stash_selector {
+                                Some(name) => MenuKind::Stash {
+                                    index: commit_idx,
+                                    name: name.clone(),
+                                },
+                                None => MenuKind::Commit { index: commit_idx },
+                            };
                             ctx.dispatch_typed_action(GitGraphAction::OpenMenu {
-                                kind: MenuKind::Commit { index: commit_idx },
+                                kind,
                                 x: menu_offset.x(),
                                 y: menu_offset.y(),
                             });
@@ -1697,6 +1805,8 @@ impl GitGraphView {
                     self.detail_selection_handle.clone(),
                     self.detail_selected_text.clone(),
                     &self.detail_file_mouse_states,
+                    &self.detail_dir_mouse_states,
+                    &self.detail_collapsed_dirs,
                     appearance,
                 )
             }
@@ -2082,6 +2192,11 @@ impl GitGraphView {
         };
         let write_enabled = FeatureFlag::GitGraphWrite.is_enabled();
         let items = build_menu(&kind, &commit, write_enabled);
+        // A kind with nothing to offer (e.g. the uncommitted row when writing is
+        // disabled) opens no menu rather than an empty box.
+        if items.is_empty() {
+            return;
+        }
         self.context_menu.update(ctx, move |menu, ctx| {
             menu.set_items(items, ctx);
             ctx.notify();
@@ -2106,13 +2221,13 @@ impl GitGraphView {
         }
     }
 
-    /// Flips the force flag on the op in the open confirmation dialog (driven by
-    /// the dialog's force checkbox). A no-op when no confirm dialog is open or
-    /// the op has no force option.
-    fn toggle_confirm_force(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Flips the optional flag on the op in the open confirmation dialog (driven
+    /// by the dialog's checkbox). A no-op when no confirm dialog is open or the
+    /// op has no such option.
+    fn toggle_confirm_option(&mut self, ctx: &mut ViewContext<Self>) {
         if let DialogState::Confirm { op, .. } = &mut self.dialog {
-            if let Some(forced) = op.force_state() {
-                *op = op.clone().with_force(!forced);
+            if let Some(checked) = op.option_state() {
+                *op = op.clone().with_option(!checked);
                 ctx.notify();
             }
         }
@@ -2150,6 +2265,50 @@ impl GitGraphView {
         self.dialog = DialogState::None;
         // Pull focus off the now-hidden input editor back to the panel so the
         // view's key bindings (e.g. Cmd/Ctrl+C) keep working.
+        ctx.focus_self();
+        self.run_op(op, ctx);
+    }
+
+    /// Opens the stash dialog: clears the shared message editor, defaults the
+    /// Include-untracked checkbox on, and focuses the input.
+    fn open_stash_dialog(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_menu = None;
+        self.dialog_input.update(ctx, |editor, ctx| {
+            editor.set_buffer_text("", ctx);
+        });
+        self.dialog = DialogState::Stash {
+            include_untracked: true,
+        };
+        ctx.focus(&self.dialog_input);
+        ctx.notify();
+    }
+
+    /// Flips the Include-untracked checkbox in the open stash dialog. A no-op when
+    /// no stash dialog is open.
+    fn toggle_stash_untracked(&mut self, ctx: &mut ViewContext<Self>) {
+        if let DialogState::Stash { include_untracked } = &mut self.dialog {
+            *include_untracked = !*include_untracked;
+            ctx.notify();
+        }
+    }
+
+    /// Submits the stash dialog: reads the (optional) message, builds the stash op
+    /// with the untracked toggle, and runs it.
+    fn submit_stash(&mut self, ctx: &mut ViewContext<Self>) {
+        let DialogState::Stash { include_untracked } = self.dialog else {
+            return;
+        };
+        let message = self
+            .dialog_input
+            .as_ref(ctx)
+            .buffer_text(ctx)
+            .trim()
+            .to_string();
+        let op = GitWriteOp::Stash {
+            message: (!message.is_empty()).then_some(message),
+            include_untracked,
+        };
+        self.dialog = DialogState::None;
         ctx.focus_self();
         self.run_op(op, ctx);
     }
@@ -2433,22 +2592,84 @@ impl GitGraphView {
                         ],
                     )
                 }
+                DialogState::Stash { include_untracked } => {
+                    // Message input on top, Include-untracked checkbox below it.
+                    let input = appearance
+                        .ui_builder()
+                        .text_input(self.dialog_input.clone())
+                        .with_style(UiComponentStyles {
+                            border_width: Some(1.),
+                            border_color: Some(theme.outline().into()),
+                            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+                            padding: Some(Coords {
+                                top: 7.,
+                                bottom: 7.,
+                                left: 8.,
+                                right: 8.,
+                            }),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish();
+                    let checkbox = appearance
+                        .ui_builder()
+                        .checkbox(st(2), Some(size))
+                        .check(*include_untracked)
+                        .build()
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(GitGraphAction::ToggleStashUntracked);
+                        })
+                        .finish();
+                    let label = Text::new_inline("Include untracked".to_string(), font, size)
+                        .with_color(theme.foreground().into())
+                        .finish();
+                    let untracked_row = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(checkbox)
+                        .with_child(Container::new(label).with_padding_left(2.).finish())
+                        .finish();
+                    let body = Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_child(input)
+                        .with_child(Container::new(untracked_row).with_margin_top(10.).finish())
+                        .finish();
+                    (
+                        "Stash uncommitted changes".to_string(),
+                        body,
+                        vec![
+                            self.dialog_button(
+                                "Cancel".to_string(),
+                                GitGraphAction::CancelDialog,
+                                st(0),
+                                false,
+                                appearance,
+                            ),
+                            self.dialog_button(
+                                "Stash".to_string(),
+                                GitGraphAction::SubmitStash,
+                                st(1),
+                                true,
+                                appearance,
+                            ),
+                        ],
+                    )
+                }
                 DialogState::Confirm { op, message } => {
-                    // Ops that accept a force flag get a checkbox under the
-                    // message; toggling it flips the force flag on `op` (so the
-                    // "Confirm" button below runs the forced variant).
-                    let body = match op.force_state() {
-                        Some(forced) => {
+                    // Ops with an optional flag get a checkbox under the message;
+                    // toggling it flips that flag on `op` (so the "Confirm" button
+                    // below runs the chosen variant).
+                    let body = match op.option_state() {
+                        Some(checked) => {
                             let checkbox = appearance
                                 .ui_builder()
                                 .checkbox(st(2), Some(size))
-                                .check(forced)
+                                .check(checked)
                                 .build()
                                 .on_click(move |ctx, _, _| {
-                                    ctx.dispatch_typed_action(GitGraphAction::ToggleConfirmForce);
+                                    ctx.dispatch_typed_action(GitGraphAction::ToggleConfirmOption);
                                 })
                                 .finish();
-                            let label = Text::new_inline(op.force_label().to_string(), font, size)
+                            let label = Text::new_inline(op.option_label().to_string(), font, size)
                                 .with_color(theme.foreground().into())
                                 .finish();
                             let force_row = Flex::row()
@@ -2529,6 +2750,45 @@ impl GitGraphView {
                                 mode: ResetMode::Hard,
                             }),
                             st(3),
+                            true,
+                            appearance,
+                        ),
+                    ],
+                ),
+                DialogState::ResetUncommitted => (
+                    "Reset uncommitted changes".to_string(),
+                    dialog_message(
+                        "Reset uncommitted changes to HEAD. Mixed unstages everything but \
+                         keeps your edits; Hard discards all uncommitted changes to tracked \
+                         files."
+                            .to_string(),
+                        appearance,
+                    ),
+                    vec![
+                        self.dialog_button(
+                            "Cancel".to_string(),
+                            GitGraphAction::CancelDialog,
+                            st(0),
+                            false,
+                            appearance,
+                        ),
+                        self.dialog_button(
+                            "Mixed".to_string(),
+                            GitGraphAction::RunOp(GitWriteOp::Reset {
+                                hash: "HEAD".to_string(),
+                                mode: ResetMode::Mixed,
+                            }),
+                            st(1),
+                            false,
+                            appearance,
+                        ),
+                        self.dialog_button(
+                            "Hard".to_string(),
+                            GitGraphAction::RunOp(GitWriteOp::Reset {
+                                hash: "HEAD".to_string(),
+                                mode: ResetMode::Hard,
+                            }),
+                            st(2),
                             true,
                             appearance,
                         ),
@@ -2772,10 +3032,13 @@ fn render_graph_row(
     position_id: &str,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
+    // The commit HEAD points at (the current checkout) draws a hollow ring
+    // instead of a filled dot — a "you are here" marker on the graph.
+    let is_head = commit.refs.iter().any(|r| r.kind == RefKind::Head);
     Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(GitGraphRowCanvas::new(row.clone(), lane_count, false).finish())
+        .with_child(GitGraphRowCanvas::new(row.clone(), lane_count, is_head).finish())
         .with_child(Expanded::new(1.0, render_commit_text(commit, index, position_id, appearance)).finish())
         .finish()
 }
@@ -2794,20 +3057,25 @@ fn render_commit_text(
     let dim = theme.sub_text_color(theme.background());
     let fg = theme.foreground();
 
-    // The short hash carries its own right-click menu (copy the 7-char hash),
-    // mirroring the ref badges: its handler sits above the row's commit menu so
-    // a right-click landing on the hash copies exactly what's shown rather than
-    // the commit menu's full 40-char hash.
-    let short_hash = {
+    let mut row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+    // Stash rows are identified by their `stash@{n}` badge, not a hash, so they
+    // omit the hash column. Every real commit shows its short hash, which carries
+    // its own right-click menu (copy the 7-char hash), mirroring the ref badges:
+    // its handler sits above the row's commit menu so a right-click on the hash
+    // copies exactly what's shown rather than the commit menu's full hash.
+    if !super::data::is_stash_node(commit) {
         let position_id = position_id.to_string();
         let hash_label = Container::new(
-            Text::new_inline(commit.short_hash.clone(), font, size)
+            Text::new_inline(commit.short_hash.clone(), appearance.monospace_font_family(), size)
                 .with_color(dim.into())
                 .finish(),
         )
         .with_padding_right(8.)
         .finish();
-        Hoverable::new(MouseStateHandle::default(), move |_| hash_label)
+        let short_hash = Hoverable::new(MouseStateHandle::default(), move |_| hash_label)
             .on_right_click(move |ctx, _app, position| {
                 let Some(bounds) = ctx.element_position_by_id(&position_id) else {
                     return;
@@ -2819,13 +3087,9 @@ fn render_commit_text(
                     y: offset.y(),
                 });
             })
-            .finish()
-    };
-
-    let mut row = Flex::row()
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(short_hash);
+            .finish();
+        row = row.with_child(short_hash);
+    }
 
     for ref_label in &commit.refs {
         row = row.with_child(render_ref_badge(
@@ -2883,6 +3147,12 @@ fn ref_badge_color(kind: RefKind) -> ColorU {
             b: 0x4f,
             a: 0xff,
         }, // yellow
+        RefKind::Stash => ColorU {
+            r: 0x3b,
+            g: 0xa5,
+            b: 0xf0,
+            a: 0xff,
+        }, // stash blue
     }
 }
 
@@ -2904,6 +3174,7 @@ fn ref_menu_kind(kind: RefKind, name: String, index: usize) -> MenuKind {
             name,
             is_current: true,
         },
+        RefKind::Stash => MenuKind::Stash { index, name },
     }
 }
 
@@ -2927,20 +3198,36 @@ fn render_ref_badge(
     } else {
         (ColorU { a: 0x33, ..color }, color)
     };
-    let badge = Container::new(
-        Text::new_inline(
-            label.name.clone(),
-            appearance.ui_font_family(),
-            appearance.ui_font_size(),
-        )
-        .with_color(text_color.into())
-        .finish(),
+    let text = Text::new_inline(
+        label.name.clone(),
+        appearance.ui_font_family(),
+        appearance.ui_font_size(),
     )
-    .with_background_color(bg)
-    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
-    .with_horizontal_padding(5.)
-    .with_vertical_padding(1.)
+    .with_color(text_color.into())
     .finish();
+    // Every badge leads with an icon so its kind reads at a glance: a branch
+    // glyph for branches (local / remote / the current HEAD), a bookmark for
+    // tags, and an inbox for stashes.
+    let leading_icon = match label.kind {
+        RefKind::Head | RefKind::LocalBranch | RefKind::RemoteBranch => Icon::GitBranch,
+        RefKind::Tag => Icon::Bookmark,
+        RefKind::Stash => Icon::Inbox,
+    };
+    let icon = ConstrainedBox::new(leading_icon.to_warpui_icon(text_color.into()).finish())
+        .with_width(12.)
+        .with_height(12.)
+        .finish();
+    let content: Box<dyn Element> = Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_child(icon)
+        .with_child(Container::new(text).with_padding_left(3.).finish())
+        .finish();
+    let badge = Container::new(content)
+        .with_background_color(bg)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+        .with_horizontal_padding(5.)
+        .with_vertical_padding(1.)
+        .finish();
 
     let inner = Container::new(badge).with_padding_right(4.).finish();
 
@@ -3064,6 +3351,8 @@ fn render_detail_body(
     selection_handle: SelectionHandle,
     selected_text: Arc<RwLock<Option<String>>>,
     file_mouse_states: &[MouseStateHandle],
+    dir_mouse_states: &HashMap<String, MouseStateHandle>,
+    collapsed_dirs: &HashSet<String>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -3157,21 +3446,14 @@ fn render_detail_body(
     // additions and deletions) + file rows ----
     let total_add: u32 = detail.files.iter().map(|f| f.additions).sum();
     let total_del: u32 = detail.files.iter().map(|f| f.deletions).sum();
-    // File rows' +/- are right-aligned to the max digit count within this
-    // commit, forming columns across rows; the summary is its own row and can
-    // just use the totals' own digit counts.
-    let add_width = detail
-        .files
-        .iter()
-        .map(|f| f.additions.to_string().len())
-        .max()
-        .unwrap_or(1);
-    let del_width = detail
-        .files
-        .iter()
-        .map(|f| f.deletions.to_string().len())
-        .max()
-        .unwrap_or(1);
+    // Right-align every row's `+adds -dels` into one trailing column by padding
+    // the numbers (monospace) to a single shared digit count for the whole
+    // detail — the summary row and the file rows. The totals are the sum of all
+    // files, so they always have at least as many digits as any single file;
+    // padding to the totals' width therefore lines up the summary with every
+    // file row.
+    let add_width = total_add.to_string().len();
+    let del_width = total_del.to_string().len();
     let summary = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -3184,8 +3466,8 @@ fn render_detail_body(
         .with_child(render_diff_counts(
             total_add,
             total_del,
-            total_add.to_string().len(),
-            total_del.to_string().len(),
+            add_width,
+            del_width,
             appearance,
         ))
         .finish();
@@ -3196,18 +3478,52 @@ fn render_detail_body(
     let mut files_col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(Container::new(summary).with_vertical_padding(4.).finish());
-    for (index, file) in detail.files.iter().enumerate() {
-        // Mouse states are the same length as files; if missing, fall back to a
-        // default with no hover highlight (clicking still works).
-        let mouse_state = file_mouse_states.get(index).cloned().unwrap_or_default();
-        files_col = files_col.with_child(render_file_row(
-            index,
-            file,
-            mouse_state,
-            add_width,
-            del_width,
-            appearance,
-        ));
+    // Render the changed files as a collapsible directory tree: directory rows
+    // (chevron + name + aggregate counts) toggle expand/collapse; file leaves
+    // open a diff. Leaves keep their index into `detail.files`, so the
+    // mouse-state lookup and `OpenFileDiff` stay index-based.
+    for row in super::file_tree::build_file_rows(&detail.files, collapsed_dirs) {
+        let el = match row {
+            super::file_tree::FileRow::Dir { path, name, depth } => {
+                let mouse_state = dir_mouse_states.get(&path).cloned().unwrap_or_default();
+                // Directory: a disclosure chevron shows expand state (down =
+                // expanded, right = collapsed); clicking the row toggles it. No
+                // `+/-` counts — only files show those.
+                let expanded = !collapsed_dirs.contains(&path);
+                render_file_tree_row(
+                    Some(expanded),
+                    Icon::Folder,
+                    &name,
+                    depth,
+                    None,
+                    add_width,
+                    del_width,
+                    mouse_state,
+                    GitGraphAction::ToggleDir(path),
+                    appearance,
+                )
+            }
+            super::file_tree::FileRow::File { index, name, depth } => {
+                // Mouse states are the same length as files; if missing, fall
+                // back to a default with no hover highlight (clicking still
+                // works).
+                let mouse_state = file_mouse_states.get(index).cloned().unwrap_or_default();
+                let file = &detail.files[index];
+                render_file_tree_row(
+                    None,
+                    Icon::File,
+                    &name,
+                    depth,
+                    Some((file.additions, file.deletions)),
+                    add_width,
+                    del_width,
+                    mouse_state,
+                    GitGraphAction::OpenFileDiff(index),
+                    appearance,
+                )
+            }
+        };
+        files_col = files_col.with_child(el);
     }
     let files_section = Container::new(files_col.finish())
         .with_border(Border::top(1.).with_border_fill(theme.outline()))
@@ -3264,64 +3580,114 @@ fn render_detail_body(
         .finish()
 }
 
-/// Renders a clickable changed-file row: the path (directory dimmed, file name
-/// brightened) + red/green `+adds -dels` on the right. Highlights on hover; a
-/// click opens a read-only diff pane in the main area.
-fn render_file_row(
-    index: usize,
-    file: &ChangedFile,
-    mouse_state: MouseStateHandle,
+/// Renders one clickable row of the detail file tree, in the same form as the
+/// Project Explorer: the depth indent + a disclosure chevron column (down =
+/// expanded, right = collapsed; empty for a file leaf) + a type icon (folder for
+/// directories, file for leaves) + the left-aligned name + (for files only) the
+/// red/green `+adds -dels` right-aligned into a trailing column. Chevron, icon,
+/// and name share the hover-reactive [`ItemHighlightState::text_and_icon_color`].
+/// `action` is dispatched on click (toggle for a directory, open-diff for a
+/// file).
+///
+/// `is_expanded` is `None` for a file leaf (no chevron) and `Some(expanded)` for
+/// a directory. `counts` is `Some((adds, dels))` for a file and `None` for a
+/// directory (directories don't show diff counts). `add_width` / `del_width` are
+/// the commit-wide max digit counts that align the `+`/`-` numbers into a column
+/// across file rows.
+#[allow(clippy::too_many_arguments)]
+fn render_file_tree_row(
+    is_expanded: Option<bool>,
+    icon: Icon,
+    name: &str,
+    depth: usize,
+    counts: Option<(u32, u32)>,
     add_width: usize,
     del_width: usize,
+    mouse_state: MouseStateHandle,
+    action: GitGraphAction,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let font = appearance.ui_font_family();
-    let size = appearance.ui_font_size();
-    let theme = appearance.theme();
-    let fg: ColorU = theme.foreground().into();
-    let dim: ColorU = theme.sub_text_color(theme.background()).into();
-
-    // The whole path is dimmed, with only the file name (the last segment)
-    // brightened to the foreground color, establishing a "directory / file name"
-    // hierarchy; when too narrow, clip from the left (keeping the more
-    // informative file name), consistent with the file search row.
-    let path = file.path.clone();
-    let basename_byte = path.rfind('/').map(|i| i + 1).unwrap_or(0);
-    let basename_char_start = path[..basename_byte].chars().count();
-    let total_chars = path.chars().count();
-    let path_text = Text::new_inline(path, font, size)
-        .with_color(dim)
-        .with_single_highlight(
-            Highlight::new().with_foreground_color(fg),
-            (basename_char_start..total_chars).collect(),
-        )
-        .with_clip(ClipConfig {
-            direction: ClipDirection::Start,
-            style: ClipStyle::Ellipsis,
-        })
-        .finish();
-
-    let row = Flex::row()
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(Expanded::new(1.0, path_text).finish())
-        .with_child(
-            Container::new(render_diff_counts(
-                file.additions,
-                file.deletions,
-                add_width,
-                del_width,
-                appearance,
-            ))
-            .with_padding_left(8.)
-            .finish(),
-        )
-        .finish();
-
-    // Hover highlight: reuse the list's common [`ItemHighlightState`] (file rows
-    // have no "selected" state, only a hover-based background switch).
+    let name = name.to_string();
+    // Build the whole row inside the hover callback (like the Project Explorer)
+    // so the chevron / icon / text colors track the hover state.
     Hoverable::new(mouse_state, move |mouse_state| {
         let highlight = ItemHighlightState::new(false, mouse_state);
+        let color = highlight.text_and_icon_color(appearance);
+        let font = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+
+        // Disclosure chevron column; a file leaf leaves it empty so its name
+        // still aligns under sibling directories' names.
+        let chevron: Box<dyn Element> = match is_expanded {
+            Some(true) => Icon::ChevronDown.to_warpui_icon(color.into()).finish(),
+            Some(false) => Icon::ChevronRight.to_warpui_icon(color.into()).finish(),
+            None => Empty::new().finish(),
+        };
+        let chevron_col = Container::new(
+            ConstrainedBox::new(chevron)
+                .with_width(FILE_TREE_ICON_SIZE)
+                .with_height(FILE_TREE_ICON_SIZE)
+                .finish(),
+        )
+        .with_margin_right(4.)
+        .finish();
+
+        // Type icon column: folder for directories, file for leaves.
+        let icon_col = Container::new(
+            ConstrainedBox::new(icon.to_warpui_icon(color.into()).finish())
+                .with_width(FILE_TREE_ICON_SIZE)
+                .with_height(FILE_TREE_ICON_SIZE)
+                .finish(),
+        )
+        .with_margin_right(8.)
+        .finish();
+
+        // The name fills the remaining width (left-aligned, ellipsis on
+        // overflow), which pushes the counts to the row's right edge so they
+        // line up in a column across rows.
+        let name_text = Expanded::new(
+            1.0,
+            Text::new_inline(name.clone(), font, size)
+                .with_color(color)
+                .with_clip(ClipConfig::ellipsis())
+                .finish(),
+        )
+        .finish();
+
+        // depth indent → chevron → icon → name (fills); the row fills the width
+        // so the hover highlight spans it and the whole row is a click target.
+        let mut row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if depth > 0 {
+            row = row.with_child(
+                ConstrainedBox::new(Empty::new().finish())
+                    .with_width(depth as f32 * FILE_TREE_INDENT)
+                    .finish(),
+            );
+        }
+        row = row
+            .with_child(chevron_col)
+            .with_child(icon_col)
+            .with_child(name_text);
+        // Files show their `+adds -dels` right-aligned into a trailing column
+        // (padded to the commit-wide digit counts so `+`/`-` line up across
+        // rows); directories show none.
+        if let Some((additions, deletions)) = counts {
+            row = row.with_child(
+                Container::new(render_diff_counts(
+                    additions,
+                    deletions,
+                    add_width,
+                    del_width,
+                    appearance,
+                ))
+                .with_padding_left(8.)
+                .finish(),
+            );
+        }
+        let row = row.finish();
+
         let mut container = Container::new(row).with_vertical_padding(2.);
         if let Some(bg) = highlight.background_color(appearance) {
             container = container.with_background_color(bg.into_solid());
@@ -3332,7 +3698,7 @@ fn render_file_row(
         container.finish()
     })
     .on_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(GitGraphAction::OpenFileDiff(index));
+        ctx.dispatch_typed_action(action.clone());
     })
     .finish()
 }
@@ -3385,6 +3751,7 @@ impl TypedActionView for GitGraphView {
             }
             GitGraphAction::FocusPanel => ctx.focus_self(),
             GitGraphAction::OpenFileDiff(index) => self.open_file_diff(*index, ctx),
+            GitGraphAction::ToggleDir(path) => self.toggle_dir(path.clone(), ctx),
             GitGraphAction::OpenMenu { kind, x, y } => {
                 self.open_context_menu(kind.clone(), vec2f(*x, *y), ctx)
             }
@@ -3393,14 +3760,22 @@ impl TypedActionView for GitGraphView {
             }
             GitGraphAction::PromptInput(kind) => self.open_input_dialog(kind.clone(), ctx),
             GitGraphAction::SubmitInput => self.submit_input(ctx),
+            GitGraphAction::PromptStash => self.open_stash_dialog(ctx),
+            GitGraphAction::ToggleStashUntracked => self.toggle_stash_untracked(ctx),
+            GitGraphAction::SubmitStash => self.submit_stash(ctx),
             GitGraphAction::PromptResetMode { hash } => {
                 self.open_menu = None;
                 self.dialog = DialogState::ResetMode { hash: hash.clone() };
                 ctx.notify();
             }
+            GitGraphAction::PromptResetUncommitted => {
+                self.open_menu = None;
+                self.dialog = DialogState::ResetUncommitted;
+                ctx.notify();
+            }
             GitGraphAction::BeginWriteOp(op) => self.begin_write_op(op.clone(), ctx),
             GitGraphAction::RunOp(op) => self.run_op(op.clone(), ctx),
-            GitGraphAction::ToggleConfirmForce => self.toggle_confirm_force(ctx),
+            GitGraphAction::ToggleConfirmOption => self.toggle_confirm_option(ctx),
             GitGraphAction::BeginArchive {
                 rev,
                 suggested_name,

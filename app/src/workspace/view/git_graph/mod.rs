@@ -3,6 +3,8 @@
 //! Module layering:
 //! - [`data`]       commit data types + parsing of `git log` output (pure
 //!   functions) + async data loading.
+//! - [`file_tree`]  turns a commit's flat changed-file list into a collapsible
+//!   directory tree for the detail area (pure functions).
 //! - [`ops`]        write-operation layer: mutating git actions reachable from
 //!   the right-click context menus (pure arg-builders + async runners), gated by
 //!   [`warp_features::FeatureFlag::GitGraphWrite`].
@@ -19,6 +21,7 @@
 
 pub(crate) mod auto_refresh;
 pub(crate) mod data;
+pub(crate) mod file_tree;
 pub(crate) mod layout;
 pub(crate) mod menu;
 pub(crate) mod ops;

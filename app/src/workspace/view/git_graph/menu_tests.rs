@@ -225,3 +225,81 @@ fn local_branch_unselect_uses_heads_ref() {
         .expect("unselect present");
     assert_eq!(unselect, "refs/heads/main");
 }
+
+#[test]
+fn uncommitted_menu_offers_stash_reset_and_clean_when_writable() {
+    let items = build_uncommitted_menu(true);
+    assert_eq!(
+        labels(&items),
+        vec![
+            "Stash uncommitted changes…",
+            "--",
+            "Reset uncommitted changes…",
+            "Clean untracked files…",
+        ]
+    );
+    // Stash opens the stash dialog (message input + untracked checkbox).
+    assert_eq!(
+        items[0].item_on_select_action(),
+        Some(&GitGraphAction::PromptStash)
+    );
+    // Reset (after the separator) opens the mixed/hard picker dialog.
+    assert_eq!(
+        items[2].item_on_select_action(),
+        Some(&GitGraphAction::PromptResetUncommitted)
+    );
+    // Clean seeds its op with the directories checkbox on by default.
+    assert_eq!(
+        items[3].item_on_select_action(),
+        Some(&GitGraphAction::BeginWriteOp(
+            GitWriteOp::CleanUntracked { directories: true }
+        ))
+    );
+}
+
+#[test]
+fn uncommitted_menu_is_empty_when_read_only() {
+    assert!(build_uncommitted_menu(false).is_empty());
+}
+
+#[test]
+fn stash_menu_full_matches_screenshot_order() {
+    let items = build_stash_menu("stash@{0}", &commit(), true);
+    assert_eq!(
+        labels(&items),
+        vec![
+            "Apply Stash…",
+            "Create Branch from Stash…",
+            "Pop Stash…",
+            "Drop Stash…",
+            "--",
+            "Copy Stash Name to Clipboard",
+            "Copy Stash Hash to Clipboard",
+        ]
+    );
+    // Create-branch goes through a text-input prompt carrying the selector.
+    assert_eq!(
+        items[1].item_on_select_action(),
+        Some(&GitGraphAction::PromptInput(PromptKind::StashBranch {
+            selector: "stash@{0}".to_string()
+        }))
+    );
+}
+
+#[test]
+fn stash_menu_read_only_shows_only_copy() {
+    let items = build_stash_menu("stash@{0}", &commit(), false);
+    assert_eq!(
+        labels(&items),
+        vec!["Copy Stash Name to Clipboard", "Copy Stash Hash to Clipboard"]
+    );
+    // Name copies the selector; hash copies the full commit hash.
+    assert_eq!(
+        items[0].item_on_select_action(),
+        Some(&GitGraphAction::CopyToClipboard("stash@{0}".to_string()))
+    );
+    assert_eq!(
+        items[1].item_on_select_action(),
+        Some(&GitGraphAction::CopyToClipboard(commit().hash))
+    );
+}

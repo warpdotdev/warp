@@ -85,8 +85,9 @@ pub(crate) struct GitGraphRowCanvas {
     /// The graph's maximum lane count, which determines this element's width (and
     /// thus the alignment of the whole column).
     lane_count: usize,
-    /// Draw the node as a hollow ring (the synthetic "uncommitted changes" row)
-    /// instead of a filled dot.
+    /// Draw the node as a hollow ring instead of a filled dot — used for the
+    /// synthetic "uncommitted changes" row and the HEAD commit (the current
+    /// checkout) as a "you are here" marker.
     hollow: bool,
     origin: Option<Point>,
     size: Option<Vector2F>,
@@ -200,10 +201,11 @@ impl Element for GitGraphRowCanvas {
             Self::draw_vertical(ctx, parent_x, mid, bot, color);
         }
 
-        // Commit dot (corner_radius = radius -> a circle). The synthetic
-        // uncommitted row draws a hollow ring (border only); its transparent
-        // center lets the row's hover/selection highlight show through, reading
-        // as "not a real commit".
+        // Commit dot (corner_radius = radius -> a circle). Hollow rows draw a
+        // ring (border only) instead: the synthetic uncommitted row (reads as
+        // "not a real commit") and the HEAD commit ("you are here"). Its
+        // transparent center lets the row's hover/selection highlight show
+        // through.
         let radius = DOT_DIAMETER / 2.0;
         let color = lane_color(self.row.node_color);
         let dot = ctx.scene.draw_rect_with_hit_recording(RectF::new(
