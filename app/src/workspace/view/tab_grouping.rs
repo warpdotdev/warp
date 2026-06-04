@@ -78,7 +78,7 @@ impl Workspace {
     }
 
     /// Cmd-click on a tab: toggles the multi-selection flag
-    /// for a single tab. 
+    /// for a single tab.
     pub(super) fn toggle_tab_multi_selection(
         &mut self,
         locator: PaneViewLocator,
