@@ -312,17 +312,14 @@ fn test_get_repo_contents() {
 
 #[test]
 fn test_get_repo_contents_truncates_to_max_results() {
-    let repo_path = StandardizedPath::try_new("/trunc_repo").unwrap();
+    // Use an absolute base path so file metadata is valid on all platforms.
+    let base = std::env::temp_dir().join("trunc_repo");
+    let repo_path = StandardizedPath::try_from_local(&base).unwrap();
 
     // Build a flat repo with more files than the result cap so traversal stops early.
     let file_count = crate::local_model::MAX_REPO_CONTENTS_RESULTS + 50;
     let children: Vec<Entry> = (0..file_count)
-        .map(|i| {
-            Entry::File(FileMetadata::new(
-                PathBuf::from(format!("/trunc_repo/file{i}.txt")),
-                false,
-            ))
-        })
+        .map(|i| Entry::File(FileMetadata::new(base.join(format!("file{i}.txt")), false)))
         .collect();
     let root = Entry::Directory(DirectoryEntry {
         path: repo_path.clone(),
