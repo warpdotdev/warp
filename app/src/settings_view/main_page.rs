@@ -285,9 +285,9 @@ impl MainSettingsPageView {
             widgets.push(Box::new(IapCredentialsWidget::default()));
             let iap_manager_handle = IapManager::handle(ctx);
             ctx.subscribe_to_model(&iap_manager_handle, |_, _, e, ctx| {
-                match e {
-                    IapManagerEvent::StateChanged => ctx.notify(),
-                };
+                if matches!(e, IapManagerEvent::StateChanged) {
+                    ctx.notify();
+                }
             })
         }
 

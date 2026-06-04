@@ -182,6 +182,7 @@ use crate::ai::aws_credentials::AwsCredentialRefresher as _;
 use crate::ai::geap_credentials::GeapCredentialRefresher as _;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
+use crate::view_components::DismissibleToast;
 pub mod workflows;
 pub mod workspace;
 
@@ -282,7 +283,7 @@ use crate::root_view::{
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
-use crate::server::iap::IapManager;
+use crate::server::iap::{IapManager, IapManagerEvent};
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 pub use crate::server::telemetry::{
     AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
@@ -1986,7 +1987,44 @@ pub(crate) fn initialize_app(
     // read the singleton without panicking. On wasm `iap_state` is always
     // `None`, making this an inert no-op: `IapManager::new` early-returns from
     // its refresh loop and `iap_state()` yields no proxy-auth header.
-    ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
+    ctx.add_singleton_model(move |ctx| {
+        let path_resolver = Box::new(|_ctx: &mut AppContext| {
+            #[cfg(feature = "local_tty")]
+            let path_future = LocalShellState::handle(_ctx).update(_ctx, |shell_state, ctx| {
+                shell_state.get_interactive_path_env_var(ctx)
+            });
+
+            #[cfg(not(feature = "local_tty"))]
+            let path_future =
+                futures::FutureExt::boxed_local(futures::future::ready(None::<String>));
+
+            path_future
+        });
+        IapManager::new(iap_state, path_resolver, ctx)
+    });
+    // Subscribe to IAP manager events to show toasts when refresh fails.
+    ctx.subscribe_to_model(&IapManager::handle(ctx), |_, e, ctx| {
+        match e {
+            IapManagerEvent::RefreshFailed {
+                message,
+                is_first_failure_of_streak,
+            } if *is_first_failure_of_streak => {
+                let window_id = ctx
+                    .windows()
+                    .active_window()
+                    .or_else(|| ctx.windows().ordered_window_ids().first().copied());
+                let Some(window_id) = window_id else {
+                    return;
+                };
+                let toast: DismissibleToast<WorkspaceAction> =
+                    DismissibleToast::error(format!("IAP credential refresh failed: {message}"));
+                ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+                    stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+            }
+            _ => {}
+        };
+    });
 
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);
