@@ -3609,18 +3609,12 @@ impl EditorView {
         self.autogrow = autogrow;
     }
 
-    /// Replaces the editor's enter-key settings at runtime.
-    ///
-    /// Use this to change how Enter / Ctrl+Enter are handled without
-    /// re-constructing the view.  The new settings take effect on the
-    /// next keystroke.
+    /// Replaces the editor's enter-key settings at runtime (effective next keystroke).
     pub fn set_enter_settings(&mut self, settings: EnterSettings) {
         self.enter_settings = settings;
     }
 
-    /// Returns the current enter-key settings.  Primarily for tests that
-    /// need to assert the settings were correctly applied without simulating
-    /// a full keystroke dispatch.
+    /// Returns the current enter-key settings (for tests asserting applied settings).
     pub fn enter_settings(&self) -> EnterSettings {
         self.enter_settings.clone()
     }

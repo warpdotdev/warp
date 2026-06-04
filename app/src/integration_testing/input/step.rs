@@ -16,14 +16,7 @@ use crate::terminal::cli_agent_sessions::{
 use crate::terminal::view::TerminalAction;
 use crate::terminal::CLIAgent;
 
-/// Opens the CLI-agent Rich Input for the terminal view at the given tab index.
-///
-/// Replicates the `open_rich_input_for_terminal` helper used in `input_tests.rs`
-/// so that integration tests can drive the full keybinding / event-dispatch path
-/// without spawning a real CLI agent process.
-///
-/// The `tab_index` parameter selects the terminal pane (use `0` for the first
-/// and only pane in a fresh test session).
+/// Opens the CLI-agent Rich Input for the terminal view at `tab_index`.
 pub fn open_cli_agent_rich_input(tab_index: usize) -> TestStep {
     new_step_with_default_assertions("Open CLI Agent Rich Input").with_action(
         move |app, window_id, _step_data| {
@@ -68,9 +61,7 @@ pub fn open_cli_agent_rich_input(tab_index: usize) -> TestStep {
     )
 }
 
-/// Asserts that the Rich Input buffer text for `tab_index` matches the predicate.
-///
-/// Returns an [`AssertionCallback`] suitable for use with `add_assertion`.
+/// Asserts that the Rich Input buffer text for `tab_index` is empty.
 pub fn rich_input_buffer_text_is_empty(tab_index: usize) -> warpui::integration::AssertionCallback {
     Box::new(move |app, window_id| {
         let input_view = single_input_view_for_tab(app, window_id, tab_index);
@@ -100,9 +91,7 @@ pub fn rich_input_buffer_contains_newline(
     })
 }
 
-/// Asserts that the Rich Input buffer text for `tab_index` does NOT contain a
-/// newline character.  Used to verify that Enter dispatched to a menu-acceptance
-/// branch rather than the newline-insertion branch.
+/// Asserts that the Rich Input buffer for `tab_index` contains no newline (verifies menu-acceptance, not newline insertion).
 pub fn rich_input_buffer_does_not_contain_newline(
     tab_index: usize,
 ) -> warpui::integration::AssertionCallback {

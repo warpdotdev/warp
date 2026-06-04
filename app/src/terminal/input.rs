@@ -12508,16 +12508,10 @@ impl Input {
                 return;
             }
 
-            // When submit_on_ctrl_enter is enabled, Enter inserts a newline
-            // rather than submitting (Ctrl+Enter handles submission in that mode).
-            //
-            // Note: user_initiated_insert replaces any active selection with the
-            // inserted text, which is the correct behaviour here — the user
-            // explicitly asked for a newline edit.
-            // Asymmetry: Ctrl+Enter preserves selections (it's a
-            // submit-on-Ctrl+Enter, not edit-on-Ctrl+Enter); Enter does not
-            // preserve selections because the user explicitly asked for a newline
-            // edit.
+            // When submit_on_ctrl_enter is enabled, Enter inserts a newline rather than
+            // submitting (Ctrl+Enter handles submission in that mode).
+            // Asymmetry: Enter replaces any active selection (the user asked for a newline
+            // edit); Ctrl+Enter preserves selections because it is a submit, not an edit.
             if *AISettings::as_ref(ctx).submit_on_ctrl_enter {
                 self.editor.update(ctx, |editor, ctx| {
                     editor.user_initiated_insert("\n", PlainTextEditorViewAction::NewLine, ctx);
@@ -12916,16 +12910,8 @@ impl Input {
         });
     }
 
-    /// Handles the Ctrl+Enter keypress in the CLI agent rich input.
-    ///
-    /// When `submit_on_ctrl_enter` is enabled and the rich input is open,
-    /// submits the current buffer contents (same as Enter does in default mode).
-    /// When `submit_on_ctrl_enter` is disabled, emits [`Event::CtrlEnter`]
-    /// (the existing fallback behaviour).
-    ///
-    /// Exposed as `pub(crate)` so that unit tests can exercise the Ctrl+Enter
-    /// behavioural matrix directly without needing to drive through the editor
-    /// event dispatch path.
+    /// Submits the rich-input buffer on Ctrl+Enter when `submit_on_ctrl_enter` is enabled;
+    /// otherwise emits [`Event::CtrlEnter`]. Exposed `pub(crate)` for unit tests.
     pub(crate) fn input_ctrl_enter(&mut self, ctx: &mut ViewContext<Self>) {
         if CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
             && *AISettings::as_ref(ctx).submit_on_ctrl_enter
@@ -12937,11 +12923,8 @@ impl Input {
     }
 
     /// Emits [`Event::SubmitCLIAgentInput`] with the current buffer contents.
-    ///
-    /// This is the shared submit path for both the Enter key (default mode) and
-    /// the Ctrl+Enter key (when `submit_on_ctrl_enter` is enabled). It assumes
-    /// the caller has already handled any menu-intercept cases (@ context menu,
-    /// prompts menu, etc.) and that the CLI agent rich input is open.
+    /// Shared submit path for Enter (default mode) and Ctrl+Enter (`submit_on_ctrl_enter` mode);
+    /// callers must have already handled menu-intercept cases.
     fn emit_submit_cli_agent_input(&mut self, ctx: &mut ViewContext<Self>) {
         // When the `!` prefix was stripped (shell mode in CLI agent input),
         // prepend it back so the CLI agent receives the mode-switch prefix,
