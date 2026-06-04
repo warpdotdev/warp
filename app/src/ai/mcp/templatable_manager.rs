@@ -12,7 +12,7 @@ use diesel::SqliteConnection;
 use futures_util::stream::AbortHandle;
 #[cfg(not(target_family = "wasm"))]
 use mcp::oauth;
-pub use mcp::runtime::TemplatableMCPServerInfo;
+use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]

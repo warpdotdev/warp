@@ -12,7 +12,6 @@ use strum_macros::EnumIter;
 #[cfg(not(target_family = "wasm"))]
 pub use templatable_manager::McpIntegration;
 pub use templatable_manager::TemplatableMCPServerManager;
-#[cfg(not(target_family = "wasm"))]
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
 
