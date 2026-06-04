@@ -1780,11 +1780,9 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
     );
-    if warp_core::features::FeatureFlag::OrchestrationV2.is_enabled() {
-        ctx.add_singleton_model(
-            ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
-        );
-    }
+    ctx.add_singleton_model(
+        ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
+    );
 
     if launch_mode.supports_indexing() {
         ctx.add_singleton_model(RepoOutlines::new);

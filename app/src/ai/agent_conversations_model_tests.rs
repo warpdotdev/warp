@@ -235,7 +235,6 @@ fn test_display_status_uses_setup_task_states() {
 #[test]
 fn test_display_status_uses_matching_conversation_for_in_progress_task() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -291,7 +290,6 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
 #[test]
 fn test_display_status_uses_active_execution_over_previous_conversation_status() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -356,7 +354,6 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
 #[test]
 fn test_display_status_updates_when_blocked_conversation_resumes() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -436,7 +433,6 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
 #[test]
 fn test_display_status_terminal_task_state_overrides_matching_conversation() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -491,7 +487,6 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
 #[test]
 fn test_status_filter_uses_display_status_for_task_backed_conversations() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
         let history_model = BlocklistAIHistoryModel::handle(&app);
 
@@ -825,7 +820,6 @@ fn test_get_entries_includes_cloud_metadata_only_entry() {
 #[test]
 fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
 
         let now = Utc::now();
@@ -1089,7 +1083,6 @@ fn test_resolve_open_action_opens_active_ambient_session_from_link() {
 #[test]
 fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
 
         let now = Utc::now();
@@ -1538,7 +1531,6 @@ fn test_resolve_open_action_reopens_ambient_session_after_terminal_unregister() 
 #[test]
 fn test_resolve_copy_link_uses_attached_synced_conversation_for_task_without_token() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
 
         let conversation_id = AIConversationId::new();
@@ -1864,7 +1856,6 @@ fn test_task_status_maps_blocked_state_to_blocked() {
 #[test]
 fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
         let history_model = BlocklistAIHistoryModel::handle(&app);
 

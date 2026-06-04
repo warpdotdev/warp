@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use chrono::{Local, Utc};
 use persistence::model::{AgentConversationData, ConversationUsageMetadata};
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, EntityId, SingletonEntity};
 
@@ -209,7 +208,6 @@ fn create_test_server_metadata(
 #[test]
 fn test_from_task_includes_linked_directory_when_run_id_matches() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let conversation_id = AIConversationId::new();

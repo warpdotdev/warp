@@ -2522,6 +2522,12 @@ pub struct TerminalView {
     /// but also the input.
     resize_tx: Sender<Vector2F>,
 
+    /// Exchange that `jump_to_latest_agent_message` wants to scroll to once the
+    /// agent view's blocks have mounted. Set when entering the agent view from the
+    /// terminal (where the target block doesn't exist yet on the current frame) and
+    /// consumed in `after_terminal_view_layout`, after layout has mounted it.
+    pending_agent_scroll_target: Option<AIAgentExchangeId>,
+
     find_link_tx: Sender<FindLinkArg>,
 
     /// Highlighted link (could be url or file path) on the screen.
@@ -4195,6 +4201,7 @@ impl TerminalView {
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             find_bar,
             resize_tx,
+            pending_agent_scroll_target: None,
             find_link_tx,
             highlighted_link: HighlightedLinkOption::default(),
             last_hover_fragment_boundary: None,
@@ -16048,6 +16055,15 @@ impl TerminalView {
     /// size of the entire terminal (block_list + input OR alt-grid OR shared session viewer loading) as its
     /// argument.
     fn after_terminal_view_layout(&mut self, size: Vector2F, ctx: &mut ViewContext<Self>) {
+        // A pending `jump_to_latest_agent_message` enters the agent view, which
+        // mounts the target block over this layout. Now that layout is done the
+        // block exists, so scroll to it — once. Doing it here (after layout, after
+        // the agent view's own entry scroll) means a single shot lands without any
+        // retry loop. Each agent turn is one block, so this lands on its top.
+        if let Some(exchange_id) = self.pending_agent_scroll_target.take() {
+            self.scroll_to_exchange(exchange_id, ctx);
+        }
+
         let size_update = SizeUpdateBuilder::after_layout(*self.size_info, size).build(self, ctx);
         self.resize_internal(size_update, ctx);
 
@@ -22025,6 +22041,79 @@ impl TerminalView {
         }
     }
 
+    fn jump_to_latest_agent_message(&mut self, ctx: &mut ViewContext<Self>) {
+        // Agent messages only render inside the agent view; in the terminal they
+        // collapse to a hidden, zero-height block. So "jump to latest agent
+        // message" makes sure we're in the agent view for the most recent
+        // conversation and then scrolls to its latest exchange.
+        if !FeatureFlag::AgentView.is_enabled() {
+            return;
+        }
+        // Follow actual agent activity. Prefer the active conversation — the one
+        // currently or most recently streaming, which tracks where the latest
+        // agent message landed even after the user switches back to an older
+        // conversation — and target its latest visible exchange. When there is no
+        // active conversation, fall back to the single most-recently-streamed
+        // exchange across all conversations (rather than the most-recently-
+        // *created* conversation) and enter the conversation that owns it.
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let (conversation_id, exchange_id) =
+            if let Some(active_conversation_id) = history.active_conversation_id(self.id()) {
+                // Resolve the target exchange from the conversation model rather than
+                // from the currently-mounted blocks: when entering from the terminal
+                // the blocks mount over later frames, so the latest block may not
+                // exist yet this tick. Use the latest *visible* exchange so we land on
+                // a block that actually renders (skipping passive/hidden exchanges).
+                let Some(exchange_id) = history
+                    .conversation(&active_conversation_id)
+                    .and_then(|conversation| conversation.latest_visible_exchange())
+                    .map(|exchange| exchange.id)
+                else {
+                    return;
+                };
+                (active_conversation_id, exchange_id)
+            } else {
+                let Some(exchange_id) = history
+                    .latest_exchange_across_all_conversations(self.id())
+                    .map(|exchange| exchange.id)
+                else {
+                    return;
+                };
+                let Some(conversation_id) =
+                    history.conversation_id_for_exchange(exchange_id, self.id())
+                else {
+                    return;
+                };
+                (conversation_id, exchange_id)
+            };
+        // Only re-enter the agent view when we're not already in this
+        // conversation's view; re-entering when already there is needless churn.
+        let already_in_view = self
+            .agent_view_controller
+            .as_ref(ctx)
+            .agent_view_state()
+            .active_conversation_id()
+            == Some(conversation_id);
+        if already_in_view {
+            // Blocks are already mounted, so the exchange resolves immediately.
+            self.scroll_to_exchange(exchange_id, ctx);
+        } else {
+            self.enter_agent_view_for_conversation(
+                None,
+                AgentViewEntryOrigin::JumpToLatestAgentMessage,
+                conversation_id,
+                ctx,
+            );
+            // The target block doesn't exist on this frame — entering the agent view
+            // mounts it over the following layout. Record it and let
+            // `after_terminal_view_layout` scroll once the block is mounted, which
+            // also runs after the agent view's own entry scroll so it isn't
+            // overridden.
+            self.pending_agent_scroll_target = Some(exchange_id);
+        }
+        send_telemetry_from_ctx!(TelemetryEvent::JumpToLatestAgentMessage, ctx);
+    }
+
     fn terminal_down(&mut self, ctx: &mut ViewContext<Self>) {
         if !self.selected_blocks.is_empty() {
             let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
@@ -25554,6 +25643,7 @@ impl TypedActionView for TerminalView {
             | SelectNextBlock
             | SelectBookmarkUp
             | SelectBookmarkDown
+            | JumpToLatestAgentMessage
             | Up
             | Down
             | JumpToBookmark(_)
@@ -26075,6 +26165,7 @@ impl TypedActionView for TerminalView {
                 InputMode::PinnedToBottom | InputMode::Waterfall => self.bookmark_down(ctx),
                 InputMode::PinnedToTop => self.bookmark_up(ctx),
             },
+            JumpToLatestAgentMessage => self.jump_to_latest_agent_message(ctx),
             BookmarkSelectedBlock => self.bookmark_selected_block(ctx),
             UserInputSequence(bytes) => self.user_input_sequence(bytes, ctx),
             ControlSequence(bytes) => self.control_sequence_on_terminal(bytes, ctx),

@@ -561,6 +561,180 @@ fn clear_buffer_action_in_fullscreen_agent_view_starts_new_conversation() {
     })
 }
 
+fn agent_jump_user_query(query: &str) -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: query.to_owned(),
+        context: Default::default(),
+        static_query_type: None,
+        referenced_attachments: Default::default(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+    }
+}
+
+#[test]
+fn jump_to_latest_agent_message_no_ops_when_agent_view_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Create a conversation while the agent view feature is enabled...
+        let agent_view = FeatureFlag::AgentView.override_enabled(true);
+        terminal.update(&mut app, |view, ctx| {
+            append_exchange_and_handle_event(view, agent_jump_user_query("hi"), ctx);
+        });
+        drop(agent_view);
+
+        // ...then turn the feature off: the action must be inert even though a
+        // conversation with a visible exchange exists.
+        let _agent_view_off = FeatureFlag::AgentView.override_enabled(false);
+        terminal.update(&mut app, |view, ctx| {
+            view.jump_to_latest_agent_message(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert!(!view.agent_view_controller().as_ref(ctx).is_active());
+            assert_eq!(view.pending_agent_scroll_target, None);
+        });
+    })
+}
+
+#[test]
+fn jump_to_latest_agent_message_no_ops_without_conversations() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // No conversations exist, so there is nothing to jump to.
+        terminal.update(&mut app, |view, ctx| {
+            view.jump_to_latest_agent_message(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert!(!view.agent_view_controller().as_ref(ctx).is_active());
+            assert_eq!(view.pending_agent_scroll_target, None);
+        });
+    })
+}
+
+#[test]
+fn jump_to_latest_agent_message_enters_agent_view_and_records_pending_scroll() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, _task_id, exchange_id, _stream_id) = terminal
+            .update(&mut app, |view, ctx| {
+                append_exchange_and_handle_event(view, agent_jump_user_query("hi"), ctx)
+            });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.jump_to_latest_agent_message(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            match view.agent_view_controller().as_ref(ctx).agent_view_state() {
+                AgentViewState::Active {
+                    conversation_id: active_conversation_id,
+                    origin,
+                    ..
+                } => {
+                    assert_eq!(*active_conversation_id, conversation_id);
+                    assert_eq!(*origin, AgentViewEntryOrigin::JumpToLatestAgentMessage);
+                }
+                state => panic!("expected an active agent view, got {state:?}"),
+            }
+            // Entering from the terminal mounts the target block on a later frame,
+            // so the scroll target is recorded for `after_terminal_view_layout`.
+            assert_eq!(view.pending_agent_scroll_target, Some(exchange_id));
+        });
+    })
+}
+
+#[test]
+fn jump_to_latest_agent_message_targets_latest_visible_exchange() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, _task_id, _first_exchange_id, _stream_id) = terminal
+            .update(&mut app, |view, ctx| {
+                append_exchange_and_handle_event(view, agent_jump_user_query("first"), ctx)
+            });
+
+        // Append a second, newer exchange to the same conversation.
+        let second_exchange_id = terminal.update(&mut app, |view, ctx| {
+            let history_model = BlocklistAIHistoryModel::handle(ctx);
+            history_model.update(ctx, |history_model, ctx| {
+                let response_stream_id = ResponseStreamId::new_for_test();
+                let exchange = exchange_with_inputs(vec![agent_jump_user_query("second")]);
+                let exchange_id = exchange.id;
+                history_model
+                    .conversation_mut(&conversation_id)
+                    .expect("conversation should exist")
+                    .append_reassigned_exchange(&response_stream_id, exchange, view.view_id, ctx)
+                    .expect("exchange should append");
+                exchange_id
+            })
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.jump_to_latest_agent_message(ctx);
+        });
+
+        terminal.read(&app, |view, _ctx| {
+            // The jump targets the latest visible exchange, not the first one.
+            assert_eq!(view.pending_agent_scroll_target, Some(second_exchange_id));
+        });
+    })
+}
+
+#[test]
+fn jump_to_latest_agent_message_scrolls_without_re_entering_when_already_in_view() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, _task_id, _exchange_id, _stream_id) = terminal
+            .update(&mut app, |view, ctx| {
+                append_exchange_and_handle_event(view, agent_jump_user_query("hi"), ctx)
+            });
+
+        // First jump enters the agent view from the terminal and records a pending
+        // scroll target; simulate the layout pass consuming it.
+        terminal.update(&mut app, |view, ctx| {
+            view.jump_to_latest_agent_message(ctx);
+            view.pending_agent_scroll_target = None;
+        });
+
+        // Second jump: already in this conversation's agent view, so it scrolls
+        // directly without re-entering or recording a new pending target.
+        terminal.update(&mut app, |view, ctx| {
+            view.jump_to_latest_agent_message(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let active_conversation_id = view
+                .agent_view_controller()
+                .as_ref(ctx)
+                .agent_view_state()
+                .active_conversation_id()
+                .expect("agent view should be active");
+            assert_eq!(active_conversation_id, conversation_id);
+            assert_eq!(view.pending_agent_scroll_target, None);
+        });
+    })
+}
+
 #[test]
 fn restoring_conversation_to_new_pane_transfers_blocks_from_previous_owner() {
     App::test((), |mut app| async move {

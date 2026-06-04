@@ -790,31 +790,6 @@ fn artifact_help_hides_upload_but_keeps_download_visible() {
 }
 
 #[test]
-fn run_help_hides_message_when_orchestration_v2_disabled() {
-    warp_core::features::mark_initialized();
-
-    let mut command = Args::clap_command();
-    command.build();
-
-    let run = command
-        .find_subcommand("run")
-        .expect("run subcommand should exist");
-    let message = run
-        .find_subcommand("message")
-        .expect("message subcommand should exist");
-
-    assert!(message.is_hide_set());
-
-    let visible_subcommands: Vec<_> = run
-        .get_subcommands()
-        .filter(|subcommand| !subcommand.is_hide_set())
-        .map(|subcommand| subcommand.get_name())
-        .collect();
-
-    assert!(!visible_subcommands.contains(&"message"));
-}
-
-#[test]
 fn raw_command_keeps_message_visible_before_runtime_help_customization() {
     let mut command = <Args as clap::CommandFactory>::command();
     command.build();
