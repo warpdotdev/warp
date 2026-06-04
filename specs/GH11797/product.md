@@ -48,6 +48,4 @@ Warp currently supports prompt chips for Git and SVN but has no equivalent for `
 
 11. **Placeholder values.** In the chip picker settings UI, the placeholder for `JjBookmark` is `jj-feature-bookmark` and for `JjDirtyItems` it is `3`.
 
-12. **Copy behavior.** Clicking a `JjBookmark` chip copies the raw text (e.g. `main` or `f3a2b1c0 on my-feature`). Clicking `JjDirtyItems` copies the integer count.
-
-13. **Icon.** Both chips reuse the existing Git/SVN icons: `Icon::GitBranch` for `JjBookmark` and `Icon::File` for `JjDirtyItems`.
+12. **Icon.** Both chips reuse the existing Git/SVN icons: `Icon::GitBranch` for `JjBookmark` and `Icon::File` for `JjDirtyItems`.

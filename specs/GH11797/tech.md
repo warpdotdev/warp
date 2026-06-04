@@ -21,7 +21,8 @@ The SVN chips (`SvnBranch`, `SvnDirtyItems`) are the closest analogue: shell-bas
 
 ### `jj_bookmark()`
 
-Produces the chip value text using `jj log` with output templates. Logic:
+Produces the chip value text using `jj log` with output templates. `change_id.shortest(8)`
+returns at most 8 hex chars that uniquely identify the change (e.g., `qquqvwzk`). Logic:
 
 1. Query bookmarks on `@` — if found, output them directly.
 2. Otherwise, get the change ID via `change_id.shortest(8)`.
@@ -165,7 +166,7 @@ For PowerShell variants, port the bash logic to PowerShell using `jj` commands d
 
 ### 3. No other files require changes
 
-- `display_chip.rs`: No changes — `JjBookmark` and `JjDirtyItems` produce plain `ChipValue::Text`, which renders via the generic text path.
+- `display_chip.rs`: No changes — `JjBookmark` and `JjDirtyItems` produce plain `ChipValue::Text`, which renders via the generic text path. Click-to-copy is not supported, matching the existing `SvnBranch`/`SvnDirtyItems` behavior (which are also plain-text chips with no click handler).
 - `current_prompt.rs`: No changes — `CurrentPrompt` uses `to_chip()` and `runtime_policy` generically.
 - `prompt.rs`: No changes — `Prompt` singleton handles all `ContextChipKind` variants uniformly.
 - `theme.rs`: No new colors needed — both chips reuse existing `input_prompt_branch` and `input_prompt_svn` colors.
