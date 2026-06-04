@@ -839,6 +839,46 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
         "/repo/.git/config"
     )));
 }
+
+/// Documents the watch-filter invariant: gitignore is applied only by the
+/// descend predicate (`should_watch_repo_directory`), so gitignored paths are
+/// pruned from recursive registration but their events are still emitted (the
+/// emit predicate only suppresses non-allowlisted `.git/` internals).
+#[test]
+fn gitignore_affects_descend_predicate_but_not_emitted_events() {
+    use std::path::Path;
+
+    use super::{gitignores_for_directory, should_ignore_git_path, should_watch_repo_directory};
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "node_modules/\n").unwrap();
+    fs::create_dir(root_path.join("node_modules")).unwrap();
+    fs::create_dir(root_path.join("src")).unwrap();
+
+    let gitignores = gitignores_for_directory(&root_path);
+    let node_modules = root_path.join("node_modules");
+    let src = root_path.join("src");
+
+    // Descend predicate: the gitignored dir is pruned from recursive
+    // registration, while a tracked dir is still descended into.
+    assert!(!should_watch_repo_directory(
+        &node_modules,
+        &gitignores,
+        &[]
+    ));
+    assert!(should_watch_repo_directory(&src, &gitignores, &[]));
+
+    // Emit predicate building block (`!should_ignore_git_path`): gitignored,
+    // non-`.git` paths are NOT suppressed, so their events still flow. Only
+    // non-allowlisted `.git/` internals are suppressed.
+    assert!(!should_ignore_git_path(&node_modules));
+    assert!(!should_ignore_git_path(&node_modules.join("pkg/index.js")));
+    assert!(should_ignore_git_path(Path::new(
+        "/repo/.git/objects/ab/blob"
+    )));
+}
+
 #[test]
 fn test_is_shared_git_ref() {
     use std::path::Path;

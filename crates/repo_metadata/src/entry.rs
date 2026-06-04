@@ -1027,6 +1027,15 @@ pub fn repo_watch_filter(
 ) -> WatchFilter {
     let should_watch =
         move |path: &Path| should_watch_repo_directory(path, &gitignores, &force_included_paths);
+    // INVARIANT: gitignore lives only in the descend predicate
+    // (`should_watch_repo_directory`), never in the emit predicate. The descend
+    // predicate is consulted only by the inotify backend (Linux) at recursive
+    // registration time, so pruning gitignored dirs is purely a Linux
+    // watch-cost control. The emit predicate must NOT filter gitignored paths:
+    // on FSEvents/ReadDirectoryChangesW (macOS/Windows) the descend predicate is
+    // ignored and the recursive root watch still delivers gitignored events, and
+    // on Linux on-demand non-recursive watches likewise rely on those events
+    // flowing through. It only suppresses non-allowlisted `.git/` internals.
     WatchFilter::with_filter(
         Arc::new(should_watch),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),
