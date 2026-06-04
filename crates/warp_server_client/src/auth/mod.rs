@@ -43,7 +43,6 @@ pub use warp_server_auth::user_uid;
 use crate::base_client::BaseClient;
 use crate::graphql_helpers::send_graphql_request;
 use crate::ids::ApiKeyUid;
-use crate::public_api::get_authenticated_public_api;
 
 /// Header key used to associate unauthenticated requests with an experiment identity.
 pub const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
@@ -460,12 +459,8 @@ impl AuthClient for AuthClientImpl {
     }
 
     async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
-        let auth_token = self
-            .get_or_refresh_access_token()
-            .await
-            .context("Failed to get access token for API request")?;
         let response: AgentIdentitiesResponse =
-            get_authenticated_public_api(&self.base_client, auth_token, "agent/identities").await?;
+            self.base_client.get_public_api("agent/identities").await?;
         Ok(response.agents)
     }
 }
