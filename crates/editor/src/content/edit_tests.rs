@@ -219,6 +219,78 @@ fn test_text_around_link_not_auto_highlighted() {
 }
 
 #[test]
+fn test_highlight_urls_custom_schemes() {
+    let runs = &[
+        StyledBufferRun {
+            run: "Open vscode://file/home/user/project/src/main.rs:12:8 and custom_link://foo/bar?baz=1#frag.".to_string(),
+            text_styles: Default::default(),
+            block_style: BufferBlockStyle::PlainText,
+        },
+    ];
+
+    assert_eq!(
+        highlight_urls(runs),
+        &[
+            ParsedUrl {
+                url_range: 5..53,
+                link: "vscode://file/home/user/project/src/main.rs:12:8".to_string()
+            },
+            ParsedUrl {
+                url_range: 58..90,
+                link: "custom_link://foo/bar?baz=1#frag".to_string()
+            }
+        ]
+    )
+}
+
+#[test]
+fn test_highlight_custom_scheme_url_across_style_runs() {
+    let runs = &[
+        StyledBufferRun {
+            run: "vscode:".to_string(),
+            text_styles: Default::default(),
+            block_style: BufferBlockStyle::PlainText,
+        },
+        StyledBufferRun {
+            run: "//file/home/user/project".to_string(),
+            text_styles: TextStylesWithMetadata::default().bold(),
+            block_style: BufferBlockStyle::PlainText,
+        },
+    ];
+
+    assert_eq!(
+        highlight_urls(runs),
+        &[ParsedUrl {
+            url_range: 0..31,
+            link: "vscode://file/home/user/project".to_string()
+        }]
+    )
+}
+
+#[test]
+fn test_highlight_custom_scheme_url_boundaries() {
+    let runs = &[StyledBufferRun {
+        run: "(vscode://file/home/user/project) not custom://\nnext custom://link".to_string(),
+        text_styles: Default::default(),
+        block_style: BufferBlockStyle::PlainText,
+    }];
+
+    assert_eq!(
+        highlight_urls(runs),
+        &[
+            ParsedUrl {
+                url_range: 1..32,
+                link: "vscode://file/home/user/project".to_string()
+            },
+            ParsedUrl {
+                url_range: 53..66,
+                link: "custom://link".to_string()
+            }
+        ]
+    )
+}
+
+#[test]
 fn test_layout_partial_url() {
     // Regression test for laying out a partially-styled autodetected URL (CLD-871).
     App::test((), |app| async move {
