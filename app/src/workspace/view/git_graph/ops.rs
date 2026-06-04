@@ -96,8 +96,9 @@ pub(crate) enum GitWriteOp {
     },
     /// `git branch <name> <hash>`.
     CreateBranch { hash: String, name: String },
-    /// `git checkout <hash>` (detached HEAD).
-    CheckoutCommit { hash: String },
+    /// `git checkout [--force] <hash>` (detached HEAD); `force` discards
+    /// uncommitted changes that would otherwise block the switch.
+    CheckoutCommit { hash: String, force: bool },
     /// `git cherry-pick <hash>` onto the current branch.
     CherryPick { hash: String },
     /// `git revert --no-edit <hash>` on the current branch.
@@ -114,23 +115,37 @@ pub(crate) enum GitWriteOp {
     RebaseOntoBranch { branch: String },
     /// `git reset --soft|--mixed|--hard <hash>` — move the current branch ref.
     Reset { hash: String, mode: ResetMode },
-    /// `git checkout <branch>` — check out a (remote) branch by its short name,
-    /// letting git set up tracking.
-    CheckoutBranch { branch: String },
+    /// `git checkout [--force] <branch>` — check out a (remote) branch by its
+    /// short name, letting git set up tracking; `force` discards uncommitted
+    /// changes that would otherwise block the switch.
+    CheckoutBranch { branch: String, force: bool },
     /// `git push <remote> --delete <branch>`.
     DeleteRemoteBranch { remote: String, branch: String },
     /// `git pull <remote> <branch>` into the current branch.
     Pull { remote: String, branch: String },
     /// `git branch -m <old> <new>`.
     RenameBranch { old: String, new: String },
-    /// `git branch -d <name>` — delete a (merged) local branch.
-    DeleteLocalBranch { name: String },
-    /// `git push <remote> <branch>`.
-    PushBranch { remote: String, branch: String },
+    /// `git branch -d|-D <name>` — delete a local branch; `force` (`-D`) deletes
+    /// it even when it isn't fully merged.
+    DeleteLocalBranch { name: String, force: bool },
+    /// `git push [--force-with-lease] <remote> <branch>`. `force` uses
+    /// `--force-with-lease` (not bare `--force`) so the overwrite is refused if
+    /// the remote moved past the position we last fetched, guarding others' work.
+    PushBranch {
+        remote: String,
+        branch: String,
+        force: bool,
+    },
     /// `git tag -d <name>`.
     DeleteTag { name: String },
-    /// `git push <remote> <tag>`.
-    PushTag { remote: String, name: String },
+    /// `git push [--force] <remote> <tag>`. Uses bare `--force` (not
+    /// `--force-with-lease`): tags have no remote-tracking ref for a lease to
+    /// compare against, so a lease would always be refused.
+    PushTag {
+        remote: String,
+        name: String,
+        force: bool,
+    },
     /// `git archive --format <fmt> -o <output> <rev>`.
     Archive {
         rev: String,
@@ -164,7 +179,14 @@ impl GitWriteOp {
             GitWriteOp::CreateBranch { hash, name } => {
                 vec!["branch".into(), name.clone(), hash.clone()]
             }
-            GitWriteOp::CheckoutCommit { hash } => vec!["checkout".into(), hash.clone()],
+            GitWriteOp::CheckoutCommit { hash, force } => {
+                let mut args = vec!["checkout".into()];
+                if *force {
+                    args.push("--force".into());
+                }
+                args.push(hash.clone());
+                args
+            }
             GitWriteOp::CherryPick { hash } => vec!["cherry-pick".into(), hash.clone()],
             GitWriteOp::Revert { hash } => {
                 vec!["revert".into(), "--no-edit".into(), hash.clone()]
@@ -181,7 +203,14 @@ impl GitWriteOp {
             GitWriteOp::Reset { hash, mode } => {
                 vec!["reset".into(), mode.flag().into(), hash.clone()]
             }
-            GitWriteOp::CheckoutBranch { branch } => vec!["checkout".into(), branch.clone()],
+            GitWriteOp::CheckoutBranch { branch, force } => {
+                let mut args = vec!["checkout".into()];
+                if *force {
+                    args.push("--force".into());
+                }
+                args.push(branch.clone());
+                args
+            }
             GitWriteOp::DeleteRemoteBranch { remote, branch } => vec![
                 "push".into(),
                 remote.clone(),
@@ -194,15 +223,36 @@ impl GitWriteOp {
             GitWriteOp::RenameBranch { old, new } => {
                 vec!["branch".into(), "-m".into(), old.clone(), new.clone()]
             }
-            GitWriteOp::DeleteLocalBranch { name } => {
-                vec!["branch".into(), "-d".into(), name.clone()]
+            GitWriteOp::DeleteLocalBranch { name, force } => {
+                let flag = if *force { "-D" } else { "-d" };
+                vec!["branch".into(), flag.into(), name.clone()]
             }
-            GitWriteOp::PushBranch { remote, branch } => {
-                vec!["push".into(), remote.clone(), branch.clone()]
+            GitWriteOp::PushBranch {
+                remote,
+                branch,
+                force,
+            } => {
+                let mut args = vec!["push".into()];
+                if *force {
+                    args.push("--force-with-lease".into());
+                }
+                args.push(remote.clone());
+                args.push(branch.clone());
+                args
             }
             GitWriteOp::DeleteTag { name } => vec!["tag".into(), "-d".into(), name.clone()],
-            GitWriteOp::PushTag { remote, name } => {
-                vec!["push".into(), remote.clone(), name.clone()]
+            GitWriteOp::PushTag {
+                remote,
+                name,
+                force,
+            } => {
+                let mut args = vec!["push".into()];
+                if *force {
+                    args.push("--force".into());
+                }
+                args.push(remote.clone());
+                args.push(name.clone());
+                args
             }
             GitWriteOp::Archive {
                 rev,
@@ -232,7 +282,7 @@ impl GitWriteOp {
             | GitWriteOp::CreateBranch { .. }
             | GitWriteOp::RenameBranch { .. }
             | GitWriteOp::Archive { .. } => None,
-            GitWriteOp::CheckoutCommit { hash } => Some(format!(
+            GitWriteOp::CheckoutCommit { hash, .. } => Some(format!(
                 "Check out commit {} as a detached HEAD?",
                 short(hash)
             )),
@@ -256,7 +306,7 @@ impl GitWriteOp {
             GitWriteOp::RebaseOntoBranch { branch } => Some(format!(
                 "Rebase the current branch onto \"{branch}\"? This rewrites history."
             )),
-            GitWriteOp::DeleteLocalBranch { name } => {
+            GitWriteOp::DeleteLocalBranch { name, .. } => {
                 Some(format!("Delete branch \"{name}\"? This cannot be undone."))
             }
             GitWriteOp::Reset { hash, mode } => Some(match mode {
@@ -271,7 +321,7 @@ impl GitWriteOp {
                     format!("Reset the current branch to {}?", short(hash))
                 }
             }),
-            GitWriteOp::CheckoutBranch { branch } => {
+            GitWriteOp::CheckoutBranch { branch, .. } => {
                 Some(format!("Check out branch \"{branch}\"?"))
             }
             GitWriteOp::DeleteRemoteBranch { remote, branch } => Some(format!(
@@ -280,15 +330,58 @@ impl GitWriteOp {
             GitWriteOp::Pull { remote, branch } => {
                 Some(format!("Pull {remote}/{branch} into the current branch?"))
             }
-            GitWriteOp::PushBranch { remote, branch } => {
+            GitWriteOp::PushBranch { remote, branch, .. } => {
                 Some(format!("Push branch \"{branch}\" to \"{remote}\"?"))
             }
             GitWriteOp::DeleteTag { name } => {
                 Some(format!("Delete tag \"{name}\"? This cannot be undone."))
             }
-            GitWriteOp::PushTag { remote, name } => {
+            GitWriteOp::PushTag { remote, name, .. } => {
                 Some(format!("Push tag \"{name}\" to \"{remote}\"?"))
             }
+        }
+    }
+
+    /// The force-toggle state for this op as shown by the confirmation dialog's
+    /// checkbox: `None` for ops with no force option (the checkbox is hidden),
+    /// otherwise `Some(checked)`.
+    pub(crate) fn force_state(&self) -> Option<bool> {
+        match self {
+            GitWriteOp::CheckoutCommit { force, .. }
+            | GitWriteOp::CheckoutBranch { force, .. }
+            | GitWriteOp::DeleteLocalBranch { force, .. }
+            | GitWriteOp::PushBranch { force, .. }
+            | GitWriteOp::PushTag { force, .. } => Some(*force),
+            _ => None,
+        }
+    }
+
+    /// Returns this op with its force flag set to `value`; a no-op for ops that
+    /// have no force option.
+    pub(crate) fn with_force(mut self, value: bool) -> Self {
+        match &mut self {
+            GitWriteOp::CheckoutCommit { force, .. }
+            | GitWriteOp::CheckoutBranch { force, .. }
+            | GitWriteOp::DeleteLocalBranch { force, .. }
+            | GitWriteOp::PushBranch { force, .. }
+            | GitWriteOp::PushTag { force, .. } => *force = value,
+            _ => {}
+        }
+        self
+    }
+
+    /// Label for the force checkbox, naming the consequence of forcing this
+    /// specific op (only ever shown for ops where [`Self::force_state`] is
+    /// `Some`).
+    pub(crate) fn force_label(&self) -> &'static str {
+        match self {
+            GitWriteOp::CheckoutCommit { .. } | GitWriteOp::CheckoutBranch { .. } => {
+                "Force (discard local changes)"
+            }
+            GitWriteOp::DeleteLocalBranch { .. } => "Force (delete unmerged branch)",
+            GitWriteOp::PushBranch { .. } => "Force (overwrite remote)",
+            GitWriteOp::PushTag { .. } => "Force (overwrite remote tag)",
+            _ => "Force",
         }
     }
 }

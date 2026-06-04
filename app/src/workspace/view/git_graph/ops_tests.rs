@@ -96,8 +96,119 @@ fn rename_branch_uses_branch_dash_m() {
 fn delete_local_branch_uses_branch_dash_d() {
     let op = GitWriteOp::DeleteLocalBranch {
         name: "feature".into(),
+        force: false,
     };
     assert_eq!(op.args(), vec!["branch", "-d", "feature"]);
+}
+
+#[test]
+fn delete_local_branch_force_uses_capital_d() {
+    let op = GitWriteOp::DeleteLocalBranch {
+        name: "feature".into(),
+        force: true,
+    };
+    assert_eq!(op.args(), vec!["branch", "-D", "feature"]);
+}
+
+#[test]
+fn checkout_commit_force_inserts_force_flag() {
+    let unforced = GitWriteOp::CheckoutCommit {
+        hash: "h".into(),
+        force: false,
+    };
+    assert_eq!(unforced.args(), vec!["checkout", "h"]);
+    let forced = GitWriteOp::CheckoutCommit {
+        hash: "h".into(),
+        force: true,
+    };
+    assert_eq!(forced.args(), vec!["checkout", "--force", "h"]);
+}
+
+#[test]
+fn checkout_branch_force_inserts_force_flag() {
+    let unforced = GitWriteOp::CheckoutBranch {
+        branch: "feat".into(),
+        force: false,
+    };
+    assert_eq!(unforced.args(), vec!["checkout", "feat"]);
+    let forced = GitWriteOp::CheckoutBranch {
+        branch: "feat".into(),
+        force: true,
+    };
+    assert_eq!(forced.args(), vec!["checkout", "--force", "feat"]);
+}
+
+#[test]
+fn push_branch_force_uses_force_with_lease() {
+    let unforced = GitWriteOp::PushBranch {
+        remote: "origin".into(),
+        branch: "main".into(),
+        force: false,
+    };
+    assert_eq!(unforced.args(), vec!["push", "origin", "main"]);
+    // Branch force uses --force-with-lease so a moved remote is not clobbered.
+    let forced = GitWriteOp::PushBranch {
+        remote: "origin".into(),
+        branch: "main".into(),
+        force: true,
+    };
+    assert_eq!(
+        forced.args(),
+        vec!["push", "--force-with-lease", "origin", "main"]
+    );
+}
+
+#[test]
+fn push_tag_force_uses_plain_force() {
+    let unforced = GitWriteOp::PushTag {
+        remote: "origin".into(),
+        name: "v1".into(),
+        force: false,
+    };
+    assert_eq!(unforced.args(), vec!["push", "origin", "v1"]);
+    // Tags have no remote-tracking ref to lease against, so force is bare --force.
+    let forced = GitWriteOp::PushTag {
+        remote: "origin".into(),
+        name: "v1".into(),
+        force: true,
+    };
+    assert_eq!(forced.args(), vec!["push", "--force", "origin", "v1"]);
+}
+
+#[test]
+fn force_state_is_some_only_for_force_capable_ops() {
+    assert_eq!(
+        GitWriteOp::PushBranch {
+            remote: "o".into(),
+            branch: "b".into(),
+            force: true,
+        }
+        .force_state(),
+        Some(true)
+    );
+    assert_eq!(
+        GitWriteOp::CheckoutBranch {
+            branch: "b".into(),
+            force: false,
+        }
+        .force_state(),
+        Some(false)
+    );
+    // An op with no force option shows no checkbox.
+    assert_eq!(GitWriteOp::Merge { rev: "r".into() }.force_state(), None);
+}
+
+#[test]
+fn with_force_sets_flag_and_is_noop_for_unsupported() {
+    let forced = GitWriteOp::DeleteLocalBranch {
+        name: "b".into(),
+        force: false,
+    }
+    .with_force(true);
+    assert_eq!(forced.force_state(), Some(true));
+    // No force option → still none after with_force.
+    let merge = GitWriteOp::Merge { rev: "r".into() }.with_force(true);
+    assert_eq!(merge.force_state(), None);
 }
 
 #[test]

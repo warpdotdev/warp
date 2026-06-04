@@ -82,6 +82,7 @@ pub fn run_failing_checkout() -> TestStep {
             view.handle_action(
                 &GitGraphAction::RunOp(GitWriteOp::CheckoutBranch {
                     branch: "warp-no-such-branch-xyz".to_string(),
+                    force: false,
                 }),
                 ctx,
             );

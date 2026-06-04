@@ -171,7 +171,10 @@ fn build_commit_menu(commit: &CommitNode, write_enabled: bool) -> Vec<MenuItem<G
     if write_enabled {
         apply.push(item(
             "Checkout…",
-            GitGraphAction::BeginWriteOp(GitWriteOp::CheckoutCommit { hash: hash.clone() }),
+            GitGraphAction::BeginWriteOp(GitWriteOp::CheckoutCommit {
+                hash: hash.clone(),
+                force: false,
+            }),
         ));
         apply.push(item(
             "Cherry Pick…",
@@ -246,6 +249,7 @@ fn build_tag_menu(
             GitGraphAction::BeginWriteOp(GitWriteOp::PushTag {
                 remote: DEFAULT_PUSH_REMOTE.to_string(),
                 name: name.to_string(),
+                force: false,
             }),
         ));
     }
@@ -278,6 +282,7 @@ fn build_remote_branch_menu(name: &str, write_enabled: bool) -> Vec<MenuItem<Git
             "Checkout Branch…",
             GitGraphAction::BeginWriteOp(GitWriteOp::CheckoutBranch {
                 branch: branch.clone(),
+                force: false,
             }),
         ));
         ops.push(item(
@@ -341,6 +346,7 @@ fn build_local_branch_menu(
                 "Checkout Branch…",
                 GitGraphAction::BeginWriteOp(GitWriteOp::CheckoutBranch {
                     branch: name.to_string(),
+                    force: false,
                 }),
             ));
         }
@@ -355,6 +361,7 @@ fn build_local_branch_menu(
                 "Delete Branch…",
                 GitGraphAction::BeginWriteOp(GitWriteOp::DeleteLocalBranch {
                     name: name.to_string(),
+                    force: false,
                 }),
             ));
             ops.push(item(
@@ -375,6 +382,7 @@ fn build_local_branch_menu(
             GitGraphAction::BeginWriteOp(GitWriteOp::PushBranch {
                 remote: DEFAULT_PUSH_REMOTE.to_string(),
                 branch: name.to_string(),
+                force: false,
             }),
         ));
     }

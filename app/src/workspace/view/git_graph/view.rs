@@ -148,6 +148,9 @@ pub(crate) enum GitGraphAction {
     /// Run a write op now (dispatched by the confirm dialog's "Confirm" button,
     /// the reset-mode dialog's buttons, and the archive save callback).
     RunOp(GitWriteOp),
+    /// Toggle the force checkbox in the open confirmation dialog (shown only for
+    /// ops that support a force flag, e.g. push / checkout / delete branch).
+    ToggleConfirmForce,
     /// Open the OS save dialog for "Create Archive"; the chosen path drives the
     /// archive format and the actual run.
     BeginArchive { rev: String, suggested_name: String },
@@ -2092,6 +2095,18 @@ impl GitGraphView {
         }
     }
 
+    /// Flips the force flag on the op in the open confirmation dialog (driven by
+    /// the dialog's force checkbox). A no-op when no confirm dialog is open or
+    /// the op has no force option.
+    fn toggle_confirm_force(&mut self, ctx: &mut ViewContext<Self>) {
+        if let DialogState::Confirm { op, .. } = &mut self.dialog {
+            if let Some(forced) = op.force_state() {
+                *op = op.clone().with_force(!forced);
+                ctx.notify();
+            }
+        }
+    }
+
     /// Opens the text-input dialog for `kind`, pre-filling and focusing the
     /// shared editor.
     fn open_input_dialog(&mut self, kind: PromptKind, ctx: &mut ViewContext<Self>) {
@@ -2407,26 +2422,58 @@ impl GitGraphView {
                         ],
                     )
                 }
-                DialogState::Confirm { op, message } => (
-                    "Confirm".to_string(),
-                    dialog_message(message.clone(), appearance),
-                    vec![
-                        self.dialog_button(
-                            "Cancel".to_string(),
-                            GitGraphAction::CancelDialog,
-                            st(0),
-                            false,
-                            appearance,
-                        ),
-                        self.dialog_button(
-                            "Confirm".to_string(),
-                            GitGraphAction::RunOp(op.clone()),
-                            st(1),
-                            true,
-                            appearance,
-                        ),
-                    ],
-                ),
+                DialogState::Confirm { op, message } => {
+                    // Ops that accept a force flag get a checkbox under the
+                    // message; toggling it flips the force flag on `op` (so the
+                    // "Confirm" button below runs the forced variant).
+                    let body = match op.force_state() {
+                        Some(forced) => {
+                            let checkbox = appearance
+                                .ui_builder()
+                                .checkbox(st(2), Some(size))
+                                .check(forced)
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(GitGraphAction::ToggleConfirmForce);
+                                })
+                                .finish();
+                            let label = Text::new_inline(op.force_label().to_string(), font, size)
+                                .with_color(theme.foreground().into())
+                                .finish();
+                            let force_row = Flex::row()
+                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                                .with_child(checkbox)
+                                .with_child(Container::new(label).with_padding_left(2.).finish())
+                                .finish();
+                            Flex::column()
+                                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                                .with_child(dialog_message(message.clone(), appearance))
+                                .with_child(Container::new(force_row).with_margin_top(10.).finish())
+                                .finish()
+                        }
+                        None => dialog_message(message.clone(), appearance),
+                    };
+                    (
+                        "Confirm".to_string(),
+                        body,
+                        vec![
+                            self.dialog_button(
+                                "Cancel".to_string(),
+                                GitGraphAction::CancelDialog,
+                                st(0),
+                                false,
+                                appearance,
+                            ),
+                            self.dialog_button(
+                                "Confirm".to_string(),
+                                GitGraphAction::RunOp(op.clone()),
+                                st(1),
+                                true,
+                                appearance,
+                            ),
+                        ],
+                    )
+                }
                 DialogState::ResetMode { hash } => (
                     "Reset current branch".to_string(),
                     dialog_message(
@@ -3342,6 +3389,7 @@ impl TypedActionView for GitGraphView {
             }
             GitGraphAction::BeginWriteOp(op) => self.begin_write_op(op.clone(), ctx),
             GitGraphAction::RunOp(op) => self.run_op(op.clone(), ctx),
+            GitGraphAction::ToggleConfirmForce => self.toggle_confirm_force(ctx),
             GitGraphAction::BeginArchive {
                 rev,
                 suggested_name,
