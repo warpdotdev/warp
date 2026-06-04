@@ -21862,29 +21862,43 @@ impl TerminalView {
         if !FeatureFlag::AgentView.is_enabled() {
             return;
         }
-        // Follow actual agent activity: prefer the most recently streamed
-        // conversation (which tracks where the latest agent message landed even
-        // after the user switches back to an older conversation), falling back
-        // to the last-created one only when there is no active conversation.
+        // Follow actual agent activity. Prefer the active conversation — the one
+        // currently or most recently streaming, which tracks where the latest
+        // agent message landed even after the user switches back to an older
+        // conversation — and target its latest visible exchange. When there is no
+        // active conversation, fall back to the single most-recently-streamed
+        // exchange across all conversations (rather than the most-recently-
+        // *created* conversation) and enter the conversation that owns it.
         let history = BlocklistAIHistoryModel::as_ref(ctx);
-        let Some(conversation_id) = history
-            .active_conversation_id(self.id())
-            .or_else(|| history.last_conversation_id(self.id()))
-        else {
-            return;
-        };
-        // Resolve the target exchange from the conversation model rather than from
-        // the currently-mounted blocks: when entering from the terminal the blocks
-        // mount over later frames, so the latest block may not exist yet this tick.
-        // Use the latest *visible* exchange so we land on a block that actually
-        // renders (skipping passive/hidden exchanges).
-        let Some(exchange_id) = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .and_then(|conversation| conversation.latest_visible_exchange())
-            .map(|exchange| exchange.id)
-        else {
-            return;
-        };
+        let (conversation_id, exchange_id) =
+            if let Some(active_conversation_id) = history.active_conversation_id(self.id()) {
+                // Resolve the target exchange from the conversation model rather than
+                // from the currently-mounted blocks: when entering from the terminal
+                // the blocks mount over later frames, so the latest block may not
+                // exist yet this tick. Use the latest *visible* exchange so we land on
+                // a block that actually renders (skipping passive/hidden exchanges).
+                let Some(exchange_id) = history
+                    .conversation(&active_conversation_id)
+                    .and_then(|conversation| conversation.latest_visible_exchange())
+                    .map(|exchange| exchange.id)
+                else {
+                    return;
+                };
+                (active_conversation_id, exchange_id)
+            } else {
+                let Some(exchange_id) = history
+                    .latest_exchange_across_all_conversations(self.id())
+                    .map(|exchange| exchange.id)
+                else {
+                    return;
+                };
+                let Some(conversation_id) =
+                    history.conversation_id_for_exchange(exchange_id, self.id())
+                else {
+                    return;
+                };
+                (conversation_id, exchange_id)
+            };
         // Only re-enter the agent view when we're not already in this
         // conversation's view; re-entering when already there is needless churn.
         let already_in_view = self
