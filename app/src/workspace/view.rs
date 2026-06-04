@@ -988,6 +988,8 @@ pub struct Workspace {
     show_tab_right_click_menu: Option<(usize, TabContextMenuAnchor)>,
     /// Open tab group more-options menu; reuses the `tab_right_click_menu` view.
     show_tab_group_right_click_menu: Option<(TabGroupId, TabContextMenuAnchor)>,
+    /// Open multi-tab selection menu (right-click on any tab in a multi-tab selection).
+    show_tab_selection_right_click_menu: Option<(usize, TabContextMenuAnchor)>,
     // TODO(CORE-2300): this used to be add_tab_dropdown_menu.
     // Because we are rolling out the change behind a feature flag,
     // keep this comment here until the feature flag is removed.
@@ -3245,6 +3247,7 @@ impl Workspace {
             tab_right_click_menu,
             show_tab_right_click_menu: None,
             show_tab_group_right_click_menu: None,
+            show_tab_selection_right_click_menu: None,
             new_session_dropdown_menu,
             show_new_session_dropdown_menu: None,
             changelog_model,
@@ -9341,6 +9344,7 @@ impl Workspace {
             MenuEvent::Close { via_select_item: _ } => {
                 self.show_tab_right_click_menu = None;
                 self.show_tab_group_right_click_menu = None;
+                self.show_tab_selection_right_click_menu = None;
                 self.hide_move_to_group_sidecar(ctx);
                 ctx.notify();
             }
@@ -9458,53 +9462,15 @@ impl Workspace {
         menu_items
     }
 
-    /// Builds the sidecar rows: every group except the tab's current one,
-    /// ordered by first member's tab index to match the tabs panel.
-    fn build_move_to_group_sidecar_items(
-        &self,
-        tab_index: usize,
-    ) -> Vec<MenuItem<WorkspaceAction>> {
-        let Some(tab) = self.tabs.get(tab_index) else {
-            return vec![];
-        };
-        let current_group_id = tab.group_id;
-
-        // Other groups paired with their first member's tab index, sorted so the menu
-        // matches panel order.
-        let sorted_other_groups = self
-            .tab_groups
-            .keys()
-            .copied()
-            .filter(|gid| Some(*gid) != current_group_id)
-            .filter_map(|gid| {
-                group_member_indices(&self.tabs, gid)
-                    .next()
-                    .map(|idx| (gid, idx))
-            })
-            .sorted_by_key(|(_, idx)| *idx);
-
-        sorted_other_groups
-            .map(|(group_id, _)| {
-                let label = self
-                    .tab_groups
-                    .get(&group_id)
-                    .and_then(|g| g.name.clone())
-                    .unwrap_or_else(|| "Untitled group".to_string());
-                MenuItemFields::new(label)
-                    .with_on_select_action(WorkspaceAction::MoveTabToGroup {
-                        tab_index,
-                        group_id,
-                    })
-                    .into_item()
-            })
-            .collect()
-    }
-
     /// Opens the sidecar when "Move to group" is hovered, hides it otherwise.
+    /// Handles both the single-tab pane menu and the multi-tab selection menu.
     fn update_move_to_group_sidecar(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some((tab_index, _)) = self.show_tab_right_click_menu else {
+        // If neither menu is open, nothing to update.
+        if self.show_tab_right_click_menu.is_none()
+            && self.show_tab_selection_right_click_menu.is_none()
+        {
             return;
-        };
+        }
         // No hovered index = cursor left the menu (possibly onto the sidecar);
         // no label = hovered a non-label row (e.g. separator).
         let hovered = self.tab_right_click_menu.read(ctx, |menu, _| {
@@ -9528,7 +9494,13 @@ impl Workspace {
         };
 
         if label == MOVE_TO_GROUP_LABEL {
-            let items = self.build_move_to_group_sidecar_items(tab_index);
+            // Single-tab pane menu carries a `tab_index`; the multi-tab
+            // selection menu has no single source tab so we pass `None` and
+            // the sidecar builder infers the multi-tab selection.
+            let source_tab_index = self
+                .show_tab_right_click_menu
+                .map(|(tab_index, _)| tab_index);
+            let items = self.build_move_to_group_sidecar_items(source_tab_index);
             if items.is_empty() {
                 self.hide_move_to_group_sidecar(ctx);
                 return;
@@ -9565,6 +9537,48 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// Shared between the single-tab pane menu and the multi-tab selection
+    /// menu render paths so the two parent menus can't drift apart in how
+    /// they position the "move to group" sidecar.
+    fn add_move_to_group_sidecar_overlay(&self, stack: &mut Stack, app: &AppContext) {
+        if !self.show_move_to_group_sidecar {
+            return;
+        }
+        let sidecar_element = SavePosition::new(
+            ChildView::new(&self.move_to_group_sidecar_menu).finish(),
+            MOVE_TO_GROUP_SIDECAR_POSITION_ID,
+        )
+        .finish();
+
+        // Flip the anchor side when the sidecar would overflow the window.
+        let render_left =
+            self.should_render_sidecar_left(MOVE_TO_GROUP_LABEL, MOVE_TO_GROUP_SIDECAR_WIDTH, app);
+        let (offset, parent_anchor, child_anchor) = if render_left {
+            (
+                vec2f(-4., 0.),
+                PositionedElementAnchor::TopLeft,
+                ChildAnchor::TopRight,
+            )
+        } else {
+            (
+                vec2f(4., 0.),
+                PositionedElementAnchor::TopRight,
+                ChildAnchor::TopLeft,
+            )
+        };
+
+        stack.add_positioned_overlay_child(
+            sidecar_element,
+            OffsetPositioning::offset_from_save_position_element(
+                MOVE_TO_GROUP_LABEL,
+                offset,
+                PositionedElementOffsetBounds::WindowByPosition,
+                parent_anchor,
+                child_anchor,
+            ),
+        );
+    }
+
     fn handle_move_to_group_sidecar_event(
         &mut self,
         event: &MenuEvent,
@@ -9572,10 +9586,11 @@ impl Workspace {
     ) {
         match event {
             MenuEvent::Close { via_select_item } => {
-                // Item dispatch fires `MoveTabToGroup` itself; we just tear
-                // down the parent menu on a real pick.
+                // Item dispatch fires the move action itself; we just tear down
+                // the parent menu (single-tab or multi-tab selection) on a pick.
                 if *via_select_item {
                     self.show_tab_right_click_menu = None;
+                    self.show_tab_selection_right_click_menu = None;
                 }
                 self.show_move_to_group_sidecar = false;
                 self.tab_right_click_menu.update(ctx, |menu, _| {
@@ -22646,6 +22661,9 @@ impl TypedActionView for Workspace {
             ToggleTabRightClickMenu { tab_index, anchor } => {
                 self.toggle_tab_right_click_menu(*tab_index, *anchor, ctx)
             }
+            ToggleTabSelectionRightClickMenu { tab_index, anchor } => {
+                self.toggle_tab_selection_right_click_menu(*tab_index, *anchor, ctx)
+            }
             ToggleVerticalTabsPaneContextMenu {
                 tab_index,
                 target,
@@ -22675,6 +22693,12 @@ impl TypedActionView for Workspace {
             RemoveTabFromGroup(tab_index) => self.remove_tab_from_group(*tab_index, ctx),
             ShiftSelectTabRange { locator } => self.shift_select_tab_range(*locator, ctx),
             ToggleTabMultiSelection { locator } => self.toggle_tab_multi_selection(*locator, ctx),
+            ClearTabMultiSelection => self.clear_tab_multi_selection(ctx),
+            NewTabGroupFromSelectedTabs => self.new_tab_group_from_selected_tabs(ctx),
+            MoveSelectedTabsToGroup { group_id } => {
+                self.move_selected_tabs_to_group(*group_id, ctx)
+            }
+            RemoveSelectedTabsFromGroup => self.remove_selected_tabs_from_group(ctx),
             ToggleTabGroupRightClickMenu { group_id, anchor } => {
                 self.toggle_tab_group_right_click_menu(*group_id, *anchor, ctx)
             }
@@ -25267,45 +25291,32 @@ impl View for Workspace {
                     );
                 }
 
-                // Sidecar menu for the "Move to group" submenu parent. Mirrors
-                // the new-session sidecar's overflow-aware left/right anchoring.
-                if self.show_move_to_group_sidecar {
-                    let sidecar_element = SavePosition::new(
-                        ChildView::new(&self.move_to_group_sidecar_menu).finish(),
-                        MOVE_TO_GROUP_SIDECAR_POSITION_ID,
-                    )
-                    .finish();
+                self.add_move_to_group_sidecar_overlay(&mut stack, app);
+            }
+        }
 
-                    let render_left = self.should_render_sidecar_left(
-                        MOVE_TO_GROUP_LABEL,
-                        MOVE_TO_GROUP_SIDECAR_WIDTH,
-                        app,
-                    );
-                    let (offset, parent_anchor, child_anchor) = if render_left {
-                        (
-                            vec2f(-4., 0.),
-                            PositionedElementAnchor::TopLeft,
-                            ChildAnchor::TopRight,
-                        )
-                    } else {
-                        (
-                            vec2f(4., 0.),
-                            PositionedElementAnchor::TopRight,
-                            ChildAnchor::TopLeft,
-                        )
-                    };
+        // Multi-tab selection menu (reuses the `tab_right_click_menu` view).
+        if let Some((_tab_idx, anchor)) = self.show_tab_selection_right_click_menu {
+            let is_vertical = FeatureFlag::VerticalTabs.is_enabled()
+                && *TabSettings::as_ref(app).use_vertical_tabs
+                && self.vertical_tabs_panel_open;
+            if is_vertical {
+                let position = match anchor {
+                    TabContextMenuAnchor::Pointer(position) => position,
+                    // The selection menu is never opened via the kebab button.
+                    TabContextMenuAnchor::VerticalTabsKebab => Vector2F::zero(),
+                };
+                stack.add_positioned_overlay_child(
+                    ChildView::new(&self.tab_right_click_menu).finish(),
+                    OffsetPositioning::offset_from_parent(
+                        position,
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
 
-                    stack.add_positioned_overlay_child(
-                        sidecar_element,
-                        OffsetPositioning::offset_from_save_position_element(
-                            MOVE_TO_GROUP_LABEL,
-                            offset,
-                            PositionedElementOffsetBounds::WindowByPosition,
-                            parent_anchor,
-                            child_anchor,
-                        ),
-                    );
-                }
+                self.add_move_to_group_sidecar_overlay(&mut stack, app);
             }
         }
 
