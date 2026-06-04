@@ -276,7 +276,9 @@ pub(crate) enum FileTreeMutation {
     },
     /// Add a directory with its fully-built subtree.
     AddDirectorySubtree { dir_path: PathBuf, subtree: Entry },
-    /// Fallback: add a bare (unloaded) directory entry when `build_tree` fails.
+    /// Add a bare (unloaded) directory placeholder, materialized on demand when
+    /// the user expands it. Used for newly created directories under lazy roots
+    /// and as a fallback when `build_tree` fails.
     AddEmptyDirectory { path: PathBuf, is_ignored: bool },
 }
 
@@ -595,6 +597,7 @@ impl LocalRepoMetadataModel {
                                 &gitignores_clone,
                                 &force_included_paths,
                                 &standing_query_definitions,
+                                lazy_load,
                             )
                             .await;
                         (
@@ -608,38 +611,6 @@ impl LocalRepoMetadataModel {
                     |model,
                      (mutations, discovered_results, removed_roots, repo_path, lazy_load),
                      ctx| {
-                        // Only a non-recursive root (lazy non-git roots on
-                        // Linux) needs to watch newly added directories: nothing
-                        // under such a root is covered by a recursive watch, so
-                        // each new dir needs its own watch. Collect them before
-                        // the mutations are consumed.
-                        //
-                        // Recursive roots don't need this: non-ignored new dirs
-                        // are auto-followed by the recursive backend, and
-                        // gitignored new dirs are added as lazy placeholders that
-                        // get watched only when the user expands them (see
-                        // `load_directory`).
-                        let new_dirs: Vec<StandardizedPath> = if matches!(
-                            model.repo_watches.get(&repo_path).map(|w| w.root_mode),
-                            Some(RootWatchMode::NonRecursive)
-                        ) {
-                            mutations
-                                .iter()
-                                .filter_map(|mutation| {
-                                    let path = match mutation {
-                                        FileTreeMutation::AddDirectorySubtree {
-                                            dir_path, ..
-                                        } => dir_path,
-                                        FileTreeMutation::AddEmptyDirectory { path, .. } => path,
-                                        _ => return None,
-                                    };
-                                    StandardizedPath::try_from_local(path).ok()
-                                })
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
-
                         if let Some(IndexedRepoState::Indexed(state)) =
                             model.repositories.get_mut(&repo_path)
                         {
@@ -681,13 +652,6 @@ impl LocalRepoMetadataModel {
                         // directory is later recreated at the same path.
                         for removed in &removed_roots {
                             model.unwatch_removed_subtree(&repo_path, removed, ctx);
-                        }
-
-                        // Watch any newly added directories under a non-recursive
-                        // root. `new_dirs` is empty for recursive roots, so this
-                        // is a no-op there.
-                        for dir in new_dirs {
-                            model.watch_subdir(&repo_path, &dir, ctx);
                         }
                     },
                 );
@@ -1167,11 +1131,17 @@ impl LocalRepoMetadataModel {
     /// Performs all filesystem I/O (`exists()`, `is_dir()`, `build_tree()`,
     /// gitignore checks) and returns a lightweight list of mutations that can
     /// be applied to the tree on the main thread without cloning it.
+    ///
+    /// When `lazy_load` is true (lazy non-git roots), newly added directories
+    /// are emitted as unloaded placeholders rather than fully-materialized
+    /// subtrees, matching the lazy tree model; the directory is materialized
+    /// (and watched) on demand when the user expands it via `load_directory`.
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
         gitignores: &[Gitignore],
         force_included_paths: &[PathBuf],
         standing_query_definitions: &StandingQueryDefinitions,
+        lazy_load: bool,
     ) -> (
         Vec<FileTreeMutation>,
         StandingQueryResults,
@@ -1204,6 +1174,18 @@ impl LocalRepoMetadataModel {
             let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
 
             if path_to_add.is_dir() {
+                if lazy_load {
+                    // Lazy (non-git) roots are not materialized when a directory
+                    // is created; insert it as an unloaded placeholder and build
+                    // the subtree on demand when the user expands it (see
+                    // `load_directory`).
+                    mutations.push(FileTreeMutation::AddEmptyDirectory {
+                        path: path_to_add.clone(),
+                        is_ignored,
+                    });
+                    continue;
+                }
+
                 let mut files = Vec::new();
                 let mut gitignores = gitignores.to_owned();
                 let mut file_limit = MAX_FILES_PER_REPO;
