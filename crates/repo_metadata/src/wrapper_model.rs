@@ -310,7 +310,7 @@ impl RepoMetadataModel {
             .update(ctx, |local, ctx| local.index_directory(repository, ctx))
     }
 
-    /// Lazily indexes a local standalone path with only the first level of children.
+    /// Lazily indexes a local standalone path as an unloaded placeholder.
     #[cfg(feature = "local_fs")]
     pub fn index_lazy_loaded_path(
         &self,
@@ -329,7 +329,7 @@ impl RepoMetadataModel {
         repo_root: &StandardizedPath,
         dir_path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<(), RepoMetadataError> {
+    ) -> Result<StandingQueryResultsDelta, RepoMetadataError> {
         let repo_root = repo_root.clone();
         let dir_path = dir_path.clone();
         self.local.update(ctx, |local, ctx| {

@@ -5,6 +5,8 @@
 //! all repositories tracked by Warp.
 
 use std::collections::HashMap;
+#[cfg(feature = "local_fs")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,7 +25,8 @@ pub enum RepoContent<'a> {
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::entry::{
-    BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
+    BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, BuildTreeRootContext, DirectoryEntry,
+    Entry, FileId, IgnoredPathStrategy, LAZY_LOAD_FILE_LIMIT,
 };
 use crate::repository::Repository;
 use crate::standing_queries::{
@@ -162,6 +165,10 @@ pub struct LocalRepoMetadataModel {
     standing_results: HashMap<StandardizedPath, StandingQueryResults>,
     /// Refcounts for lazily-loaded standalone paths tracked in the model.
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
+    /// Non-recursive watches registered as the user expands directories inside
+    /// lazily-loaded standalone paths.
+    #[cfg(feature = "local_fs")]
+    expanded_directory_watches: HashMap<StandardizedPath, HashSet<PathBuf>>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
@@ -258,6 +265,8 @@ impl LocalRepoMetadataModel {
             repositories: HashMap::new(),
             standing_results: HashMap::new(),
             lazy_loaded_paths: HashMap::new(),
+            #[cfg(feature = "local_fs")]
+            expanded_directory_watches: HashMap::new(),
             #[cfg(feature = "local_fs")]
             watcher: None,
             emit_incremental_updates: false,
@@ -383,6 +392,7 @@ impl LocalRepoMetadataModel {
                                 &gitignores_clone,
                                 &force_included_paths,
                                 &standing_query_definitions,
+                                lazy_load,
                             )
                             .await;
                         (
@@ -396,6 +406,11 @@ impl LocalRepoMetadataModel {
                     |model,
                      (mutations, discovered_results, removed_roots, repo_path, lazy_load),
                      ctx| {
+                        model.unregister_expanded_directory_watches_below(
+                            &repo_path,
+                            &removed_roots,
+                            ctx,
+                        );
                         if let Some(IndexedRepoState::Indexed(state)) =
                             model.repositories.get_mut(&repo_path)
                         {
@@ -475,6 +490,92 @@ impl LocalRepoMetadataModel {
             Err(_) => None,
         }
     }
+    #[cfg(feature = "local_fs")]
+    fn register_expanded_directory_watch(
+        &mut self,
+        repo_root: &StandardizedPath,
+        dir_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.lazy_loaded_paths.contains_key(repo_root) {
+            return;
+        }
+
+        let Some(watch_path) = dir_path.to_local_path() else {
+            log::warn!("Cannot watch non-local path: {dir_path}");
+            return;
+        };
+        if !self
+            .expanded_directory_watches
+            .entry(repo_root.clone())
+            .or_default()
+            .insert(watch_path.clone())
+        {
+            return;
+        }
+
+        if let Some(ref watcher) = self.watcher {
+            let gitignores = crate::gitignores_for_directory(&watch_path);
+            let force_included_paths = self.force_included_paths.clone();
+            watcher.update(ctx, |watcher, _ctx| {
+                std::mem::drop(watcher.register_path(
+                    &watch_path,
+                    repo_watch_filter(gitignores, force_included_paths),
+                    RecursiveMode::NonRecursive,
+                ));
+            });
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn unregister_expanded_directory_watches(
+        &mut self,
+        repo_root: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(watched_paths) = self.expanded_directory_watches.remove(repo_root) else {
+            return;
+        };
+        if let Some(ref watcher) = self.watcher {
+            for watched_path in watched_paths {
+                watcher.update(ctx, |watcher, _ctx| {
+                    std::mem::drop(watcher.unregister_path(&watched_path));
+                });
+            }
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn unregister_expanded_directory_watches_below(
+        &mut self,
+        repo_root: &StandardizedPath,
+        removed_roots: &[StandardizedPath],
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(watched_paths) = self.expanded_directory_watches.get_mut(repo_root) else {
+            return;
+        };
+        let paths_to_unregister = watched_paths
+            .iter()
+            .filter(|watched_path| {
+                removed_roots.iter().any(|removed_root| {
+                    removed_root
+                        .to_local_path()
+                        .is_some_and(|removed_root| watched_path.starts_with(removed_root))
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for watched_path in paths_to_unregister {
+            watched_paths.remove(&watched_path);
+            if let Some(ref watcher) = self.watcher {
+                watcher.update(ctx, |watcher, _ctx| {
+                    std::mem::drop(watcher.unregister_path(&watched_path));
+                });
+            }
+        }
+    }
 
     /// Adds or updates a repository's file tree state.
     fn add_repository_internal(
@@ -538,17 +639,23 @@ impl LocalRepoMetadataModel {
     ) -> Result<(), RepoMetadataError> {
         if self.remove_repository_state(repo_path).is_some() {
             self.standing_results.remove(repo_path);
+            let was_lazy_loaded = self.lazy_loaded_paths.remove(repo_path).is_some();
             // Unregister from watcher
             #[cfg(feature = "local_fs")]
             {
-                if let Some(ref watcher) = self.watcher {
-                    if let Some(local_path) = repo_path.to_local_path() {
-                        watcher.update(ctx, |watcher, _ctx| {
-                            std::mem::drop(watcher.unregister_path(&local_path));
-                        });
+                self.unregister_expanded_directory_watches(repo_path, ctx);
+                if !was_lazy_loaded {
+                    if let Some(ref watcher) = self.watcher {
+                        if let Some(local_path) = repo_path.to_local_path() {
+                            watcher.update(ctx, |watcher, _ctx| {
+                                std::mem::drop(watcher.unregister_path(&local_path));
+                            });
+                        }
                     }
                 }
             }
+            #[cfg(not(feature = "local_fs"))]
+            let _ = was_lazy_loaded;
 
             ctx.emit(RepositoryMetadataEvent::RepositoryRemoved {
                 path: repo_path.clone(),
@@ -594,8 +701,10 @@ impl LocalRepoMetadataModel {
         self.lazy_loaded_paths.contains_key(path)
     }
 
-    /// Lazily indexes a standalone path with only the first level of children.
-    /// Registers the path with the file watcher for live updates.
+    /// Tracks a standalone path as an unloaded placeholder.
+    ///
+    /// Children are loaded and a non-recursive watcher is registered only when
+    /// the user explicitly expands a directory.
     /// No-ops if the path is already tracked.
     #[cfg(feature = "local_fs")]
     pub fn index_lazy_loaded_path(
@@ -630,32 +739,19 @@ impl LocalRepoMetadataModel {
             ));
         }
 
-        // Build first-level-only tree while collecting standing results across
-        // descendants that are not materialized in the lazy file tree.
-        let mut files = Vec::new();
-        let mut file_limit = MAX_FILES_PER_REPO;
-        let mut standing_results = StandingQueryResults::default();
-        let root_entry = Entry::build_tree_with_standing_queries(
-            &local_path,
-            &mut files,
-            &mut vec![],
-            Some(&mut file_limit),
-            BuildTreeOptions {
-                max_depth: 1, // Only first level.
-                current_depth: 0,
-                ignored_path_strategy: &IgnoredPathStrategy::Include,
-                force_included_paths: &self.force_included_paths,
-                budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
-            },
-            &mut standing_results,
-            &self.standing_query_definitions,
-        )
-        .map_err(RepoMetadataError::BuildTree)?;
+        let root_entry = Entry::Directory(DirectoryEntry {
+            path: path.clone(),
+            children: Vec::new(),
+            ignored: false,
+            loaded: false,
+        });
 
         let state = FileTreeState::new_lazy_loaded(root_entry);
-        self.standing_results.insert(path.clone(), standing_results);
-        self.add_repository_internal(path.clone(), state, ctx)?;
+        self.standing_results
+            .insert(path.clone(), StandingQueryResults::default());
+        self.replace_repository_state(path.clone(), IndexedRepoState::Indexed(state));
         self.lazy_loaded_paths.insert(path.clone(), 1);
+        ctx.emit(RepositoryMetadataEvent::RepositoryUpdated { path: path.clone() });
         Ok(())
     }
 
@@ -673,35 +769,89 @@ impl LocalRepoMetadataModel {
             *refcount -= 1;
             return;
         }
-        self.lazy_loaded_paths.remove(path);
-        // remove_repository unregisters the watcher and emits RepositoryRemoved.
+        // remove_repository unregisters expanded-directory watchers and emits RepositoryRemoved.
         let _ = self.remove_repository(path, ctx);
     }
 
-    /// Loads a specific directory inside an already-tracked tree.
-    /// Emits `FileTreeEntryUpdated` so subscribers can sync.
+    /// Expands a specific directory inside an already-tracked tree.
+    ///
+    /// Lazily-loaded standalone paths register a non-recursive watcher for the
+    /// expanded directory. The traversal loads exactly one level and retains
+    /// standing-query matches encountered at that level.
     #[cfg(feature = "local_fs")]
     pub fn load_directory(
         &mut self,
         repo_root: &StandardizedPath,
         dir_path: &StandardizedPath,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<(), RepoMetadataError> {
+    ) -> Result<StandingQueryResultsDelta, RepoMetadataError> {
+        let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(repo_root) else {
+            return Err(RepoMetadataError::RepoNotFound(repo_root.to_string()));
+        };
+        let Some(entry) = state.entry.get(dir_path) else {
+            return Err(RepoMetadataError::InvalidPath(format!(
+                "Directory is not present in file tree: {dir_path}"
+            )));
+        };
+        if !matches!(entry, FileTreeEntryState::Directory(_)) {
+            return Err(RepoMetadataError::InvalidPath(format!(
+                "Path is not a directory: {dir_path}"
+            )));
+        }
+        self.register_expanded_directory_watch(repo_root, dir_path, ctx);
+
         let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(repo_root) else {
             return Err(RepoMetadataError::RepoNotFound(repo_root.to_string()));
         };
-
+        if state
+            .entry
+            .get(dir_path)
+            .is_some_and(|entry| entry.loaded())
+        {
+            return Ok(StandingQueryResultsDelta::default());
+        }
+        let ancestor_is_ignored = state.entry.ignored(dir_path);
         let mut gitignores = state.gitignores.clone();
+        let mut files = Vec::new();
+        let mut file_limit = LAZY_LOAD_FILE_LIMIT;
+        let mut discovered_results = StandingQueryResults::default();
+        let subtree = Entry::build_tree_with_options(
+            dir_path.to_local_path_lossy(),
+            &mut files,
+            &mut gitignores,
+            Some(&mut file_limit),
+            BuildTreeOptions {
+                max_depth: 1,
+                current_depth: 0,
+                ignored_path_strategy: &IgnoredPathStrategy::Include,
+                force_included_paths: &[],
+                budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
+            },
+            BuildTreeRootContext::default()
+                .with_ignored_ancestor(ancestor_is_ignored)
+                .with_standing_queries(&mut discovered_results, &self.standing_query_definitions),
+        )
+        .map_err(RepoMetadataError::BuildTree)?;
         state
             .entry
-            .load_at_path(dir_path, &mut gitignores)
-            .map_err(RepoMetadataError::BuildTree)?;
+            .insert_entry_at_path(Arc::new(dir_path.clone()), subtree);
+        let standing_delta = self
+            .standing_results
+            .entry(repo_root.clone())
+            .or_default()
+            .replace_subtrees(std::slice::from_ref(dir_path), discovered_results);
 
         ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
             path: repo_root.clone(),
             update_type: MetadataUpdateType::FullReplace,
         });
-        Ok(())
+        if !standing_delta.is_empty() {
+            ctx.emit(RepositoryMetadataEvent::StandingQueryResultsUpdated {
+                path: repo_root.clone(),
+                delta: standing_delta.clone(),
+            });
+        }
+        Ok(standing_delta)
     }
 
     /// Checks whether the parent directory of `path` is loaded in the given entry.
@@ -722,6 +872,7 @@ impl LocalRepoMetadataModel {
         gitignores: &[Gitignore],
         force_included_paths: &[PathBuf],
         standing_query_definitions: &StandingQueryDefinitions,
+        lazy_load: bool,
     ) -> (
         Vec<FileTreeMutation>,
         StandingQueryResults,
@@ -754,10 +905,25 @@ impl LocalRepoMetadataModel {
             let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
 
             if path_to_add.is_dir() {
+                if lazy_load {
+                    if path_to_add.is_symlink() {
+                        standing_results.record_direct_project_skill_provider_child_change(
+                            path_to_add,
+                            standing_query_definitions,
+                        );
+                    } else {
+                        standing_results.record_path(path_to_add, true, standing_query_definitions);
+                        mutations.push(FileTreeMutation::AddEmptyDirectory {
+                            path: path_to_add.clone(),
+                            is_ignored,
+                        });
+                    }
+                    continue;
+                }
                 let mut files = Vec::new();
                 let mut gitignores = gitignores.to_owned();
                 let mut file_limit = MAX_FILES_PER_REPO;
-                match Entry::build_tree_with_standing_queries(
+                match Entry::build_tree_with_options(
                     path_to_add,
                     &mut files,
                     &mut gitignores,
@@ -769,8 +935,8 @@ impl LocalRepoMetadataModel {
                         force_included_paths,
                         budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
-                    &mut standing_results,
-                    standing_query_definitions,
+                    BuildTreeRootContext::default()
+                        .with_standing_queries(&mut standing_results, standing_query_definitions),
                 ) {
                     Ok(subtree) => {
                         mutations.push(FileTreeMutation::AddDirectorySubtree {
@@ -1032,6 +1198,8 @@ impl LocalRepoMetadataModel {
                 // Was a lazy-loaded path – allow upgrading to a real repo.
                 log::info!("Upgrading lazy-loaded path to git repo: {repo_path_str}");
                 self.lazy_loaded_paths.remove(&std_path);
+                #[cfg(feature = "local_fs")]
+                self.unregister_expanded_directory_watches(&std_path, ctx);
             }
             Some(IndexedRepoState::Pending(_)) => {
                 log::debug!("Repository already being indexed: {repo_path_str}");
@@ -1081,7 +1249,7 @@ impl LocalRepoMetadataModel {
                 // both are handled inside the builder.
                 let mut file_limit = MAX_FILES_PER_REPO;
 
-                let build_result = Entry::build_tree_with_standing_queries(
+                let build_result = Entry::build_tree_with_options(
                     &repo_path_for_build,
                     &mut files,
                     &mut gitignores_for_build,
@@ -1093,8 +1261,8 @@ impl LocalRepoMetadataModel {
                         force_included_paths: &force_included_paths,
                         budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
-                    &mut standing_results,
-                    &standing_query_definitions,
+                    BuildTreeRootContext::default()
+                        .with_standing_queries(&mut standing_results, &standing_query_definitions),
                 );
 
                 // A fully-exhausted budget means the repo was too large to index

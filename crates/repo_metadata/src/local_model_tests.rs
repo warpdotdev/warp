@@ -1,7 +1,7 @@
 //! Tests for the LocalRepoMetadataModel.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::task::Poll;
@@ -32,6 +32,8 @@ impl LocalRepoMetadataModel {
             repositories: HashMap::new(),
             standing_results: HashMap::new(),
             lazy_loaded_paths: Default::default(),
+            #[cfg(feature = "local_fs")]
+            expanded_directory_watches: Default::default(),
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
@@ -335,6 +337,11 @@ fn test_lazy_loaded_path_registrations_are_refcounted() {
             });
 
             let shared_dir_std = StandardizedPath::from_local_canonicalized(&shared_dir).unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&shared_dir_std, &shared_dir_std, ctx)
+                    .unwrap();
+            });
 
             model_handle.update(&mut app, |model, ctx| {
                 model.remove_lazy_loaded_path(&shared_dir_std, ctx);
@@ -343,6 +350,10 @@ fn test_lazy_loaded_path_registrations_are_refcounted() {
             model_handle.read(&app, |model, _ctx| {
                 assert!(model.is_lazy_loaded_path(&shared_dir_std));
                 assert!(model.has_repository(&shared_dir_std));
+                assert_eq!(
+                    model.expanded_directory_watches.get(&shared_dir_std),
+                    Some(&HashSet::from([shared_dir.clone()]))
+                );
             });
 
             model_handle.update(&mut app, |model, ctx| {
@@ -356,6 +367,9 @@ fn test_lazy_loaded_path_registrations_are_refcounted() {
                 assert!(!model.has_repository(
                     &StandardizedPath::from_local_canonicalized(&shared_dir).unwrap()
                 ));
+                assert!(!model
+                    .expanded_directory_watches
+                    .contains_key(&shared_dir_std));
             });
         });
     });
@@ -363,7 +377,48 @@ fn test_lazy_loaded_path_registrations_are_refcounted() {
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_lazy_loaded_path_builds_standing_rule_results_below_shallow_tree() {
+fn test_removed_lazy_loaded_subtree_unregisters_descendant_watches() {
+    VirtualFS::test("lazy_loaded_subtree_watch_cleanup", |dirs, mut vfs| {
+        vfs.mkdir("workspace/src/deep");
+
+        let workspace = dirs.tests().join("workspace");
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let workspace_path = StandardizedPath::from_local_canonicalized(&workspace).unwrap();
+            let src_path = StandardizedPath::try_from_local(&workspace.join("src")).unwrap();
+            let deep_path = StandardizedPath::try_from_local(&workspace.join("src/deep")).unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.index_lazy_loaded_path(&workspace_path, ctx).unwrap();
+                model
+                    .load_directory(&workspace_path, &workspace_path, ctx)
+                    .unwrap();
+                model
+                    .load_directory(&workspace_path, &src_path, ctx)
+                    .unwrap();
+                model
+                    .load_directory(&workspace_path, &deep_path, ctx)
+                    .unwrap();
+                model.unregister_expanded_directory_watches_below(
+                    &workspace_path,
+                    std::slice::from_ref(&src_path),
+                    ctx,
+                );
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                assert_eq!(
+                    model.expanded_directory_watches.get(&workspace_path),
+                    Some(&HashSet::from([workspace.clone()]))
+                );
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_lazy_loaded_path_discovers_standing_rule_results_by_expanded_level() {
     VirtualFS::test("lazy_loaded_path_standing_rules", |dirs, mut vfs| {
         vfs.mkdir("workspace/src/deep")
             .with_files(vec![Stub::FileWithContent(
@@ -375,6 +430,8 @@ fn test_lazy_loaded_path_builds_standing_rule_results_below_shallow_tree() {
         App::test((), |mut app| async move {
             let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
             let workspace_path = StandardizedPath::from_local_canonicalized(&workspace).unwrap();
+            let src_path = StandardizedPath::try_from_local(&workspace.join("src")).unwrap();
+            let deep_path = StandardizedPath::try_from_local(&workspace.join("src/deep")).unwrap();
             let rule_path =
                 StandardizedPath::try_from_local(&workspace.join("src/deep/WARP.md")).unwrap();
 
@@ -383,12 +440,91 @@ fn test_lazy_loaded_path_builds_standing_rule_results_below_shallow_tree() {
             });
 
             model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&workspace_path)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(!state.entry.get(&workspace_path).unwrap().loaded());
+                assert!(!state.entry.contains(&src_path));
+                assert!(!model
+                    .expanded_directory_watches
+                    .contains_key(&workspace_path));
+                let results = model
+                    .standing_query_results(&workspace_path)
+                    .expect("lazy indexed paths should retain standing results");
+                assert!(!results
+                    .project_rules()
+                    .any(|content| content.path == rule_path));
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&workspace_path, &workspace_path, ctx)
+                    .unwrap();
+            });
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&workspace_path)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.get(&workspace_path).unwrap().loaded());
+                assert!(state.entry.contains(&src_path));
+                assert!(!state.entry.get(&src_path).unwrap().loaded());
+                assert!(!state.entry.contains(&deep_path));
+                assert_eq!(
+                    model.expanded_directory_watches.get(&workspace_path),
+                    Some(&HashSet::from([workspace.clone()]))
+                );
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&workspace_path, &src_path, ctx)
+                    .unwrap();
+            });
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&workspace_path)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&deep_path));
+                assert!(!state.entry.get(&deep_path).unwrap().loaded());
+                assert!(!state.entry.contains(&rule_path));
+                assert_eq!(
+                    model.expanded_directory_watches.get(&workspace_path),
+                    Some(&HashSet::from([workspace.clone(), workspace.join("src")]))
+                );
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&workspace_path, &deep_path, ctx)
+                    .unwrap();
+            });
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&workspace_path)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&rule_path));
                 let results = model
                     .standing_query_results(&workspace_path)
                     .expect("lazy indexed paths should retain standing results");
                 assert!(results
                     .project_rules()
                     .any(|content| content.path == rule_path));
+                assert_eq!(
+                    model.expanded_directory_watches.get(&workspace_path),
+                    Some(&HashSet::from([
+                        workspace.clone(),
+                        workspace.join("src"),
+                        workspace.join("src/deep"),
+                    ]))
+                );
             });
         });
     });
@@ -424,6 +560,7 @@ fn test_index_directory_upgrades_lazy_loaded_path_to_repo() {
 
             let repo_root_for_index =
                 StandardizedPath::from_local_canonicalized(&repo_root).unwrap();
+            let src_dir_for_index = StandardizedPath::try_from_local(&src_dir).unwrap();
             model_handle.update(&mut app, |model, ctx| {
                 model
                     .index_lazy_loaded_path(&repo_root_for_index, ctx)
@@ -439,12 +576,32 @@ fn test_index_directory_upgrades_lazy_loaded_path_to_repo() {
                 ) else {
                     panic!("expected indexed lazy-loaded path");
                 };
-                assert!(state
-                    .entry
-                    .contains(&StandardizedPath::try_from_local(&src_dir).unwrap()));
+                assert!(!state.entry.get(&repo_root_for_index).unwrap().loaded());
+                assert!(!state.entry.contains(&src_dir_for_index));
+                assert!(!model
+                    .expanded_directory_watches
+                    .contains_key(&repo_root_for_index));
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .load_directory(&repo_root_for_index, &repo_root_for_index, ctx)
+                    .unwrap();
+            });
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&repo_root_for_index)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&src_dir_for_index));
                 assert!(!state
                     .entry
                     .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
+                assert_eq!(
+                    model.expanded_directory_watches.get(&repo_root_for_index),
+                    Some(&HashSet::from([repo_root.clone()]))
+                );
             });
 
             let (tx, rx) = oneshot::channel();
@@ -477,6 +634,9 @@ fn test_index_directory_upgrades_lazy_loaded_path_to_repo() {
                 assert!(!model.is_lazy_loaded_path(
                     &StandardizedPath::from_local_canonicalized(&repo_root).unwrap()
                 ));
+                assert!(!model
+                    .expanded_directory_watches
+                    .contains_key(&repo_root_for_index));
                 let Some(IndexedRepoState::Indexed(state)) = model.repository_state(
                     &StandardizedPath::from_local_canonicalized(&repo_root).unwrap(),
                 ) else {
@@ -773,6 +933,7 @@ fn test_update_file_tree_entry_respects_gitignore() {
             &gitignores,
             &[],
             &standing_query_definitions,
+            false,
         ));
         LocalRepoMetadataModel::apply_file_tree_mutations(&mut root, mutations, false, false);
 
@@ -806,6 +967,51 @@ fn test_update_file_tree_entry_respects_gitignore() {
     });
 }
 
+#[test]
+fn lazy_loaded_directory_addition_stays_unloaded_until_expanded() {
+    VirtualFS::test("lazy_loaded_directory_addition", |dirs, mut fs| {
+        fs.mkdir("new-dir/nested")
+            .with_files(vec![Stub::FileWithContent(
+                "new-dir/nested/WARP.md",
+                "project rules",
+            )]);
+
+        let repo_path = StandardizedPath::try_from_local(dirs.tests()).unwrap();
+        let new_dir = dirs.tests().join("new-dir");
+        let nested_dir = new_dir.join("nested");
+        let rule_path = nested_dir.join("WARP.md");
+        let update = RepoUpdate {
+            added: vec![new_dir.clone()],
+            ..Default::default()
+        };
+        let definitions = StandingQueryDefinitions::default();
+        let (mutations, discovered, removed_roots) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &[],
+                &[],
+                &definitions,
+                true,
+            ));
+        let mut root = FileTreeEntry::from(Entry::Directory(DirectoryEntry {
+            path: repo_path,
+            children: Vec::new(),
+            ignored: false,
+            loaded: true,
+        }));
+
+        LocalRepoMetadataModel::apply_file_tree_mutations(&mut root, mutations, true, false);
+
+        let new_dir_path = StandardizedPath::try_from_local(&new_dir).unwrap();
+        assert!(root.contains(&new_dir_path));
+        assert!(!root.get(&new_dir_path).unwrap().loaded());
+        assert!(!root.contains(&StandardizedPath::try_from_local(&nested_dir).unwrap()));
+        assert!(!discovered
+            .project_rules()
+            .any(|content| content.path == StandardizedPath::try_from_local(&rule_path).unwrap()));
+        assert!(removed_roots.is_empty());
+    });
+}
 #[test]
 fn test_gitignore_patterns_comprehensive() {
     VirtualFS::test("comprehensive_test", |dirs, mut fs| {
@@ -1246,9 +1452,14 @@ fn added_symlinked_skill_directory_refreshes_provider_without_canonical_tree_mut
             added: vec![linked_skill],
             ..Default::default()
         };
-        let (mutations, discovered, removed_roots) = block_on(
-            LocalRepoMetadataModel::compute_file_tree_mutations(&update, &[], &[], &definitions),
-        );
+        let (mutations, discovered, removed_roots) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                &[],
+                &[],
+                &definitions,
+                false,
+            ));
 
         assert!(mutations.is_empty());
         assert!(removed_roots.is_empty());
@@ -1283,6 +1494,7 @@ fn unrelated_skill_support_file_does_not_refresh_project_skills() {
             &[],
             &[],
             &definitions,
+            false,
         ));
 
         assert!(discovered.project_skills().next().is_none());
@@ -1306,6 +1518,7 @@ fn removed_direct_skill_child_refreshes_provider_for_possible_symlink_removal() 
             &[],
             &[],
             &definitions,
+            false,
         ));
 
         assert!(discovered.project_skills().any(|content| {

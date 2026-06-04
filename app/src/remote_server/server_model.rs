@@ -1960,17 +1960,19 @@ impl ServerModel {
         }
 
         // Load the directory on the server's local model.
-        let load_result = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
-            model.load_directory(&repo_path, &dir_path, ctx)
-        });
-
-        if let Err(e) = load_result {
-            log::warn!("LoadRepoMetadataDirectory failed: {e}");
-            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                code: ErrorCode::Internal.into(),
-                message: format!("Failed to load directory: {e}"),
-            }));
-        }
+        let standing_results_delta = match RepoMetadataModel::handle(ctx)
+            .update(ctx, |model, ctx| {
+                model.load_directory(&repo_path, &dir_path, ctx)
+            }) {
+            Ok(delta) => delta,
+            Err(e) => {
+                log::warn!("LoadRepoMetadataDirectory failed: {e}");
+                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                    code: ErrorCode::Internal.into(),
+                    message: format!("Failed to load directory: {e}"),
+                }));
+            }
+        };
 
         // Read back the loaded children and serialize them.
         let id = RepositoryIdentifier::local(repo_path.clone());
@@ -1990,6 +1992,7 @@ impl ServerModel {
                 repo_path: msg.repo_path,
                 dir_path: msg.dir_path,
                 entries,
+                standing_results_delta: Some((&standing_results_delta).into()),
             },
         ))
     }

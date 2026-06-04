@@ -281,8 +281,8 @@ message NavigatedToDirectory {
 // Response after the server has run git detection on the requested path.
 // When is_git is true, indexed_path is the git repo root and full indexing
 // runs in the background. A RepoMetadataSnapshot push will follow.
-// When is_git is false, the directory was lazily indexed at first level.
-// A RepoMetadataSnapshot push with the lazy tree data will follow.
+// When is_git is false, the directory was lazily indexed as an unloaded placeholder.
+// A RepoMetadataSnapshot push with the lazy root data will follow.
 message NavigatedToDirectoryResponse {
   string indexed_path = 1;
   bool is_git = 2;
@@ -302,6 +302,7 @@ message LoadRepoMetadataDirectoryResponse {
   string repo_path = 1;
   string dir_path = 2;
   repeated RepoMetadataEntryUpdate entries = 3;
+  StandingQueryResultsDelta standing_results_delta = 4;
 }
 
 // ── File write/delete operations ──────────────────────────────────

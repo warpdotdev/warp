@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use editing::sort_entries_for_file_tree;
 use itertools::Itertools;
@@ -13,7 +12,7 @@ use repo_metadata::file_tree_store::{
 };
 use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::{FileTreeEntry, RepoMetadataModel};
+use repo_metadata::{DirectoryEntry, Entry, FileTreeEntry, RepoMetadataModel};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
@@ -310,6 +309,23 @@ impl FileTreeView {
             .get(root)
             .is_some_and(|collapsed| collapsed.contains(path))
     }
+    fn expand_folder_if_loaded(
+        &mut self,
+        root_path: &StandardizedPath,
+        folder_path: &StandardizedPath,
+    ) -> bool {
+        let Some(root_dir) = self.root_directories.get_mut(root_path) else {
+            return false;
+        };
+        if !root_dir
+            .entry
+            .get(folder_path)
+            .is_some_and(|entry| entry.loaded())
+        {
+            return false;
+        }
+        root_dir.expanded_folders.insert(folder_path.clone())
+    }
 
     /// Returns whether the item identified by `id` belongs to a remote root.
     fn is_remote_item(&self, id: &FileTreeIdentifier) -> bool {
@@ -474,9 +490,7 @@ impl FileTreeView {
 
             // Auto-expand the root, respecting explicit user collapses.
             if !self.is_explicitly_collapsed(&repo_path, &repo_path) {
-                if let Some(root_dir) = self.root_directories.get_mut(&repo_path) {
-                    root_dir.expanded_folders.insert(repo_path);
-                }
+                self.expand_folder_if_loaded(&repo_path, &repo_path);
             }
 
             changed = true;
@@ -773,15 +787,15 @@ impl FileTreeView {
             .cloned()
     }
 
-    /// Scrolls to show the specified file in the file tree,
-    /// ensuring that all parent folders are expanded and loaded.
+    /// Scrolls to show the specified file in the file tree, expanding only
+    /// parent folders that are already loaded.
     fn scroll_to_file(
         &mut self,
         repository_root: &StandardizedPath,
         file_path: &StandardizedPath,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.expand_ancestors_to_path(repository_root, file_path, ctx);
+        self.expand_ancestors_to_path(repository_root, file_path);
 
         // Create a FileTreeIdentifier to search for the file in the specific root
         // We need to find the item first by rebuilding the tree, then looking for it
@@ -810,7 +824,6 @@ impl FileTreeView {
         &mut self,
         root: &StandardizedPath,
         target_path: &StandardizedPath,
-        ctx: &mut ViewContext<Self>,
     ) {
         if !target_path.starts_with(root) {
             return;
@@ -837,16 +850,12 @@ impl FileTreeView {
                 break;
             }
 
-            if let Some(root_dir) = self.root_directories.get_mut(root) {
-                root_dir.expanded_folders.insert(parent.clone());
+            if !self.expand_folder_if_loaded(root, &parent) {
+                break;
             }
-            self.ensure_loaded_path(root, &parent, ctx);
         }
         // Also expand root itself.
-        if let Some(root_dir) = self.root_directories.get_mut(root) {
-            root_dir.expanded_folders.insert(root.clone());
-        }
-        self.ensure_loaded_path(root, root, ctx);
+        self.expand_folder_if_loaded(root, root);
     }
 
     /// Scroll to the item at the given FileTreeIdentifier, without expanding folders.
@@ -1071,7 +1080,7 @@ impl FileTreeView {
             .collect();
         for (ancestor, absorbed) in &absorbed_by_root {
             for descendant in absorbed {
-                self.expand_ancestors_to_path(ancestor, descendant, ctx);
+                self.expand_ancestors_to_path(ancestor, descendant);
                 // Expand the descendant itself only if the parent chain up
                 // to it is fully expanded (i.e., `expand_ancestors_to_path`
                 // did not bail at an explicit collapse) and the descendant
@@ -1086,10 +1095,7 @@ impl FileTreeView {
                     None => false,
                 };
                 if chain_expanded && !self.is_explicitly_collapsed(ancestor, descendant) {
-                    if let Some(root_dir) = self.root_directories.get_mut(ancestor) {
-                        root_dir.expanded_folders.insert(descendant.clone());
-                    }
-                    self.ensure_loaded_path(ancestor, descendant, ctx);
+                    self.expand_folder_if_loaded(ancestor, descendant);
                 }
             }
         }
@@ -1331,21 +1337,7 @@ impl FileTreeView {
         if should_expand_last_directory {
             if let Some(displayed_root) = self.displayed_directories.last().cloned() {
                 if !self.is_explicitly_collapsed(&displayed_root, &displayed_root) {
-                    self.ensure_loaded_path(&displayed_root, &displayed_root, ctx);
-                    if let Some(root_dir) = self.root_directories.get_mut(&displayed_root) {
-                        root_dir.expanded_folders.insert(displayed_root.clone());
-                    }
-                }
-            }
-        }
-
-        // Ensure all expanded folders have their children loaded
-        for root_path in self.displayed_directories.clone() {
-            if let Some(root_dir) = self.root_directories.get(&root_path) {
-                let expanded_folders: Vec<StandardizedPath> =
-                    root_dir.expanded_folders.iter().cloned().collect();
-                for folder_path in expanded_folders {
-                    self.ensure_loaded_path(&root_path, &folder_path, ctx);
+                    self.expand_folder_if_loaded(&displayed_root, &displayed_root);
                 }
             }
         }
@@ -1541,7 +1533,8 @@ impl FileTreeView {
                 remote_host_id: None,
             });
         // When the file tree is active, index the lazy-loaded path through the
-        // model so that a file watcher is started.
+        // model as an unloaded placeholder. A watcher is started only after the
+        // user explicitly expands a directory.
         if self.is_active && !self.registered_lazy_loaded_paths.contains(path) {
             let index_result = self
                 .repository_metadata_model
@@ -1576,7 +1569,13 @@ impl FileTreeView {
     }
 
     fn create_empty_entry(path: &StandardizedPath) -> FileTreeEntry {
-        FileTreeEntry::new_for_directory(Arc::new(path.clone()))
+        Entry::Directory(DirectoryEntry {
+            path: path.clone(),
+            children: Vec::new(),
+            ignored: false,
+            loaded: false,
+        })
+        .into()
     }
 
     /// Rebuilds the flattened items list for a single root directory only,
@@ -2107,19 +2106,11 @@ impl FileTreeView {
         // Respect explicit user collapse of the root header.
         let needs_rebuild = if self.is_explicitly_collapsed(&most_recent_dir, &most_recent_dir) {
             false
-        } else if let Some(root_dir) = self.root_directories.get_mut(&most_recent_dir) {
-            if !root_dir.expanded_folders.contains(&most_recent_dir) {
-                root_dir.expanded_folders.insert(most_recent_dir.clone());
-                true
-            } else {
-                false
-            }
         } else {
-            false
+            self.expand_folder_if_loaded(&most_recent_dir, &most_recent_dir)
         };
 
         if needs_rebuild {
-            self.ensure_loaded_path(&most_recent_dir, &most_recent_dir, ctx);
             self.rebuild_flattened_items();
         }
 
