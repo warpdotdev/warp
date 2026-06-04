@@ -401,8 +401,6 @@ pub struct ServerApi {
     // TODO(jeff): Make `TelemetryApi` another type of client, and move it off `ServerApi`.
     telemetry_api: TelemetryApi,
     last_server_time: Arc<Mutex<Option<ServerTime>>>,
-    /// IAP credential cache for staging server access. [`None`] on production builds.
-    iap_state: Option<Arc<IapState>>,
 
     #[cfg(feature = "agent_mode_evals")]
     eval_user_id: Option<i32>,
@@ -417,9 +415,10 @@ impl ServerApi {
         ctx: &mut ModelContext<ServerApiProvider>,
     ) -> Self {
         let mut client = http_client::Client::new();
-        if let Some(state) = iap_state.as_ref() {
+        let iap_token_provider = iap_state.map(|state| {
             client.set_iap_token_provider(state.clone());
-        }
+            state as Arc<dyn http_client::iap::IapTokenProvider>
+        });
         let mut telemetry_api = TelemetryApi::new();
         if ContextFlag::NetworkLogConsole.is_enabled() {
             NetworkLogModel::handle(ctx).update(ctx, |model, model_ctx| {
@@ -431,7 +430,7 @@ impl ServerApi {
             auth_state,
             event_sender,
             agent_source,
-            iap_state,
+            iap_token_provider,
             telemetry_api,
         )
     }
@@ -441,7 +440,7 @@ impl ServerApi {
         auth_state: Arc<AuthState>,
         event_sender: async_channel::Sender<AuthEvent>,
         agent_source: Option<ai::AgentSource>,
-        iap_state: Option<Arc<IapState>>,
+        iap_token_provider: Option<Arc<dyn http_client::iap::IapTokenProvider>>,
         telemetry_api: TelemetryApi,
     ) -> Self {
         // We generate a random user ID for evals so we can run evals in parallel.
@@ -474,14 +473,13 @@ impl ServerApi {
             agent_source.map(|source| source.as_str().to_string()),
             graphql_routing,
             authenticated_graphql,
-            iap_state.is_some(),
+            iap_token_provider,
         ));
 
         Self {
             base_client,
             telemetry_api,
             last_server_time: Arc::new(Mutex::new(None)),
-            iap_state,
             #[cfg(feature = "agent_mode_evals")]
             eval_user_id,
         }
@@ -520,86 +518,6 @@ impl ServerApi {
         self.base_client
             .set_ambient_agent_task_id(task_id.map(|task_id| task_id.to_string()));
     }
-
-    /// Inspects a response for the IAP challenge header and emits an
-    /// `IapChallengeReceived` event if detected. Returns `true` if the
-    /// response was an IAP challenge.
-    ///
-    /// TODO(isaiah): implement retries on IAP challenge failures so the
-    /// triggering request transparently succeeds after the refresh
-    /// completes instead of bubbling up a one-off error to the caller.
-    fn check_for_iap_challenge(&self, response: &http_client::Response) {
-        if self.iap_state.is_none() {
-            return;
-        }
-        if http_client::iap::is_iap_challenge(response.status(), response.headers()) {
-            log::warn!(
-                "Received IAP challenge (status {}); notifying IapManager",
-                response.status()
-            );
-            if let Err(err) = self.send_auth_event(AuthEvent::IapChallengeReceived) {
-                log::warn!("Failed to enqueue IapChallengeReceived event: {err}");
-            }
-        }
-    }
-
-    /// Wraps an eventsource stream so that any `InvalidStatusCode` error
-    /// carrying an IAP challenge header triggers an `IapChallengeReceived`
-    /// event. The original error is passed through unchanged — the
-    /// stream is not transparently reconnected after the refresh.
-    ///
-    /// TODO(isaiah): implement retries on IAP challenge failures so
-    /// streams transparently reconnect after the refresh completes.
-    fn wrap_eventsource_with_iap_detection(
-        &self,
-        stream: http_client::EventSourceStream,
-    ) -> http_client::EventSourceStream {
-        if self.iap_state.is_none() {
-            return stream;
-        }
-        let event_sender = self.event_sender();
-        let wrapped = stream.map(move |event| {
-            if let Err(reqwest_eventsource::Error::InvalidStatusCode(status, ref response)) = event
-            {
-                if http_client::iap::is_iap_challenge(status, response.headers()) {
-                    log::warn!(
-                        "Received IAP challenge on eventsource (status {status}); notifying IapManager"
-                    );
-                    if let Err(err) = event_sender.try_send(AuthEvent::IapChallengeReceived) {
-                        log::warn!(
-                            "Failed to enqueue IapChallengeReceived event from eventsource: {err}"
-                        );
-                    }
-                }
-            }
-            event
-        });
-        cfg_if::cfg_if! {
-            if #[cfg(target_family = "wasm")] {
-                wrapped.boxed_local()
-            } else {
-                wrapped.boxed()
-            }
-        }
-    }
-
-    /// Inspects a websocket *handshake* connect error for an IAP challenge and
-    /// enqueues an `IapChallengeReceived` event if detected.
-    #[cfg(not(target_family = "wasm"))]
-    fn report_ws_iap_challenge(&self, err: &anyhow::Error) {
-        if self.iap_state.is_none() {
-            return;
-        }
-        if warp_server_client::iap::ws_connect_is_iap_challenge(err) {
-            log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
-            if let Err(err) = self.send_auth_event(AuthEvent::IapChallengeReceived) {
-                log::warn!("Failed to enqueue IapChallengeReceived: {err}");
-            }
-        }
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn report_ws_iap_challenge(&self, _err: &anyhow::Error) {}
 
     /// Returns ambient agent headers to attach to requests.
     async fn ambient_agent_headers(&self) -> Result<Vec<(String, String)>> {
@@ -778,7 +696,7 @@ impl ServerApi {
         if response.status().is_success() {
             Ok(response)
         } else {
-            self.check_for_iap_challenge(&response);
+            self.observe_iap_challenge(&response);
             Err(Self::error_from_response(response).await)
         }
     }
@@ -1370,7 +1288,7 @@ impl ServerApi {
             .await?;
 
         if !res.status().is_success() {
-            self.check_for_iap_challenge(&res);
+            self.observe_iap_challenge(&res);
         }
 
         match res.status() {
@@ -1444,7 +1362,7 @@ impl ServerApi {
 
         let response = request_builder.send().await?;
         if !response.status().is_success() {
-            self.check_for_iap_challenge(&response);
+            self.observe_iap_challenge(&response);
         }
         let versions: ChannelVersions = response.json().await?;
         log::info!("Received channel versions from Warp server: {versions}");

@@ -11,6 +11,13 @@ use crate::base_client::{
     AGENT_SOURCE_HEADER, AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER,
     GraphqlRoutingConfig,
 };
+struct EmptyIapTokenProvider;
+
+impl http_client::iap::IapTokenProvider for EmptyIapTokenProvider {
+    fn cached_token(&self) -> Option<String> {
+        None
+    }
+}
 
 fn base_client(observe_iap_challenges: bool) -> (BaseClient, async_channel::Receiver<AuthEvent>) {
     base_client_with_auth(AuthState::new_for_test(), None, observe_iap_challenges)
@@ -30,7 +37,9 @@ fn base_client_with_auth(
             agent_source,
             GraphqlRoutingConfig::default(),
             AuthenticatedGraphqlConfig::default(),
-            observe_iap_challenges,
+            observe_iap_challenges.then(|| {
+                Arc::new(EmptyIapTokenProvider) as Arc<dyn http_client::iap::IapTokenProvider>
+            }),
         ),
         event_receiver,
     )

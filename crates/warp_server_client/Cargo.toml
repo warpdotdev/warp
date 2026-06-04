@@ -19,6 +19,7 @@ base64.workspace = true
 bincode.workspace = true
 blocking.workspace = true
 bounded-vec-deque.workspace = true
+cfg-if.workspace = true
 chrono.workspace = true
 cloud_object_client.workspace = true
 cloud_object_models.workspace = true
@@ -27,6 +28,7 @@ command.workspace = true
 cynic.workspace = true
 derivative.workspace = true
 firebase.workspace = true
+futures.workspace = true
 http.workspace = true
 http_client.workspace = true
 instant.workspace = true
@@ -38,6 +40,7 @@ oauth2.workspace = true
 parking_lot.workspace = true
 pathfinder_geometry.workspace = true
 reqwest.workspace = true
+reqwest-eventsource.workspace = true
 schemars = { version = "1", features = ["uuid1"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -57,7 +60,6 @@ diesel = { workspace = true, features = ["sqlite", "chrono"] }
 websocket.workspace = true
 
 [dev-dependencies]
-futures.workspace = true
 mockall.workspace = true
 mockito.workspace = true
 warp_core = { workspace = true, features = ["test-util"] }

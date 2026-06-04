@@ -15264,6 +15264,7 @@ dependencies = [
 name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
+ "aha-reqwest-eventsource",
  "anyhow",
  "async-channel",
  "async-trait",
@@ -15271,6 +15272,7 @@ dependencies = [
  "bincode",
  "blocking",
  "bounded-vec-deque",
+ "cfg-if",
  "chrono",
  "cloud_object_client",
  "cloud_object_models",

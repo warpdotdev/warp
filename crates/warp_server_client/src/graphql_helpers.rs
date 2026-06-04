@@ -68,7 +68,7 @@ where
             {
                 if base_client.is_auth_refresh_allowed() {
                     log::error!("GraphQL request failed due to unauthenticated user");
-                    base_client.on_graphql_user_account_disabled();
+                    let _ = base_client.send_auth_event(AuthEvent::UserAccountDisabled);
                 } else {
                     anyhow::bail!("server rejected authentication credentials");
                 }

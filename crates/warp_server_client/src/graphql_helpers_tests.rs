@@ -24,7 +24,7 @@ fn base_client(auth_state: AuthState) -> (BaseClient, async_channel::Receiver<Au
             None,
             GraphqlRoutingConfig::default(),
             AuthenticatedGraphqlConfig::default(),
-            false,
+            None,
         ),
         event_receiver,
     )
