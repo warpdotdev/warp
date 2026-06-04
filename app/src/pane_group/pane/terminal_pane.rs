@@ -2214,13 +2214,6 @@ fn handle_ai_history_event(
             is_hidden,
             ..
         } => {
-            // Check if session restoration is enabled.
-            if !*GeneralSettings::as_ref(ctx).restore_session
-                || !AppExecutionMode::as_ref(ctx).can_save_session()
-            {
-                return;
-            }
-
             let Some(conversation) =
                 BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
             else {
@@ -2233,48 +2226,93 @@ fn handle_ai_history_event(
                 return;
             };
 
-            // Hidden blocks and passive-only conversations should not be restored, so we skip
+            // Hidden blocks and passive-only conversations should not be captured, so we skip
             // them.
             if *is_hidden || conversation.is_entirely_passive() {
                 return;
             }
 
-            // Do not persist AI queries from shared ambient agent sessions that we've viewed,
-            // as these were sent as part of an ambient agent run and shouldn't polute the up arrow history.
+            // Do not capture from shared ambient agent sessions that we've viewed, as these
+            // were sent as part of an ambient agent run and shouldn't pollute history.
             if is_shared_ambient_agent_session {
                 return;
             }
 
-            let persisted_query = PersistedAIInput {
-                start_ts: exchange.start_time,
-                inputs: exchange
-                    .input
-                    .iter()
-                    .filter_map(|input| PersistedAIInputType::try_from(input).ok())
-                    .collect(),
-                exchange_id: exchange.id,
-                conversation_id: *conversation_id,
-                output_status: AIQueryHistoryOutputStatus::from(&exchange.output_status),
-                working_directory: exchange.working_directory.clone(),
-                // TODO(CORE-3546): shell: exchange.shell.clone(),
-                model_id: exchange.model_id.clone(),
-                coding_model_id: exchange.coding_model_id.clone(),
-            };
-            let upsert_ai_query_event = ModelEvent::UpsertAIQuery {
-                query: Arc::new(persisted_query),
-            };
-            let _ = ctx.spawn(
-                // Sending over a sync sender can block the current thread, so we
-                // do this async.
-                async move { model_event_sender.send(upsert_ai_query_event) },
-                move |_, res, _| {
-                    if let Err(err) = res {
-                        log::error!(
-                            "Error sending upsert AI query event for terminal id {terminal_pane_id:?} {err:?}"
-                        );
-                    }
-                },
-            );
+            // Capture the submitted prompt into the NLD prompt-history store at
+            // prompt-submission time (`AppendedExchange` only). This is independent of
+            // the session-restore setting (and of `output_status` — a submitted prompt
+            // is an AI-intent signal even if later cancelled or failed) so input
+            // classification can learn from prompts regardless of those settings.
+            let captured_prompt = matches!(event, BlocklistAIHistoryEvent::AppendedExchange { .. })
+                .then(|| {
+                    exchange
+                        .input
+                        .iter()
+                        .find_map(|input| input.user_query())
+                        .filter(|query| !query.trim().is_empty())
+                        .map(|query| (query, exchange.start_time))
+                })
+                .flatten();
+
+            // The AI query (up-arrow) history is only persisted when session
+            // restoration is enabled.
+            let restore_session_enabled = *GeneralSettings::as_ref(ctx).restore_session
+                && AppExecutionMode::as_ref(ctx).can_save_session();
+            let upsert_ai_query_event = restore_session_enabled.then(|| {
+                let persisted_query = PersistedAIInput {
+                    start_ts: exchange.start_time,
+                    inputs: exchange
+                        .input
+                        .iter()
+                        .filter_map(|input| PersistedAIInputType::try_from(input).ok())
+                        .collect(),
+                    exchange_id: exchange.id,
+                    conversation_id: *conversation_id,
+                    output_status: AIQueryHistoryOutputStatus::from(&exchange.output_status),
+                    working_directory: exchange.working_directory.clone(),
+                    // TODO(CORE-3546): shell: exchange.shell.clone(),
+                    model_id: exchange.model_id.clone(),
+                    coding_model_id: exchange.coding_model_id.clone(),
+                };
+                ModelEvent::UpsertAIQuery {
+                    query: Arc::new(persisted_query),
+                }
+            });
+
+            // All borrows of `ctx` via the history model end above; the mutable
+            // `ctx` operations below are now safe.
+            if let Some((prompt, start_ts)) = captured_prompt {
+                crate::ai::blocklist::AgentPromptHistory::handle(ctx).update(ctx, |history, _| {
+                    history.append(prompt.clone(), start_ts);
+                });
+                let prompt_sender = model_event_sender.clone();
+                let insert_agent_prompt_event = ModelEvent::InsertAgentPrompt { prompt, start_ts };
+                let _ = ctx.spawn(
+                    async move { prompt_sender.send(insert_agent_prompt_event) },
+                    move |_, res, _| {
+                        if let Err(err) = res {
+                            log::error!(
+                                "Error sending insert agent prompt event for terminal id {terminal_pane_id:?} {err:?}"
+                            );
+                        }
+                    },
+                );
+            }
+
+            if let Some(upsert_ai_query_event) = upsert_ai_query_event {
+                let _ = ctx.spawn(
+                    // Sending over a sync sender can block the current thread, so we
+                    // do this async.
+                    async move { model_event_sender.send(upsert_ai_query_event) },
+                    move |_, res, _| {
+                        if let Err(err) = res {
+                            log::error!(
+                                "Error sending upsert AI query event for terminal id {terminal_pane_id:?} {err:?}"
+                            );
+                        }
+                    },
+                );
+            }
         }
         BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
         | BlocklistAIHistoryEvent::ClearedActiveConversation { .. } => {

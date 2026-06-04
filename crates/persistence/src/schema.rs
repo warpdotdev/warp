@@ -17,6 +17,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    agent_prompts (id) {
+        id -> Integer,
+        prompt -> Text,
+        start_ts -> Timestamp,
+    }
+}
+
+diesel::table! {
     agent_tasks (id) {
         id -> Integer,
         conversation_id -> Text,

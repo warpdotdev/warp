@@ -1,5 +1,6 @@
 //! This module contains model, controller, and view logic for Blocklist AI.
 mod action_model;
+pub mod agent_prompt_history;
 pub mod agent_view;
 pub mod block;
 pub mod code_block;
@@ -38,6 +39,7 @@ pub(crate) use action_model::{
     ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
     StartAgentRequestId,
 };
+pub(crate) use agent_prompt_history::AgentPromptHistory;
 #[cfg(any(test, feature = "integration_tests"))]
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{init, model, AIBlock, AIBlockEvent, RequestedEditResolution};

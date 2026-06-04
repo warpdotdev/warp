@@ -9,10 +9,10 @@ use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::{self as api};
 
 use super::schema::{
-    active_mcp_servers, agent_conversations, agent_tasks, ai_document_panes, ai_memory_panes,
-    ambient_agent_panes, app, blocks, cloud_objects_refreshes, code_pane_tabs, code_panes,
-    code_review_panes, commands, current_user_information, env_var_collection_panes, folders,
-    generic_string_objects, ignored_suggestions, mcp_environment_variables,
+    active_mcp_servers, agent_conversations, agent_prompts, agent_tasks, ai_document_panes,
+    ai_memory_panes, ambient_agent_panes, app, blocks, cloud_objects_refreshes, code_pane_tabs,
+    code_panes, code_review_panes, commands, current_user_information, env_var_collection_panes,
+    folders, generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
     project_rules, projects, server_experiments, settings_panes, tabs, team_members, team_settings,
@@ -778,6 +778,21 @@ pub struct NewCommand {
     pub cloud_workflow_id: Option<String>,
     pub workflow_command: Option<String>,
     pub is_agent_executed: Option<bool>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = agent_prompts)]
+pub struct NewAgentPrompt {
+    pub prompt: String,
+    pub start_ts: NaiveDateTime,
+}
+
+#[derive(Identifiable, Queryable, Clone)]
+#[diesel(table_name = agent_prompts)]
+pub struct AgentPrompt {
+    pub id: i32,
+    pub prompt: String,
+    pub start_ts: NaiveDateTime,
 }
 
 #[derive(Identifiable, Queryable, Default, Clone)]

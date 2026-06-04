@@ -202,6 +202,9 @@ pub struct PersistedData {
     pub ignored_suggestions: Vec<(String, SuggestionType)>,
     pub mcp_server_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     pub mcp_servers_to_restore: Vec<Uuid>,
+    /// Prompts the user has submitted to the agent, in chronological order
+    /// (oldest first), used to seed the in-memory NLD prompt-history match store.
+    pub agent_prompts: Vec<(String, DateTime<Local>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -284,6 +287,12 @@ pub enum ModelEvent {
     },
     InsertCommand {
         metadata: StartedCommandMetadata,
+    },
+    /// Persists a prompt the user submitted to the agent into the capped
+    /// `agent_prompts` store, used for NLD prompt-history matching.
+    InsertAgentPrompt {
+        prompt: String,
+        start_ts: DateTime<Local>,
     },
     UpdateFinishedCommand {
         metadata: FinishedCommandMetadata,

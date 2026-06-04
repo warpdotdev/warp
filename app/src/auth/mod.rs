@@ -27,7 +27,7 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{AgentPromptHistory, BlocklistAIHistoryModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai_assistant::requests::REQUEST_LIMIT_INFO_CACHE_KEY;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -225,6 +225,11 @@ pub fn log_out(app: &mut AppContext) {
     });
     BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
         history_model.reset();
+    });
+    // The SQLite DB (including `agent_prompts`) is removed on logout, so clear
+    // the in-memory NLD prompt-history store too.
+    AgentPromptHistory::handle(app).update(app, |prompt_history, _| {
+        prompt_history.reset();
     });
     OrchestrationPillBarModel::handle(app).update(app, |pill_bar_model, _| {
         pill_bar_model.reset();

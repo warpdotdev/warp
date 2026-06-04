@@ -141,7 +141,7 @@ pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
-use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use ai::blocklist::{AgentPromptHistory, BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use ai::persisted_workspace::PersistedWorkspace;
@@ -1235,6 +1235,7 @@ pub(crate) fn initialize_app(
         mut persisted_ignored_suggestions,
         mut persisted_mcp_server_installations,
         mut mcp_servers_to_restore,
+        mut agent_prompts,
     ) = sqlite_data
         .map(|sqlite_data| {
             (
@@ -1256,10 +1257,12 @@ pub(crate) fn initialize_app(
                 sqlite_data.ignored_suggestions,
                 sqlite_data.mcp_server_installations,
                 sqlite_data.mcp_servers_to_restore,
+                sqlite_data.agent_prompts,
             )
         })
         .unwrap_or_else(|| {
             (
+                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -1303,6 +1306,7 @@ pub(crate) fn initialize_app(
         persisted_ignored_suggestions = Default::default();
         persisted_mcp_server_installations = Default::default();
         mcp_servers_to_restore = Default::default();
+        agent_prompts = Default::default();
     }
 
     // Initialize a global model to track server-side experiment state.
@@ -1575,6 +1579,8 @@ pub(crate) fn initialize_app(
     });
 
     ctx.add_singleton_model(move |_| History::new(command_history));
+
+    ctx.add_singleton_model(move |_| AgentPromptHistory::new(agent_prompts));
 
     ctx.add_singleton_model(CustomSecretRegexUpdater::new);
 

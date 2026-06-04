@@ -9,7 +9,7 @@ use std::{fs, thread};
 
 use ai::project_context::model::ProjectRulePath;
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Local, TimeZone, Utc};
 use cloud_object_models::folder::persistence as folder_persistence;
 use cloud_object_models::folder::persistence::upsert_folders;
 use cloud_object_models::json_model::persistence::{
@@ -53,8 +53,8 @@ use super::block_list::{
 };
 use super::model::{
     self, ActiveMCPServer, CurrentUserInformation, MCPEnvironmentVariables, NewActiveMCPServer,
-    NewApp, NewCommand, NewServerExperiment, NewTab, NewTeam, NewWindow, NewWorkspace,
-    NewWorkspaceMetadata, NewWorkspaceTeam, Project, Tab, Window,
+    NewAgentPrompt, NewApp, NewCommand, NewServerExperiment, NewTab, NewTeam, NewWindow,
+    NewWorkspace, NewWorkspaceMetadata, NewWorkspaceTeam, Project, Tab, Window,
     WorkspaceMetadata as WorkspaceMetadataModel, AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND,
     CODE_PANE_KIND, ENV_VAR_COLLECTION_PANE_KIND, EXECUTION_PROFILE_EDITOR_PANE_KIND,
     MCP_SERVER_PANE_KIND, NOTEBOOK_PANE_KIND, SETTINGS_PANE_KIND, TERMINAL_PANE_KIND,
@@ -116,6 +116,9 @@ diesel::define_sql_function! {
 // events to queue.
 const CHANNEL_SIZE: usize = 1024;
 const COMMANDS_COUNT_LIMIT: i64 = 10000;
+// The `agent_prompts` store is a flat, capped, FIFO table whose startup load
+// cost stays ~constant over the app's lifetime.
+const AGENT_PROMPTS_COUNT_LIMIT: i64 = 2000;
 
 const WARP_SQLITE_FILE_NAME: &str = "warp.sqlite";
 
@@ -654,6 +657,10 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
         }
         ModelEvent::InsertCommand { metadata } => {
             insert_command(connection, metadata).context("error inserting command")
+        }
+        ModelEvent::InsertAgentPrompt { prompt, start_ts } => {
+            insert_agent_prompt(connection, prompt, start_ts)
+                .context("error inserting agent prompt")
         }
         ModelEvent::UpdateFinishedCommand { metadata } => {
             update_finished_command(connection, metadata).context("error updating finished command")
@@ -2708,6 +2715,7 @@ fn read_sqlite_data(
     let ignored_suggestions = get_all_ignored_suggestions(conn)?;
     let mcp_server_installations = get_all_mcp_server_installations(conn)?;
     let mcp_servers_to_restore = get_mcp_servers_to_restore(conn)?;
+    let agent_prompts = read_agent_prompts(conn)?;
 
     Ok(PersistedData {
         app_state,
@@ -2728,7 +2736,21 @@ fn read_sqlite_data(
         ignored_suggestions,
         mcp_server_installations,
         mcp_servers_to_restore,
+        agent_prompts,
     })
+}
+
+/// Reads all persisted agent prompts, dedupped on newest prompt(`id DESC`)
+fn read_agent_prompts(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<(String, DateTime<Local>)>, Error> {
+    let prompts = schema::agent_prompts::dsl::agent_prompts
+        .order(schema::agent_prompts::columns::id.desc())
+        .load_iter::<model::AgentPrompt, DefaultLoadingMode>(conn)?
+        .filter_map(|prompt| prompt.ok())
+        .map(|prompt| (prompt.prompt, Local.from_utc_datetime(&prompt.start_ts)))
+        .collect::<Vec<(String, DateTime<Local>)>>();
+    Ok(prompts)
 }
 
 impl From<StartedCommandMetadata> for model::NewCommand {
@@ -2780,6 +2802,38 @@ fn insert_command(
         let new_command: NewCommand = command_metadata.into();
         diesel::insert_into(schema::commands::dsl::commands)
             .values(new_command)
+            .execute(conn)?;
+        Ok(())
+    })
+}
+
+/// Inserts an agent prompt into the capped `agent_prompts` store, evicting the
+/// oldest row when at capacity. Mirrors [`insert_command`] exactly (same FIFO
+/// `==` eviction); `id` is monotonic with insertion so it doubles as recency.
+fn insert_agent_prompt(
+    conn: &mut SqliteConnection,
+    prompt_text: String,
+    prompt_start_ts: DateTime<Local>,
+) -> Result<(), Error> {
+    use schema::agent_prompts::dsl::*;
+
+    conn.transaction::<(), Error, _>(|conn| {
+        let prompt_count: i64 = agent_prompts.count().first(conn)?;
+        if prompt_count == AGENT_PROMPTS_COUNT_LIMIT {
+            let oldest_id: i32 = agent_prompts
+                .select(id)
+                .order(id.asc())
+                .limit(1)
+                .first(conn)?;
+            diesel::delete(agent_prompts.filter(id.eq(oldest_id))).execute(conn)?;
+        }
+
+        let new_prompt = NewAgentPrompt {
+            prompt: prompt_text,
+            start_ts: prompt_start_ts.naive_utc(),
+        };
+        diesel::insert_into(schema::agent_prompts::dsl::agent_prompts)
+            .values(new_prompt)
             .execute(conn)?;
         Ok(())
     })

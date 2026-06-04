@@ -116,7 +116,7 @@ if ("$CHANNEL" -eq 'local') {
 }
 
 if (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
-    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
+    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2,nld_prompt_history_match"
 } elseif ("$CHANNEL" -eq 'preview') {
     $FEATURES = "$FEATURES,nld_classifier_v2,nld_heuristic_v2"
 } else {
