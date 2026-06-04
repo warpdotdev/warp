@@ -146,6 +146,7 @@ warp_logging.workspace = true
 sentry = { workspace = true, optional = true }
 lz4_flex = "0.11"
 markdown_parser.workspace = true
+mcp.workspace = true
 memchr.workspace = true
 memo-map.workspace = true
 mermaid_to_svg.workspace = true
@@ -259,7 +260,7 @@ warp_multi_agent_api.workspace = true
 remote_server.workspace = true
 repo_metadata.workspace = true
 vim.workspace = true
-rmcp = { workspace = true, features = ["client"] }
+rmcp.workspace = true
 warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
@@ -320,12 +321,6 @@ aws-credential-types = "1"
 aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-types = "1"
 
-mcp.workspace = true
-rmcp = { workspace = true, features = [
-    "auth",
-    "transport-streamable-http-client-reqwest",
-    "transport-child-process",
-] }
 notify-debouncer-full.workspace = true
 rquickjs = { workspace = true, optional = true }
 rustls.workspace = true
@@ -661,14 +656,11 @@ default = [
     "settings_file",
     "directory_tab_colors",
     "git_credential_refresh",
-    "configurable_context_window",
     "oz_handoff",
     "handoff_local_cloud",
-    "orchestration_v2",
     "orchestration_pill_bar",
     "orchestration_viewer_pill_bar",
     "orchestration_viewer_streamer",
-    "run_agents_tool",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -713,6 +705,7 @@ grep_tool = []
 gui = ["voice_input"]
 nld_classifier_v1 = ["input_classifier/nld_classifier_v1"]
 nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
+nld_classifier_v3 = ["input_classifier/nld_classifier_v3"]
 nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 msys2_shells = []
@@ -954,6 +947,7 @@ summarization_via_message_replacement = []
 lsp_as_a_tool = []
 inline_model_selector = ["agent_view"]
 inline_profile_selector = ["agent_view"]
+restore_prompt_on_inline_model_selector_search = []
 oz_platform_skills = []
 oz_identity_federation = []
 oz_launch_modal = []
@@ -964,11 +958,9 @@ file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-orchestration_v2 = []
 orchestration_pill_bar = []
 orchestration_viewer_pill_bar = []
 orchestration_viewer_streamer = []
-run_agents_tool = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
@@ -990,15 +982,16 @@ skip_firebase_anonymous_user = []
 custom_inference_endpoints = []
 solo_user_byok = []
 billing_and_usage_page_v2 = []
+gpt_configurable_context_window = []
 configurable_toolbar = []
 warpify_footer = []
 hoa_onboarding_flow = []
 git_operations_in_code_review = []
 hoa_remote_control = []
 codex_notifications = []
+codex_plugin = []
 cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
-configurable_context_window = []
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 

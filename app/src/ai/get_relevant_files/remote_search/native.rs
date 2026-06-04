@@ -72,15 +72,8 @@ pub(super) fn send_request(
         .active_repo_availability(&session_context, requested_codebase_path.as_deref());
     match availability {
         RemoteCodebaseSearchAvailability::Ready(search_context) => {
-            let Some(client) = remote_server::manager::RemoteServerManager::as_ref(ctx)
-                .client_for_host(&search_context.remote_path.host_id)
-                .cloned()
-            else {
-                return RemoteSearchRequest::Ready(SearchCodebaseResult::Failed {
-                    reason: SearchCodebaseFailureReason::ClientError,
-                    message: "Remote codebase search is unavailable because the remote server is not connected.".to_string(),
-                });
-            };
+            let handle = remote_server::manager::RemoteServerManager::as_ref(ctx)
+                .host_request_handle(&search_context.remote_path.host_id);
             if search_context.is_stale {
                 let remote_path = search_context.remote_path.clone();
                 let sync_requested = remote_server::manager::RemoteServerManager::handle(ctx)
@@ -101,7 +94,7 @@ pub(super) fn send_request(
                             query,
                             partial_paths,
                             search_context,
-                            client,
+                            handle,
                             store_client,
                         )
                         .await
@@ -132,7 +125,7 @@ async fn execute_remote_codebase_search(
     query: String,
     partial_paths: Option<Vec<String>>,
     search_context: RemoteCodebaseSearchContext,
-    client: Arc<remote_server::client::RemoteServerClient>,
+    handle: remote_server::manager::HostRequestHandle,
     store_client: Arc<ServerApi>,
 ) -> Result<SearchCodebaseResult, anyhow::Error> {
     let root_hash = search_context.root_hash;
@@ -163,13 +156,14 @@ async fn execute_remote_codebase_search(
         .iter()
         .map(ToString::to_string)
         .collect_vec();
-    let metadata_response = client
+    let metadata_response = handle
         .get_fragment_metadata_from_hash(
             repo_path.clone(),
             root_hash_string,
             candidate_hash_strings,
         )
-        .await?;
+        .await
+        .map_err(|e| anyhow::anyhow!("Fragment metadata lookup failed: {e}"))?;
     if !metadata_response.missing_hashes.is_empty() {
         log::warn!(
             "Remote codebase search metadata lookup missed {} hashes for repo {}",
@@ -206,7 +200,7 @@ async fn execute_remote_codebase_search(
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
 
-    let response = client
+    let response = handle
         .read_file_context(read_full_fragment_files_request(&parsed_fragment_metadata))
         .await?;
     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {
@@ -254,7 +248,7 @@ async fn execute_remote_codebase_search(
         return Ok(SearchCodebaseResult::Success { files: vec![] });
     }
 
-    let response = client
+    let response = handle
         .read_file_context(read_context_locations_request(&locations))
         .await?;
     if !response.failed_files.is_empty() && response.file_contexts.is_empty() {

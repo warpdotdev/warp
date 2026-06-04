@@ -36,6 +36,6 @@ Rejected: reusing `AppendedExchange` (never fires on the skip-initial-turn path,
 Nextest and full clippy are intentionally not part of the per-PR validation. Per-stage unit tests are detailed in `STAGE-1.md` (serialization round-trip on `SpawnAgentRequest { prompt: None }` plus borrow-site fixtures) and `STAGE-2.md` (substitution outcomes in `build_handoff_spawn_request`, CLI parser tests, viewer event-loop arm, `IdleTimeoutSender::complete_with_optional_idle`).
 ## Wire shape coordination summary
 - `SpawnAgentRequest` (`POST /agent/run`): `prompt: Option<String>` (Stage 1); does not carry `skip_initial_turn` (Stage 2).
-- `TaskAssignmentMessage` (server → self-hosted worker): top-level `SkipInitialTurn bool` (JSON tag `skip_initial_turn`, `omitempty`).
+- `TaskAssignmentMessage` (server → self-hosted worker): top-level `AdditionalOzArgs []string` (JSON tag `additional_oz_args`, `omitempty`), populated with `--skip-initial-turn` for eligible executions.
 - `--skip-initial-turn` CLI flag (worker → CLI): the sole worker→driver contract for the skip-initial-turn decision.
 - `OrderedTerminalEventType::CloudModeSetupPhaseEnded` (sharer → viewer via session-sharing-protocol).

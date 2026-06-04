@@ -189,7 +189,7 @@ lazy_static = "1.4.0"
 libc = "0.2.81"
 line-ending = "1.4.0"
 log = { version = "0.4", features = ["serde", "std"] }
-mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "81551775746cd86bdeec29cb96ba278fd08c9074" }
+mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "40cecf2be376e47e15053eadbfb782a531777420" }
 mime_guess = "2.0"
 minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
@@ -260,7 +260,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 serde_with = "2.0.1"
 serde_yaml = "0.8"
-session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "9e437df5be3c318999a9c94dba1826ebb33ad679" }
+session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d" }
 similar = { version = "2.7", features = ["inline"] }
 simplelog = "0.12.2"
 smallvec = "1.6.1"

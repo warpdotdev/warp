@@ -1095,17 +1095,16 @@ impl TerminalManager {
                     // In cloud-mode startup (before the first exchange), shared-session input
                     // sync reflects environment setup commands. Skip applying remote edits so
                     // the visible input isn't populated with setup-command text.
-                    if FeatureFlag::CloudModeSetupV2.is_enabled()
-                        && {
-                            let model = view.model.lock();
-                            is_cloud_agent_pre_first_exchange(
-                                view.ambient_agent_view_model(),
-                                view.agent_view_controller(),
-                                &model,
-                                ctx,
-                            )
-                        }
-                    {
+                    let skip_during_setup = FeatureFlag::CloudModeSetupV2.is_enabled() && {
+                        let model = view.model.lock();
+                        is_cloud_agent_pre_first_exchange(
+                            view.ambient_agent_view_model(),
+                            view.agent_view_controller(),
+                            &model,
+                            ctx,
+                        )
+                    };
+                    if skip_during_setup {
                         return;
                     }
                     view.apply_viewer_shared_session_input_update(block_id, operations.clone(), ctx);

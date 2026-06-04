@@ -24,6 +24,16 @@ fn pending_launch() -> PendingCloudLaunch {
     }
 }
 
+/// Empty-prompt launch fixture for empty-prompt handoff tests. Mirrors what
+/// the workspace synthesizes when the chip / `&` / `/handoff` is dispatched
+/// with `launch: None`.
+fn empty_pending_launch() -> PendingCloudLaunch {
+    PendingCloudLaunch {
+        prompt: String::new(),
+        attachments: HandoffLaunchAttachments::default(),
+    }
+}
+
 fn pending_handoff() -> PendingHandoff {
     PendingHandoff {
         forked_conversation_id: Some("forked-conversation".to_owned()),
@@ -33,6 +43,7 @@ fn pending_handoff() -> PendingHandoff {
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
         orchestration_handoff: None,
+        should_inject_continue: false,
     }
 }
 
@@ -45,6 +56,7 @@ fn pending_handoff_fresh_launch() -> PendingHandoff {
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
         orchestration_handoff: None,
+        should_inject_continue: false,
     }
 }
 
@@ -57,6 +69,30 @@ fn pending_handoff_with_orchestration() -> PendingHandoff {
         submission_state: HandoffSubmissionState::Idle,
         auto_submit: Some(pending_launch()),
         orchestration_handoff: Some(true),
+        should_inject_continue: false,
+    }
+}
+
+/// Variant of `pending_handoff` for empty-prompt handoff tests. Lets the caller
+/// set the source-conversation state and substitute an empty-prompt launch.
+fn pending_handoff_empty(inject_continue: bool) -> PendingHandoff {
+    PendingHandoff {
+        forked_conversation_id: Some("forked-conversation".to_owned()),
+        title: None,
+        touched_workspace: None,
+        snapshot_upload: SnapshotUploadStatus::Pending,
+        submission_state: HandoffSubmissionState::Idle,
+        auto_submit: Some(empty_pending_launch()),
+        orchestration_handoff: None,
+        should_inject_continue: inject_continue,
+    }
+}
+
+/// Non-empty `TouchedWorkspace` for the snapshot-rehydration substitution test.
+fn touched_workspace_with_orphan_file() -> TouchedWorkspace {
+    TouchedWorkspace {
+        repos: vec![],
+        orphan_files: vec![std::path::PathBuf::from("/tmp/handoff-fixture.txt")],
     }
 }
 
@@ -468,6 +504,165 @@ fn snapshot_failure_is_treated_as_settled_for_auto_submit() {
                 .expect("Failed snapshot should be treated as settled");
             assert_eq!(launch.prompt, "fix tests");
             assert!(model.maybe_auto_submit_handoff(ctx).is_none());
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_auto_submit_with_active_source_substitutes_continue_on_wire() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ true)), ctx);
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(
+            queued,
+            "empty-prompt auto-submit should be accepted, not gated"
+        );
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert_eq!(
+                request.prompt.as_deref(),
+                Some("Continue"),
+                "active source + empty prompt must substitute the wire prompt with \"Continue\"",
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_auto_submit_with_idle_source_sends_none_on_the_wire() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ false)), ctx);
+            // The queue path passes no snapshot token to
+            // `build_handoff_spawn_request`, so the substitution resolves to
+            // `None` regardless of the derived workspace. The
+            // snapshot-rehydration substitution can only fire on the
+            // `submit_handoff` path (covered separately).
+            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
+        });
+
+        let queued = model.update(&mut app, |model, ctx| model.queue_handoff_auto_submit(ctx));
+        assert!(queued);
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert!(
+                request.prompt.is_none(),
+                "idle source + empty prompt must send prompt: None (got {:?})",
+                request.prompt
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_submit_handoff_with_idle_source_and_snapshot_substitutes_apply_workspace_changes() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        let token: InitialSnapshotToken =
+            serde_json::from_str("\"snapshot-token-abc\"").expect("snapshot token should parse");
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ false)), ctx);
+            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
+            model.set_pending_handoff_snapshot_upload(SnapshotUploadStatus::Uploaded(token), ctx);
+        });
+
+        // submit_handoff is the only entry point that can resolve the
+        // snapshot-rehydration substitution; it passes the snapshot token
+        // through to `build_handoff_spawn_request`.
+        model.update(&mut app, |model, ctx| {
+            model.submit_handoff(String::new(), vec![], ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert_eq!(
+                request.prompt.as_deref(),
+                Some("Apply the workspace changes from my previous session."),
+                "idle source + non-empty snapshot token must substitute the rehydration prompt",
+            );
+            assert!(
+                request.initial_snapshot_token.is_some(),
+                "the snapshot token must still ride alongside the substituted prompt",
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_submit_handoff_with_active_source_and_snapshot_concatenates_continue_and_apply() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        let token: InitialSnapshotToken =
+            serde_json::from_str("\"snapshot-token-xyz\"").expect("snapshot token should parse");
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ true)), ctx);
+            model.set_pending_handoff_workspace(touched_workspace_with_orphan_file(), ctx);
+            model.set_pending_handoff_snapshot_upload(SnapshotUploadStatus::Uploaded(token), ctx);
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.submit_handoff(String::new(), vec![], ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert_eq!(
+                request.prompt.as_deref(),
+                Some("Continue. Apply the workspace changes from my previous session."),
+                "active source + non-empty snapshot token must concatenate both substitutions",
+            );
+            assert!(
+                request.initial_snapshot_token.is_some(),
+                "the snapshot token must still ride alongside the substituted prompt",
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_prompt_submit_handoff_with_idle_source_and_no_snapshot_sends_none_on_the_wire() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_pending_handoff(Some(pending_handoff_empty(/*inject_continue*/ false)), ctx);
+            model.set_pending_handoff_workspace(TouchedWorkspace::default(), ctx);
+            model.set_pending_handoff_snapshot_upload(
+                SnapshotUploadStatus::SkippedEmptyWorkspace,
+                ctx,
+            );
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.submit_handoff(String::new(), vec![], ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let request = model.request().expect("request should be populated");
+            assert!(
+                request.prompt.is_none(),
+                "idle source + empty snapshot must send prompt: None (got {:?})",
+                request.prompt,
+            );
+            assert!(request.initial_snapshot_token.is_none());
         });
     });
 }

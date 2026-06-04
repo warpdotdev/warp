@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use futures::future::Either;
 use futures::StreamExt;
 use instant::Instant;
+use warp_core::errors::AnyhowErrorExt as _;
 use warpui::r#async::Timer;
 
 use crate::server::retry_strategies::is_transient_http_error;
@@ -69,7 +70,7 @@ pub(crate) struct AgentEventDriverConfig {
     /// before upstream infrastructure times it out (for example, before Cloud
     /// Run's 20-minute streaming timeout).
     pub proactive_reconnect_after: Option<Duration>,
-    /// Failure count at which reconnect logging is escalated from debug to warn.
+    /// Failure count at which actionable reconnect failures are reported at Error level.
     /// This only affects log severity; retry behavior stays the same.
     pub failures_before_error_log: usize,
 }
@@ -214,16 +215,25 @@ impl AgentEventSource for ServerApiAgentEventSource {
                     }
                 }
                 Err(err) => {
-                    let anyhow_err = match &err {
-                        reqwest_eventsource::Error::InvalidStatusCode(status_code, _) => {
+                    let anyhow_err = match err {
+                        reqwest_eventsource::Error::InvalidStatusCode(status_code, response) => {
+                            let body = response
+                                .text()
+                                .await
+                                .unwrap_or_else(|err| format!("(no response body: {err:#})"));
                             let status_err = HttpStatusError {
                                 status: status_code.as_u16(),
-                                body: format!("{err:?}"),
+                                body: body.clone(),
                             };
-                            anyhow::Error::new(status_err)
-                                .context(format!("SSE stream error: {err:?}"))
+                            anyhow::Error::new(status_err).context(format!(
+                                "SSE stream error: invalid status code {status_code}: {body}"
+                            ))
                         }
-                        _ => anyhow!("SSE stream error: {err:?}"),
+                        #[cfg(not(target_family = "wasm"))]
+                        reqwest_eventsource::Error::Transport(err) => {
+                            anyhow::Error::new(err).context("SSE stream error")
+                        }
+                        err => anyhow!("SSE stream error: {err:?}"),
                     };
                     Some(Err(anyhow_err))
                 }
@@ -445,12 +455,14 @@ fn log_stream_failure(
     failures_before_error_log: usize,
 ) {
     let label = filter.log_label();
-    if agent_event_failures_exceeded_threshold(failures, failures_before_error_log) {
+    if agent_event_failure_should_log_error(err, failures, failures_before_error_log) {
         log::error!(
             "Agent event stream failed {failures} consecutive times for {label}, retrying in {backoff:?}: {err:#}"
         );
     } else {
-        log::warn!("Agent event stream failed for {label}, retrying in {backoff:?}: {err:#}");
+        log::warn!(
+            "Agent event stream failed {failures} consecutive times for {label}, retrying in {backoff:?}: {err:#}"
+        );
     }
 }
 
@@ -464,6 +476,15 @@ pub(crate) fn agent_event_backoff(failures: usize, backoff_steps: &[u64]) -> Dur
     Duration::from_secs(safe_steps[index])
 }
 
+#[cfg(test)]
 pub(crate) fn agent_event_failures_exceeded_threshold(failures: usize, threshold: usize) -> bool {
     failures >= threshold
+}
+
+pub(crate) fn agent_event_failure_should_log_error(
+    err: &anyhow::Error,
+    failures: usize,
+    threshold: usize,
+) -> bool {
+    threshold > 0 && failures == threshold && err.is_actionable()
 }

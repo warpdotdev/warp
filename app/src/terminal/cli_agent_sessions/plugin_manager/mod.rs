@@ -266,7 +266,11 @@ pub(crate) fn plugin_manager_for_with_shell(
             if FeatureFlag::CodexNotifications.is_enabled()
                 && FeatureFlag::HOANotifications.is_enabled() =>
         {
-            Some(Box::new(CodexPluginManager))
+            Some(Box::new(CodexPluginManager::new(
+                shell_path,
+                shell_type,
+                path_env_var,
+            )))
         }
         CLIAgent::Gemini
             if FeatureFlag::GeminiNotifications.is_enabled()

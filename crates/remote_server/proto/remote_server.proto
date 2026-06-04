@@ -15,31 +15,64 @@ import "diff_state.proto";
 message ClientMessage {
   string request_id = 1;
   oneof message {
-    Initialize initialize = 2;
-    Abort abort = 3;
-    NavigatedToDirectory navigated_to_directory = 4;
-    LoadRepoMetadataDirectory load_repo_metadata_directory = 5;
-    SessionBootstrapped session_bootstrapped = 6;
-    WriteFile write_file = 7;
-    DeleteFile delete_file = 8;
-    RunCommandRequest run_command = 9;
-    ReadFileContextRequest read_file_context = 10;
-    Authenticate authenticate = 11;
-    UpdatePreferences update_preferences = 12;
-    OpenBuffer open_buffer = 13;
-    BufferEdit buffer_edit = 14;
-    CloseBuffer close_buffer = 15;
-    SaveBuffer save_buffer = 16;
-    ResolveConflict resolve_conflict = 17;
-    GetDiffState get_diff_state = 18;
-    UnsubscribeDiffState unsubscribe_diff_state = 19;
-    DiscardFilesRequest discard_files = 20;
-    IndexCodebase index_codebase = 21;
-    DropCodebaseIndex drop_codebase_index = 22;
-    GetFragmentMetadataFromHash get_fragment_metadata_from_hash = 23;
-    GetBranches get_branches = 24;
-    ResyncCodebase resync_codebase = 25;
-    UploadHandoffSnapshot upload_handoff_snapshot = 26;
+    HostScopedRequest host_scoped = 2;
+    SessionScopedRequest session_scoped = 3;
+    Notification notification = 4;
+  }
+}
+
+// Request that targets the host, not a specific connection.
+// The daemon may deliver the response on any open connection
+// if the originating connection disconnects before the response
+// is ready.
+message HostScopedRequest {
+  // 4 (open_buffer) and 7 (get_diff_state) moved to SessionScopedRequest:
+  // they establish per-connection subscription state, so they must be
+  // delivered on (and answered by) a specific connection, never failed over.
+  reserved 4, 7;
+  oneof message {
+    WriteFile write_file = 1;
+    DeleteFile delete_file = 2;
+    ReadFileContextRequest read_file_context = 3;
+    SaveBuffer save_buffer = 5;
+    ResolveConflict resolve_conflict = 6;
+    DiscardFilesRequest discard_files = 8;
+    IndexCodebase index_codebase = 9;
+    DropCodebaseIndex drop_codebase_index = 10;
+    GetFragmentMetadataFromHash get_fragment_metadata_from_hash = 11;
+    GetBranches get_branches = 12;
+    ResyncCodebase resync_codebase = 13;
+    UploadHandoffSnapshot upload_handoff_snapshot = 14;
+  }
+}
+
+// Request that targets a specific connection/session.
+// The response is always delivered on the originating connection.
+message SessionScopedRequest {
+  oneof message {
+    Initialize initialize = 1;
+    NavigatedToDirectory navigated_to_directory = 2;
+    LoadRepoMetadataDirectory load_repo_metadata_directory = 3;
+    RunCommandRequest run_command = 4;
+    // Subscription-establishing requests: the daemon registers per-connection
+    // state (buffer / diff-state subscriptions) keyed to the originating
+    // connection, so the response must come back on that same connection.
+    OpenBuffer open_buffer = 5;
+    GetDiffState get_diff_state = 6;
+  }
+}
+
+// Fire-and-forget message. No response is expected.
+// The daemon processes these inline and does not track them.
+message Notification {
+  oneof message {
+    Abort abort = 1;
+    Authenticate authenticate = 2;
+    UpdatePreferences update_preferences = 3;
+    SessionBootstrapped session_bootstrapped = 4;
+    BufferEdit buffer_edit = 5;
+    CloseBuffer close_buffer = 6;
+    UnsubscribeDiffState unsubscribe_diff_state = 7;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -224,6 +257,18 @@ message FileNodeMetadata {
 message RepoMetadataEntryUpdate {
   string parent_path_to_replace = 1;
   repeated RepoNodeMetadata subtree_metadata = 2;
+}
+
+message StandingQueryContent {
+  string path = 1;
+  bool is_directory = 2;
+}
+
+message StandingQueryResultsDelta {
+  repeated StandingQueryContent upserted_project_skills = 1;
+  repeated StandingQueryContent removed_project_skills = 2;
+  repeated StandingQueryContent upserted_project_rules = 3;
+  repeated StandingQueryContent removed_project_rules = 4;
 }
 
 // ── NavigatedToDirectory ──────────────────────────────────────────
@@ -449,6 +494,7 @@ message RepoMetadataSnapshot {
   string repo_path = 1;
   repeated RepoMetadataEntryUpdate entries = 2;
   bool sync_complete = 3;
+  StandingQueryResultsDelta standing_results = 4;
 }
 
 // Incremental repo metadata update. Mirrors RepoMetadataUpdate in Rust.
@@ -456,6 +502,7 @@ message RepoMetadataUpdatePush {
   string repo_path = 1;
   repeated string remove_entries = 2;
   repeated RepoMetadataEntryUpdate update_entries = 3;
+  StandingQueryResultsDelta standing_results_delta = 4;
 }
 
 // ── Buffer syncing ────────────────────────────────────────────────

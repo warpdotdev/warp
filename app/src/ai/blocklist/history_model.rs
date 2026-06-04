@@ -235,9 +235,9 @@ pub struct BlocklistAIHistoryModel {
 
     /// Reverse index from server-side agent identifier to local conversation ID.
     ///
-    /// Keyed by `run_id` when OrchestrationV2 is enabled, otherwise by
-    /// `server_conversation_token`. Only the identifier relevant to the
-    /// active orchestration version is stored.
+    /// Keyed by `run_id` for current orchestration. Older conversation data may
+    /// still contain `server_conversation_token`-backed identifiers, but new
+    /// runtime lookups use run IDs.
     agent_id_to_conversation_id: HashMap<String, AIConversationId>,
 
     /// Reverse index from [`ServerConversationToken`] to local [`AIConversationId`].
@@ -2522,11 +2522,7 @@ fn agent_id_key(conversation: &AIConversation) -> Option<String> {
 }
 
 fn agent_id_key_from_persisted_data(conversation_data: &AgentConversationData) -> Option<&str> {
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        conversation_data.run_id.as_deref()
-    } else {
-        conversation_data.server_conversation_token.as_deref()
-    }
+    conversation_data.run_id.as_deref()
 }
 
 /// Whether an `UpdatedConversationStatus` event represents a restoration

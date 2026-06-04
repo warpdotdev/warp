@@ -4,6 +4,7 @@ use warp_multi_agent_api as api;
 
 use super::{
     api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
+    supports_orchestration_v2,
 };
 use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
@@ -94,6 +95,36 @@ fn api_keys_with_warp_credit_fallback_setting_preserves_existing_keys() {
 
     assert_eq!(api_keys.anthropic, "anthropic-key");
     assert!(api_keys.allow_use_of_warp_credits);
+}
+
+#[test]
+fn supports_orchestration_v2_matches_request_orchestration_setting() {
+    assert!(supports_orchestration_v2(true));
+    assert!(!supports_orchestration_v2(false));
+}
+
+#[test]
+fn supported_tools_include_orchestration_tools_when_orchestration_enabled() {
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.orchestration_enabled = true;
+
+    let supported_tools = get_supported_tools(&params);
+
+    assert!(supported_tools.contains(&api::ToolType::RunAgents));
+    assert!(supported_tools.contains(&api::ToolType::SendMessageToAgent));
+    assert!(!supported_tools.contains(&api::ToolType::StartAgent));
+    assert!(!supported_tools.contains(&api::ToolType::StartAgentV2));
+}
+
+#[test]
+fn supported_tools_omit_orchestration_tools_when_orchestration_disabled() {
+    let params = request_params_with_ask_user_question_enabled(false);
+    let supported_tools = get_supported_tools(&params);
+
+    assert!(!supported_tools.contains(&api::ToolType::RunAgents));
+    assert!(!supported_tools.contains(&api::ToolType::SendMessageToAgent));
+    assert!(!supported_tools.contains(&api::ToolType::StartAgent));
+    assert!(!supported_tools.contains(&api::ToolType::StartAgentV2));
 }
 #[test]
 fn supported_tools_omits_ask_user_question_when_disabled() {

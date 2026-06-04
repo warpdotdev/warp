@@ -1208,6 +1208,9 @@ impl Display for FetchConversationResult {
     }
 }
 
+// TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 result support once
+// old preview orchestration history no longer needs parse/display/result compatibility.
+// Linear issue: QUALITY-788.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StartAgentResult {
     Success {

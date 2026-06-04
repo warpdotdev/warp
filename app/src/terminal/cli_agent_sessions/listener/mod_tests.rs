@@ -1,5 +1,7 @@
 use super::*;
-use crate::terminal::cli_agent_sessions::event::CLIAgentEventType;
+use crate::terminal::cli_agent_sessions::event::{
+    CLIAgentEventSource, CLIAgentEventType, CLI_AGENT_NOTIFICATION_SENTINEL,
+};
 
 #[test]
 fn codex_parses_any_text_as_stop() {
@@ -40,17 +42,63 @@ fn codex_ignores_empty_body() {
 
 #[test]
 fn codex_try_parse_ignores_titled_notifications() {
-    let handler = CodexSessionHandler;
+    let mut handler = CodexSessionHandler;
     assert!(handler
-        .try_parse(Some("some-title"), "Agent turn complete")
+        .try_parse(Some("some-title"), "Agent turn complete", false)
         .is_none());
 }
 
 #[test]
 fn codex_try_parse_handles_osc9() {
-    let handler = CodexSessionHandler;
-    let event = handler.try_parse(None, "Agent turn complete").unwrap();
+    let mut handler = CodexSessionHandler;
+    let event = handler
+        .try_parse(None, "Agent turn complete", false)
+        .unwrap();
     assert_eq!(event.event, CLIAgentEventType::Stop);
+}
+
+#[test]
+fn codex_try_parse_ignores_osc9_when_plugin_already_active() {
+    let _guard = FeatureFlag::CodexPlugin.override_enabled(true);
+    let mut handler = CodexSessionHandler;
+    let body = r#"{"v":1,"agent":"codex","event":"permission_request","summary":"Approve?","tool_name":"Bash"}"#;
+
+    let event = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+        .unwrap();
+
+    assert_eq!(event.event, CLIAgentEventType::PermissionRequest);
+    // Once the session is rich, OSC 9 fallback is dropped.
+    assert!(handler
+        .try_parse(None, "Agent turn complete", true)
+        .is_none());
+}
+
+#[test]
+fn codex_try_parse_ignores_structured_event_without_codex_plugin() {
+    let _guard = FeatureFlag::CodexPlugin.override_enabled(false);
+    let mut handler = CodexSessionHandler;
+    let body = r#"{"v":1,"agent":"codex","event":"permission_request","summary":"Approve?","tool_name":"Bash"}"#;
+
+    assert!(handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+        .is_none());
+    assert!(handler
+        .try_parse(None, "Agent turn complete", false)
+        .is_some());
+}
+
+#[test]
+fn codex_try_parse_ignores_other_structured_agents() {
+    let mut handler = CodexSessionHandler;
+    let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
+
+    assert!(handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), body, false)
+        .is_none());
+    assert!(handler
+        .try_parse(None, "Agent turn complete", false)
+        .is_some());
 }
 
 #[test]
@@ -59,14 +107,10 @@ fn auggie_is_supported() {
 }
 
 #[test]
-fn auggie_uses_default_handler_with_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::Auggie));
-}
-
-#[test]
 fn auggie_default_handler_skips_session_start() {
     let mut handler = DefaultSessionListener;
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Auggie,
         event: CLIAgentEventType::SessionStart,
@@ -82,6 +126,7 @@ fn auggie_default_handler_skips_session_start() {
 fn auggie_default_handler_forwards_stop() {
     let mut handler = DefaultSessionListener;
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Auggie,
         event: CLIAgentEventType::Stop,
@@ -99,14 +144,10 @@ fn pi_is_supported() {
 }
 
 #[test]
-fn pi_uses_default_handler_with_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::Pi));
-}
-
-#[test]
 fn pi_default_handler_skips_session_start() {
     let mut handler = DefaultSessionListener;
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Pi,
         event: CLIAgentEventType::SessionStart,
@@ -122,6 +163,7 @@ fn pi_default_handler_skips_session_start() {
 fn pi_default_handler_forwards_stop() {
     let mut handler = DefaultSessionListener;
     let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
         v: 1,
         agent: CLIAgent::Pi,
         event: CLIAgentEventType::Stop,

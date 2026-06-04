@@ -1594,7 +1594,7 @@ impl AISettings {
     }
 
     pub fn is_orchestration_enabled(&self, app: &warpui::AppContext) -> bool {
-        FeatureFlag::OrchestrationV2.is_enabled() && self.is_any_ai_enabled(app)
+        self.is_any_ai_enabled(app)
     }
 
     /// Returns true when local-to-cloud handoff is effectively enabled.
