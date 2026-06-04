@@ -13788,7 +13788,7 @@ impl Input {
         let attachments: Vec<AgentAttachment> = self
             .ai_context_model
             .as_ref(ctx)
-            .pending_context(ctx, true)
+            .pending_context(ctx, true, None)
             .into_iter()
             .filter_map(|context| match context {
                 AIAgentContext::Block(block) => Some(AgentAttachment::BlockReference {

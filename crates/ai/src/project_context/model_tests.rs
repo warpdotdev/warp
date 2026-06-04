@@ -325,45 +325,80 @@ fn test_merge_rediscovery_keeps_latest() {
     assert_eq!(delta.discovered_rules.len(), 1);
     assert!(delta.deleted_rules.is_empty());
 }
-#[cfg(feature = "local_fs")]
-#[test]
-fn test_failed_standing_rule_read_preserves_cached_content() {
-    let rule_path = PathBuf::from("/unavailable/project/WARP.md");
-    let mut existing_rules = ProjectRules::default();
-    existing_rules.upsert_rule(
-        &LocalOrRemotePath::Local(rule_path.clone()),
-        "cached content".to_string(),
-    );
 
-    let rules = futures::executor::block_on(ProjectContextModel::read_standing_project_rules(
+#[test]
+fn test_missing_rule_content_preserves_cached_content_while_path_is_standing() {
+    let rule_path = local_path("/unavailable/project/WARP.md");
+    let mut existing_rules = ProjectRules::default();
+    existing_rules.upsert_rule(&rule_path, "cached content".to_string());
+
+    let rules = ProjectContextModel::reconcile_project_rules(
         vec![rule_path.clone()],
+        Vec::new(),
         existing_rules,
-    ));
+    );
     let result = rules.find_active_or_applicable_rules(&local_path("/unavailable/project/main.rs"));
 
     assert_eq!(result.active_rules.len(), 1);
-    assert_eq!(
-        result.active_rules[0].path,
-        LocalOrRemotePath::Local(rule_path)
-    );
+    assert_eq!(result.active_rules[0].path, rule_path);
     assert_eq!(result.active_rules[0].content, "cached content");
+}
+
+#[test]
+fn test_rule_missing_from_standing_results_is_removed_from_cached_content() {
+    let rule_path = local_path("/unavailable/project/WARP.md");
+    let mut existing_rules = ProjectRules::default();
+    existing_rules.upsert_rule(&rule_path, "cached content".to_string());
+
+    let rules =
+        ProjectContextModel::reconcile_project_rules(Vec::new(), Vec::new(), existing_rules);
+    assert!(rules.rule_paths().next().is_none());
+}
+
+#[test]
+fn test_reconcile_project_rules_hydrates_local_and_remote_paths() {
+    let local_rule_path = local_path("/local/WARP.md");
+    let remote_rule_path = remote_path("host-a", "/remote/AGENTS.md");
+
+    let rules = ProjectContextModel::reconcile_project_rules(
+        vec![local_rule_path.clone(), remote_rule_path.clone()],
+        vec![
+            (local_rule_path.clone(), "local content".to_string()),
+            (remote_rule_path.clone(), "remote content".to_string()),
+        ],
+        ProjectRules::default(),
+    );
+
+    let local_result = rules.find_active_or_applicable_rules(&local_path("/local/main.rs"));
+    assert_eq!(local_result.active_rules.len(), 1);
+    assert_eq!(local_result.active_rules[0].path, local_rule_path);
+    assert_eq!(local_result.active_rules[0].content, "local content");
+
+    let remote_result =
+        rules.find_active_or_applicable_rules(&remote_path("host-a", "/remote/main.rs"));
+    assert_eq!(remote_result.active_rules.len(), 1);
+    assert_eq!(remote_result.active_rules[0].path, remote_rule_path);
+    assert_eq!(remote_result.active_rules[0].content, "remote content");
 }
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_rule_missing_from_standing_results_is_removed_from_cached_content() {
-    let rule_path = PathBuf::from("/unavailable/project/WARP.md");
-    let mut existing_rules = ProjectRules::default();
-    existing_rules.upsert_rule(
-        &LocalOrRemotePath::Local(rule_path),
-        "cached content".to_string(),
-    );
-
-    let rules = futures::executor::block_on(ProjectContextModel::read_standing_project_rules(
-        Vec::new(),
-        existing_rules,
+fn test_remote_standing_results_preserve_host_qualified_rule_paths() {
+    let host = HostId::new("test-host".to_string());
+    let repo_id = RepositoryIdentifier::Remote(RemotePath::new(
+        host.clone(),
+        StandardizedPath::try_new("/repo").unwrap(),
     ));
-    assert!(rules.local_rule_paths().next().is_none());
+    let rule_path = StandardizedPath::try_new("/repo/nested/WARP.md").unwrap();
+    let contents = [
+        StandingQueryContent::file(rule_path.clone()),
+        StandingQueryContent::directory(StandardizedPath::try_new("/repo/nested").unwrap()),
+    ];
+
+    assert_eq!(
+        standing_project_rule_paths(&repo_id, &contents),
+        vec![LocalOrRemotePath::Remote(RemotePath::new(host, rule_path))]
+    );
 }
 
 // Helper for global-rules tests: inserts a synthetic global rule directly into
@@ -407,14 +442,14 @@ fn test_remote_project_rules_require_matching_host() {
     );
 
     let same_host = model
-        .find_applicable_project_rules_at_location(&remote_path("host-a", "/repo/src/main.rs"))
+        .find_applicable_project_rules(&remote_path("host-a", "/repo/src/main.rs"))
         .expect("same-host remote rule should apply");
     assert_eq!(same_host.root_path, remote_path("host-a", "/repo"));
     assert_eq!(same_host.active_rules.len(), 1);
     assert_eq!(same_host.active_rules[0].content, "remote_project_rule");
 
-    let other_host = model
-        .find_applicable_project_rules_at_location(&remote_path("host-b", "/repo/src/main.rs"));
+    let other_host =
+        model.find_applicable_project_rules(&remote_path("host-b", "/repo/src/main.rs"));
     assert!(other_host.is_none());
 }
 
@@ -428,7 +463,7 @@ fn test_global_rule_alone_no_project_rules() {
     );
 
     let result = model
-        .find_applicable_rules(Path::new("/some/project/file.rs"))
+        .find_applicable_rules(&local_path("/some/project/file.rs"))
         .expect("global rule should produce a result");
 
     assert_eq!(result.active_rules.len(), 1);
@@ -452,7 +487,7 @@ fn test_global_rule_layered_with_project_warp() {
     );
 
     let result = model
-        .find_applicable_rules(Path::new("/repo/src/main.rs"))
+        .find_applicable_rules(&local_path("/repo/src/main.rs"))
         .expect("layered rules should produce a result");
 
     // Layered precedence: global first, then project rules.
@@ -482,7 +517,7 @@ fn test_in_dir_warp_shadows_agents_with_global() {
     );
 
     let result = model
-        .find_applicable_rules(Path::new("/repo/src/main.rs"))
+        .find_applicable_rules(&local_path("/repo/src/main.rs"))
         .expect("layered rules should produce a result");
 
     // Expect: [global, project WARP.md]. project AGENTS.md is shadowed.
@@ -494,7 +529,7 @@ fn test_in_dir_warp_shadows_agents_with_global() {
 #[test]
 fn test_no_rules_returns_none() {
     let model = ProjectContextModel::default();
-    let result = model.find_applicable_rules(Path::new("/some/path/file.rs"));
+    let result = model.find_applicable_rules(&local_path("/some/path/file.rs"));
     assert!(result.is_none());
 }
 
@@ -504,7 +539,7 @@ fn test_global_rule_root_path_falls_back_to_parent() {
     insert_global_rule(&mut model, Path::new("/home/u/.agents/AGENTS.md"), "global");
 
     let result = model
-        .find_applicable_rules(Path::new("/some/file.rs"))
+        .find_applicable_rules(&local_path("/some/file.rs"))
         .expect("global rule should produce a result");
 
     // No project root indexed; root_path falls back to parent of the global rule.
@@ -526,7 +561,7 @@ fn test_multiple_global_rules_all_contribute() {
     );
 
     let result = model
-        .find_applicable_rules(Path::new("/repo/src/main.rs"))
+        .find_applicable_rules(&local_path("/repo/src/main.rs"))
         .expect("globals should produce a result");
 
     assert_eq!(result.active_rules.len(), 2);

@@ -53,7 +53,7 @@ pub(super) fn input_context_for_request(
     app: &AppContext,
 ) -> Arc<[AIAgentContext]> {
     let current_working_directory_location = active_session.current_working_directory_location(app);
-    let mut context = context_model.pending_context_for_location(
+    let mut context = context_model.pending_context(
         app,
         is_user_query,
         current_working_directory_location.as_ref(),

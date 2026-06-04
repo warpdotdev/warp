@@ -223,7 +223,7 @@ impl RuleView {
             .as_ref(ctx)
             .global_rule_paths()
             .map(|p| FileBackedRow {
-                file_path: LocalOrRemotePath::Local(p),
+                file_path: p,
                 mouse_state: Default::default(),
             })
             .collect();
@@ -249,7 +249,7 @@ impl RuleView {
                         .as_ref(ctx)
                         .global_rule_paths()
                         .map(|p| FileBackedRow {
-                            file_path: LocalOrRemotePath::Local(p),
+                            file_path: p,
                             mouse_state: Default::default(),
                         })
                         .collect();

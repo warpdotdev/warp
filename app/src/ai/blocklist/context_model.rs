@@ -3,7 +3,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 
 use ai::project_context::model::ProjectContextModel;
@@ -394,21 +393,7 @@ impl BlocklistAIContextModel {
     /// Returns `AIAgentContext` for the blocks to be included in the current AI query.
     /// If `is_user_query` is true, includes blocks, selected text, and images as context.
     /// If false, excludes these user-specific contexts but includes everything else.
-    pub fn pending_context(&self, app: &AppContext, is_user_query: bool) -> Vec<AIAgentContext> {
-        let current_working_directory_location = self.current_pwd().and_then(|path| {
-            PathBuf::from_str(&path)
-                .ok()
-                .and_then(|path| path.canonicalize().ok())
-                .map(LocalOrRemotePath::Local)
-        });
-        self.pending_context_for_location(
-            app,
-            is_user_query,
-            current_working_directory_location.as_ref(),
-        )
-    }
-
-    pub fn pending_context_for_location(
+    pub fn pending_context(
         &self,
         app: &AppContext,
         is_user_query: bool,
@@ -426,9 +411,8 @@ impl BlocklistAIContextModel {
                 })
         };
 
-        let project_rules = current_working_directory_location.and_then(|pwd| {
-            ProjectContextModel::as_ref(app).find_applicable_rules_at_location(pwd)
-        });
+        let project_rules = current_working_directory_location
+            .and_then(|pwd| ProjectContextModel::as_ref(app).find_applicable_rules(pwd));
 
         let mut context = Vec::new();
 

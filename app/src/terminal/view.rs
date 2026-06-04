@@ -22496,10 +22496,15 @@ impl TerminalView {
             ctx,
         );
 
-        let context = self
-            .ai_context_model
+        let current_working_directory_location = self
+            .active_session
             .as_ref(ctx)
-            .pending_context(ctx, true /* is_user_query */);
+            .current_working_directory_location(ctx);
+        let context = self.ai_context_model.as_ref(ctx).pending_context(
+            ctx,
+            true, /* is_user_query */
+            current_working_directory_location.as_ref(),
+        );
 
         let code_review_input = AIAgentInput::CodeReview {
             context: context.into(),

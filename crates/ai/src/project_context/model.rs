@@ -1,20 +1,49 @@
-use std::collections::HashMap;
-#[cfg(feature = "local_fs")]
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use futures::future::BoxFuture;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warp_util::remote_path::RemotePath;
-use warpui_core::{Entity, ModelContext, SingletonEntity};
+use warpui_core::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::GlobalRules;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
-        use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+        use repo_metadata::{
+            RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier, StandingQueryContent,
+        };
+        use warp_util::remote_path::RemotePath;
         use warp_util::standardized_path::StandardizedPath;
     }
+}
+
+pub type ProjectRuleContents = Vec<(LocalOrRemotePath, String)>;
+/// App-provided transport for reading the exact rule paths discovered by repository metadata.
+///
+/// This remains injected because remote file reads are implemented in the app crate.
+pub type ProjectRuleContentReader = fn(
+    Vec<LocalOrRemotePath>,
+    &AppContext,
+) -> BoxFuture<'static, anyhow::Result<ProjectRuleContents>>;
+
+#[cfg(feature = "local_fs")]
+fn standing_project_rule_paths<'a>(
+    repo_id: &RepositoryIdentifier,
+    contents: impl IntoIterator<Item = &'a StandingQueryContent>,
+) -> Vec<LocalOrRemotePath> {
+    contents
+        .into_iter()
+        .filter(|content| !content.is_directory)
+        .filter_map(|content| match repo_id {
+            RepositoryIdentifier::Local(_) => {
+                content.path.to_local_path().map(LocalOrRemotePath::Local)
+            }
+            RepositoryIdentifier::Remote(remote_root) => Some(LocalOrRemotePath::Remote(
+                RemotePath::new(remote_root.host_id.clone(), content.path.clone()),
+            )),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -63,32 +92,32 @@ struct ProjectRules {
 }
 
 impl ProjectRules {
-    #[cfg(feature = "local_fs")]
-    fn local_rule_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
+    fn rule_paths(&self) -> impl Iterator<Item = &LocalOrRemotePath> {
         self.rules.iter().flat_map(|rule| {
             rule.warp_md
                 .iter()
                 .chain(rule.agents_md.iter())
-                .filter_map(|rule| rule.path.to_local_path().map(Path::to_path_buf))
+                .map(|rule| &rule.path)
         })
     }
+    fn local_rule_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.rule_paths()
+            .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
+    }
 
-    #[cfg(feature = "local_fs")]
-    fn retain_rule_paths(&mut self, retained_paths: &HashSet<PathBuf>) {
+    fn retain_rule_paths(&mut self, retained_paths: &HashSet<LocalOrRemotePath>) {
         self.rules.retain_mut(|rule| {
             if rule
                 .warp_md
                 .as_ref()
-                .and_then(|rule| rule.path.to_local_path())
-                .is_some_and(|path| !retained_paths.contains(path))
+                .is_some_and(|rule| !retained_paths.contains(&rule.path))
             {
                 rule.warp_md = None;
             }
             if rule
                 .agents_md
                 .as_ref()
-                .and_then(|rule| rule.path.to_local_path())
-                .is_some_and(|path| !retained_paths.contains(path))
+                .is_some_and(|rule| !retained_paths.contains(&rule.path))
             {
                 rule.agents_md = None;
             }
@@ -167,13 +196,13 @@ impl ProjectRules {
 /// Singleton model that keeps track of mapping between paths and rule files
 /// Currently supports WARP.md files, but designed to be extensible
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ProjectContextModel {
     /// Mapping from directory path to list of rule files found in that directory
     path_to_rules: HashMap<LocalOrRemotePath, ProjectRules>,
-    /// Latest metadata-backed async refresh per project root.
+    /// Latest metadata-backed async refresh per repository.
     #[cfg(feature = "local_fs")]
-    rule_refresh_generations: HashMap<PathBuf, u64>,
+    rule_refresh_generations: HashMap<RepositoryIdentifier, u64>,
     #[cfg(feature = "local_fs")]
     next_rule_refresh_generation: u64,
     /// File-based global rules and their local watcher state. Kept separate
@@ -237,43 +266,40 @@ impl ProjectContextModel {
     #[cfg_attr(not(feature = "local_fs"), allow(unused_variables))]
     pub fn new_from_persisted(
         persisted_rules: Vec<ProjectRulePath>,
+        project_rule_content_reader: ProjectRuleContentReader,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        #[cfg_attr(not(feature = "local_fs"), allow(unused_mut))]
+        let mut model = Self::default();
         #[cfg(feature = "local_fs")]
         {
-            ctx.subscribe_to_model(
-                &RepoMetadataModel::handle(ctx),
-                |me, event, ctx| match event {
-                    RepoMetadataEvent::RepositoryUpdated {
-                        id: RepositoryIdentifier::Local(repo_path),
-                    } => me.refresh_project_rules_for_repo(repo_path.clone(), ctx),
-                    RepoMetadataEvent::StandingQueryResultsUpdated {
-                        id: RepositoryIdentifier::Local(repo_path),
-                        delta,
-                    } => {
+            ctx.subscribe_to_model(&RepoMetadataModel::handle(ctx), move |me, event, ctx| {
+                match event {
+                    RepoMetadataEvent::RepositoryUpdated { id } => {
+                        me.refresh_project_rules_for_repo(
+                            id.clone(),
+                            project_rule_content_reader,
+                            ctx,
+                        );
+                    }
+                    RepoMetadataEvent::StandingQueryResultsUpdated { id, delta } => {
                         if delta.project_rules_changed() {
-                            me.refresh_project_rules_for_repo(repo_path.clone(), ctx);
+                            me.refresh_project_rules_for_repo(
+                                id.clone(),
+                                project_rule_content_reader,
+                                ctx,
+                            );
                         }
                     }
-                    RepoMetadataEvent::RepositoryRemoved {
-                        id: RepositoryIdentifier::Local(repo_path),
-                    } => me.remove_project_rules_for_repo(repo_path, ctx),
-                    RepoMetadataEvent::RepositoryUpdated {
-                        id: RepositoryIdentifier::Remote(_),
+                    RepoMetadataEvent::RepositoryRemoved { id } => {
+                        me.remove_project_rules_for_repo(id, ctx);
                     }
-                    | RepoMetadataEvent::RepositoryRemoved {
-                        id: RepositoryIdentifier::Remote(_),
-                    }
-                    | RepoMetadataEvent::StandingQueryResultsUpdated {
-                        id: RepositoryIdentifier::Remote(_),
-                        ..
-                    }
-                    | RepoMetadataEvent::FileTreeUpdated { .. }
+                    RepoMetadataEvent::FileTreeUpdated { .. }
                     | RepoMetadataEvent::FileTreeEntryUpdated { .. }
                     | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                     | RepoMetadataEvent::IncrementalUpdateReady { .. } => {}
-                },
-            );
+                }
+            });
 
             ctx.spawn(
                 async move { Self::read_persisted_rules(persisted_rules).await },
@@ -285,9 +311,18 @@ impl ProjectContextModel {
                     ctx.emit(ProjectContextModelEvent::PathIndexed);
                 },
             );
+
+            let remote_repo_ids = RepoMetadataModel::as_ref(ctx)
+                .remote_repository_ids(ctx)
+                .cloned()
+                .map(RepositoryIdentifier::Remote)
+                .collect::<Vec<_>>();
+            for repo_id in remote_repo_ids {
+                model.refresh_project_rules_for_repo(repo_id, project_rule_content_reader, ctx);
+            }
         }
 
-        Self::default()
+        model
     }
 
     /// Reconciles project rule contents from the repository metadata standing result set.
@@ -295,6 +330,7 @@ impl ProjectContextModel {
     pub fn index_and_store_rules(
         &mut self,
         root_path: PathBuf,
+        project_rule_content_reader: ProjectRuleContentReader,
         ctx: &mut ModelContext<Self>,
     ) -> Result<()> {
         #[cfg(feature = "local_fs")]
@@ -309,7 +345,7 @@ impl ProjectContextModel {
                     metadata.index_lazy_loaded_path(&repo_path, ctx)
                 })?;
             }
-            self.refresh_project_rules_for_repo(repo_path, ctx);
+            self.refresh_project_rules_for_repo(repo_id, project_rule_content_reader, ctx);
         }
         Ok(())
     }
@@ -317,86 +353,58 @@ impl ProjectContextModel {
     #[cfg(feature = "local_fs")]
     fn refresh_project_rules_for_repo(
         &mut self,
-        repo_path: StandardizedPath,
+        repo_id: RepositoryIdentifier,
+        project_rule_content_reader: ProjectRuleContentReader,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(project_root) = repo_path.to_local_path() else {
+        if repo_id.to_local_or_remote_path().is_none() {
             return;
         };
-        let id = RepositoryIdentifier::local(repo_path);
-        let rule_paths = RepoMetadataModel::as_ref(ctx)
-            .standing_query_results(&id, ctx)
-            .into_iter()
-            .flat_map(|results| results.project_rules())
-            .filter(|content| !content.is_directory)
-            .filter_map(|content| content.path.to_local_path())
-            .collect::<Vec<_>>();
-        let project_root_location = LocalOrRemotePath::Local(project_root.clone());
-        let existing_rules = self
-            .path_to_rules
-            .get(&project_root_location)
-            .cloned()
-            .unwrap_or_default();
+        let rule_paths = standing_project_rule_paths(
+            &repo_id,
+            RepoMetadataModel::as_ref(ctx)
+                .standing_query_results(&repo_id, ctx)
+                .into_iter()
+                .flat_map(|results| results.project_rules()),
+        );
+        let read_rule_contents = project_rule_content_reader(rule_paths.clone(), ctx);
 
         self.next_rule_refresh_generation += 1;
         let refresh_generation = self.next_rule_refresh_generation;
         self.rule_refresh_generations
-            .insert(project_root.clone(), refresh_generation);
-        let project_root_for_read = project_root.clone();
-        ctx.spawn(
-            async move { Self::read_standing_project_rules(rule_paths, existing_rules).await },
-            move |me, rules, ctx| {
-                if me.rule_refresh_generations.get(&project_root_for_read)
-                    != Some(&refresh_generation)
-                {
-                    return;
+            .insert(repo_id.clone(), refresh_generation);
+        let repo_id_for_result = repo_id.clone();
+        ctx.spawn(read_rule_contents, move |me, result, ctx| {
+            if me.rule_refresh_generations.get(&repo_id_for_result) != Some(&refresh_generation) {
+                return;
+            }
+            match result {
+                Ok(contents) => {
+                    let Some(project_root) = repo_id_for_result.to_local_or_remote_path() else {
+                        return;
+                    };
+                    let existing_rules = me
+                        .path_to_rules
+                        .get(&project_root)
+                        .cloned()
+                        .unwrap_or_default();
+                    let rules = Self::reconcile_project_rules(rule_paths, contents, existing_rules);
+                    me.apply_project_rules(repo_id_for_result, rules, ctx);
                 }
-                let new_paths = rules.local_rule_paths().collect::<Vec<_>>();
-                let previous = me
-                    .path_to_rules
-                    .insert(
-                        LocalOrRemotePath::Local(project_root_for_read.clone()),
-                        rules,
-                    )
-                    .unwrap_or_default();
-                let deleted_rules = previous
-                    .local_rule_paths()
-                    .filter(|path| !new_paths.contains(path))
-                    .collect();
-                let discovered_rules = new_paths
-                    .into_iter()
-                    .map(|path| ProjectRulePath {
-                        path,
-                        project_root: project_root_for_read.clone(),
-                    })
-                    .collect();
-                ctx.emit(ProjectContextModelEvent::KnownRulesChanged(RulesDelta {
-                    discovered_rules,
-                    deleted_rules,
-                }));
-                ctx.emit(ProjectContextModelEvent::PathIndexed);
-            },
-        );
+                Err(error) => log::warn!("Failed to read project rules: {error}"),
+            }
+        });
     }
 
-    #[cfg(feature = "local_fs")]
-    async fn read_standing_project_rules(
-        rule_paths: Vec<PathBuf>,
+    fn reconcile_project_rules(
+        rule_paths: Vec<LocalOrRemotePath>,
+        rule_contents: ProjectRuleContents,
         mut existing_rules: ProjectRules,
     ) -> ProjectRules {
         let retained_paths = rule_paths.iter().cloned().collect::<HashSet<_>>();
         existing_rules.retain_rule_paths(&retained_paths);
-
-        for rule_path in rule_paths {
-            match async_fs::read_to_string(&rule_path).await {
-                Ok(content) => {
-                    existing_rules.upsert_rule(&LocalOrRemotePath::Local(rule_path), content)
-                }
-                Err(error) => log::debug!(
-                    "Failed to read project rule file {}: {error}",
-                    rule_path.display()
-                ),
-            }
+        for (path, content) in rule_contents {
+            existing_rules.upsert_rule(&path, content);
         }
         existing_rules
     }
@@ -404,24 +412,63 @@ impl ProjectContextModel {
     #[cfg(feature = "local_fs")]
     fn remove_project_rules_for_repo(
         &mut self,
-        repo_path: &StandardizedPath,
+        repo_id: &RepositoryIdentifier,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(project_root) = repo_path.to_local_path() else {
+        self.rule_refresh_generations.remove(repo_id);
+        let Some(project_root) = repo_id.to_local_or_remote_path() else {
             return;
         };
-        self.rule_refresh_generations.remove(&project_root);
-        if let Some(rules) = self
-            .path_to_rules
-            .remove(&LocalOrRemotePath::Local(project_root))
-        {
-            let deleted_rules = rules.local_rule_paths().collect();
-            ctx.emit(ProjectContextModelEvent::KnownRulesChanged(RulesDelta {
-                discovered_rules: Vec::new(),
-                deleted_rules,
-            }));
+        if let Some(rules) = self.path_to_rules.remove(&project_root) {
+            if matches!(repo_id, RepositoryIdentifier::Local(_)) {
+                let deleted_rules = rules.local_rule_paths().collect();
+                ctx.emit(ProjectContextModelEvent::KnownRulesChanged(RulesDelta {
+                    discovered_rules: Vec::new(),
+                    deleted_rules,
+                }));
+            }
             ctx.emit(ProjectContextModelEvent::PathIndexed);
         }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn apply_project_rules(
+        &mut self,
+        repo_id: RepositoryIdentifier,
+        rules: ProjectRules,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(project_root) = repo_id.to_local_or_remote_path() else {
+            return;
+        };
+        if let RepositoryIdentifier::Local(local_root) = &repo_id {
+            let Some(local_root) = local_root.to_local_path() else {
+                return;
+            };
+            let new_paths = rules.local_rule_paths().collect::<Vec<_>>();
+            let previous = self
+                .path_to_rules
+                .insert(project_root, rules)
+                .unwrap_or_default();
+            let deleted_rules = previous
+                .local_rule_paths()
+                .filter(|path| !new_paths.contains(path))
+                .collect();
+            let discovered_rules = new_paths
+                .into_iter()
+                .map(|path| ProjectRulePath {
+                    path,
+                    project_root: local_root.clone(),
+                })
+                .collect();
+            ctx.emit(ProjectContextModelEvent::KnownRulesChanged(RulesDelta {
+                discovered_rules,
+                deleted_rules,
+            }));
+        } else {
+            self.path_to_rules.insert(project_root, rules);
+        }
+        ctx.emit(ProjectContextModelEvent::PathIndexed);
     }
 
     /// Index all configured global rule sources.
@@ -439,13 +486,7 @@ impl ProjectContextModel {
     ///
     /// Use this for callers that need a project-initialization signal rather
     /// than the full rule context sent to agents.
-    pub fn find_applicable_project_rules(&self, path: &Path) -> Option<ProjectRulesResult> {
-        self.find_applicable_project_rules_at_location(&LocalOrRemotePath::Local(
-            path.to_path_buf(),
-        ))
-    }
-
-    pub fn find_applicable_project_rules_at_location(
+    pub fn find_applicable_project_rules(
         &self,
         path: &LocalOrRemotePath,
     ) -> Option<ProjectRulesResult> {
@@ -485,15 +526,8 @@ impl ProjectContextModel {
     /// `AIAgentContext::ProjectRules` for an agent query. Callers that need
     /// a project-only signal should use
     /// [`Self::find_applicable_project_rules`] instead.
-    pub fn find_applicable_rules(&self, path: &Path) -> Option<ProjectRulesResult> {
-        self.find_applicable_rules_at_location(&LocalOrRemotePath::Local(path.to_path_buf()))
-    }
-
-    pub fn find_applicable_rules_at_location(
-        &self,
-        path: &LocalOrRemotePath,
-    ) -> Option<ProjectRulesResult> {
-        let project_result = self.find_applicable_project_rules_at_location(path);
+    pub fn find_applicable_rules(&self, path: &LocalOrRemotePath) -> Option<ProjectRulesResult> {
+        let project_result = self.find_applicable_project_rules(path);
 
         // Layered precedence: global rules are always included alongside
         // project rules. `global_rules` is a `BTreeMap`, so iteration is
@@ -513,10 +547,8 @@ impl ProjectContextModel {
         }
 
         // Use the indexed project root when available; otherwise fall back to
-        // the parent of the first global rule (or empty).
-        let root_path = project_root.unwrap_or_else(|| {
-            LocalOrRemotePath::Local(self.global_rules.first_rule_parent().unwrap_or_default())
-        });
+        // the parent of the first global rule.
+        let root_path = project_root.or_else(|| self.global_rules.first_rule_parent())?;
 
         Some(ProjectRulesResult {
             root_path,
@@ -563,9 +595,9 @@ impl ProjectContextModel {
         })
     }
 
-    /// Absolute paths of every indexed global rule file (e.g. `~/.agents/AGENTS.md`).
+    /// Absolute locations of every indexed global rule file (e.g. `~/.agents/AGENTS.md`).
     /// Iteration order is sorted by path because global rules are backed by a `BTreeMap`.
-    pub fn global_rule_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
+    pub fn global_rule_paths(&self) -> impl Iterator<Item = LocalOrRemotePath> + '_ {
         self.global_rules.paths()
     }
 
@@ -582,31 +614,6 @@ impl ProjectContextModel {
                 })
             })
             .collect()
-    }
-
-    pub fn replace_remote_project_rules_from_metadata(
-        &mut self,
-        remote_root: RemotePath,
-        rules: Vec<ProjectRule>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let mut project_rules = ProjectRules::default();
-        for rule in rules {
-            project_rules.upsert_rule(&rule.path, rule.content);
-        }
-        self.path_to_rules
-            .insert(LocalOrRemotePath::Remote(remote_root), project_rules);
-        ctx.emit(ProjectContextModelEvent::PathIndexed);
-    }
-
-    pub fn clear_remote_project_rules_for_removed_metadata_root(
-        &mut self,
-        remote_root: RemotePath,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.path_to_rules
-            .remove(&LocalOrRemotePath::Remote(remote_root));
-        ctx.emit(ProjectContextModelEvent::PathIndexed);
     }
 }
 

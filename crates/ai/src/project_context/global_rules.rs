@@ -78,16 +78,15 @@ impl GlobalRules {
         self.rules.values().cloned()
     }
 
-    pub(crate) fn paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
-        self.rules.keys().cloned()
+    pub(crate) fn paths(&self) -> impl Iterator<Item = LocalOrRemotePath> + '_ {
+        self.rules.keys().cloned().map(LocalOrRemotePath::Local)
     }
 
-    pub(crate) fn first_rule_parent(&self) -> Option<PathBuf> {
+    pub(crate) fn first_rule_parent(&self) -> Option<LocalOrRemotePath> {
         self.rules
             .values()
             .next()
             .and_then(|rule| rule.path.parent())
-            .and_then(|parent| parent.to_local_path().map(Path::to_path_buf))
     }
 
     /// Index all configured global rule sources (see [`GlobalRuleSource`]).
@@ -161,6 +160,7 @@ impl GlobalRules {
                     me.global_rules.rules.insert(
                         file_path.clone(),
                         ProjectRule {
+                            // Global rule sources are watched under the local home directory.
                             path: LocalOrRemotePath::Local(file_path.clone()),
                             content,
                         },
