@@ -994,8 +994,6 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
 /// never produce a worse state than the pre-Fix-B fallback.
 #[test]
 fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -1091,7 +1089,6 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 #[test]
 fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_child_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);

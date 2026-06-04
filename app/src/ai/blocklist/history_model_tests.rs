@@ -330,7 +330,6 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
     // orchestration transcript name resolution can find them before the parent's
     // hidden child pane materializes lazily. Non-orchestration historical rows
     // must stay on the lazy path.
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();
         let child_id = AIConversationId::new();
