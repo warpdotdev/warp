@@ -14,7 +14,7 @@ use warpui_core::ModelContext;
 use super::local_model::collect_contents_recursive;
 use crate::file_tree_store::{FileTreeEntry, FileTreeState};
 use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
-use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContent};
+use crate::local_model::{GetContentsArgs, IndexedRepoState, RepoContents};
 use crate::repository_identifier::RemoteRepositoryIdentifier;
 use crate::standing_queries::{StandingQueryResults, StandingQueryResultsDelta};
 use crate::RepoMetadataError;
@@ -107,13 +107,16 @@ impl RemoteRepoMetadataModel {
 
     /// Returns repository contents for the specified remote repository.
     ///
-    /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// The number of returned entries is capped; when the repository contains
+    /// more matching entries, the result is truncated and
+    /// [`RepoContents::truncated`] is set to `true`.
+    ///
     /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents(
         &self,
         id: &RemoteRepositoryIdentifier,
         args: GetContentsArgs,
-    ) -> Result<Vec<RepoContent<'_>>, RepoMetadataError> {
+    ) -> Result<RepoContents<'_>, RepoMetadataError> {
         let state = match self.repositories.get(id) {
             Some(IndexedRepoState::Indexed(state)) => state,
             Some(IndexedRepoState::Pending(_)) => {
@@ -127,13 +130,16 @@ impl RemoteRepoMetadataModel {
             }
         };
         let mut contents = Vec::new();
-        collect_contents_recursive(
+        let truncated = collect_contents_recursive(
             &state.entry,
             state.entry.root_directory(),
             &mut contents,
             &args,
-        )?;
-        Ok(contents)
+        );
+        Ok(RepoContents {
+            contents,
+            truncated,
+        })
     }
 
     /// Returns all tracked remote repository identifiers, including those in

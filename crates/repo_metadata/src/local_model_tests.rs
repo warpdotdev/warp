@@ -282,7 +282,7 @@ fn test_get_repo_contents() {
                     include_ignored: false,
                     filter: None,
                 };
-                let files = model
+                let result = model
                     .get_repo_contents(
                         &StandardizedPath::from_local_canonicalized(&test_repo).unwrap(),
                         args,
@@ -290,7 +290,8 @@ fn test_get_repo_contents() {
                     .unwrap();
 
                 // Should have 4 files total (file1.txt, file2.rs, file3.py, file4.md)
-                assert_eq!(files.len(), 4);
+                assert_eq!(result.contents.len(), 4);
+                assert!(!result.truncated);
 
                 // Test with non-existent repository
                 let non_existent = StandardizedPath::try_new("/non_existent_repo").unwrap();
@@ -307,6 +308,52 @@ fn test_get_repo_contents() {
             });
         });
     });
+}
+
+#[test]
+fn test_get_repo_contents_truncates_to_max_results() {
+    let repo_path = StandardizedPath::try_new("/trunc_repo").unwrap();
+
+    // Build a flat repo with more files than the result cap so traversal stops early.
+    let file_count = crate::local_model::MAX_REPO_CONTENTS_RESULTS + 50;
+    let children: Vec<Entry> = (0..file_count)
+        .map(|i| {
+            Entry::File(FileMetadata::new(
+                PathBuf::from(format!("/trunc_repo/file{i}.txt")),
+                false,
+            ))
+        })
+        .collect();
+    let root = Entry::Directory(DirectoryEntry {
+        path: repo_path.clone(),
+        children,
+        ignored: false,
+        loaded: true,
+    });
+    let state = FileTreeState::new(root, Vec::new(), None);
+
+    let mut model = LocalRepoMetadataModel::new_for_test();
+    model
+        .repositories
+        .insert(repo_path.clone(), IndexedRepoState::Indexed(state));
+
+    let result = model
+        .get_repo_contents(
+            &repo_path,
+            GetContentsArgs {
+                include_folders: false,
+                include_ignored: false,
+                filter: None,
+            },
+        )
+        .unwrap();
+
+    // The result is capped and flagged as truncated rather than erroring.
+    assert_eq!(
+        result.contents.len(),
+        crate::local_model::MAX_REPO_CONTENTS_RESULTS
+    );
+    assert!(result.truncated);
 }
 
 #[cfg(feature = "local_fs")]
@@ -606,7 +653,8 @@ fn test_get_repo_contents_include_ignored() {
                         &StandardizedPath::from_local_canonicalized(&test_repo).unwrap(),
                         args,
                     )
-                    .unwrap();
+                    .unwrap()
+                    .contents;
 
                 let paths: Vec<PathBuf> = contents
                     .iter()
@@ -639,7 +687,8 @@ fn test_get_repo_contents_include_ignored() {
                         &StandardizedPath::from_local_canonicalized(&test_repo).unwrap(),
                         args,
                     )
-                    .unwrap();
+                    .unwrap()
+                    .contents;
 
                 let paths: Vec<PathBuf> = contents
                     .iter()

@@ -22,6 +22,20 @@ pub enum RepoContent<'a> {
     Directory(&'a FileTreeDirectoryEntryState),
 }
 
+/// The result of [`LocalRepoMetadataModel::get_repo_contents`].
+///
+/// The number of returned entries is capped at [`MAX_REPO_CONTENTS_RESULTS`].
+/// When the repository contains more matching entries than that cap, the
+/// returned `contents` are a partial prefix and `truncated` is `true`.
+#[derive(Debug, Default)]
+pub struct RepoContents<'a> {
+    /// The collected repository contents, capped at [`MAX_REPO_CONTENTS_RESULTS`].
+    pub contents: Vec<RepoContent<'a>>,
+    /// `true` if traversal stopped early because the maximum result size was
+    /// reached, meaning more matching entries exist than were returned.
+    pub truncated: bool,
+}
+
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::entry::{
@@ -1333,13 +1347,16 @@ impl LocalRepoMetadataModel {
 
     /// Returns repository contents (files and optionally directories) in a given repository.
     ///
-    /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// At most [`MAX_REPO_CONTENTS_RESULTS`] entries are returned. When the
+    /// repository contains more matching entries, the result is truncated to
+    /// that cap and [`RepoContents::truncated`] is set to `true`.
+    ///
     /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents(
         &self,
         repo_path: &StandardizedPath,
         args: GetContentsArgs,
-    ) -> Result<Vec<RepoContent<'_>>, RepoMetadataError> {
+    ) -> Result<RepoContents<'_>, RepoMetadataError> {
         let state = match self.repositories.get(repo_path) {
             Some(IndexedRepoState::Indexed(state)) => state,
             Some(IndexedRepoState::Pending(_)) => {
@@ -1353,13 +1370,16 @@ impl LocalRepoMetadataModel {
             }
         };
         let mut contents = Vec::new();
-        collect_contents_recursive(
+        let truncated = collect_contents_recursive(
             &state.entry,
             state.entry.root_directory(),
             &mut contents,
             &args,
-        )?;
-        Ok(contents)
+        );
+        Ok(RepoContents {
+            contents,
+            truncated,
+        })
     }
 
     /// Change the indexing state of `repo_path` to `state`.
@@ -1421,26 +1441,28 @@ impl warpui_core::Entity for LocalRepoMetadataModel {
 }
 
 /// Helper function to recursively collect contents (files and optionally directories) from an Entry tree.
-/// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+///
+/// Collects at most [`MAX_REPO_CONTENTS_RESULTS`] entries into `contents`.
+/// Returns `true` if traversal stopped early because that cap was reached,
+/// indicating the collected `contents` are truncated and more matching entries
+/// exist.
 pub(crate) fn collect_contents_recursive<'a>(
     entry: &'a FileTreeEntry,
     current_path: &'a StandardizedPath,
     contents: &mut Vec<RepoContent<'a>>,
     args: &GetContentsArgs,
-) -> Result<(), RepoMetadataError> {
+) -> bool {
     if !args.include_ignored && entry.ignored(current_path) {
-        return Ok(());
+        return false;
     }
 
     match entry.get(current_path) {
         Some(FileTreeEntryState::File(metadata)) => {
             let content = RepoContent::File(metadata);
             if args.filter.as_ref().is_none_or(|f| f(&content)) {
-                // Check limit before adding
+                // Stop before exceeding the cap, reporting that results are truncated.
                 if contents.len() >= MAX_REPO_CONTENTS_RESULTS {
-                    return Err(RepoMetadataError::ExceededMaxResultSize(
-                        MAX_REPO_CONTENTS_RESULTS,
-                    ));
+                    return true;
                 }
                 contents.push(content);
             }
@@ -1449,23 +1471,23 @@ pub(crate) fn collect_contents_recursive<'a>(
             if args.include_folders {
                 let content = RepoContent::Directory(dir);
                 if args.filter.as_ref().is_none_or(|f| f(&content)) {
-                    // Check limit before adding
+                    // Stop before exceeding the cap, reporting that results are truncated.
                     if contents.len() >= MAX_REPO_CONTENTS_RESULTS {
-                        return Err(RepoMetadataError::ExceededMaxResultSize(
-                            MAX_REPO_CONTENTS_RESULTS,
-                        ));
+                        return true;
                     }
                     contents.push(content);
                 }
             }
 
             for child in entry.child_paths(current_path) {
-                collect_contents_recursive(entry, child, contents, args)?;
+                if collect_contents_recursive(entry, child, contents, args) {
+                    return true;
+                }
             }
         }
         None => {}
     }
-    Ok(())
+    false
 }
 
 // Test helpers

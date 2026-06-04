@@ -15,7 +15,8 @@ use warpui_core::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 use crate::file_tree_store::FileTreeState;
 use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{
-    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoContent, RepositoryMetadataEvent,
+    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoContents,
+    RepositoryMetadataEvent,
 };
 use crate::remote_model::{RemoteRepoMetadataModel, RemoteRepositoryMetadataEvent};
 use crate::repository_identifier::{RemoteRepositoryIdentifier, RepositoryIdentifier};
@@ -267,14 +268,17 @@ impl RepoMetadataModel {
 
     /// Returns repository contents for the specified repository.
     ///
-    /// Returns an error if the number of results exceeds MAX_REPO_CONTENTS_RESULTS.
+    /// The number of returned entries is capped; when the repository contains
+    /// more matching entries, the result is truncated and
+    /// [`RepoContents::truncated`] is set to `true`.
+    ///
     /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents<'a>(
         &self,
         id: &RepositoryIdentifier,
         args: GetContentsArgs,
         ctx: &'a AppContext,
-    ) -> Result<Vec<RepoContent<'a>>, RepoMetadataError> {
+    ) -> Result<RepoContents<'a>, RepoMetadataError> {
         match id {
             RepositoryIdentifier::Local(path) => {
                 self.local.as_ref(ctx).get_repo_contents(path, args)
