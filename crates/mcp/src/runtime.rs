@@ -11,8 +11,8 @@ use std::future::Future;
 use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::FutureExt as _;
-use rmcp::transport::ConfigureCommandExt as _;
 use rmcp::ServiceExt as _;
+use rmcp::transport::ConfigureCommandExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
@@ -362,19 +362,30 @@ async fn determine_transport(
         StatusCode::OK => Ok(Transport::Http(None)),
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
         StatusCode::UNAUTHORIZED => {
-            let Some(auth_context) = auth_context else {
+            let Some(mut auth_context) = auth_context else {
                 return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
                     "Server requires authentication, which is not yet supported.".to_string(),
                 ));
             };
 
+            // Grab the post-authentication callback so we can invoke it once we know for sure that we successfully
+            // went through the OAuth flow for a server and were able to successfully send an initialize request.
+            let authenticated_callback = std::mem::take(&mut auth_context.authenticated);
+
             // Go through the OAuth flow to get an authenticated client.
             // This will first attempt to use cached credentials before starting interactive OAuth.
-            let client = crate::oauth::make_authenticated_client(&server_name, url, auth_context)
+            let client = crate::oauth::make_authenticated_client(url, auth_context)
                 .await
                 .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
             match send_initialize_request(url, headers, Some(&client)).await? {
-                StatusCode::OK => Ok(Transport::Http(Some(client))),
+                StatusCode::OK => {
+                    if let Some(authenticated_callback) = authenticated_callback {
+                        if let Err(err) = authenticated_callback(server_name).await {
+                            log::warn!("Failed to emit MCP authenticated notification: {err:?}");
+                        }
+                    }
+                    Ok(Transport::Http(Some(client)))
+                }
                 StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => {
                     Ok(Transport::Sse(Some(client)))
                 }

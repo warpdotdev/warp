@@ -186,7 +186,7 @@ pub struct AuthContext {
     pub is_file_based: bool,
     pub persist_credentials: PersistCredentialsCallback,
     pub requires_authentication: RequiresAuthenticationCallback,
-    pub authenticated: AuthenticatedCallback,
+    pub authenticated: Option<AuthenticatedCallback>,
 }
 
 /// Result of OAuth callback.
@@ -202,7 +202,6 @@ pub enum CallbackResult {
 /// to determine the authorization server.
 ///
 pub async fn make_authenticated_client(
-    server_name: &str,
     resource_url: &str,
     auth_context: AuthContext,
 ) -> Result<AuthClient<reqwest::Client>, AuthError> {
@@ -214,7 +213,7 @@ pub async fn make_authenticated_client(
         is_file_based,
         persist_credentials,
         requires_authentication,
-        authenticated,
+        ..
     } = auth_context;
 
     // Build the redirect URI using the channel's URL scheme.
@@ -354,10 +353,6 @@ pub async fn make_authenticated_client(
     let auth_manager = oauth_state.into_authorization_manager().ok_or_else(|| {
         AuthError::InternalError("Failed to create authorization manager".to_string())
     })?;
-
-    if let Err(err) = authenticated(server_name.to_string()).await {
-        log::warn!("Failed to emit MCP authenticated notification: {err:?}");
-    }
 
     Ok(AuthClient::new(reqwest::Client::new(), auth_manager))
 }

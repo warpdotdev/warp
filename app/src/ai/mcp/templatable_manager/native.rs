@@ -935,7 +935,7 @@ impl TemplatableMCPServerManager {
                         Ok(())
                     })
                 }),
-                authenticated: Box::new(move |server_name| {
+                authenticated: Some(Box::new(move |server_name| {
                     let spawner = authenticated_spawner.clone();
                     Box::pin(async move {
                         spawner
@@ -960,7 +960,7 @@ impl TemplatableMCPServerManager {
                             })?;
                         Ok(())
                     })
-                }),
+                })),
             }
         });
 
