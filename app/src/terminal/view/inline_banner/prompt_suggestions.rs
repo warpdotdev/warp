@@ -167,12 +167,21 @@ fn render_button(
         let mut icon_color = blended_colors::text_main(theme, theme.surface_1());
         icon_color.a = opacity_u8;
 
+        let should_expand_button = mouse_state.is_hovered();
         let text = {
-            let base = Text::new(
-                text,
-                appearance.ui_font_family(),
-                appearance.monospace_font_size(),
-            )
+            let base = if should_expand_button {
+                Text::new(
+                    text,
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size(),
+                )
+            } else {
+                Text::new_inline(
+                    text,
+                    appearance.ui_font_family(),
+                    appearance.monospace_font_size(),
+                )
+            }
             .with_color(text_color)
             .finish();
 
@@ -265,9 +274,12 @@ fn render_button(
             }
         }
 
-        ConstrainedBox::new(stack.finish())
-            .with_min_height(button_height)
-            .finish()
+        let button = ConstrainedBox::new(stack.finish());
+        if should_expand_button {
+            button.with_min_height(button_height).finish()
+        } else {
+            button.with_height(button_height).finish()
+        }
     })
     .with_cursor(Cursor::PointingHand);
 
