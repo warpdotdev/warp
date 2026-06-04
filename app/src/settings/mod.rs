@@ -258,7 +258,7 @@ pub struct Settings;
 /// later allow users to have both quake mode and activation mode enabled simultaneously. If/when
 /// that happens we'll remove this enum. These options are not modeled as a ternary option in the
 /// serialized user-defaults, but as independent options.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GlobalHotkeyMode {
     #[default]
     Disabled,

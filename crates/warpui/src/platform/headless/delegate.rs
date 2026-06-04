@@ -40,7 +40,7 @@ impl AppDelegate {
 
     fn send_event(&self, event: AppEvent) {
         if self.event_sender.send(event).is_err() {
-            log::warn!("Tried to send event, but event loop is no longer running");
+            log::debug!("Tried to send event, but event loop is no longer running");
         }
     }
 }
@@ -210,7 +210,7 @@ impl platform::DispatchDelegate for DispatchDelegate {
             .send(AppEvent::RunTask(ManuallyDrop::new(task)))
             .is_err()
         {
-            log::warn!("Tried to send event, but event loop is no longer running");
+            log::debug!("Tried to send event, but event loop is no longer running");
         }
     }
 }

@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use cloud_object_client::MockObjectClient;
+use cloud_object_models::JsonSerializer;
 use futures_lite::future;
 use settings::{RespectUserSyncSetting, SyncToCloud};
 use warp_core::features::FeatureFlag;
@@ -20,7 +22,6 @@ use crate::cloud_object::model::actions::{
     ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType, ObjectActions,
 };
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
-use crate::cloud_object::model::json_model::JsonSerializer;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent, UpdateSource};
 use crate::cloud_object::{
     BulkCreateCloudObjectResult, CloudModelType, CloudObjectEventEntrypoint, CloudObjectGuest,
@@ -28,8 +29,8 @@ use crate::cloud_object::{
     GenericCloudObject, GenericStringObjectFormat, JsonObjectType, ObjectDeleteResult,
     ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData, ObjectType, Owner,
     Revision, RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerGuestSubject,
-    ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow, ServerWorkflowEnum, Space,
-    UpdateCloudObjectResult,
+    ServerNotebook, ServerObject, ServerObjectGuest, ServerPreference, ServerWorkflow,
+    ServerWorkflowEnum, Space, UpdateCloudObjectResult,
 };
 use crate::drive::folders::{CloudFolder, CloudFolderModel, FolderId};
 use crate::drive::sharing::{SharingAccessLevel, Subject, UserKind};
@@ -42,13 +43,11 @@ use crate::server::cloud_objects::test_utils::{
 };
 use crate::server::cloud_objects::update_manager::{
     get_duplicate_object_name, FetchSingleObjectOption, GenericStringObjectInput, InitiatedBy,
-    ServerMetadata, ServerNotebook, ServerPermissions,
+    ServerMetadata, ServerPermissions,
 };
 use crate::server::ids::{
     ClientId, HashableId, ObjectUid, ServerId, ServerIdAndType, SyncId, ToServerId,
 };
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{CloudPreferenceModel, Preference};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};

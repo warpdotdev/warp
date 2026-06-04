@@ -50,6 +50,7 @@ pub(crate) use self::environment_selector::sort_environments_by_recency;
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
@@ -75,7 +76,6 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
 };
 use crate::settings_view::SettingsSection;
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
@@ -121,6 +121,8 @@ const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
 
 const FAST_FORWARD_ON_TOOLTIP: &str = "Turn off auto-approve all agent actions";
 const FAST_FORWARD_OFF_TOOLTIP: &str = "Auto-approve all agent actions for this task";
+const FAST_FORWARD_LOCKED_TOOLTIP: &str =
+    "Fast forward is always enabled for cloud agent conversations";
 
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
@@ -358,6 +360,7 @@ impl AgentInputFooter {
                 .with_tooltip(FAST_FORWARD_OFF_TOOLTIP)
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
+                .with_disabled_theme(FastForwardLockedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(TerminalAction::ToggleAutoexecuteMode);
                 })
@@ -373,7 +376,7 @@ impl AgentInputFooter {
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::OpenHandoffPane);
+                    ctx.dispatch_typed_action(AgentInputFooterAction::HandoffChipClicked);
                 })
         });
 
@@ -503,12 +506,12 @@ impl AgentInputFooter {
                     me.plugin_chip_ready = false;
                 }
 
-                // When a listener connects for an agent with rich status,
-                // the plugin is verified installed — hide the chip.
-                // (Codex always has a listener but no actual plugin to install.)
+                // When a structured plugin connects, the plugin is verified
+                // installed — hide the chip. Codex's OSC 9 fallback is not a
+                // structured plugin, so its chip stays until the plugin connects.
                 if CLIAgentSessionsModel::as_ref(ctx)
                     .session(me.terminal_view_id)
-                    .is_some_and(|s| s.listener.is_some() && agent_supports_rich_status(&s.agent))
+                    .is_some_and(|s| s.supports_rich_status())
                 {
                     me.plugin_chip_ready = false;
                 }
@@ -529,10 +532,7 @@ impl AgentInputFooter {
                                     |me, _, ctx: &mut ViewContext<Self>| {
                                         let suppress = CLIAgentSessionsModel::as_ref(ctx)
                                             .session(me.terminal_view_id)
-                                            .is_some_and(|s| {
-                                                s.listener.is_some()
-                                                    && agent_supports_rich_status(&s.agent)
-                                            });
+                                            .is_some_and(|s| s.supports_rich_status());
                                         if !suppress {
                                             me.plugin_chip_ready = true;
                                             ctx.notify();
@@ -731,6 +731,12 @@ impl AgentInputFooter {
                 me.update_ftu_callout_render_state(ctx);
             }
         });
+        ctx.subscribe_to_model(
+            &display_chip_config.agent_view_controller,
+            |me, _, _, ctx| {
+                me.sync_fast_forward_button(ctx);
+            },
+        );
 
         // Keep the remote-control chip in sync with login state so we can
         // disable it and swap the tooltip when the user is anonymous or
@@ -972,13 +978,16 @@ impl AgentInputFooter {
             }
         }
 
-        Flex::row()
+        let content = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(CLOUD_MODE_V2_FOOTER_GAP)
             .with_child(left.finish())
             .with_child(right.finish())
-            .finish()
+            .finish();
+
+        Clipped::new(content).finish()
     }
 
     fn all_display_chips(&self) -> impl Iterator<Item = &ViewHandle<DisplayChip>> {
@@ -1074,10 +1083,9 @@ impl AgentInputFooter {
             let manager = plugin_manager_for(session.agent)?;
             let min_version = manager.minimum_plugin_version();
             let chip_key = plugin_chip_key(session.agent.command_prefix(), &session.remote_host);
-
-            // If the plugin is connected (listener present) and this agent supports
+            // If a structured plugin is connected and this agent supports
             // version-based updates, check the reported version.
-            if session.listener.is_some() && manager.supports_update() {
+            if session.supports_rich_status() && manager.supports_update() {
                 let needs_update = match &session.plugin_version {
                     // No version reported = pre-versioning plugin, definitely outdated.
                     None => true,
@@ -1946,26 +1954,40 @@ impl AgentInputFooter {
     }
 
     fn sync_fast_forward_button(&self, ctx: &mut ViewContext<Self>) {
+        // In cloud agent conversations fast forward is force-enabled.
+        let terminal_model = self.terminal_model.lock();
+        let is_force_enabled = is_in_cloud_context(
+            terminal_model.block_list().agent_view_state(),
+            &terminal_model,
+        );
+        drop(terminal_model);
+
         // Read directly from the conversation, same data source as the warping
         // indicator footer's auto-approve chip.
         let is_active = BlocklistAIHistoryModel::as_ref(ctx)
             .active_conversation(self.terminal_view_id)
             .map(|c| c.autoexecute_any_action())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || is_force_enabled;
+
         let icon = if is_active {
             Icon::FastForwardFilled
         } else {
             Icon::FastForward
         };
-        let tooltip = if is_active {
+        let tooltip = if is_force_enabled {
+            FAST_FORWARD_LOCKED_TOOLTIP
+        } else if is_active {
             FAST_FORWARD_ON_TOOLTIP
         } else {
             FAST_FORWARD_OFF_TOOLTIP
         };
+
         self.fast_forward_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
             button.set_tooltip(Some(tooltip), ctx);
             button.set_active(is_active, ctx);
+            button.set_disabled(is_force_enabled, ctx);
         });
     }
 
@@ -2091,10 +2113,7 @@ impl AgentInputFooter {
                 .is_enabled()
                 .then(|| ChildView::new(&self.fast_forward_button).finish()),
             AgentToolbarItemKind::HandoffToCloud => {
-                if !AISettings::as_ref(app)
-                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, app)
-                    || is_cloud_context
-                {
+                if !AISettings::as_ref(app).is_cloud_handoff_enabled(app) || is_cloud_context {
                     return None;
                 }
 
@@ -2384,9 +2403,10 @@ pub enum AgentInputFooterAction {
     StartRemoteControl,
     StopRemoteControl,
     OpenCodingAgentSettings,
-    /// Open the local-to-cloud handoff pane. Dispatched by the
-    /// "Hand off to cloud" footer chip.
-    OpenHandoffPane,
+    /// User clicked the "Hand off to cloud" footer chip. The terminal `Input`
+    /// subscriber decides whether to dispatch the immediate empty-prompt
+    /// handoff or enter `&` compose mode based on the current input state.
+    HandoffChipClicked,
     ShowContextMenu {
         position: Vector2F,
     },
@@ -2583,12 +2603,16 @@ impl TypedActionView for AgentInputFooter {
                     widget_id: crate::settings_view::cli_agent_settings_widget_id(),
                 });
             }
-            AgentInputFooterAction::OpenHandoffPane => {
+            AgentInputFooterAction::HandoffChipClicked => {
                 if FeatureFlag::OzHandoff.is_enabled()
                     && FeatureFlag::HandoffLocalCloud.is_enabled()
                     && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
                 {
-                    ctx.emit(AgentInputFooterEvent::OpenHandoffPane);
+                    // The terminal `Input` subscriber decides what to do with
+                    // the chip click — auto-handoff when the input buffer is
+                    // empty and the source conversation has content, or `&`
+                    // compose mode otherwise (preserving any in-flight prompt).
+                    ctx.emit(AgentInputFooterEvent::HandoffChipClicked);
                 }
             }
             AgentInputFooterAction::ShowContextMenu { position } => {
@@ -2638,8 +2662,10 @@ pub enum AgentInputFooterEvent {
     #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(CLIAgent, PluginModalKind),
     /// Local-to-cloud handoff chip clicked. The terminal `Input` subscriber
-    /// activates `&` handoff-compose mode on the local input.
-    OpenHandoffPane,
+    /// either dispatches the immediate empty-prompt handoff (empty buffer +
+    /// source conversation with content) or activates `&` compose mode
+    /// (preserving any in-flight prompt).
+    HandoffChipClicked,
 }
 
 impl Entity for AgentInputFooter {
@@ -2836,6 +2862,38 @@ impl ActionButtonTheme for FastForwardButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
+    }
+}
+
+/// Disabled-state theme used by the fast-forward chip when fast-forward is
+/// locked on (cloud agent conversations). Delegates entirely to
+/// `FastForwardButtonTheme`, but forces `hovered=true` on the background so
+/// the chip still reads as "on" while the underlying button is disabled
+/// (which gives us the arrow cursor and no-op click handler for free).
+struct FastForwardLockedTheme;
+
+impl ActionButtonTheme for FastForwardLockedTheme {
+    fn background(&self, _hovered: bool, appearance: &Appearance) -> Option<Fill> {
+        // Force the active (hovered) background so the disabled chip still
+        // visually looks like fast-forward is on.
+        FastForwardButtonTheme.background(true, appearance)
+    }
+
+    fn text_color(
+        &self,
+        hovered: bool,
+        background: Option<Fill>,
+        appearance: &Appearance,
+    ) -> ColorU {
+        FastForwardButtonTheme.text_color(hovered, background, appearance)
+    }
+
+    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
+        FastForwardButtonTheme.border(appearance)
+    }
+
+    fn should_opt_out_of_contrast_adjustment(&self) -> bool {
+        FastForwardButtonTheme.should_opt_out_of_contrast_adjustment()
     }
 }
 

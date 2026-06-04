@@ -1,14 +1,15 @@
 use std::borrow::Cow;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_void};
+use std::os::raw::c_void;
 use std::path::PathBuf;
 
-use cocoa::appkit::NSApp;
-use cocoa::base::{id, nil};
-use cocoa::foundation::{NSArray, NSAutoreleasePool, NSData, NSString, NSUInteger, NSURL};
+use cocoa::base::id;
 use futures_util::future::LocalBoxFuture;
 use objc::runtime::{Object, Sel, BOOL, NO, YES};
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::rc::{autoreleasepool, Retained};
+use objc2::{msg_send, AnyThread, MainThreadMarker};
+use objc2_app_kit::{NSAlert, NSApplication, NSImage, NSRunningApplication};
+use objc2_foundation::{NSArray, NSData, NSString, NSUInteger, NSURL};
 use warpui_core::assets::AssetProvider;
 use warpui_core::integration::TestDriver;
 use warpui_core::keymap::{Keystroke, Trigger};
@@ -19,56 +20,22 @@ use warpui_core::platform::{self, FilePickerCallback, SaveFilePickerCallback};
 use warpui_core::{AppContext, Event};
 
 use super::keycode::{Keycode, CMD_KEY, CONTROL_KEY, OPTION_KEY, SHIFT_KEY};
-use super::make_nsstring;
 use super::menus::{make_dock_menu, make_main_menu};
 use super::window::{get_window_state, IntegrationTestWindowManager, Window, WindowManager};
 use crate::platform::app::{AppBackend, AppBuilder};
 use crate::platform::AsInnerMut;
 
-pub trait NSAlert: Sized {
-    unsafe fn alloc(_: Self) -> id {
-        msg_send![class!(NSAlert), alloc]
+/// Builds a native macOS alert dialog from an [`AlertDialog`].
+pub fn create_native_platform_modal(dialog: AlertDialog) -> Retained<NSAlert> {
+    // SAFETY: native modals are constructed on the main thread.
+    let mtm = unsafe { MainThreadMarker::new_unchecked() };
+    let alert = NSAlert::new(mtm);
+    alert.setInformativeText(&NSString::from_str(&dialog.info_text));
+    alert.setMessageText(&NSString::from_str(&dialog.message_text));
+    for title in dialog.buttons {
+        alert.addButtonWithTitle(&NSString::from_str(&title));
     }
-
-    unsafe fn init(self) -> id;
-    unsafe fn autorelease(self) -> id;
-    unsafe fn set_message_text(self, message_text: id);
-    unsafe fn set_informative_text(self, informative_text: id);
-    unsafe fn add_button_with_title(self, title: id);
-}
-
-impl NSAlert for id {
-    unsafe fn init(self) -> id {
-        msg_send![self, init]
-    }
-
-    unsafe fn autorelease(self) -> id {
-        msg_send![self, autorelease]
-    }
-
-    unsafe fn set_message_text(self, message_text: id) {
-        msg_send![self, setMessageText: message_text]
-    }
-
-    unsafe fn set_informative_text(self, informative_text: id) {
-        msg_send![self, setInformativeText: informative_text]
-    }
-
-    unsafe fn add_button_with_title(self, title: id) {
-        msg_send![self, addButtonWithTitle: title]
-    }
-}
-
-pub fn create_native_platform_modal(dialog: AlertDialog) -> id {
-    unsafe {
-        let alert = NSAlert::autorelease(NSAlert::init(NSAlert::alloc(nil)));
-        alert.set_informative_text(make_nsstring(&dialog.info_text));
-        alert.set_message_text(make_nsstring(&dialog.message_text));
-        for title in dialog.buttons {
-            alert.add_button_with_title(make_nsstring(&title));
-        }
-        alert
-    }
+    alert
 }
 
 const RUST_WRAPPER_IVAR_NAME: &str = "rustWrapper";
@@ -158,44 +125,47 @@ impl App {
     ) {
         self.init_fn = Some(Box::new(init_fn));
 
-        unsafe {
-            let pool = NSAutoreleasePool::new(nil);
-
+        // The autorelease pool stays open for the whole app lifetime (`run` blocks
+        // until termination).
+        autoreleasepool(|_| {
             // Get (and create, if necessary) the underlying NSApplication.
-            let app: id = get_warp_app();
+            // SAFETY: `get_warp_app()` returns the warp NSApplication subclass instance.
+            let app_ptr = unsafe { get_warp_app() };
+            let app = unsafe { &*app_ptr.cast::<NSApplication>() };
 
-            let running_app: id = msg_send![class!(NSRunningApplication), currentApplication];
-            let bundle_id: id = msg_send![running_app, bundleIdentifier];
-            let dev_icon = if bundle_id.is_null() {
-                self.dev_icon.as_ref().map(|dev_icon| {
-                    let data: id = msg_send![class!(NSData), alloc];
-                    let data: id = data.initWithBytes_length_(
-                        dev_icon.as_ptr() as *const c_void,
-                        dev_icon.len() as u64,
-                    );
-                    let image: id = msg_send![class!(NSImage), alloc];
-                    image.initWithData_(data)
+            // When running without an application bundle (dev builds), install the
+            // provided dev icon as the app icon. This is a dev-only path: if the icon
+            // bytes fail to decode we skip the call below and leave the default icon.
+            let running_app = NSRunningApplication::currentApplication();
+            let dev_icon: Option<Retained<NSImage>> = if running_app.bundleIdentifier().is_none() {
+                self.dev_icon.as_ref().and_then(|dev_icon| {
+                    let data = NSData::with_bytes(dev_icon);
+                    NSImage::initWithData(NSImage::alloc(), &data)
                 })
             } else {
                 None
             };
 
-            let app_delegate: id = msg_send![app, delegate];
+            // SAFETY: the app and its delegate are exclusively owned here, so writing
+            // the `rustWrapper` ivar and messaging them is sound.
+            unsafe {
+                let app_delegate = app.delegate().expect("the warp app always has a delegate");
 
-            let self_ptr = Box::into_raw(Box::new(self));
-            (*app).set_ivar(RUST_WRAPPER_IVAR_NAME, self_ptr as *mut c_void);
-            (*app_delegate).set_ivar(RUST_WRAPPER_IVAR_NAME, self_ptr as *mut c_void);
+                let self_ptr = Box::into_raw(Box::new(self));
+                (*app_ptr).set_ivar(RUST_WRAPPER_IVAR_NAME, self_ptr as *mut c_void);
+                (*Retained::as_ptr(&app_delegate).cast::<Object>().cast_mut())
+                    .set_ivar(RUST_WRAPPER_IVAR_NAME, self_ptr as *mut c_void);
 
-            if let Some(dev_icon) = dev_icon {
-                let _: () = msg_send![app, setApplicationIconImage: dev_icon];
+                if let Some(dev_icon) = dev_icon {
+                    app.setApplicationIconImage(Some(&dev_icon));
+                }
+
+                app.run();
+
+                // App is done running when we get here, so we can reinstantiate the Box and drop it.
+                drop(Box::from_raw(self_ptr));
             }
-
-            let _: () = msg_send![app, run];
-            let _: () = msg_send![pool, drain];
-
-            // App is done running when we get here, so we can reinstantiate the Box and drop it.
-            drop(Box::from_raw(self_ptr));
-        }
+        });
     }
 }
 
@@ -275,30 +245,38 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
 
     let app = get_app(this);
 
+    // SAFETY: this delegate callback runs on the main thread.
+    let mtm = MainThreadMarker::new_unchecked();
+    let ns_app = NSApplication::sharedApplication(mtm);
+
     if app.activate_on_launch {
-        let _: () = msg_send![NSApp(), activateIgnoringOtherApps: YES];
+        ns_app.activateIgnoringOtherApps(true);
     }
 
     if let Some(init_fn) = app.init_fn.take() {
         app.callbacks.initialize_app(init_fn);
     }
 
-    let app_delegate: id = msg_send![NSApp(), delegate];
+    let app_delegate = ns_app
+        .delegate()
+        .expect("the warp app always has a delegate");
 
     if app.callbacks.has_internet_reachability_changed_callback() {
-        let _: () = msg_send![app_delegate, setReachabilityListener];
+        // `setReachabilityListener` is a custom warp app-delegate selector.
+        let _: () = msg_send![&*app_delegate, setReachabilityListener];
     }
 
     if let Some(menu_bar_builder) = app.menu_bar_builder.take() {
         let menu_bar = app.callbacks.with_mutable_app_context(menu_bar_builder);
         let nsmenu = make_main_menu(menu_bar);
-        let () = msg_send![NSApp(), setMainMenu: nsmenu];
+        ns_app.setMainMenu(Some(&nsmenu));
     }
 
     if let Some(dock_menu_builder) = app.dock_menu_builder.take() {
         let dock_menu = app.callbacks.with_mutable_app_context(dock_menu_builder);
         let nsmenu = make_dock_menu(dock_menu);
-        let _: () = msg_send![app_delegate, setDockMenu: nsmenu];
+        // `setDockMenu:` is a custom warp app-delegate selector.
+        let _: () = msg_send![&*app_delegate, setDockMenu: &*nsmenu];
     }
 }
 
@@ -522,11 +500,13 @@ extern "C-unwind" fn cpu_will_sleep(this: &mut Object) {
 
 #[no_mangle]
 extern "C-unwind" fn warp_app_open_files(this: &mut Object, paths: id) {
+    // SAFETY: `paths` is an `NSArray<NSString>` of file paths.
     let paths = unsafe {
+        let paths = &*paths.cast::<NSArray<NSString>>();
         (0..paths.count())
             .filter_map(|i| {
                 let path = paths.objectAtIndex(i);
-                match CStr::from_ptr(path.UTF8String() as *mut c_char).to_str() {
+                match CStr::from_ptr(path.UTF8String()).to_str() {
                     Ok(string) => Some(PathBuf::from(string)),
                     Err(err) => {
                         log::error!("error converting path to string: {err}");
@@ -542,11 +522,13 @@ extern "C-unwind" fn warp_app_open_files(this: &mut Object, paths: id) {
 
 #[no_mangle]
 extern "C-unwind" fn warp_app_open_urls(this: &mut Object, urls: id) {
+    // SAFETY: `urls` is an `NSArray<NSURL>`.
     let urls = unsafe {
+        let urls = &*urls.cast::<NSArray<NSURL>>();
         (0..urls.count())
             .filter_map(|i| {
-                let url = urls.objectAtIndex(i).absoluteString();
-                match CStr::from_ptr(url.UTF8String() as *mut c_char).to_str() {
+                let url = urls.objectAtIndex(i).absoluteString()?;
+                match CStr::from_ptr(url.UTF8String()).to_str() {
                     Ok(string) => Some(string.to_string()),
                     Err(err) => {
                         log::error!("error converting url to string: {err}");
@@ -574,16 +556,15 @@ pub(crate) extern "C-unwind" fn warp_open_panel_file_selected(urls: id, callback
     // avoid the memory leak that would occur if we left it in raw pointer form.
     let callback = unsafe { Box::from_raw(callback as *mut FilePickerCallback) };
 
+    // SAFETY: `urls` is an `NSArray<NSURL>` of selected files.
     let paths = unsafe {
+        let urls = &*urls.cast::<NSArray<NSURL>>();
         (0..urls.count())
             .map(|i| {
-                let file_url = urls.objectAtIndex(i);
-                let file_path: id = msg_send![file_url, path];
-                let slice = std::slice::from_raw_parts(
-                    file_path.UTF8String() as *const std::ffi::c_uchar,
-                    file_path.len(),
-                );
-                std::str::from_utf8_unchecked(slice).to_string()
+                urls.objectAtIndex(i)
+                    .path()
+                    .map(|file_path| file_path.to_string())
+                    .unwrap_or_default()
             })
             .collect::<Vec<_>>()
     };
@@ -592,6 +573,7 @@ pub(crate) extern "C-unwind" fn warp_open_panel_file_selected(urls: id, callback
         log::info!("No file was selected. Dialog was cancelled.")
     }
 
+    // SAFETY: `get_warp_app()` returns the warp NSApplication subclass instance.
     let app = unsafe { get_app(&mut *get_warp_app()) };
     app.callbacks.with_mutable_app_context(move |ctx| {
         callback(Ok(paths), ctx);
@@ -603,23 +585,19 @@ pub(crate) extern "C-unwind" fn warp_open_panel_file_selected(urls: id, callback
 pub(crate) extern "C-unwind" fn warp_save_panel_file_selected(url: id, callback: *mut c_void) {
     let callback = unsafe { Box::from_raw(callback as *mut SaveFilePickerCallback) };
 
-    let path = if url.is_null() {
-        None
-    } else {
-        unsafe {
-            let file_path: id = msg_send![url, path];
-            let slice = std::slice::from_raw_parts(
-                file_path.UTF8String() as *const std::ffi::c_uchar,
-                file_path.len(),
-            );
-            Some(std::str::from_utf8_unchecked(slice).to_string())
-        }
+    // SAFETY: `url` is null or a valid `NSURL`.
+    let path = unsafe {
+        url.cast::<NSURL>()
+            .as_ref()
+            .and_then(|url| url.path())
+            .map(|file_path| file_path.to_string())
     };
 
     if path.is_none() {
         log::info!("Save dialog was cancelled.");
     }
 
+    // SAFETY: `get_warp_app()` returns the warp NSApplication subclass instance.
     let app = unsafe { get_app(&mut *get_warp_app()) };
     app.callbacks.with_mutable_app_context(move |ctx| {
         callback(path, ctx);

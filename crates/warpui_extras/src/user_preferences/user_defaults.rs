@@ -1,15 +1,14 @@
 //! Implementation of the [`UserPreferences`] trait using macOS user defaults.
 
-#![allow(deprecated)]
-
-use cocoa::base::{id, nil};
-use objc::rc::StrongPtr;
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::rc::Retained;
+use objc2::runtime::AnyObject;
+use objc2::AnyThread;
+use objc2_foundation::{NSString, NSUserDefaults};
 
 /// A user preferences store backed by macOS user defaults (`NSUserDefaults`).
 pub struct UserDefaultsPreferencesStorage {
     /// A strong reference to the `NSUserDefaults` backing store.
-    user_defaults: StrongPtr,
+    user_defaults: Retained<NSUserDefaults>,
 }
 
 impl UserDefaultsPreferencesStorage {
@@ -29,74 +28,53 @@ impl UserDefaultsPreferencesStorage {
     ///
     /// If [`None`] is provided as the suite name, the standard user defaults
     /// will be used (namespaced based on the current application).
-    fn user_defaults(suite_name: Option<String>) -> StrongPtr {
-        unsafe {
-            // Calling `[[NSUserDefaults alloc] initWithSuiteName]`` where the suite name is the
-            // application's bundle ID (the default `data_domain` if `data_profile` is unset)
-            // _should_ be equivalent to `[NSUserDefaults standardUserDefaults]`. However, in case
-            // the two ever deviate, we explicitly use `standardUserDefaults` below. The Apple docs
-            // also imply that `standardUserDefaults` is cached.
-            if let Some(suite_name) = &suite_name {
-                let defaults: id = msg_send![class!(NSUserDefaults), alloc];
-                let suite_name = util::make_nsstring(suite_name);
+    fn user_defaults(suite_name: Option<String>) -> Retained<NSUserDefaults> {
+        // Calling `[[NSUserDefaults alloc] initWithSuiteName]`` where the suite name is the
+        // application's bundle ID (the default `data_domain` if `data_profile` is unset)
+        // _should_ be equivalent to `[NSUserDefaults standardUserDefaults]`. However, in case
+        // the two ever deviate, we explicitly use `standardUserDefaults` below. The Apple docs
+        // also imply that `standardUserDefaults` is cached.
+        if let Some(suite_name) = &suite_name {
+            let suite_name = NSString::from_str(suite_name);
 
-                StrongPtr::new(msg_send![defaults, initWithSuiteName: *suite_name])
-            } else {
-                StrongPtr::retain(msg_send![class!(NSUserDefaults), standardUserDefaults])
-            }
+            // `initWithSuiteName:` only returns nil when the suite name is a reserved domain
+            // (NSGlobalDomain/NSArgumentDomain/NSRegistrationDomain) or the app's own bundle
+            // identifier; our `{app_id}-{profile}` suite name is never either of those, so this
+            // is unreachable in practice.
+            NSUserDefaults::initWithSuiteName(NSUserDefaults::alloc(), Some(&suite_name)).expect(
+                "initWithSuiteName: only returns nil for a reserved domain or the app's own bundle id",
+            )
+        } else {
+            NSUserDefaults::standardUserDefaults()
         }
     }
 }
 
 impl super::UserPreferences for UserDefaultsPreferencesStorage {
     fn write_value(&self, key: &str, value: String) -> Result<(), super::Error> {
-        unsafe {
-            let key = util::make_nsstring(key);
-            let value = util::make_nsstring(&value);
+        let key = NSString::from_str(key);
+        let value = NSString::from_str(&value);
+        let value: &AnyObject = &value;
 
-            let _: () = msg_send![*self.user_defaults, setObject: *value forKey: *key];
-            Ok(())
+        // `setObject:forKey:` stores an arbitrary object; the value and key are
+        // both `NSString`s, which are valid property-list types.
+        unsafe {
+            self.user_defaults.setObject_forKey(Some(value), &key);
         }
+        Ok(())
     }
 
     fn read_value(&self, key: &str) -> Result<Option<String>, super::Error> {
-        unsafe {
-            let key = util::make_nsstring(key);
-            let value: id = msg_send![*self.user_defaults, stringForKey: *key];
-            if value != nil {
-                Ok(Some(
-                    warpui::platform::mac::utils::nsstring_as_str(value)?.to_owned(),
-                ))
-            } else {
-                Ok(None)
-            }
+        let key = NSString::from_str(key);
+        match self.user_defaults.stringForKey(&key) {
+            Some(value) => Ok(Some(value.to_string())),
+            None => Ok(None),
         }
     }
 
     fn remove_value(&self, key: &str) -> Result<(), super::Error> {
-        unsafe {
-            let key = util::make_nsstring(key);
-            let _: () = msg_send![*self.user_defaults, removeObjectForKey: *key];
-            Ok(())
-        }
-    }
-}
-
-mod util {
-    use cocoa::base::nil;
-    use cocoa::foundation::NSString;
-    use objc::rc::StrongPtr;
-
-    /// Creates a new `NSString` from the given `&str`, wrapped in a
-    /// [`StrongPtr`] so it is released when the `StrongPtr` is dropped.
-    ///
-    /// **Important:** when passing the result to `msg_send!`, always
-    /// dereference it (e.g. `msg_send![obj, foo: *nsstring]`). Passing the
-    /// `StrongPtr` itself by value causes it to be moved into the
-    /// `unsafe extern fn` call that `msg_send!` transmutes to, and Rust will
-    /// not run the `StrongPtr`'s `Drop` glue after that call, leaking the
-    /// underlying `NSString`.
-    pub fn make_nsstring(value: &str) -> StrongPtr {
-        unsafe { StrongPtr::new(NSString::alloc(nil).init_str(value)) }
+        let key = NSString::from_str(key);
+        self.user_defaults.removeObjectForKey(&key);
+        Ok(())
     }
 }

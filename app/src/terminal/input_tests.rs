@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -135,6 +137,9 @@ pub fn initialize_app(app: &mut App) {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     });
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // QueuedQueryModel subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(crate::ai::blocklist::QueuedQueryModel::new);
     // Pill bar model subscribes to history events; register after the
     // history model is in place.
     app.add_singleton_model(|ctx| {
@@ -144,6 +149,15 @@ pub fn initialize_app(app: &mut App) {
         )
     });
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+    // The blocklist controller created during terminal bootstrap subscribes to
+    // OrchestrationEventService and OrchestrationEventStreamer unconditionally,
+    // so both singletons must be registered before bootstrap.
+    app.add_singleton_model(
+        crate::ai::blocklist::orchestration_events::OrchestrationEventService::new,
+    );
+    app.add_singleton_model(
+        crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
+    );
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
     app.add_singleton_model(BlocklistAIPermissions::new);
@@ -1112,6 +1126,62 @@ fn test_history_up_for_shared_session_executor() {
         // The buffer should contain the text of the second last item after another arrow-up
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "echo foo");
+        });
+    });
+}
+
+#[test]
+fn send_now_event_submits_through_active_pane_and_preserves_draft() {
+    // A queued-prompt "send now" surfaces as a SendNow event on the input. The host should
+    // immediately route the removed prompt through the active-pane submission path (here, the
+    // shared-session viewer path, which emits SendAgentPrompt) without clobbering a draft the
+    // user has typed locally.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        terminal.update(&mut app, |view, _| {
+            let mut model = view.model.lock();
+            model.block_list_mut().set_bootstrapped();
+            model
+                .block_list_mut()
+                .active_block_for_test()
+                .set_session_id(SessionId::from(0));
+            model.set_shared_session_status(SharedSessionStatus::executor());
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let submitted_prompts = Rc::new(RefCell::new(Vec::<String>::new()));
+        let submitted_prompts_for_subscription = submitted_prompts.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if let super::Event::SendAgentPrompt { prompt, .. } = event {
+                    submitted_prompts_for_subscription
+                        .borrow_mut()
+                        .push(prompt.clone());
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("draft in progress", ctx);
+            input.handle_queued_prompts_panel_event(
+                &QueuedPromptsPanelEvent::SendNow {
+                    text: "queued prompt".to_owned(),
+                },
+                ctx,
+            );
+        });
+
+        // The queued prompt was submitted immediately...
+        assert_eq!(submitted_prompts.borrow().as_slice(), ["queued prompt"]);
+        // ...and the in-progress draft the user typed was left untouched.
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "draft in progress");
         });
     });
 }

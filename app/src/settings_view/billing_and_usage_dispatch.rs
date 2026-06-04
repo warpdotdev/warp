@@ -14,6 +14,7 @@ use super::settings_page::{
 use super::SettingsSection;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 
 pub struct BillingAndUsageDispatchView {
     page: PageType<Self>,
@@ -55,16 +56,18 @@ impl BillingAndUsageDispatchView {
         if !FeatureFlag::BillingAndUsagePageV2.is_enabled() {
             return false;
         }
-        UserWorkspaces::as_ref(ctx)
-            .current_workspace()
-            .is_some_and(|workspace| {
-                let bm = &workspace.billing_metadata;
-                bm.is_on_build_plan()
-                    || bm.is_on_build_max_plan()
-                    || bm.is_on_build_business_plan()
-                    || bm.is_enterprise_plan()
-                    || bm.is_free_plan()
-            })
+        Self::workspace_uses_v2(UserWorkspaces::as_ref(ctx).current_workspace())
+    }
+
+    fn workspace_uses_v2(workspace: Option<&Workspace>) -> bool {
+        workspace.is_none_or(|workspace| {
+            let bm = &workspace.billing_metadata;
+            bm.is_on_build_plan()
+                || bm.is_on_build_max_plan()
+                || bm.is_on_build_business_plan()
+                || bm.is_enterprise_plan()
+                || bm.is_free_plan()
+        })
     }
 
     pub fn get_modal_content(&self, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -75,6 +78,10 @@ impl BillingAndUsageDispatchView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "billing_and_usage_dispatch_tests.rs"]
+mod tests;
 
 impl Entity for BillingAndUsageDispatchView {
     type Event = BillingAndUsagePageEvent;

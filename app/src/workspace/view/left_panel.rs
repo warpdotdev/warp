@@ -65,9 +65,9 @@ use crate::TelemetryEvent;
 #[derive(Default)]
 struct MouseStateHandles {
     project_explorer_button: MouseStateHandle,
+    conversation_list_view_button: MouseStateHandle,
     global_search_button: MouseStateHandle,
     warp_drive_button: MouseStateHandle,
-    conversation_list_view_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -1118,11 +1118,11 @@ impl View for LeftPanelView {
 
         let mouse_state_handles = vec![
             self.mouse_state_handles.project_explorer_button.clone(),
-            self.mouse_state_handles.global_search_button.clone(),
-            self.mouse_state_handles.warp_drive_button.clone(),
             self.mouse_state_handles
                 .conversation_list_view_button
                 .clone(),
+            self.mouse_state_handles.global_search_button.clone(),
+            self.mouse_state_handles.warp_drive_button.clone(),
         ];
 
         // If there is only one button in the toolbelt row,

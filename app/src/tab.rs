@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +45,7 @@ use crate::util::color::{coloru_with_opacity, Opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
 use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
     TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
 };
@@ -54,6 +56,9 @@ use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+
+/// Label for the tab right-click menu's "Move to group" submenu parent.
+pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
 /// Exposed so binding-description overrides in `workspace/mod.rs` and context-
@@ -147,6 +152,8 @@ pub struct TabData {
     pub indicator_hover_state: MouseStateHandle,
     // Used by a later drag-tab branch to distinguish tabs that have moved into detached windows.
     pub detached: bool,
+    /// Tab group this tab belongs to, if any
+    pub group_id: Option<TabGroupId>,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
@@ -164,6 +171,7 @@ impl TabData {
             selected_color: SelectedTabColor::Unset,
             indicator_hover_state: Default::default(),
             detached: false,
+            group_id: None,
         }
     }
 
@@ -177,15 +185,17 @@ impl TabData {
         &self,
         index: usize,
         tabs_len: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
-        self.menu_items_with_pane_name_target(index, tabs_len, None, ctx)
+        self.menu_items_with_pane_name_target(index, tabs_len, tab_groups, None, ctx)
     }
 
     pub fn menu_items_with_pane_name_target(
         &self,
         index: usize,
         tabs_len: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         pane_name_target: Option<PaneNameMenuTarget>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
@@ -194,7 +204,7 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
-            Self::tab_group_menu_items(),
+            self.tab_group_menu_items(index, tab_groups),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
@@ -530,15 +540,37 @@ impl TabData {
             .into_item()]
     }
 
-    /// Returns the tab-group related entries, TODO(johnturcoo) add group actions.
-    fn tab_group_menu_items() -> Vec<MenuItem<WorkspaceAction>> {
+    /// Returns the tab-group entries for the top-level right-click menu:
+    /// `New group with tab` (always available when the FF is on),
+    /// `Move to group` (when at least one other group exists), and
+    /// `Remove from group` (only when the tab is currently in a group).
+    ///
+    /// The `Move to group` item is a submenu parent — selecting/hovering it
+    /// opens a sidecar populated by the workspace; it has no
+    /// `on_select_action` of its own.
+    fn tab_group_menu_items(
+        &self,
+        index: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
+    ) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
-        vec![
-            MenuItemFields::new("New group with tab").into_item(),
-            MenuItemFields::new_submenu("Move to group").into_item(),
-        ]
+        let mut menu_items = vec![MenuItemFields::new("New group with tab")
+            .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+            .into_item()];
+        let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != self.group_id);
+        if has_other_groups {
+            menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
+        }
+        if self.group_id.is_some() {
+            menu_items.push(
+                MenuItemFields::new("Remove from group")
+                    .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
+                    .into_item(),
+            );
+        }
+        menu_items
     }
 
     fn color_option_menu_items(

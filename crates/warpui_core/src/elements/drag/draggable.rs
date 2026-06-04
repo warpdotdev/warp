@@ -251,6 +251,8 @@ pub struct Draggable {
     bounds_cache: Option<RectF>,
     /// If true, keeps the original element visible in its original position during drag.
     keep_original_visible: bool,
+    /// Defers to a nested `Draggable` that already claimed the mouse-down.
+    defer_to_handled_child_mouse_down: bool,
 
     start_handler: Option<Handler>,
     drag_handler: Option<DragDropHandler>,
@@ -273,6 +275,7 @@ impl Draggable {
             drag_bounds: DragBounds::None,
             bounds_cache: None,
             keep_original_visible: false,
+            defer_to_handled_child_mouse_down: false,
             start_handler: None,
             drag_handler: None,
             is_accepted_by_drop_target_handler: None,
@@ -312,6 +315,12 @@ impl Draggable {
     /// will be clamped to the minimum value of the bounds along that axis.
     pub fn with_drag_bounds(mut self, bounds: RectF) -> Self {
         self.drag_bounds = DragBounds::Fixed(bounds);
+        self
+    }
+
+    /// Skips initiating this drag when a nested `Draggable` already claimed the mouse-down.
+    pub fn with_defer_to_handled_child_mouse_down(mut self) -> Self {
+        self.defer_to_handled_child_mouse_down = true;
         self
     }
 
@@ -591,6 +600,9 @@ impl Element for Draggable {
 
         match event.raw_event() {
             Event::LeftMouseDown { position, .. } => {
+                if self.defer_to_handled_child_mouse_down && ctx.descendant_draggable_initiated() {
+                    return true;
+                }
                 let origin = self.origin().expect("origin should exist");
                 if let Some(rect) = ctx.visible_rect(origin, size) {
                     let max_z_index = self.child_max_z_index.expect("child z index should exist");
@@ -605,6 +617,7 @@ impl Element for Draggable {
                             mouse_down_position: *position,
                             mouse_down_offset,
                         });
+                        ctx.mark_descendant_draggable_initiated();
 
                         ctx.set_cursor(Cursor::PointingHand, max_z_index);
                         return true;

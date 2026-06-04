@@ -148,7 +148,7 @@ use crate::ai::get_relevant_files::controller::{
 use crate::ai::skills::SkillOpenOrigin;
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
-use crate::auth::AuthStateProvider;
+use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
@@ -198,6 +198,7 @@ use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::find::FindEvent;
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     report_error, report_if_error, send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit,
@@ -215,6 +216,79 @@ const AUTO_EXPAND_REQUESTED_COMMAND_DELAY: std::time::Duration =
 
 pub const RICH_CONTENT_SECRET_FIRST_CHAR_POSITION_ID: &str =
     "ai_block:rich_content_secret_first_char_position";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UserAvatarInfo {
+    display_name: String,
+    profile_image_path: Option<String>,
+}
+
+fn current_user_avatar_info(app: &AppContext) -> UserAvatarInfo {
+    let auth_state = AuthStateProvider::as_ref(app).get().clone();
+    UserAvatarInfo {
+        display_name: auth_state
+            .username_for_display()
+            .unwrap_or_else(|| DEFAULT_USER_DISPLAY_NAME.to_owned()),
+        profile_image_path: auth_state.user_photo_url(),
+    }
+}
+
+fn non_empty_photo_url(photo_url: &str) -> Option<String> {
+    (!photo_url.is_empty()).then(|| photo_url.to_string())
+}
+
+fn display_name_for_user_profile(profile: &UserProfileWithUID) -> String {
+    profile
+        .display_name
+        .as_ref()
+        .filter(|name| !name.is_empty())
+        .or_else(|| (!profile.email.is_empty()).then_some(&profile.email))
+        .cloned()
+        .unwrap_or_else(|| profile.firebase_uid.to_string())
+}
+
+fn user_avatar_info_for_conversation_creator(
+    creator: Option<&UserProfileWithUID>,
+    creator_uid: Option<&str>,
+    fallback: UserAvatarInfo,
+    app: &AppContext,
+) -> UserAvatarInfo {
+    if let Some(creator) = creator {
+        return UserAvatarInfo {
+            display_name: display_name_for_user_profile(creator),
+            profile_image_path: non_empty_photo_url(&creator.photo_url),
+        };
+    }
+
+    if let Some(creator_uid) = creator_uid {
+        if let Some(profile) = UserProfiles::as_ref(app).profile_for_uid(UserUid::new(creator_uid))
+        {
+            return UserAvatarInfo {
+                display_name: profile.displayable_identifier(),
+                profile_image_path: non_empty_photo_url(&profile.photo_url),
+            };
+        }
+    }
+
+    fallback
+}
+
+fn user_avatar_info_for_ai_block(
+    model: &dyn AIBlockModel<View = AIBlock>,
+    app: &AppContext,
+) -> UserAvatarInfo {
+    let fallback = current_user_avatar_info(app);
+    let server_metadata = model
+        .conversation(app)
+        .and_then(|conversation| conversation.server_metadata());
+
+    user_avatar_info_for_conversation_creator(
+        server_metadata.and_then(|metadata| metadata.creator.as_ref()),
+        server_metadata.and_then(|metadata| metadata.metadata.creator_uid.as_deref()),
+        fallback,
+        app,
+    )
+}
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -992,10 +1066,7 @@ impl AIBlock {
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-        let user_display_name = auth_state
-            .username_for_display()
-            .unwrap_or_else(|| DEFAULT_USER_DISPLAY_NAME.to_owned());
+        let user_avatar_info = user_avatar_info_for_ai_block(model.as_ref(), ctx);
         let num_attached_context_blocks = num_attached_context_blocks(model.inputs_to_render(ctx));
         let has_attached_context_selected_text =
             has_attached_context_selected_text(model.inputs_to_render(ctx));
@@ -1339,8 +1410,8 @@ impl AIBlock {
             model,
             terminal_model,
             client_ids,
-            profile_image_path: auth_state.user_photo_url(),
-            user_display_name,
+            profile_image_path: user_avatar_info.profile_image_path,
+            user_display_name: user_avatar_info.display_name,
             controller,
             action_model,
             context_model,
@@ -1681,6 +1752,9 @@ impl AIBlock {
 
         self.client_ids.conversation_id = new_conversation_id;
         self.model = new_model;
+        let user_avatar_info = user_avatar_info_for_ai_block(self.model.as_ref(), ctx);
+        self.profile_image_path = user_avatar_info.profile_image_path;
+        self.user_display_name = user_avatar_info.display_name;
         self.run_secret_redaction_on_user_query(new_conversation_id, ctx);
 
         // Re-detect all links for the new conversation.
@@ -2074,32 +2148,29 @@ impl AIBlock {
             }
 
             // Register collapsible state for orchestration action messages.
-            if FeatureFlag::OrchestrationV2.is_enabled() {
-                match &message.message {
-                    AIAgentOutputMessageType::Action(AIAgentAction { action, .. }) => {
-                        if let Some(state) =
-                            default_collapsible_state_for_orchestration_action(action)
-                        {
-                            self.collapsible_block_states
-                                .entry(message.id.clone())
-                                .or_insert(state);
-                        }
+            match &message.message {
+                AIAgentOutputMessageType::Action(AIAgentAction { action, .. }) => {
+                    if let Some(state) = default_collapsible_state_for_orchestration_action(action)
+                    {
+                        self.collapsible_block_states
+                            .entry(message.id.clone())
+                            .or_insert(state);
                     }
-                    AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } => {
-                        for received_message in messages {
-                            let collapsible_id =
-                                received_message_collapsible_id(&received_message.message_id);
-                            self.collapsible_block_states
-                                .entry(collapsible_id.clone())
-                                .or_insert_with(CollapsibleElementState::collapsed);
-                            self.state_handles
-                                .transcript_avatar_handles
-                                .entry(collapsible_id)
-                                .or_default();
-                        }
-                    }
-                    _ => {}
                 }
+                AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } => {
+                    for received_message in messages {
+                        let collapsible_id =
+                            received_message_collapsible_id(&received_message.message_id);
+                        self.collapsible_block_states
+                            .entry(collapsible_id.clone())
+                            .or_insert_with(CollapsibleElementState::collapsed);
+                        self.state_handles
+                            .transcript_avatar_handles
+                            .entry(collapsible_id)
+                            .or_default();
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -3074,7 +3145,7 @@ impl AIBlock {
                         ctx.emit(AIBlockEvent::OpenCodeInWarp {
                             source: CodeSource::Skill {
                                 reference: reference.clone(),
-                                path: path.clone(),
+                                location: path.clone(),
                                 origin: SkillOpenOrigin::EditFiles,
                             },
                             layout: *crate::util::file::external_editor::EditorSettings::as_ref(
@@ -4073,6 +4144,13 @@ impl AIBlock {
 
     /// Handles find match focus changes by auto-expanding collapsed reasoning blocks
     /// that contain the focused match.
+    /// The number of cached find matches for this AI block. Test-only; used to
+    /// assert that find highlights are cleared when the find bar closes.
+    #[cfg(test)]
+    pub(crate) fn find_match_count(&self) -> usize {
+        self.find_state.match_count()
+    }
+
     fn handle_find_match_focus_change(&mut self, ctx: &mut ViewContext<Self>) {
         // Get the currently focused match ID from the terminal's find model.
         // The helper handles both the sync and async find paths.

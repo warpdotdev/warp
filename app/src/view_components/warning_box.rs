@@ -1,10 +1,11 @@
 //! A reusable warning callout component with optional action button.
-
+use markdown_parser::{FormattedText, FormattedTextInline, FormattedTextLine};
 use warp_core::ui::color::blend::Blend;
 use warpui::color::ColorU;
 use warpui::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Expanded, Flex,
-    Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    FormattedTextElement, Hoverable, HyperlinkLens, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Text,
 };
 use warpui::platform::Cursor;
 use warpui::EventContext;
@@ -32,10 +33,14 @@ impl WarningBoxButtonConfig {
         }
     }
 }
+pub enum WarningBoxTitle {
+    Text(String),
+    Formatted(FormattedTextInline),
+}
 
 pub struct WarningBoxConfig {
     pub icon: Icon,
-    pub title: String,
+    pub title: WarningBoxTitle,
     pub description: Option<String>,
 
     /// Optional max width. If provided, the WarningBox will not exceed this width,
@@ -49,9 +54,17 @@ pub struct WarningBoxConfig {
 
 impl WarningBoxConfig {
     pub fn new(title: impl Into<String>) -> Self {
+        Self::from_title(WarningBoxTitle::Text(title.into()))
+    }
+
+    pub fn formatted_title(title: FormattedTextInline) -> Self {
+        Self::from_title(WarningBoxTitle::Formatted(title))
+    }
+
+    fn from_title(title: WarningBoxTitle) -> Self {
         Self {
             icon: Icon::AlertTriangle,
-            title: title.into(),
+            title,
             description: None,
             width: None,
             margin_top: 8.,
@@ -79,7 +92,6 @@ impl WarningBoxConfig {
         self
     }
 }
-
 pub fn render_warning_box(config: WarningBoxConfig, appearance: &Appearance) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon_size = appearance.ui_font_size() * 1.1;
@@ -96,19 +108,36 @@ pub fn render_warning_box(config: WarningBoxConfig, appearance: &Appearance) -> 
 
     let background = theme.surface_2().blend(&warning_fill.with_opacity(15));
 
+    let title = match config.title {
+        WarningBoxTitle::Text(title) => Text::new(
+            title,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(text_color)
+        .soft_wrap(true)
+        .finish(),
+        WarningBoxTitle::Formatted(title) => FormattedTextElement::new(
+            FormattedText::new([FormattedTextLine::Line(title)]),
+            appearance.ui_font_size(),
+            appearance.ui_font_family(),
+            appearance.ui_font_family(),
+            text_color,
+            Default::default(),
+        )
+        .with_hyperlink_font_color(theme.accent().into())
+        .register_default_click_handlers_with_action_support(|hyperlink, _event, app| {
+            if let HyperlinkLens::Url(url) = hyperlink {
+                app.open_url(url);
+            }
+        })
+        .finish(),
+    };
+
     let mut text_col = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacing(2.)
-        .with_child(
-            Text::new(
-                config.title,
-                appearance.ui_font_family(),
-                appearance.ui_font_size(),
-            )
-            .with_color(text_color)
-            .soft_wrap(true)
-            .finish(),
-        );
+        .with_child(title);
 
     if let Some(description) = config.description {
         text_col.add_child(

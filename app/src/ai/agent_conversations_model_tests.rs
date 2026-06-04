@@ -17,7 +17,8 @@ use super::{
     record_earliest_rtc_task_refresh_timestamp, AgentConversationsModel,
     AgentConversationsModelEvent, AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter,
     ConversationMetadata, ConversationUpdateKind, EnvironmentFilter, HarnessFilter, OwnerFilter,
-    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchState, MAX_PERSONAL_TASKS, MAX_TEAM_TASKS,
+    RtcTaskRefreshThrottleState, StatusFilter, TaskFetchError, TaskFetchState, MAX_PERSONAL_TASKS,
+    MAX_TEAM_TASKS,
 };
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::api::ServerConversationToken;
@@ -37,6 +38,7 @@ use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::server::ids::ServerId;
+use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::workspace::WorkspaceAction;
 
@@ -233,7 +235,6 @@ fn test_display_status_uses_setup_task_states() {
 #[test]
 fn test_display_status_uses_matching_conversation_for_in_progress_task() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -289,7 +290,6 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
 #[test]
 fn test_display_status_uses_active_execution_over_previous_conversation_status() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -354,7 +354,6 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
 #[test]
 fn test_display_status_updates_when_blocked_conversation_resumes() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -434,7 +433,6 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
 #[test]
 fn test_display_status_terminal_task_state_overrides_matching_conversation() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
 
         let now = Utc::now();
@@ -489,7 +487,6 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
 #[test]
 fn test_status_filter_uses_display_status_for_task_backed_conversations() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
         let history_model = BlocklistAIHistoryModel::handle(&app);
 
@@ -707,11 +704,13 @@ fn create_server_conversation_metadata(
             was_summarized: false,
             context_window_usage: 0.0,
             credits_spent: 0.0,
+            platform_credits_spent: 0.0,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
         },
         metadata: mock_server_metadata(),
+        creator: None,
         permissions: mock_server_permissions(),
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(server_token.to_string()),
@@ -821,7 +820,6 @@ fn test_get_entries_includes_cloud_metadata_only_entry() {
 #[test]
 fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
 
         let now = Utc::now();
@@ -1085,7 +1083,6 @@ fn test_resolve_open_action_opens_active_ambient_session_from_link() {
 #[test]
 fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
 
         let now = Utc::now();
@@ -1534,7 +1531,6 @@ fn test_resolve_open_action_reopens_ambient_session_after_terminal_unregister() 
 #[test]
 fn test_resolve_copy_link_uses_attached_synced_conversation_for_task_without_token() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
 
         let conversation_id = AIConversationId::new();
@@ -1860,7 +1856,6 @@ fn test_task_status_maps_blocked_state_to_blocked() {
 #[test]
 fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
     App::test((), |mut app| async move {
-        let _orchestration_v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         add_entry_projection_test_models(&mut app);
         let history_model = BlocklistAIHistoryModel::handle(&app);
 
@@ -2113,6 +2108,35 @@ fn test_harness_filter_is_filtering_and_reset() {
 }
 
 #[test]
+fn test_task_fetch_error_extracts_access_denied_http_status() {
+    for status in [401, 403] {
+        let error = anyhow::Error::new(HttpStatusError {
+            status,
+            body: String::new(),
+        })
+        .context("run metadata unavailable");
+        let fetch_error = TaskFetchError::from_error(&error);
+
+        assert_eq!(fetch_error.message(), "run metadata unavailable");
+        assert!(
+            fetch_error.is_access_denied(),
+            "expected status {status} to be access denied"
+        );
+    }
+
+    for error in [
+        anyhow::Error::new(HttpStatusError {
+            status: 404,
+            body: String::new(),
+        })
+        .context("permission denied text alone should not decide the UI"),
+        anyhow::anyhow!("API error 403: forbidden"),
+    ] {
+        assert!(!TaskFetchError::from_error(&error).is_access_denied());
+    }
+}
+
+#[test]
 fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
     // If the task is already in `tasks`, return it directly and don't touch the fetch-state
     // map — even if a stale `PermanentlyFailedAt` entry exists (which shouldn't normally happen,
@@ -2130,7 +2154,10 @@ fn test_get_or_async_fetch_task_data_returns_cached_task_without_fetching() {
                 task_id,
                 TaskFetchState::PermanentlyFailed {
                     at: Instant::now(),
-                    message: "test".to_string(),
+                    error: TaskFetchError {
+                        message: "test".to_string(),
+                        status: None,
+                    },
                 },
             );
             model
@@ -2165,7 +2192,10 @@ fn test_get_or_async_fetch_task_data_skips_when_permanently_failed() {
                 task_id,
                 TaskFetchState::PermanentlyFailed {
                     at: Instant::now(),
-                    message: "403 Forbidden".to_string(),
+                    error: TaskFetchError {
+                        message: "403 Forbidden".to_string(),
+                        status: Some(403),
+                    },
                 },
             );
             model
@@ -2228,7 +2258,10 @@ fn test_get_or_async_fetch_task_data_skips_within_transient_cooldown() {
                 task_id,
                 TaskFetchState::TransientlyFailed {
                     at: Instant::now(),
-                    message: "500 Internal Server Error".to_string(),
+                    error: TaskFetchError {
+                        message: "500 Internal Server Error".to_string(),
+                        status: Some(500),
+                    },
                 },
             );
             model

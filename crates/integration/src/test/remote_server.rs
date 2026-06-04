@@ -24,7 +24,7 @@ use warp::integration_testing::terminal::{
 };
 use warp::terminal::shell::ShellType;
 use warp::terminal::warpify::settings::{SshExtensionInstallMode, SshExtensionInstallModeSetting};
-use warpui::integration::TestStep;
+use warpui_core::integration::TestStep;
 
 use super::{new_builder, Builder};
 

@@ -327,7 +327,7 @@ pub struct CurrentDraggingState {
     pub current_location: ChipLocation,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChipConfiguratorAction {
     StartDraggingChip { location: ChipLocation },
     DragChip { current_position: RectF },

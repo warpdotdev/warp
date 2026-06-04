@@ -25,7 +25,8 @@ use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, ActionPermission, RunAgentsPermission, WriteToPtyPermission,
+    AIExecutionProfile, AIExecutionProfileAppExt as _, ActionPermission, RunAgentsPermission,
+    WriteToPtyPermission,
 };
 use crate::ai::llms::{
     DisableReason, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,
@@ -40,6 +41,7 @@ use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::settings::{AISettings, AISettingsChangedEvent, AgentModeCommandExecutionPredicate};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme};
+use crate::view_components::dropdown::DropdownAction;
 use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
@@ -242,6 +244,7 @@ pub struct ExecutionProfileEditorView {
     context_window_slider_state: SliderStateHandle,
     context_window_editor: ViewHandle<EditorView>,
     last_synced_context_window_editor_value: Option<u32>,
+    dragged_context_window_value: Option<u32>,
     coding_model_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     full_terminal_use_model_dropdown:
         ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
@@ -648,6 +651,7 @@ impl ExecutionProfileEditorView {
             context_window_slider_state,
             context_window_editor,
             last_synced_context_window_editor_value,
+            dragged_context_window_value: None,
             coding_model_dropdown,
             full_terminal_use_model_dropdown,
             computer_use_model_dropdown,
@@ -1185,7 +1189,7 @@ impl ExecutionProfileEditorView {
 
             let items = available_model_menu_items(
                 choices,
-                |llm| create_action(llm.id.clone()).into(),
+                |llm| DropdownAction::select_action_and_close(create_action(llm.id.clone())),
                 None,
                 None,
                 false,
@@ -1234,7 +1238,9 @@ impl ExecutionProfileEditorView {
             let items = available_model_menu_items(
                 choices,
                 |llm| {
-                    ExecutionProfileEditorViewAction::SetCodingModel { id: llm.id.clone() }.into()
+                    DropdownAction::select_action_and_close(
+                        ExecutionProfileEditorViewAction::SetCodingModel { id: llm.id.clone() },
+                    )
                 },
                 None,
                 None,
@@ -1439,6 +1445,7 @@ impl ExecutionProfileEditorView {
     }
 
     fn sync_context_window_editor(&mut self, ctx: &mut ViewContext<Self>, force: bool) {
+        self.dragged_context_window_value = None;
         let Some(value) = self.current_context_window_display_value(ctx) else {
             self.last_synced_context_window_editor_value = None;
             self.context_window_slider_state.reset_offset();
@@ -1575,6 +1582,7 @@ impl TypedActionView for ExecutionProfileEditorView {
                 // in the input box without persisting to the profile yet.
                 // Persistence happens on SetContextWindowSize (drop / commit).
                 if self.configurable_context_window(ctx).is_some() {
+                    self.dragged_context_window_value = Some(*value);
                     let formatted = value.separate_with_commas();
                     self.context_window_editor.update(ctx, |editor, ctx| {
                         editor.system_reset_buffer_text(&formatted, ctx);
@@ -1583,6 +1591,7 @@ impl TypedActionView for ExecutionProfileEditorView {
                 }
             }
             ExecutionProfileEditorViewAction::SetContextWindowSize { value } => {
+                self.dragged_context_window_value = None;
                 if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     self.sync_context_window_editor(ctx, true);
                     return;

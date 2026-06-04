@@ -221,8 +221,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ProfilesDesignRevamp,
         #[cfg(feature = "search_codebase_ui")]
         FeatureFlag::SearchCodebaseUI,
-        #[cfg(feature = "changed_lines_only_apply_diff_result")]
-        FeatureFlag::ChangedLinesOnlyApplyDiffResult,
         #[cfg(feature = "linked_code_blocks")]
         FeatureFlag::LinkedCodeBlocks,
         #[cfg(feature = "tabbed_editor_view")]
@@ -417,22 +415,24 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "orchestration_v2")]
-        FeatureFlag::OrchestrationV2,
         #[cfg(feature = "orchestration_pill_bar")]
         FeatureFlag::OrchestrationPillBar,
         #[cfg(feature = "orchestration_viewer_pill_bar")]
         FeatureFlag::OrchestrationViewerPillBar,
-        #[cfg(feature = "run_agents_tool")]
-        FeatureFlag::RunAgentsTool,
+        #[cfg(feature = "orchestration_viewer_streamer")]
+        FeatureFlag::OrchestrationViewerStreamer,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]
         FeatureFlag::QueueSlashCommand,
+        #[cfg(feature = "queued_prompts_v2")]
+        FeatureFlag::QueuedPromptsV2,
         #[cfg(feature = "kitty_keyboard_protocol")]
         FeatureFlag::KittyKeyboardProtocol,
         #[cfg(feature = "inline_menu_headers")]
         FeatureFlag::InlineMenuHeaders,
+        #[cfg(feature = "restore_prompt_on_inline_model_selector_search")]
+        FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
         #[cfg(feature = "directory_tab_colors")]
         FeatureFlag::DirectoryTabColors,
         #[cfg(feature = "open_warp_new_settings_modes")]
@@ -467,6 +467,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SoloUserByok,
         #[cfg(feature = "billing_and_usage_page_v2")]
         FeatureFlag::BillingAndUsagePageV2,
+        #[cfg(feature = "gpt_configurable_context_window")]
+        FeatureFlag::GPTConfigurableContextWindow,
         #[cfg(feature = "skip_firebase_anonymous_user")]
         FeatureFlag::SkipFirebaseAnonymousUser,
         #[cfg(feature = "hoa_onboarding_flow")]
@@ -477,14 +479,14 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HOARemoteControl,
         #[cfg(feature = "codex_notifications")]
         FeatureFlag::CodexNotifications,
+        #[cfg(feature = "codex_plugin")]
+        FeatureFlag::CodexPlugin,
         #[cfg(feature = "trim_trailing_blank_lines")]
         FeatureFlag::TrimTrailingBlankLines,
         #[cfg(feature = "cloud_mode_setup_v2")]
         FeatureFlag::CloudModeSetupV2,
         #[cfg(feature = "cloud_mode_input_v2")]
         FeatureFlag::CloudModeInputV2,
-        #[cfg(feature = "configurable_context_window")]
-        FeatureFlag::ConfigurableContextWindow,
         #[cfg(feature = "handoff_cloud_cloud")]
         FeatureFlag::HandoffCloudCloud,
         #[cfg(feature = "git_credential_refresh")]

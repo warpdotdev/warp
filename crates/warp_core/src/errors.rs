@@ -16,6 +16,17 @@ pub use self::anyhow::AnyhowErrorExt;
 /// The `target` that is set by log entries from this module.
 pub const LOG_TARGET: &str = "errors::report_error";
 
+/// Controls how often a [`report_error!`] invocation logs errors.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ReportErrorLogMode {
+    /// Log every time the error is reported.
+    #[default]
+    EveryTime,
+    /// Log only the first time this macro invocation is reached during the
+    /// current app run.
+    OncePerRun,
+}
+
 /// Reports an error encountered during execution.
 ///
 /// This checks whether or not the error is actionable, and logs an error or
@@ -24,7 +35,7 @@ pub const LOG_TARGET: &str = "errors::report_error";
 /// upon.)
 #[macro_export]
 macro_rules! report_error {
-    ($err:expr) => {{
+    (@log $err:expr) => {{
         #[allow(unused_imports)]
         use $crate::errors::{AnyhowErrorExt as _, ErrorExt as _, LOG_TARGET};
         let err = $err;
@@ -35,6 +46,38 @@ macro_rules! report_error {
             log::Level::Warn
         };
         log::log!(target: LOG_TARGET, log_level, "{:#}", err);
+    }};
+    (@once_per_run $err:expr) => {{
+        static HAS_LOGGED_REPORT_ERROR: ::std::sync::atomic::AtomicBool =
+            ::std::sync::atomic::AtomicBool::new(false);
+        if !HAS_LOGGED_REPORT_ERROR.swap(true, ::std::sync::atomic::Ordering::Relaxed) {
+            $crate::report_error!(@log $err);
+        }
+    }};
+    ($err:expr) => {{
+        $crate::report_error!(@log $err);
+    }};
+    ($err:expr, $crate::errors::ReportErrorLogMode::EveryTime) => {{
+        $crate::report_error!(@log $err);
+    }};
+    ($err:expr, ReportErrorLogMode::EveryTime) => {{
+        $crate::report_error!(@log $err);
+    }};
+    ($err:expr, $crate::errors::ReportErrorLogMode::OncePerRun) => {{
+        $crate::report_error!(@once_per_run $err);
+    }};
+    ($err:expr, ReportErrorLogMode::OncePerRun) => {{
+        $crate::report_error!(@once_per_run $err);
+    }};
+    ($err:expr, $log_mode:expr) => {{
+        match $log_mode {
+            $crate::errors::ReportErrorLogMode::EveryTime => {
+                $crate::report_error!(@log $err);
+            }
+            $crate::errors::ReportErrorLogMode::OncePerRun => {
+                $crate::report_error!(@once_per_run $err);
+            }
+        }
     }};
 }
 pub use report_error;
@@ -50,6 +93,11 @@ macro_rules! report_if_error {
     ($result:expr) => {{
         if let Err(error) = &$result {
             $crate::report_error!(error);
+        }
+    }};
+    ($result:expr, $log_mode:expr) => {{
+        if let Err(error) = &$result {
+            $crate::report_error!(error, $log_mode);
         }
     }};
 }
@@ -76,3 +124,7 @@ pub trait ErrorExt: RegisteredError + std::error::Error {
         sentry::capture_error(self);
     }
 }
+
+#[cfg(test)]
+#[path = "errors_tests.rs"]
+mod tests;
