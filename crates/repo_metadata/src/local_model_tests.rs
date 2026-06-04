@@ -40,13 +40,17 @@ impl LocalRepoMetadataModel {
             force_included_paths: Default::default(),
             standing_query_definitions: Default::default(),
             #[cfg(feature = "local_fs")]
-            project_skill_symlink_dependencies: Default::default(),
-            #[cfg(feature = "local_fs")]
-            watched_project_skill_symlink_target_dirs: Default::default(),
+            symlink_targets: Default::default(),
         }
     }
 }
 
+#[test]
+#[should_panic(expected = "ignored path interests must be repository-relative")]
+fn force_included_paths_must_be_relative() {
+    let mut model = LocalRepoMetadataModel::new_for_test();
+    model.register_force_included_paths([PathBuf::from("/absolute/path")]);
+}
 fn empty_repo_state(repo_path: &StandardizedPath) -> FileTreeState {
     let root = Entry::Directory(DirectoryEntry {
         path: repo_path.clone(),
@@ -452,7 +456,6 @@ fn test_index_directory_upgrades_lazy_loaded_path_to_repo() {
                     .entry
                     .contains(&StandardizedPath::try_from_local(&source_file).unwrap()));
             });
-
             let (tx, rx) = oneshot::channel();
             let repo_root_for_event = repo_root.clone();
             let upgrade_completed = Rc::new(RefCell::new(Some(tx)));
@@ -1444,6 +1447,8 @@ fn modified_external_symlink_target_upserts_lexical_project_skill() {
                 let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
                 model_handle.update(&mut app, |model, ctx| {
                     model.set_emit_incremental_updates(true);
+                    model.register_force_included_paths([PathBuf::from(".agents/skills")]);
+                    model.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
                     model.repositories.insert(
                         repo_path.clone(),
                         IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
@@ -1453,7 +1458,7 @@ fn modified_external_symlink_target_upserts_lexical_project_skill() {
                         logical_skill_path.clone(),
                     ));
                     model.standing_results.insert(repo_path.clone(), results);
-                    model.refresh_project_skill_symlink_dependencies(&repo_path, ctx);
+                    model.refresh_symlink_targets(&repo_path, ctx);
                 });
 
                 let (tx, rx) = oneshot::channel();
@@ -1530,6 +1535,8 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                 let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
                 model_handle.update(&mut app, |model, ctx| {
                     model.set_emit_incremental_updates(true);
+                    model.register_force_included_paths([PathBuf::from(".agents/skills")]);
+                    model.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
                     model.repositories.insert(
                         repo_path.clone(),
                         IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
@@ -1539,7 +1546,7 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                         logical_skill_path.clone(),
                     ));
                     model.standing_results.insert(repo_path.clone(), results);
-                    model.refresh_project_skill_symlink_dependencies(&repo_path, ctx);
+                    model.refresh_symlink_targets(&repo_path, ctx);
                 });
 
                 let (tx, rx) = oneshot::channel();
@@ -1566,6 +1573,7 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                     });
                 });
 
+                std::fs::remove_file(&target_skill_path).unwrap();
                 model_handle.update(&mut app, |model, ctx| {
                     model.handle_watcher_event(
                         &BulkFilesystemWatcherEvent {
@@ -1612,6 +1620,7 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                         }
                     });
                 });
+                std::fs::write(&target_skill_path, "linked skill").unwrap();
                 model_handle.update(&mut app, |model, ctx| {
                     model.handle_watcher_event(
                         &BulkFilesystemWatcherEvent {
@@ -1625,6 +1634,130 @@ fn removed_then_recreated_external_symlink_target_refreshes_lexical_project_skil
                     .await
                     .expect("timed out waiting for recreated symlink target upsert")
                     .expect("recreated symlink target upsert sender dropped");
+            });
+        },
+    );
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn symlink_targets_retain_aliases_and_clear_for_removed_or_failed_repositories() {
+    VirtualFS::test(
+        "symlink_targets_retain_aliases_and_clear_for_removed_or_failed_repositories",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("outside/shared-skill")
+                .with_files(vec![Stub::FileWithContent(
+                    "outside/shared-skill/SKILL.md",
+                    "shared skill",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let target = dirs.tests().join("outside/shared-skill");
+            std::os::unix::fs::symlink(&target, repo.join(".agents/skills/first")).unwrap();
+            std::os::unix::fs::symlink(&target, repo.join(".agents/skills/second")).unwrap();
+
+            App::test((), |mut app| async move {
+                let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                let target = dunce::canonicalize(target).unwrap();
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+                model_handle.update(&mut app, |model, ctx| {
+                    model.set_emit_incremental_updates(true);
+                    model.register_force_included_paths([PathBuf::from(".agents/skills")]);
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                    model.refresh_symlink_targets(&repo_path, ctx);
+                });
+
+                model_handle.read(&app, |model, _ctx| {
+                    assert_eq!(
+                        model
+                            .symlink_targets
+                            .get(&target)
+                            .expect("resolved target should be tracked")
+                            .len(),
+                        2
+                    );
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model
+                        .remove_repository(&repo_path, ctx)
+                        .expect("repository should be removed");
+                });
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(model.symlink_targets.is_empty());
+                });
+
+                model_handle.update(&mut app, |model, ctx| {
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                    model.refresh_symlink_targets(&repo_path, ctx);
+                    model.mark_repository_failed(
+                        repo_path.clone(),
+                        RepoMetadataError::RepoNotFound(repo_path.to_string()),
+                        ctx,
+                    );
+                });
+                model_handle.read(&app, |model, _ctx| {
+                    assert!(model.symlink_targets.is_empty());
+                });
+            });
+        },
+    );
+}
+
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn removed_external_symlink_target_directory_queues_lexical_removal_and_clears_mapping() {
+    VirtualFS::test(
+        "removed_external_symlink_target_directory_queues_lexical_removal_and_clears_mapping",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("outside/linked-skill")
+                .with_files(vec![Stub::FileWithContent(
+                    "outside/linked-skill/SKILL.md",
+                    "linked skill",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let logical_skill_dir = repo.join(".agents/skills/linked-skill");
+            let target_skill_dir = dirs.tests().join("outside/linked-skill");
+            std::os::unix::fs::symlink(&target_skill_dir, &logical_skill_dir).unwrap();
+
+            App::test((), |mut app| async move {
+                let repo_path = StandardizedPath::from_local_canonicalized(&repo).unwrap();
+                let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+                model_handle.update(&mut app, |model, ctx| {
+                    model.set_emit_incremental_updates(true);
+                    model.register_force_included_paths([PathBuf::from(".agents/skills")]);
+                    model.repositories.insert(
+                        repo_path.clone(),
+                        IndexedRepoState::Indexed(empty_repo_state(&repo_path)),
+                    );
+                    model.refresh_symlink_targets(&repo_path, ctx);
+                });
+
+                std::fs::remove_dir_all(&target_skill_dir).unwrap();
+                model_handle.update(&mut app, |model, ctx| {
+                    let mut repo_updates = HashMap::new();
+                    let event = BulkFilesystemWatcherEvent {
+                        deleted: std::collections::HashSet::from([target_skill_dir.clone()]),
+                        ..Default::default()
+                    };
+                    let matched_paths = model.add_symlink_target_updates(&event, &mut repo_updates);
+                    assert!(matched_paths.contains(&target_skill_dir));
+                    let update = repo_updates
+                        .get(&repo_path)
+                        .expect("target directory deletion should queue a lexical refresh");
+                    assert_eq!(update.deleted, vec![logical_skill_dir.clone()]);
+                    assert!(update.added.is_empty());
+
+                    model.refresh_symlink_targets(&repo_path, ctx);
+                    assert!(model.symlink_targets.is_empty());
+                });
             });
         },
     );
