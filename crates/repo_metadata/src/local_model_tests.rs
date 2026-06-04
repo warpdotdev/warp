@@ -32,7 +32,7 @@ impl LocalRepoMetadataModel {
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
-            ignored_path_interests: Vec::new(),
+            force_included_paths: Vec::new(),
         }
     }
 }

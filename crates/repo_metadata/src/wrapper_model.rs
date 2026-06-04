@@ -305,19 +305,20 @@ impl RepoMetadataModel {
         })
     }
 
-    /// Registers component-sequence paths that should be loaded even when ignored.
+    /// Registers paths that must be loaded even when gitignored or beyond the
+    /// tree's size limit.
     ///
-    /// This delegates to the local model because ignored-path matching happens
-    /// while building local file trees. Remote repositories receive the resulting
-    /// file-tree metadata over the existing remote sync protocol.
-    pub fn register_ignored_path_interests(
+    /// This delegates to the local model because force-included path matching
+    /// happens while building local file trees. Remote repositories receive the
+    /// resulting file-tree metadata over the existing remote sync protocol.
+    pub fn register_force_included_paths(
         &self,
-        interests: impl IntoIterator<Item = std::path::PathBuf>,
+        paths: impl IntoIterator<Item = std::path::PathBuf>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let interests: Vec<_> = interests.into_iter().collect();
+        let paths: Vec<_> = paths.into_iter().collect();
         self.local.update(ctx, |local, _| {
-            local.register_ignored_path_interests(interests);
+            local.register_force_included_paths(paths);
         });
     }
 

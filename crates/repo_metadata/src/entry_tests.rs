@@ -212,69 +212,69 @@ fn should_watch_prunes_gitignored_directory() {
 }
 
 #[test]
-fn should_watch_descends_to_interest_under_ignored_ancestor() {
+fn should_watch_descends_to_force_included_under_ignored_ancestor() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(temp_dir.path()).unwrap();
     fs::create_dir_all(root.join(".agents/skills/test")).unwrap();
     fs::create_dir(root.join(".agents/other")).unwrap();
     let gitignores = vec![gitignore_rooted(&root, ".agents/\n")];
-    let interests = vec![std::path::PathBuf::from(".agents/skills")];
+    let force_included = vec![std::path::PathBuf::from(".agents/skills")];
 
     // The whole `.agents` subtree is gitignored, but we still descend along the
-    // prefix to reach the registered interest, and into the interest subtree.
+    // prefix to reach the force-included path, and into its subtree.
     assert!(super::should_watch_repo_directory(
         &root.join(".agents"),
         &gitignores,
-        &interests
+        &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join(".agents/skills"),
         &gitignores,
-        &interests
+        &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join(".agents/skills/test"),
         &gitignores,
-        &interests
+        &force_included
     ));
-    // A sibling ignored dir that is not part of any interest is still pruned.
+    // A sibling ignored dir that is not force-included is still pruned.
     assert!(!super::should_watch_repo_directory(
         &root.join(".agents/other"),
         &gitignores,
-        &interests
+        &force_included
     ));
 }
 
 #[test]
-fn should_watch_handles_nested_ignored_ancestor_with_deeper_interest() {
+fn should_watch_handles_nested_ignored_ancestor_with_deeper_force_included() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(temp_dir.path()).unwrap();
     fs::create_dir_all(root.join("a/b/c")).unwrap();
     fs::create_dir(root.join("a/b/other")).unwrap();
     let gitignores = vec![gitignore_rooted(&root, "a/b/\n")];
-    let interests = vec![std::path::PathBuf::from("a/b/c")];
+    let force_included = vec![std::path::PathBuf::from("a/b/c")];
 
-    // `a/b` is ignored but `a/b/c` is a registered interest: descend along the
-    // whole prefix and into the interest, while pruning the ignored sibling.
+    // `a/b` is ignored but `a/b/c` is force-included: descend along the whole
+    // prefix and into it, while pruning the ignored sibling.
     assert!(super::should_watch_repo_directory(
         &root.join("a"),
         &gitignores,
-        &interests
+        &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join("a/b"),
         &gitignores,
-        &interests
+        &force_included
     ));
     assert!(super::should_watch_repo_directory(
         &root.join("a/b/c"),
         &gitignores,
-        &interests
+        &force_included
     ));
     assert!(!super::should_watch_repo_directory(
         &root.join("a/b/other"),
         &gitignores,
-        &interests
+        &force_included
     ));
 }
 
@@ -312,8 +312,9 @@ fn should_watch_descends_dir_only_reinclude_negation() {
 
 #[test]
 fn should_watch_preserves_git_internal_allowlist() {
-    // No gitignores / interests needed: `.git` handling short-circuits and is
-    // path-based, mirroring `should_watch_directory_in_git_path`.
+    // No gitignores / force-included paths needed: `.git` handling
+    // short-circuits and is path-based, mirroring
+    // `should_watch_directory_in_git_path`.
     let repo = std::path::Path::new("/home/user/project");
     assert!(super::should_watch_repo_directory(
         &repo.join(".git/refs/heads"),
@@ -346,7 +347,7 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = 1000;
-    super::Entry::build_tree_with_ignored_path_interests(
+    super::Entry::build_tree_with_force_included_paths(
         root,
         &mut files,
         &mut gitignores,
@@ -355,7 +356,7 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
             max_depth: 200,
             current_depth: 0,
             ignored_path_strategy: &super::IgnoredPathStrategy::IncludeLazy,
-            ignored_path_interests: &[std::path::PathBuf::from(".agents/skills")],
+            force_included_paths: &[std::path::PathBuf::from(".agents/skills")],
             budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
         },
     )
@@ -437,7 +438,7 @@ fn ignored_agents_skills_directory_is_loaded_for_registered_provider_path() {
 }
 
 #[test]
-fn unrelated_ignored_directory_stays_lazy_without_registered_interest() {
+fn unrelated_ignored_directory_stays_lazy_without_registered_force_included() {
     virtual_fs::VirtualFS::test("unrelated_ignored_dir_lazy", |dirs, mut vfs| {
         vfs.mkdir("repo/.agents/skills/test")
             .mkdir("repo/target/debug")
@@ -672,17 +673,17 @@ fn test_extract_worktree_git_dir() {
     );
 }
 
-/// Builds a tree with an explicit file budget and ignored-path interests using
+/// Builds a tree with an explicit file budget and force-included paths using
 /// the lazy ignored-path strategy.
 fn build_with_budget(
     root: &std::path::Path,
     budget: usize,
-    interests: &[std::path::PathBuf],
+    force_included_paths: &[std::path::PathBuf],
 ) -> super::Entry {
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = budget;
-    super::Entry::build_tree_with_ignored_path_interests(
+    super::Entry::build_tree_with_force_included_paths(
         root,
         &mut files,
         &mut gitignores,
@@ -691,7 +692,7 @@ fn build_with_budget(
             max_depth: 200,
             current_depth: 0,
             ignored_path_strategy: &super::IgnoredPathStrategy::IncludeLazy,
-            ignored_path_interests: interests,
+            force_included_paths,
             budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
         },
     )
@@ -743,7 +744,7 @@ fn build_tree_budget_covers_breadth_first_and_leaves_remainder_unloaded() {
 }
 
 #[test]
-fn build_tree_budget_does_not_prune_interest_paths() {
+fn build_tree_budget_does_not_prune_force_included_paths() {
     let temp_dir = tempfile::tempdir().unwrap();
     let root = dunce::canonicalize(temp_dir.path()).unwrap();
 
@@ -757,13 +758,13 @@ fn build_tree_budget_does_not_prune_interest_paths() {
     fs::write(skill_dir.join("SKILL.md"), "name: test").unwrap();
 
     // Tiny budget: the root expands and is immediately exhausted, but the
-    // registered interest path must still be loaded all the way down.
-    let interests = [std::path::PathBuf::from(".agents/skills")];
-    let tree = build_with_budget(&root, 1, &interests);
+    // force-included path must still be loaded all the way down.
+    let force_included = [std::path::PathBuf::from(".agents/skills")];
+    let tree = build_with_budget(&root, 1, &force_included);
 
     assert!(
         find_entry(&tree, &skill_dir.join("SKILL.md")).is_some(),
-        "interest-path files must load even when the budget is exhausted"
+        "force-included path files must load even when the budget is exhausted"
     );
 }
 

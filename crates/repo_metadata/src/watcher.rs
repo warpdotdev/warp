@@ -43,11 +43,11 @@ pub struct DirectoryWatcher {
     /// Handle to the internal processing queue model that orders scan & update tasks.
     processing_queue: ModelHandle<TaskQueue>,
 
-    /// Component-sequence paths that should stay watched even when gitignored
-    /// (e.g. skill provider directories). Fed into the watch descend filter so
-    /// consumers keep getting updates for ignored subtrees they care about.
+    /// Paths that must be watched (and indexed) even when they are gitignored
+    /// or beyond the tree's size limit — e.g. skill provider directories that
+    /// consumers (LSP, MCP) need live updates for.
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
-    ignored_path_interests: Vec<PathBuf>,
+    force_included_paths: Vec<PathBuf>,
 }
 
 impl DirectoryWatcher {
@@ -75,7 +75,7 @@ impl DirectoryWatcher {
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
             processing_queue,
-            ignored_path_interests: Vec::new(),
+            force_included_paths: Vec::new(),
         }
     }
 
@@ -100,26 +100,19 @@ impl DirectoryWatcher {
             #[cfg(feature = "local_fs")]
             watcher: Some(fs_watcher),
             processing_queue,
-            ignored_path_interests: Vec::new(),
+            force_included_paths: Vec::new(),
         }
     }
 
-    /// Registers component-sequence paths that should stay watched even when
-    /// gitignored. Mirrors `LocalRepoMetadataModel::register_ignored_path_interests`
-    /// but applies to the watcher backing `Repository` subscribers (LSP, MCP).
-    /// Must be called before repositories begin watching for the interest to
-    /// take effect on already-registered watches.
-    ///
-    /// Kept as a `Vec` (deduped on insert): registration happens a handful of
-    /// times at startup, while `start_watching_directory` reads it far more
-    /// often and benefits from a cheap clone.
-    pub fn register_ignored_path_interests(
-        &mut self,
-        interests: impl IntoIterator<Item = PathBuf>,
-    ) {
-        for interest in interests {
-            if !self.ignored_path_interests.contains(&interest) {
-                self.ignored_path_interests.push(interest);
+    /// Registers paths that must be watched even when gitignored. Mirrors
+    /// `LocalRepoMetadataModel::register_force_included_paths` but applies to
+    /// the watcher backing `Repository` subscribers (LSP, MCP). Must be called
+    /// before repositories begin watching to take effect on already-registered
+    /// watches.
+    pub fn register_force_included_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for path in paths {
+            if !self.force_included_paths.contains(&path) {
+                self.force_included_paths.push(path);
             }
         }
     }
@@ -356,7 +349,7 @@ impl DirectoryWatcher {
                 // threaded in from `Repository::start_watching` so we neither
                 // re-read `.gitignore` from disk nor re-enter the (already
                 // borrowed) `Repository` model here.
-                let interests = self.ignored_path_interests.clone();
+                let force_included_paths = self.force_included_paths.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     use notify_debouncer_full::notify::RecursiveMode;
 
@@ -364,7 +357,7 @@ impl DirectoryWatcher {
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(gitignores, interests),
+                        repo_watch_filter(gitignores, force_included_paths),
                         RecursiveMode::Recursive,
                     ))
                 })
