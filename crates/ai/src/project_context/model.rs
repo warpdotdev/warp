@@ -61,6 +61,7 @@ struct ProjectRules {
 }
 
 impl ProjectRules {
+    #[cfg(feature = "local_fs")]
     fn all_rule_paths(&self) -> impl Iterator<Item = &PathBuf> {
         self.rules.iter().flat_map(|rule| {
             rule.warp_md
