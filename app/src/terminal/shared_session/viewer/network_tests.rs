@@ -26,7 +26,6 @@ fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
             channel_event_proxy,
             terminal_view,
             terminal_model,
-            write_to_pty_events_tx.clone(),
             write_to_pty_events_rx,
             ctx,
         )

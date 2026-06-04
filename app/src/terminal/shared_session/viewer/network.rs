@@ -142,7 +142,6 @@ pub struct Network {
     /// over the websocket to the server.
     ws_proxy_tx: async_channel::Sender<UpstreamMessage>,
     selection_throttled_tx: async_channel::Sender<Selection>,
-    write_to_pty_events_tx: async_channel::Sender<Vec<u8>>,
 
     #[cfg(test)]
     ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
@@ -165,15 +164,12 @@ pub struct Network {
 }
 
 impl Network {
-    // Keep both ends of the PTY channel explicit: the manager installs the sender on the
-    // terminal model while the network retains it to restore the same pane after a failed join.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         session_id: SessionId,
         channel_event_proxy: ChannelEventListener,
         terminal_view: WeakViewHandle<TerminalView>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
-        write_to_pty_events_tx: async_channel::Sender<Vec<u8>>,
         write_to_pty_events_rx: Receiver<Vec<u8>>,
         initial_load_mode: SharedSessionInitialLoadMode,
         ctx: &mut ModelContext<Self>,
@@ -202,7 +198,6 @@ impl Network {
                 universal_developer_input_context: None,
             },
             selection_throttled_tx,
-            write_to_pty_events_tx,
             selection_event_no: EventNumber::new(),
             next_buffer_seq_no: (BlockId::new(), InputOperationSeqNo::zero()),
             write_to_pty_event_no: WriteToPtySeqNo::zero(),
@@ -236,7 +231,6 @@ impl Network {
         channel_event_proxy: ChannelEventListener,
         terminal_view: WeakViewHandle<TerminalView>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
-        write_to_pty_events_tx: async_channel::Sender<Vec<u8>>,
         write_to_pty_events_rx: Receiver<Vec<u8>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
@@ -270,7 +264,6 @@ impl Network {
                 universal_developer_input_context: None,
             },
             selection_throttled_tx,
-            write_to_pty_events_tx,
             selection_event_no: EventNumber::new(),
             next_buffer_seq_no: (BlockId::new(), InputOperationSeqNo::zero()),
             write_to_pty_event_no: WriteToPtySeqNo::zero(),
@@ -606,10 +599,6 @@ impl Network {
 
     pub fn is_failed_initial_join(&self) -> bool {
         self.event_loop.is_none() && matches!(&self.stage, Stage::Finished)
-    }
-
-    pub fn write_to_pty_events_tx(&self) -> async_channel::Sender<Vec<u8>> {
-        self.write_to_pty_events_tx.clone()
     }
 
     pub fn retry_initial_join(&mut self, ctx: &mut ModelContext<Self>) {
