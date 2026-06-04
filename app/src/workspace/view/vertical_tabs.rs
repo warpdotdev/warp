@@ -304,12 +304,13 @@ struct TabGroupMouseStates {
 fn pane_row_background(
     pane_color: Option<ThemeFill>,
     is_selected: bool,
+    is_range_selected: bool,
     is_hovered: bool,
     is_being_dragged: bool,
     theme: &WarpTheme,
 ) -> Option<ThemeFill> {
     if let Some(color) = pane_color {
-        let opacity = if is_selected || is_hovered {
+        let opacity = if is_selected || is_hovered || is_range_selected {
             TAB_COLOR_HOVER_OPACITY
         } else {
             TAB_COLOR_OPACITY
@@ -317,7 +318,11 @@ fn pane_row_background(
         Some(color.with_opacity(opacity))
     } else if is_selected {
         Some(internal_colors::fg_overlay_2(theme))
-    } else if is_being_dragged || is_hovered {
+    } else if is_range_selected && is_hovered {
+        // Hovering a range-selected row steps one shade darker so the hover
+        // stays visually distinguishable from the in-range highlight.
+        Some(internal_colors::fg_overlay_2(theme))
+    } else if is_range_selected || is_being_dragged || is_hovered {
         Some(internal_colors::fg_overlay_1(theme))
     } else {
         None
@@ -352,6 +357,7 @@ fn render_pane_row_element(
         is_focused,
         typed: _,
         is_being_dragged,
+        is_range_selected,
         pane_color,
         badge_mouse_states: _,
         detail_hover_state,
@@ -372,6 +378,7 @@ fn render_pane_row_element(
         if let Some(background) = pane_row_background(
             pane_color,
             is_selected,
+            is_range_selected,
             state.is_hovered(),
             is_being_dragged,
             theme,
@@ -387,11 +394,17 @@ fn render_pane_row_element(
             }))
             .finish()
     })
-    .on_click(move |ctx, _, _| {
-        ctx.dispatch_typed_action(WorkspaceAction::FocusPane(PaneViewLocator {
+    .on_click_with_modifiers(move |ctx, _, _, modifiers| {
+        let locator = PaneViewLocator {
             pane_group_id,
             pane_id,
-        }));
+        };
+        // Shift-click extends the range selection; plain click focuses the pane.
+        if modifiers.shift && FeatureFlag::GroupedTabs.is_enabled() {
+            ctx.dispatch_typed_action(WorkspaceAction::ShiftSelectTabRange { locator });
+        } else {
+            ctx.dispatch_typed_action(WorkspaceAction::FocusPane(locator));
+        }
     })
     .on_hover(move |is_hovered, ctx, app, position| {
         let show_details_on_hover = *TabSettings::as_ref(app)
@@ -719,6 +732,8 @@ struct PaneProps<'a> {
     is_focused: bool,
     typed: TypedPane<'a>,
     is_being_dragged: bool,
+    /// True when this row's tab is part of the active range selection.
+    is_range_selected: bool,
     pane_color: Option<ThemeFill>,
     badge_mouse_states: PaneRowBadgeMouseStates,
     detail_hover_state: VerticalTabsDetailHoverState,
@@ -1085,6 +1100,7 @@ impl VerticalTabsPanelState {
                                 pane_id,
                                 tab.pane_group.id(),
                                 *tab_index == active_tab_index,
+                                false,
                                 PaneRowState {
                                     mouse_state: ms,
                                     title_mouse_state: None,
@@ -1652,6 +1668,7 @@ fn render_groups(
                                     pane_id,
                                     tab.pane_group.id(),
                                     tab_index == workspace.active_tab_index,
+                                    false,
                                     PaneRowState {
                                         mouse_state: ms,
                                         title_mouse_state: None,
@@ -1679,6 +1696,7 @@ fn render_groups(
                                 pane_id,
                                 tab.pane_group.id(),
                                 tab_index == workspace.active_tab_index,
+                                false,
                                 PaneRowState {
                                     mouse_state,
                                     title_mouse_state: None,
@@ -1935,6 +1953,8 @@ fn render_tab_group_internal(
     let is_first_tab = tab_index == 0;
     let is_last_tab = tab_index + 1 == workspace.tabs.len();
     let is_this_tab_dragging = tab.draggable_state.is_dragging();
+    // Ensure panes inherit range selection status from the tab they belong to.
+    let is_range_selected = tab.in_range_selected;
     let color_mode = compute_tab_group_color_mode(tab, pane_group, &visible_pane_ids, theme, app);
     let per_pane_colors = color_mode.into_per_pane_colors(&visible_pane_ids);
     let is_being_renamed = is_active && workspace.current_workspace_state.is_tab_being_renamed();
@@ -1982,6 +2002,7 @@ fn render_tab_group_internal(
                     *pane_id,
                     pane_group_id,
                     is_active,
+                    is_range_selected,
                     PaneRowState {
                         mouse_state: row_mouse_state.clone(),
                         title_mouse_state: None,
@@ -2035,6 +2056,7 @@ fn render_tab_group_internal(
                     *pane_id,
                     pane_group_id,
                     is_active,
+                    is_range_selected,
                     PaneRowState {
                         mouse_state: row_mouse_state.clone(),
                         title_mouse_state: title_mouse_states.get(pane_id).cloned(),
@@ -3335,6 +3357,7 @@ impl<'a> PaneProps<'a> {
         pane_id: PaneId,
         pane_group_id: EntityId,
         is_active_tab: bool,
+        is_range_selected: bool,
         pane_row_state: PaneRowState,
         detail_hover_state: VerticalTabsDetailHoverState,
         display_granularity: VerticalTabsDisplayGranularity,
@@ -3385,6 +3408,7 @@ impl<'a> PaneProps<'a> {
             is_focused: pane_group.focused_pane_id(app) == pane_id,
             typed,
             is_being_dragged: pane.is_pane_being_dragged(app),
+            is_range_selected,
             pane_color: pane_row_state.pane_color,
             badge_mouse_states: pane_row_state.badge_mouse_states,
             detail_hover_state,
@@ -6143,6 +6167,7 @@ fn detail_pane_props<'a>(
         pane_group,
         pane_id,
         pane_group_id,
+        false,
         false,
         PaneRowState {
             mouse_state: MouseStateHandle::default(),
