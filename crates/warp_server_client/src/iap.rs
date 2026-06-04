@@ -360,7 +360,7 @@ impl IapManager {
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub(crate) fn ws_connect_is_iap_challenge(err: &anyhow::Error) -> bool {
+pub fn ws_connect_is_iap_challenge(err: &anyhow::Error) -> bool {
     connect_error_http_response(err).is_some_and(|response| {
         http_client::iap::is_iap_challenge(response.status(), response.headers())
     })

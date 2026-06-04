@@ -15267,12 +15267,15 @@ dependencies = [
  "anyhow",
  "async-channel",
  "async-trait",
+ "base64 0.22.1",
  "bincode",
+ "blocking",
  "bounded-vec-deque",
  "chrono",
  "cloud_object_client",
  "cloud_object_models",
  "cloud_objects",
+ "command",
  "cynic",
  "derivative",
  "diesel",
@@ -15303,6 +15306,7 @@ dependencies = [
  "warp_isolation_platform",
  "warp_server_auth",
  "warpui_core",
+ "websocket",
 ]
 
 [[package]]

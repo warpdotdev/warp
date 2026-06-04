@@ -15,12 +15,15 @@ test-util = ["cloud_object_client/test-util", "cloud_objects/test-util", "dep:mo
 anyhow.workspace = true
 async-channel.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 bincode.workspace = true
+blocking.workspace = true
 bounded-vec-deque.workspace = true
 chrono.workspace = true
 cloud_object_client.workspace = true
 cloud_object_models.workspace = true
 cloud_objects.workspace = true
+command.workspace = true
 cynic.workspace = true
 derivative.workspace = true
 firebase.workspace = true
@@ -51,6 +54,7 @@ warpui_core.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
+websocket.workspace = true
 
 [dev-dependencies]
 futures.workspace = true

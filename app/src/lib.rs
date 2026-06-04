@@ -226,6 +226,7 @@ pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 use warp_files::FileModel;
 use warp_logging::LogDestination;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_server_client::iap::{IapManager, IapManagerEvent, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
@@ -283,7 +284,6 @@ use crate::root_view::{
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
-use crate::server::iap::{IapManager, IapManagerEvent};
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 pub use crate::server::telemetry::{
     AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
@@ -1192,10 +1192,9 @@ pub(crate) fn initialize_app(
     // is handed to both `ServerApi` (for sync reads on the request path) and
     // `IapManager` (which owns refresh logic on the main thread).
     #[cfg(not(target_family = "wasm"))]
-    let iap_state =
-        ChannelState::iap_config().map(|cfg| Arc::new(crate::server::iap::IapState::new(&cfg)));
+    let iap_state = ChannelState::iap_config().map(|cfg| Arc::new(IapState::new(&cfg)));
     #[cfg(target_family = "wasm")]
-    let iap_state: Option<Arc<crate::server::iap::IapState>> = None;
+    let iap_state: Option<Arc<IapState>> = None;
 
     let server_api_provider = ctx.add_singleton_model({
         let auth_state = auth_state.clone();

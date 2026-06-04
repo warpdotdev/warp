@@ -47,6 +47,7 @@ use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
 };
+use warp_server_client::iap::{IapManager, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -62,7 +63,6 @@ use crate::ai::predict::{generate_ai_input_suggestions, generate_am_query_sugges
 use crate::ai::voice::transcribe::{TranscribeRequest, TranscribeResponse};
 use crate::auth::auth_manager::AuthManager;
 use crate::auth::auth_state::AuthState;
-use crate::server::iap::{IapManager, IapState};
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
 use crate::{settings_view, ChannelState};
@@ -402,7 +402,7 @@ pub struct ServerApi {
     telemetry_api: TelemetryApi,
     last_server_time: Arc<Mutex<Option<ServerTime>>>,
     /// IAP credential cache for staging server access. [`None`] on production builds.
-    iap_state: Option<Arc<super::iap::IapState>>,
+    iap_state: Option<Arc<IapState>>,
 
     #[cfg(feature = "agent_mode_evals")]
     eval_user_id: Option<i32>,
@@ -590,7 +590,7 @@ impl ServerApi {
         if self.iap_state.is_none() {
             return;
         }
-        if super::iap::ws_connect_is_iap_challenge(err) {
+        if warp_server_client::iap::ws_connect_is_iap_challenge(err) {
             log::warn!("Received IAP challenge on websocket handshake; notifying IapManager");
             if let Err(err) = self.send_auth_event(AuthEvent::IapChallengeReceived) {
                 log::warn!("Failed to enqueue IapChallengeReceived: {err}");
@@ -1465,7 +1465,7 @@ impl ServerApiProvider {
     pub fn new(
         auth_state: Arc<AuthState>,
         agent_source: Option<ai::AgentSource>,
-        iap_state: Option<Arc<super::iap::IapState>>,
+        iap_state: Option<Arc<IapState>>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (event_sender, event_receiver) = async_channel::bounded(10);
