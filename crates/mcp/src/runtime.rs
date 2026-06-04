@@ -11,8 +11,8 @@ use std::future::Future;
 use cfg_if::cfg_if;
 use cloud_object_models::{StaticEnvVar, TransportType};
 use futures::FutureExt as _;
-use rmcp::ServiceExt as _;
 use rmcp::transport::ConfigureCommandExt as _;
+use rmcp::ServiceExt as _;
 use simple_logger::SimpleLogger;
 use tokio::io::AsyncBufReadExt as _;
 use uuid::Uuid;
@@ -374,14 +374,19 @@ async fn determine_transport(
 
             // Go through the OAuth flow to get an authenticated client.
             // This will first attempt to use cached credentials before starting interactive OAuth.
-            let client = crate::oauth::make_authenticated_client(url, auth_context)
-                .await
-                .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
+            let (client, did_require_login) =
+                crate::oauth::make_authenticated_client(url, auth_context)
+                    .await
+                    .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
             match send_initialize_request(url, headers, Some(&client)).await? {
                 StatusCode::OK => {
-                    if let Some(authenticated_callback) = authenticated_callback {
-                        if let Err(err) = authenticated_callback(server_name).await {
-                            log::warn!("Failed to emit MCP authenticated notification: {err:?}");
+                    if did_require_login {
+                        if let Some(authenticated_callback) = authenticated_callback {
+                            if let Err(err) = authenticated_callback(server_name).await {
+                                log::warn!(
+                                    "Failed to emit MCP authenticated notification: {err:?}"
+                                );
+                            }
                         }
                     }
                     Ok(Transport::Http(Some(client)))

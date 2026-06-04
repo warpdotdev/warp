@@ -201,10 +201,12 @@ pub enum CallbackResult {
 /// This takes in the URL of the resource to authenticate for, and uses that
 /// to determine the authorization server.
 ///
+/// Upon success, returns the client and a boolean indicating whether the user was required to
+/// re-authenticate (e.g. re-log in).
 pub async fn make_authenticated_client(
     resource_url: &str,
     auth_context: AuthContext,
-) -> Result<AuthClient<reqwest::Client>, AuthError> {
+) -> Result<(AuthClient<reqwest::Client>, bool), AuthError> {
     let AuthContext {
         oauth_result_rx,
         uuid,
@@ -250,7 +252,7 @@ pub async fn make_authenticated_client(
                     .with_client_secret(client_secret),
             )?;
         }
-        return Ok(AuthClient::new(reqwest::Client::new(), auth_manager));
+        return Ok((AuthClient::new(reqwest::Client::new(), auth_manager), false));
     }
 
     // If we're in headless mode and we reach here, it means we either have no credentials
@@ -354,7 +356,7 @@ pub async fn make_authenticated_client(
         AuthError::InternalError("Failed to create authorization manager".to_string())
     })?;
 
-    Ok(AuthClient::new(reqwest::Client::new(), auth_manager))
+    Ok((AuthClient::new(reqwest::Client::new(), auth_manager), true))
 }
 
 /// Loads credentials from secure storage at the provided key.
