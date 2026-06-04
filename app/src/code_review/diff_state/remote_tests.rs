@@ -40,6 +40,7 @@ fn empty_metadata(branch: &str) -> DiffMetadata {
         current_branch_name: branch.to_string(),
         against_head: DiffMetadataAgainstBase {
             aggregate_stats: DiffStats::default(),
+            files: vec![],
         },
         against_base_branch: None,
         has_head_commit: true,
@@ -115,6 +116,7 @@ fn test_metadata(branch: &str) -> DiffMetadata {
                 total_additions: 5,
                 total_deletions: 2,
             },
+            files: vec![],
         },
         against_base_branch: None,
         has_head_commit: true,
@@ -124,6 +126,7 @@ fn test_metadata(branch: &str) -> DiffMetadata {
             files_changed: 1,
             additions: 5,
             deletions: 2,
+            files: vec![],
         }],
         upstream_ref: Some("origin/feature".to_string()),
         pr_info: Some(PrInfo {

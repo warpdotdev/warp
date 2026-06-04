@@ -374,9 +374,12 @@ impl RemoteDiffStateManager {
                 // Client-only event — should not occur on the server side.
                 log::warn!("Unexpected ConnectionLost event on server-side model key={key:?}");
             }
-            DiffStateModelEvent::BranchesReceived(_) => {
-                // Client-only event — the server model fetches branches
+            DiffStateModelEvent::BranchesReceived(_)
+            | DiffStateModelEvent::GitOpCompleted(_)
+            | DiffStateModelEvent::CommitMessageGenerated(_) => {
+                // Client-only events — the server model fetches branches
                 // directly via handle_get_branches, not through this tracker.
+                // Commit-message autogen also runs only on the client dialog.
             }
         }
     }

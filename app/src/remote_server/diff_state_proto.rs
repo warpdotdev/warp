@@ -13,11 +13,11 @@ use warp_util::standardized_path::StandardizedPath;
 use super::proto;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
-    DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
-    DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData, GitDiffWithBaseContent,
-    GitFileStatus,
+    CommitChainMode, DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase,
+    DiffMode, DiffState, DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData,
+    GitDiffWithBaseContent, GitFileStatus,
 };
-use crate::util::git::{Commit, PrInfo};
+use crate::util::git::{Commit, FileChangeEntry, PrInfo};
 
 // ── Proto → Rust (for incoming client messages) ────────────────────
 
@@ -111,7 +111,18 @@ impl TryFrom<&proto::DiffMetadataAgainstBase> for DiffMetadataAgainstBase {
                 .as_ref()
                 .map(DiffStats::from)
                 .ok_or_else(|| "missing aggregate_stats in DiffMetadataAgainstBase".to_string())?,
+            files: base.files.iter().map(FileChangeEntry::from).collect(),
         })
+    }
+}
+
+impl From<&proto::FileChangeEntry> for FileChangeEntry {
+    fn from(file: &proto::FileChangeEntry) -> Self {
+        FileChangeEntry {
+            path: file.path.clone(),
+            additions: file.additions as usize,
+            deletions: file.deletions as usize,
+        }
     }
 }
 
@@ -123,6 +134,7 @@ impl From<&proto::Commit> for Commit {
             files_changed: commit.files_changed as usize,
             additions: commit.additions as usize,
             deletions: commit.deletions as usize,
+            files: commit.files.iter().map(FileChangeEntry::from).collect(),
         }
     }
 }
@@ -393,6 +405,17 @@ impl From<&DiffMetadataAgainstBase> for proto::DiffMetadataAgainstBase {
     fn from(m: &DiffMetadataAgainstBase) -> Self {
         proto::DiffMetadataAgainstBase {
             aggregate_stats: Some((&m.aggregate_stats).into()),
+            files: m.files.iter().map(proto::FileChangeEntry::from).collect(),
+        }
+    }
+}
+
+impl From<&FileChangeEntry> for proto::FileChangeEntry {
+    fn from(file: &FileChangeEntry) -> Self {
+        proto::FileChangeEntry {
+            path: file.path.clone(),
+            additions: file.additions as u64,
+            deletions: file.deletions as u64,
         }
     }
 }
@@ -405,6 +428,7 @@ impl From<&Commit> for proto::Commit {
             files_changed: c.files_changed as u64,
             additions: c.additions as u64,
             deletions: c.deletions as u64,
+            files: c.files.iter().map(proto::FileChangeEntry::from).collect(),
         }
     }
 }
@@ -520,6 +544,26 @@ impl From<&DiffSize> for proto::DiffSize {
             DiffSize::Normal => proto::DiffSize::Normal,
             DiffSize::Large => proto::DiffSize::Large,
             DiffSize::Unrenderable => proto::DiffSize::Unrenderable,
+        }
+    }
+}
+
+impl From<&CommitChainMode> for proto::GitCommitChainMode {
+    fn from(mode: &CommitChainMode) -> Self {
+        match mode {
+            CommitChainMode::CommitOnly => proto::GitCommitChainMode::CommitOnly,
+            CommitChainMode::CommitAndPush => proto::GitCommitChainMode::CommitAndPush,
+            CommitChainMode::CommitAndCreatePr => proto::GitCommitChainMode::CommitAndCreatePr,
+        }
+    }
+}
+
+impl From<proto::GitCommitChainMode> for CommitChainMode {
+    fn from(mode: proto::GitCommitChainMode) -> Self {
+        match mode {
+            proto::GitCommitChainMode::CommitOnly => CommitChainMode::CommitOnly,
+            proto::GitCommitChainMode::CommitAndPush => CommitChainMode::CommitAndPush,
+            proto::GitCommitChainMode::CommitAndCreatePr => CommitChainMode::CommitAndCreatePr,
         }
     }
 }

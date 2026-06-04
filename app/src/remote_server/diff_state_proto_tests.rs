@@ -88,6 +88,7 @@ fn diff_metadata_requires_against_head() {
 fn diff_metadata_against_base_requires_stats() {
     let against_base = proto::DiffMetadataAgainstBase {
         aggregate_stats: None,
+        files: vec![],
     };
 
     assert!(DiffMetadataAgainstBase::try_from(&against_base).is_err());
@@ -104,6 +105,7 @@ fn diff_metadata_preserves_pr_info() {
                 total_additions: 2,
                 total_deletions: 3,
             },
+            files: vec![],
         },
         against_base_branch: None,
         has_head_commit: true,
