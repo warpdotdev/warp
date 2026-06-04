@@ -204,6 +204,21 @@ lazy_static! {
     /// PTY compliant. Windows users expect pasting to work using both `ctrl-v` and `ctrl-shift-v`,
     /// so we allowlist the terminal paste action for the purposes of binding validation.
     pub static ref WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES: HashSet<Keystroke> = HashSet::from_iter([Keystroke::parse("ctrl-v").expect("should be able to construct ctrl-v keystroke")]);
+    /// Action and keystroke pairs that intentionally use a PTY control character.
+    ///
+    /// Keep these exceptions scoped by both action and keystroke so unrelated TerminalView
+    /// actions remain invalid and customizing one of these actions does not allow an arbitrary
+    /// control character.
+    pub static ref PTY_NON_COMPLIANT_ACTION_KEYSTROKES: Vec<(&'static str, Keystroke)> = vec![
+        (
+            "terminal:cycle_next_orchestration_child_agent",
+            Keystroke::parse("ctrl-]").expect("should be able to construct ctrl-] keystroke"),
+        ),
+        (
+            "terminal:cycle_previous_orchestration_child_agent",
+            Keystroke::parse("ctrl-[").expect("should be able to construct ctrl-[ keystroke"),
+        ),
+    ];
 
     /// Set of keystrokes that should be considered valid bindings on all platforms even though
     /// they aren't PTY compliant.
@@ -212,10 +227,6 @@ lazy_static! {
         // introducing multiple codepaths for handling ctrl-c, we register ctrl-c as a binding
         // on TerminalView on all platforms.
         Keystroke::parse("ctrl-c").expect("should be able to construct ctrl-c keystroke"),
-        // Orchestration conversation cycling defaults use ctrl-[ / ctrl-] on all platforms.
-        // These intentionally overlap PTY control characters and are validated here.
-        Keystroke::parse("ctrl-[").expect("should be able to construct ctrl-[ keystroke"),
-        Keystroke::parse("ctrl-]").expect("should be able to construct ctrl-] keystroke"),
         // The resume conversation binding uses cmd-shift-R on Mac and should be allowed
         Keystroke::parse("cmd-shift-R").expect("should be able to construct cmd-shift-R keystroke")
     ]);
@@ -900,21 +911,26 @@ pub fn is_binding_pty_compliant(binding: BindingLens) -> IsBindingValid {
     let Some(keystroke) = trigger_to_keystroke(trigger) else {
         return IsBindingValid::Yes;
     };
-
-    let is_binding_in_allowlist = (OperatingSystem::get().is_mac()
-        && MAC_PTY_NON_COMPLIANT_ACTIONS.contains(binding.name))
-        || (OperatingSystem::get().is_windows()
-            && WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES.contains(&keystroke))
-        || PTY_NON_COMPLIANT_KEYSTROKES.contains(&keystroke);
-
     if CONTROL_CHARACTER_KEY_REGEX.is_match(keystroke.normalized().as_str())
-        && !is_binding_in_allowlist
+        && !is_pty_non_compliant_binding_allowed(binding.name, &keystroke)
     {
         // The binding interferes with a control character so it is not valid.
         IsBindingValid::No
     } else {
         IsBindingValid::Yes
     }
+}
+
+fn is_pty_non_compliant_binding_allowed(binding_name: &str, keystroke: &Keystroke) -> bool {
+    (OperatingSystem::get().is_mac() && MAC_PTY_NON_COMPLIANT_ACTIONS.contains(binding_name))
+        || (OperatingSystem::get().is_windows()
+            && WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke))
+        || PTY_NON_COMPLIANT_ACTION_KEYSTROKES
+            .iter()
+            .any(|(name, allowed_keystroke)| {
+                *name == binding_name && allowed_keystroke == keystroke
+            })
+        || PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke)
 }
 
 /// Validates all that bindings are cross-platform by returning [`IsBindingValid::No`] if a `cmd-*`

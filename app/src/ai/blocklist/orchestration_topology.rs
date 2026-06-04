@@ -2,9 +2,9 @@
 //!
 //! The topology is stored as a parent → children index on
 //! [`BlocklistAIHistoryModel`]. These helpers are factored out of the
-//! orchestration pill bar so other surfaces (e.g. the agent-mode usage
-//! footer's credit rollup) can walk the same tree without duplicating the
-//! traversal.
+//! orchestration pill bar so other surfaces (e.g. keyboard navigation and
+//! the agent-mode usage footer's credit rollup) can walk and order the same
+//! tree without duplicating the logic.
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -67,11 +67,14 @@ pub fn collect_descendant_conversation_ids_in_spawn_order(
     }
 }
 
-/// Returns descendants sorted in the same visual ordering used by the
-/// orchestration pill bar:
+/// Returns descendants in the canonical orchestration pill order:
 ///   1) pinned children
 ///   2) unpinned children
 /// each bucket ordered by status priority, then done-recency, then spawn order.
+///
+/// This is the single ordering source used by both the pill bar and keyboard
+/// navigation. Callers should preserve the returned order rather than sorting
+/// the conversations again.
 pub fn descendant_conversation_ids_in_pill_order(
     history: &BlocklistAIHistoryModel,
     parent_id: AIConversationId,

@@ -4,6 +4,33 @@ use super::*;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
+#[test]
+fn pill_order_keys_prioritize_attention_then_in_progress_then_done() {
+    let blocked = ConversationStatus::Blocked {
+        blocked_action: String::new(),
+    };
+    let blocked_key = pill_status_sort_key(Some(&blocked));
+    let error_key = pill_status_sort_key(Some(&ConversationStatus::Error));
+    let in_progress_key = pill_status_sort_key(Some(&ConversationStatus::InProgress));
+    let cancelled_key = pill_status_sort_key(Some(&ConversationStatus::Cancelled));
+    let success_key = pill_status_sort_key(Some(&ConversationStatus::Success));
+
+    assert!(blocked_key < error_key);
+    assert!(error_key < in_progress_key);
+    assert!(in_progress_key < cancelled_key);
+    assert_eq!(cancelled_key, success_key);
+    assert_eq!(pill_status_sort_key(None), in_progress_key);
+}
+
+#[test]
+fn pill_order_keys_sort_done_conversations_by_most_recent_first() {
+    let older = pill_secondary_sort_key(DONE_STATUS_KEY, Some(1_000));
+    let newer = pill_secondary_sort_key(DONE_STATUS_KEY, Some(2_000));
+    let unknown = pill_secondary_sort_key(DONE_STATUS_KEY, None);
+
+    assert!(newer < older);
+    assert!(older < unknown);
+}
 
 #[test]
 fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder() {
