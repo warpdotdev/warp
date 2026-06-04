@@ -576,6 +576,13 @@ impl GitBranchTrackingStatus {
             Some(upstream) => {
                 format!("Tracking {upstream}; ahead/behind counts are unavailable")
             }
+            None if self.is_rebased() => {
+                "Branch was rebased; upstream name is unavailable".to_string()
+            }
+            None if self.counts_available => format!(
+                "Ahead {}, behind {}; upstream name is unavailable",
+                self.ahead, self.behind
+            ),
             None => "No upstream configured".to_string(),
         }
     }
