@@ -384,9 +384,7 @@ async fn determine_transport(
                 if did_require_login {
                     if let Some(authenticated_callback) = authenticated_callback {
                         if let Err(err) = authenticated_callback(server_name).await {
-                            log::warn!(
-                                "Failed to emit MCP authenticated notification: {err:?}"
-                            );
+                            log::warn!("Failed to emit MCP authenticated notification: {err:?}");
                         }
                     }
                 }
