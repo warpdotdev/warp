@@ -378,20 +378,27 @@ async fn determine_transport(
                 crate::oauth::make_authenticated_client(url, auth_context)
                     .await
                     .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
-            match send_initialize_request(url, headers, Some(&client)).await? {
-                StatusCode::OK => {
-                    if did_require_login {
-                        if let Some(authenticated_callback) = authenticated_callback {
-                            if let Err(err) = authenticated_callback(server_name).await {
-                                log::warn!(
-                                    "Failed to emit MCP authenticated notification: {err:?}"
-                                );
-                            }
+
+            // Define a helper function to invoke when we've successfully authenticated.
+            let emit_authenticated_notification = async move || {
+                if did_require_login {
+                    if let Some(authenticated_callback) = authenticated_callback {
+                        if let Err(err) = authenticated_callback(server_name).await {
+                            log::warn!(
+                                "Failed to emit MCP authenticated notification: {err:?}"
+                            );
                         }
                     }
+                }
+            };
+
+            match send_initialize_request(url, headers, Some(&client)).await? {
+                StatusCode::OK => {
+                    emit_authenticated_notification().await;
                     Ok(Transport::Http(Some(client)))
                 }
                 StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => {
+                    emit_authenticated_notification().await;
                     Ok(Transport::Sse(Some(client)))
                 }
                 other => Err(unexpected_error(other)),
