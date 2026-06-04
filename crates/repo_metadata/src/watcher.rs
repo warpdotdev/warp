@@ -350,14 +350,15 @@ impl DirectoryWatcher {
                 // re-read `.gitignore` from disk nor re-enter the (already
                 // borrowed) `Repository` model here.
                 let force_included_paths = self.force_included_paths.clone();
+                let filter_root = local_path.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     use notify_debouncer_full::notify::RecursiveMode;
 
-                    use crate::entry::repo_watch_filter;
+                    use crate::entry::repo_watch_filter_nested;
 
                     Some(watcher.register_path(
                         &local_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        repo_watch_filter_nested(filter_root, gitignores, force_included_paths),
                         RecursiveMode::Recursive,
                     ))
                 })

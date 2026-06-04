@@ -1,11 +1,13 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 
+#[cfg(feature = "local_fs")]
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "local_fs")]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
@@ -1070,6 +1072,129 @@ pub fn repo_watch_filter(
         Arc::new(should_watch),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),
     )
+}
+
+/// Returns the [`WatchFilter`] used by repository file watchers, with
+/// support for nested per-directory `.gitignore` files.
+///
+/// This is an enhancement over [`repo_watch_filter`] that lazily reads and
+/// caches `.gitignore` files found in subdirectories as the recursive walk
+/// descends into the repository tree. This prevents over-watching large
+/// gitignored subtrees (e.g. `node_modules` in a monorepo where only a
+/// per-package `.gitignore` excludes it, not the root one), which otherwise
+/// causes the inotify backend to allocate gigabytes of heap for the per-watch
+/// `HashMap` entries.
+///
+/// The nested `.gitignore` cache is per-watcher-registration — it is created
+/// fresh for each call to `register_path` and lives only as long as the
+/// returned `WatchFilter` is live.
+///
+/// The emit predicate is the same as [`repo_watch_filter`]: it forwards
+/// everything outside `.git/` and the allowlisted files inside `.git/`.
+#[cfg(feature = "local_fs")]
+pub fn repo_watch_filter_nested(
+    repo_root: PathBuf,
+    root_gitignores: Vec<Gitignore>,
+    force_included_paths: Vec<PathBuf>,
+) -> WatchFilter {
+    // Thread-safe, lazily-populated cache: directory path → its local
+    // .gitignore (None when the directory has none).
+    let nested_cache: Arc<Mutex<HashMap<PathBuf, Option<Gitignore>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let repo_root = Arc::new(repo_root);
+    let root_gitignores = Arc::new(root_gitignores);
+    let force_included_paths = Arc::new(force_included_paths);
+
+    let should_watch = {
+        let nested_cache = nested_cache.clone();
+        let repo_root = repo_root.clone();
+        let root_gitignores = root_gitignores.clone();
+        let force_included_paths = force_included_paths.clone();
+        move |path: &Path| {
+            if is_git_internal_path(path) {
+                return should_watch_directory_in_git_path(path);
+            }
+            if matches_force_included_path(path, &force_included_paths) {
+                return true;
+            }
+            // Fast path: check root-level gitignores first.
+            if matches_gitignores(
+                path,
+                path.is_dir(),
+                &root_gitignores,
+                /* check_ancestors */ true,
+            ) {
+                return false;
+            }
+            // Slow path: check nested .gitignore files in parent directories
+            // between the repo root and this path.
+            check_nested_gitignores(path, &repo_root, &nested_cache)
+        }
+    };
+
+    WatchFilter::with_filter(
+        Arc::new(should_watch),
+        Arc::new(|path: &Path| !should_ignore_git_path(path)),
+    )
+}
+
+/// Checks whether `path` should be watched by consulting per-directory
+/// `.gitignore` files in ancestor directories between `repo_root` (exclusive)
+/// and `path`'s parent (inclusive).
+///
+/// Returns `false` if any nested gitignore ignores `path`; `true` otherwise.
+/// Gitignore files are read on first access and cached for subsequent calls.
+#[cfg(feature = "local_fs")]
+fn check_nested_gitignores(
+    path: &Path,
+    repo_root: &Path,
+    cache: &Mutex<HashMap<PathBuf, Option<Gitignore>>>,
+) -> bool {
+    // Collect parent directories strictly between the repo root and path.
+    let mut parent_dirs: Vec<PathBuf> = Vec::new();
+    let mut current = path.to_path_buf();
+    loop {
+        if !current.pop() {
+            break;
+        }
+        if current == repo_root || !current.starts_with(repo_root) {
+            break;
+        }
+        parent_dirs.push(current.clone());
+    }
+
+    if parent_dirs.is_empty() {
+        return true;
+    }
+
+    let is_dir = path.is_dir();
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    for dir in &parent_dirs {
+        // Populate cache entry on first visit.
+        if !guard.contains_key(dir) {
+            let gitignore_path = dir.join(".gitignore");
+            let entry = if gitignore_path.exists() {
+                let (gi, _) = Gitignore::new(&gitignore_path);
+                Some(gi)
+            } else {
+                None
+            };
+            guard.insert(dir.clone(), entry);
+        }
+
+        if let Some(Some(gitignore)) = guard.get(dir) {
+            if let Ok(relative) = path.strip_prefix(gitignore.path()) {
+                if !relative.has_root()
+                    && gitignore
+                        .matched_path_or_any_parents(relative, is_dir)
+                        .is_ignore()
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 /// Determines whether a file should be parsed by a treesitter query. For now the main criteria is it shouldn't

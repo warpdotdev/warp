@@ -34,7 +34,7 @@ use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use notify_debouncer_full::notify::RecursiveMode;
-        use crate::entry::repo_watch_filter;
+        use crate::entry::repo_watch_filter_nested;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui_core::SingletonEntity as _;
@@ -506,13 +506,17 @@ impl LocalRepoMetadataModel {
                 // Build the gitignore set (root + global) and force-included
                 // path list so the descend filter prunes gitignored subtrees
                 // while still watching registered force-included paths (e.g.
-                // skills).
+                // skills). The nested filter also reads per-directory
+                // .gitignore files lazily to prevent over-watching large
+                // subtrees (e.g. node_modules in a monorepo) that are only
+                // excluded by non-root gitignore files.
                 let gitignores = crate::gitignores_for_directory(&watch_path);
                 let force_included_paths = self.force_included_paths.clone();
+                let filter_root = watch_path.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        repo_watch_filter_nested(filter_root, gitignores, force_included_paths),
                         RecursiveMode::Recursive,
                     ));
                 });
