@@ -38,6 +38,7 @@ use crate::util::bindings::keybinding_name_to_keystroke;
 
 const INLINE_BANNER_SPACING: f32 = 8.;
 const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;
+const INLINE_BANNER_BUTTON_EXPANDED_VERTICAL_PADDING: f32 = 4.;
 
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_TOOLTIP_MESSAGE: &str = "Restricted due to payment issue";
 const OUT_OF_REQUESTS_TOOLTIP_MESSAGE: &str = "Out of credits";
@@ -240,6 +241,11 @@ fn render_button(
 
         if button_index != 0 {
             container = container.with_margin_left(INLINE_BANNER_SPACING);
+        }
+        if should_expand_button {
+            container = container
+                .with_padding_top(INLINE_BANNER_BUTTON_EXPANDED_VERTICAL_PADDING)
+                .with_padding_bottom(INLINE_BANNER_BUTTON_EXPANDED_VERTICAL_PADDING);
         }
 
         let mut stack = Stack::new();
