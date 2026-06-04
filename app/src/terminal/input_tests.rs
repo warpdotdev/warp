@@ -7163,38 +7163,6 @@ fn open_rich_input_for_terminal(terminal: &ViewHandle<TerminalView>, app: &mut A
 }
 
 // ---------------------------------------------------------------------------
-// AC#1 / AC#4 smoke test: setting compiles, defaults to false, round-trips
-// ---------------------------------------------------------------------------
-
-/// The `submit_on_ctrl_enter` setting must exist in `AISettings`, default to
-/// `false` (preserve current Enter-submits behaviour), and survive a TOML
-/// round-trip.
-#[test]
-fn submit_on_ctrl_enter_setting_defaults_to_false_and_round_trips() {
-    App::test((), |mut app| async move {
-        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
-
-        initialize_app(&mut app);
-
-        // Default must be false so existing Enter-submits behaviour is preserved.
-        let default_value =
-            AISettings::handle(&app).read(&app, |settings, _| *settings.submit_on_ctrl_enter);
-        assert!(!default_value, "submit_on_ctrl_enter must default to false");
-
-        // Round-trip: set to true, read back.
-        AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            settings
-                .submit_on_ctrl_enter
-                .set_value(true, ctx)
-                .expect("setting value must succeed");
-        });
-        let after_set =
-            AISettings::handle(&app).read(&app, |settings, _| *settings.submit_on_ctrl_enter);
-        assert!(after_set, "submit_on_ctrl_enter should read back as true");
-    });
-}
-
-// ---------------------------------------------------------------------------
 // AC#3 behavioural matrix — cell 1: setting=false, Enter submits
 // ---------------------------------------------------------------------------
 
@@ -7210,7 +7178,12 @@ fn enter_submits_when_submit_on_ctrl_enter_is_false() {
 
         initialize_app(&mut app);
 
-        // Ensure the setting is false (the default).
+        // Default must be false (guards existing Enter-submits behaviour).
+        let default_value =
+            AISettings::handle(&app).read(&app, |settings, _| *settings.submit_on_ctrl_enter);
+        assert!(!default_value, "submit_on_ctrl_enter must default to false");
+
+        // Explicitly confirm false so the test doesn't rely on the global default.
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             settings
                 .submit_on_ctrl_enter
@@ -7460,117 +7433,11 @@ fn ctrl_enter_submits_when_submit_on_ctrl_enter_is_true() {
 }
 
 // ---------------------------------------------------------------------------
-// AC#3 regression: shell-mode locked + Ctrl+Enter + setting=true
-// ---------------------------------------------------------------------------
-
-/// When `submit_on_ctrl_enter` is `true`, the user is in shell mode (buffer
-/// starts with the `!` prefix), and they press Ctrl+Enter, the submission must:
-///   1. Prepend `TERMINAL_INPUT_PREFIX` ("!") to the text.
-///   2. Exit shell mode (switch back to AI mode).
-///   3. Emit `Event::SubmitCLIAgentInput` with the prefixed text.
-///
-/// This mirrors the existing `input_enter` shell-mode path so that the
-/// Ctrl+Enter submit is functionally equivalent.
-#[test]
-fn ctrl_enter_with_shell_mode_locked_prepends_prefix_and_exits_shell_mode_when_setting_true() {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
-    App::test((), |mut app| async move {
-        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
-
-        initialize_app(&mut app);
-
-        AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            settings
-                .submit_on_ctrl_enter
-                .set_value(true, ctx)
-                .expect("setting value must succeed");
-        });
-
-        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        open_rich_input_for_terminal(&terminal, &mut app);
-
-        // Lock input into shell mode (the `!` prefix state).
-        input.update(&mut app, |input, ctx| {
-            input.ai_input_model().update(ctx, |ai_input, ctx| {
-                ai_input.set_input_config(
-                    crate::ai::blocklist::InputConfig {
-                        input_type: crate::ai::blocklist::InputType::Shell,
-                        is_locked: true,
-                    },
-                    true,
-                    None,
-                    ctx,
-                );
-            });
-        });
-
-        let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-        let submitted_clone = submitted.clone();
-        app.update(|ctx| {
-            ctx.subscribe_to_view(&input, move |_, event, _| {
-                if let Event::SubmitCLIAgentInput { text } = event {
-                    submitted_clone.borrow_mut().push(text.clone());
-                }
-            });
-        });
-
-        // The buffer text the user typed (without the `!` — the UI strips the prefix).
-        let shell_text = "ls -la";
-        input.update(&mut app, |input, ctx| {
-            input.clear_buffer_and_reset_undo_stack(ctx);
-            input.user_insert(shell_text, ctx);
-        });
-
-        // Ctrl+Enter should submit with the `!` prefix prepended.
-        input.update(&mut app, |input, ctx| {
-            input.input_ctrl_enter(ctx);
-        });
-
-        assert_eq!(
-            submitted.borrow().len(),
-            1,
-            "Ctrl+Enter should submit once in shell-locked mode when submit_on_ctrl_enter=true"
-        );
-        assert_eq!(
-            submitted.borrow()[0],
-            format!("!{shell_text}"),
-            "submitted text must include the TERMINAL_INPUT_PREFIX ('!')"
-        );
-
-        // After submission, shell mode must have been exited (input type back to AI).
-        input.read(&app, |input, ctx| {
-            let config = input.ai_input_model().as_ref(ctx).input_config();
-            assert_eq!(
-                config.input_type,
-                crate::ai::blocklist::InputType::AI,
-                "shell mode must be exited after Ctrl+Enter submission"
-            );
-        });
-    });
-}
-
-// ---------------------------------------------------------------------------
 // Issue #11588 — Selection-preservation regression (PR #11723)
 // ---------------------------------------------------------------------------
 
-/// When `submit_on_ctrl_enter` is `true`, text is selected in the Rich Input,
-/// and the user presses Ctrl+Enter, the submitted message must contain the
-/// **full** buffer text — including the selected portion.
-///
-/// Under the broken (pre-fix) implementation:
-///   1. The editor's `ctrl_enter` handler called `newline_internal`, which
-///      called `insert("\n", …)`.  `insert` replaces any active selection with
-///      the inserted text, so "world" became "\n".
-///   2. `input_ctrl_enter` then called `editor.backspace()` to strip the `\n`.
-///   3. The submitted text was "hello " — "world" was silently lost.
-///
-/// After the fix, `enter_settings.ctrl_enter = Emit` so the editor never
-/// calls `newline_internal`, the selection is untouched, and the full buffer
-/// text "hello world" is submitted.
+/// Regression (#11588): with toggle ON and text selected, Ctrl+Enter must
+/// submit the full buffer — the selected portion must not be lost.
 #[test]
 fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true() {
     use std::cell::RefCell;
@@ -7645,29 +7512,12 @@ fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true(
 }
 
 // ---------------------------------------------------------------------------
-// Issue #11588 — Keymap-context predicate tests
-//
-// These two tests pin the `keymap_context_modifier` closure behaviour for the
-// inner EditorView that owns the `ctrl-enter` binding.  They must be run on
-// Windows (non-macOS) with AgentView enabled — the exact conditions under
-// which the bug manifested.
-//
-// Test A (RED pre-fix): with the CLI agent rich input open, the editor context
-// must NOT contain CTRL_ENTER_ENTERS_AGENT_VIEW (so the binding can match),
-// and it MUST contain CLI_AGENT_RICH_INPUT_OPEN (sanity).
-//
-// Test B (baseline): without the rich input open, the editor context DOES
-// contain CTRL_ENTER_ENTERS_AGENT_VIEW on non-macOS, preserving the existing
-// agent-view-entry behaviour.
+// Issue #11588 — Keymap-context predicate: rich input open suppresses flag
 // ---------------------------------------------------------------------------
 
-/// With the CLI agent rich input open, the EditorView keymap context must NOT
-/// contain `CTRL_ENTER_ENTERS_AGENT_VIEW` (so ctrl-enter binding is not
-/// suppressed) and MUST contain `CLI_AGENT_RICH_INPUT_OPEN`.
-///
-/// Pre-fix this test fails because `CTRL_ENTER_ENTERS_AGENT_VIEW` is inserted
-/// unconditionally whenever the inline agent-view controller is inactive,
-/// regardless of whether the rich input is open.
+/// Regression (#11588): with the CLI agent rich input open, the editor keymap
+/// context must NOT contain `CTRL_ENTER_ENTERS_AGENT_VIEW` (so the binding
+/// fires) and MUST contain `CLI_AGENT_RICH_INPUT_OPEN`.
 #[test]
 fn editor_keymap_context_excludes_ctrl_enter_enters_agent_view_when_rich_input_is_open() {
     App::test((), |mut app| async move {
@@ -7696,45 +7546,9 @@ fn editor_keymap_context_excludes_ctrl_enter_enters_agent_view_when_rich_input_i
                  is open; got flags: {:?}",
                 km_ctx.set
             );
-            // Sanity: the rich-input-open flag itself must be present.
             assert!(
                 km_ctx.set.contains(flags::CLI_AGENT_RICH_INPUT_OPEN),
                 "CLI_AGENT_RICH_INPUT_OPEN must be set when the rich input is open; \
-                 got flags: {:?}",
-                km_ctx.set
-            );
-        });
-    });
-}
-
-/// Without the CLI agent rich input open (the default state), the EditorView
-/// keymap context DOES contain `CTRL_ENTER_ENTERS_AGENT_VIEW` on non-macOS
-/// when AgentView is enabled and the inline agent-view controller is inactive.
-///
-/// This pins the existing agent-view-entry behaviour so a future change to the
-/// closure cannot silently break the ctrl-enter-to-agent-view use case.
-#[cfg(not(target_os = "macos"))]
-#[test]
-fn editor_keymap_context_includes_ctrl_enter_enters_agent_view_when_rich_input_is_closed() {
-    App::test((), |mut app| async move {
-        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
-        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
-
-        initialize_app(&mut app);
-
-        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        // Do NOT open the rich input — the default state with an inactive
-        // inline agent-view controller should set CTRL_ENTER_ENTERS_AGENT_VIEW.
-        input.read(&app, |input, ctx| {
-            let km_ctx = input
-                .editor
-                .read(ctx, |editor, ctx| editor.keymap_context(ctx));
-            assert!(
-                km_ctx.set.contains(flags::CTRL_ENTER_ENTERS_AGENT_VIEW),
-                "CTRL_ENTER_ENTERS_AGENT_VIEW should be set when the rich input is NOT open \
-                 and the inline agent-view controller is inactive on non-macOS; \
                  got flags: {:?}",
                 km_ctx.set
             );
@@ -7746,24 +7560,8 @@ fn editor_keymap_context_includes_ctrl_enter_enters_agent_view_when_rich_input_i
 // Issue #11588 — Enter must accept inline menus when submit_on_ctrl_enter=true
 // ---------------------------------------------------------------------------
 
-/// When `submit_on_ctrl_enter` is `true` and the CLI agent rich input is open,
-/// pressing Enter while the slash-commands menu is active must route to the
-/// menu-acceptance branch — **not** the newline-insertion branch.
-///
-/// The underlying bug: `update_cli_agent_enter_settings` was setting
-/// `enter = EnterAction::InsertNewLineIfMultiLine` when the toggle was on.
-/// That caused the editor's `enter()` function to call `newline_internal`
-/// directly, bypassing `input_enter` entirely.  All inline-menu acceptance
-/// (slash commands, prompts, skills, @ context) therefore failed silently.
-///
-/// After the fix, `enter` is always `EnterAction::Emit` so `input_enter` runs
-/// first and can check menu state before falling through to newline insertion.
-///
-/// Assertion strategy: directly set the suggestions mode to SlashCommands, then
-/// press Enter and verify no newline was appended to the buffer.  The slash
-/// commands view may have no items loaded (no session context), so `accept_selected_item`
-/// is a no-op — but the important invariant is that the newline-insertion path
-/// was NOT reached.
+/// Regression (#11588): with toggle ON, Enter while a slash-commands menu is
+/// active must route to menu acceptance, not newline insertion.
 #[test]
 fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
     use std::cell::RefCell;
@@ -7849,22 +7647,55 @@ fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
 }
 
 // ---------------------------------------------------------------------------
-// Issue #11588 / PR #11723 — Bug 3: Ctrl+Enter enter_settings restore on close
+// Issue #11588 / PR #11723 — Bug 4: Ctrl+Enter no-op when toggle is OFF
 // ---------------------------------------------------------------------------
 
-/// After a CLI-agent Rich Input session closes, the shared editor's
-/// `ctrl_enter` setting must be restored to `InsertNewLineIfMultiLine`
-/// (the `EnterSettings::default()` value).
+/// Regression test: when `submit_on_ctrl_enter` is `false` and the CLI agent
+/// rich input is open, the editor's `ctrl_enter` setting must be
+/// `InsertNewLineIfMultiLine` so that Ctrl+Enter inserts a newline.
 ///
-/// The bug: `update_cli_agent_enter_settings` always wrote `{enter: Emit,
-/// ctrl_enter: Emit}` regardless of whether the rich input was open or
-/// closed.  After a Rich Input session ended, the normal terminal input
-/// therefore had `ctrl_enter = Emit`, which emitted `Event::CtrlEnter`
-/// instead of inserting a newline — breaking the default multi-line
-/// editing behaviour.
-///
-/// The fix: branch inside `update_cli_agent_enter_settings` on
-/// `is_input_open` and restore `EnterSettings::default()` on close.
+/// Pre-fix this fails because `update_cli_agent_enter_settings` always set
+/// `ctrl_enter: Emit` regardless of the toggle, causing the editor's
+/// `ctrl_enter()` to hit the `_ => ()` no-op arm (issue #11588).
+#[test]
+fn ctrl_enter_inserts_newline_when_submit_on_ctrl_enter_is_false() {
+    use crate::editor::EnterAction;
+
+    App::test((), |mut app| async move {
+        let _cli_agent_flag = FeatureFlag::CLIAgentRichInput.override_enabled(true);
+
+        initialize_app(&mut app);
+
+        // Ensure the setting is false (the default).
+        let default_value =
+            AISettings::handle(&app).read(&app, |settings, _| *settings.submit_on_ctrl_enter);
+        assert!(!default_value, "submit_on_ctrl_enter must default to false");
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Open the rich input — update_cli_agent_enter_settings fires.
+        open_rich_input_for_terminal(&terminal, &mut app);
+
+        // With toggle=false, ctrl_enter must be InsertNewLineIfMultiLine so
+        // that pressing Ctrl+Enter inserts a newline instead of no-op'ing.
+        input.read(&app, |input, ctx| {
+            let settings = input.editor().as_ref(ctx).enter_settings();
+            assert!(
+                matches!(settings.ctrl_enter, EnterAction::InsertNewLineIfMultiLine),
+                "with submit_on_ctrl_enter=false, ctrl_enter must be \
+                 InsertNewLineIfMultiLine when rich input is open; got Emit instead"
+            );
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Issue #11588 / PR #11723 — enter_settings restored when rich input closes
+// ---------------------------------------------------------------------------
+
+/// Regression (#11588): after a Rich Input session closes, `ctrl_enter` must
+/// be restored to `InsertNewLineIfMultiLine` (the `EnterSettings::default()`).
 #[test]
 fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
     use crate::editor::EnterAction;
@@ -7877,13 +7708,8 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
 
-        // Open the rich input — update_cli_agent_enter_settings fires and sets
-        // {enter: Emit, ctrl_enter: Emit}.
         open_rich_input_for_terminal(&terminal, &mut app);
 
-        // Close the rich input — update_cli_agent_enter_settings must fire
-        // again and restore EnterSettings::default(), where ctrl_enter is
-        // InsertNewLineIfMultiLine.
         terminal.update(&mut app, |view, ctx| {
             let view_id = view.view_id();
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
@@ -7891,8 +7717,6 @@ fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
             });
         });
 
-        // Assert that the editor's ctrl_enter setting is back to
-        // InsertNewLineIfMultiLine — the EnterSettings::default() value.
         input.read(&app, |input, ctx| {
             let settings = input.editor().as_ref(ctx).enter_settings();
             assert!(

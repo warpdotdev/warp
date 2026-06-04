@@ -195,40 +195,33 @@ impl Input {
 
     /// Configures the editor's enter-key behaviour for the CLI agent rich input.
     ///
-    /// When the rich input is **open**, both `enter` and `ctrl_enter` are set
-    /// to `Emit` so the editor never inserts a newline directly — newline
-    /// insertion (when `submit_on_ctrl_enter` is `true`) is handled in
-    /// `Input::input_enter` after all inline-menu acceptance branches have had
-    /// a chance to run.  This ensures that pressing Enter while an `@`-context,
-    /// prompt, skill, or slash-command menu is active always accepts the
-    /// highlighted item rather than inserting a newline.
+    /// When rich input is **open**, `enter` is always `Emit` so `input_enter`
+    /// runs first and handles inline-menu acceptance before any newline or
+    /// submit logic.  `ctrl_enter` is `Emit` only when the toggle is ON
+    /// (submit on Ctrl+Enter); when the toggle is OFF it is
+    /// `InsertNewLineIfMultiLine` to restore baseline newline insertion.
     ///
-    /// When the rich input is **closed**, the editor's enter settings are
-    /// restored to `EnterSettings::default()` so that Ctrl+Enter behaves as
-    /// `InsertNewLineIfMultiLine` in the normal terminal input — matching the
-    /// behaviour before any CLI-agent session was started.
-    ///
-    /// The `EnterSettings` values this function writes depend only on whether
-    /// the rich input is currently open, not on the `submit_on_ctrl_enter`
-    /// setting — so callers do not need to re-invoke it when that setting
-    /// changes.
+    /// When rich input is **closed**, `EnterSettings::default()` is restored.
     pub(super) fn update_cli_agent_enter_settings(&mut self, ctx: &mut ViewContext<Self>) {
         let rich_input_open =
             CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
 
         let settings = if rich_input_open {
+            let submit_on_ctrl_enter =
+                *crate::settings::AISettings::as_ref(ctx).submit_on_ctrl_enter;
             EnterSettings {
-                // Always Emit so that input_enter runs and can handle the
-                // submit_on_ctrl_enter toggle and all inline-menu branches.
+                // Always Emit so input_enter handles menus before submit/newline.
                 enter: EnterAction::Emit,
-                // Always Emit: we never want the editor to mutate the buffer
-                // (and thereby drop any active selection) on Ctrl+Enter.
-                ctrl_enter: EnterAction::Emit,
+                // Toggle ON  → Emit (submit path in input_ctrl_enter).
+                // Toggle OFF → InsertNewLineIfMultiLine (baseline newline).
+                ctrl_enter: if submit_on_ctrl_enter {
+                    EnterAction::Emit
+                } else {
+                    EnterAction::InsertNewLineIfMultiLine
+                },
                 ..Default::default()
             }
         } else {
-            // Rich input is closed — restore the normal terminal input defaults
-            // so Ctrl+Enter inserts a newline (InsertNewLineIfMultiLine) again.
             EnterSettings::default()
         };
 

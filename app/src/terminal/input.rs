@@ -2598,10 +2598,7 @@ impl Input {
             // Sync the editor text colors with the (now active or inactive)
             // alt-screen CLI agent background so input text stays legible.
             me.update_cli_agent_editor_text_colors(ctx);
-            // Sync enter_settings with the new open/closed state.
-            // When open: enter and ctrl_enter are Emit (rich input mode).
-            // When closed: restores EnterSettings::default() (normal terminal).
-            // See update_cli_agent_enter_settings for details.
+            // Re-sync enter_settings whenever the rich input opens or closes.
             me.update_cli_agent_enter_settings(ctx);
             me.set_zero_state_hint_text(ctx);
             ctx.notify();
@@ -6514,10 +6511,9 @@ impl Input {
                 self.update_voice_transcription_options(ctx);
             }
             AISettingsChangedEvent::SubmitRichInputOnCtrlEnter { .. } => {
-                // No need to re-sync enter_settings here: both enter and
-                // ctrl_enter are always EnterAction::Emit regardless of the
-                // toggle value. The newline-vs-submit decision for Enter is
-                // made inside input_enter after all inline-menu branches run.
+                // ctrl_enter now depends on the toggle: re-sync so flipping
+                // the setting mid-session takes effect immediately.
+                self.update_cli_agent_enter_settings(ctx);
             }
             _ => {}
         }
