@@ -2393,3 +2393,87 @@ fn remove_lazy_loaded_path_clears_tracked_watches() {
         });
     });
 }
+
+/// Deleting an expanded subdirectory of a lazy non-recursive root drops its
+/// per-directory watch (and any tracked descendants), so the entry no longer
+/// lingers in `extra_dirs`. Otherwise a directory recreated at the same path
+/// would be skipped by `watch_subdir` and never re-watched.
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn deleted_subdir_drops_its_tracked_watch() {
+    VirtualFS::test("lazy_delete_subdir_drops_watch", |dirs, mut vfs| {
+        vfs.mkdir("workspace/sub/inner");
+        let root =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace")).unwrap();
+        let sub = StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub"))
+            .unwrap();
+        let inner =
+            StandardizedPath::from_local_canonicalized(&dirs.tests().join("workspace/sub/inner"))
+                .unwrap();
+        let sub_local = sub.to_local_path().unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+                model
+                    .load_directory(&root, &sub, ctx)
+                    .expect("should load subdir");
+                model
+                    .load_directory(&root, &inner, ctx)
+                    .expect("should load nested subdir");
+            });
+
+            // Only a non-recursive (Linux) root tracks per-directory watches.
+            if !cfg!(target_os = "linux") {
+                return;
+            }
+
+            model_handle.read(&app, |model, _ctx| {
+                let repo_watch = model.repo_watches.get(&root).expect("watch recorded");
+                assert!(repo_watch.extra_dirs.contains(&sub));
+                assert!(repo_watch.extra_dirs.contains(&inner));
+            });
+
+            // Wait for the spawned watcher-event handling to finish by
+            // listening for the tree update it emits.
+            let (tx, rx) = oneshot::channel();
+            let sender = Rc::new(RefCell::new(Some(tx)));
+            let root_for_event = root.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } = event {
+                        if path == &root_for_event {
+                            if let Some(tx) = sender.borrow_mut().take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                    }
+                });
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        deleted: std::collections::HashSet::from([sub_local]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for tree update")
+                .expect("tree update sender dropped");
+
+            model_handle.read(&app, |model, _ctx| {
+                let repo_watch = model.repo_watches.get(&root).expect("watch recorded");
+                // The deleted subdir and its tracked descendant are dropped.
+                assert!(!repo_watch.extra_dirs.contains(&sub));
+                assert!(!repo_watch.extra_dirs.contains(&inner));
+            });
+        });
+    });
+}

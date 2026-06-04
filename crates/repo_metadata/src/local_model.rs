@@ -672,6 +672,15 @@ impl LocalRepoMetadataModel {
                             }
                         }
 
+                        // Drop per-directory watches for any directory that was
+                        // deleted or moved away (along with their tracked
+                        // descendants). Without this their stale `extra_dirs`
+                        // entries would make `watch_subdir` skip re-watching if a
+                        // directory is later recreated at the same path.
+                        for removed in &removed_roots {
+                            model.unwatch_removed_subtree(&repo_path, removed, ctx);
+                        }
+
                         // Watch any newly added directories under a non-recursive
                         // root. `new_dirs` is empty for recursive roots, so this
                         // is a no-op there.
@@ -1079,6 +1088,47 @@ impl LocalRepoMetadataModel {
                     repo_watch_filter(gitignores, force_included_paths),
                     RecursiveMode::NonRecursive,
                 ));
+            });
+        }
+    }
+
+    /// Drops any on-demand per-directory watches at or under `removed_path` when
+    /// a directory is deleted or moved away. Each stale path is unregistered from
+    /// the watcher and removed from `extra_dirs`. Without this, a directory
+    /// recreated at the same path would be skipped by [`watch_subdir`] (which
+    /// sees the stale `extra_dirs` entry) and never receive a fresh watch.
+    #[cfg(feature = "local_fs")]
+    fn unwatch_removed_subtree(
+        &mut self,
+        repo_root: &StandardizedPath,
+        removed_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(repo_watch) = self.repo_watches.get_mut(repo_root) else {
+            return;
+        };
+        // The removed directory plus any tracked descendants are now stale.
+        // `starts_with` is component-aware and matches the path itself, so this
+        // covers both an exact removed dir and everything expanded beneath it.
+        let stale: Vec<StandardizedPath> = repo_watch
+            .extra_dirs
+            .iter()
+            .filter(|dir| dir.starts_with(removed_path))
+            .cloned()
+            .collect();
+        if stale.is_empty() {
+            return;
+        }
+        for dir in &stale {
+            repo_watch.extra_dirs.remove(dir);
+        }
+        if let Some(ref watcher) = self.watcher {
+            let local_paths: Vec<PathBuf> =
+                stale.iter().filter_map(|dir| dir.to_local_path()).collect();
+            watcher.update(ctx, |watcher, _ctx| {
+                for path in &local_paths {
+                    std::mem::drop(watcher.unregister_path(path));
+                }
             });
         }
     }
