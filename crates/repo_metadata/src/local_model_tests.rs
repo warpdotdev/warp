@@ -46,7 +46,7 @@ impl LocalRepoMetadataModel {
 }
 
 #[test]
-#[should_panic(expected = "ignored path interests must be repository-relative")]
+#[should_panic(expected = "force-included paths must be repository-relative")]
 fn force_included_paths_must_be_relative() {
     let mut model = LocalRepoMetadataModel::new_for_test();
     model.register_force_included_paths([PathBuf::from("/absolute/path")]);

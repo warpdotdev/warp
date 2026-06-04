@@ -457,7 +457,7 @@ impl LocalRepoMetadataModel {
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         target_dir,
-                        repo_watch_filter(),
+                        repo_watch_filter(Vec::new(), Vec::new()),
                         RecursiveMode::NonRecursive,
                     ));
                 });
