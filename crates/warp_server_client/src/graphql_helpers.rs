@@ -6,7 +6,7 @@ use instant::Duration;
 use warp_graphql::client::{GraphQLError, Operation};
 use warpui_core::r#async::BoxFuture;
 
-use crate::base_client::BaseClient;
+use crate::{auth::AuthEvent, base_client::BaseClient};
 
 /// Sends a GraphQL operation through a base client supplied by the application.
 ///
@@ -29,11 +29,11 @@ where
         {
             Ok(response) => response,
             Err(GraphQLError::StagingAccessBlocked) => {
-                base_client.on_graphql_staging_access_blocked();
+                let _ = base_client.send_auth_event(AuthEvent::StagingAccessBlocked);
                 anyhow::bail!(GraphQLError::StagingAccessBlocked);
             }
             Err(GraphQLError::IapChallengeBlocked) => {
-                base_client.on_graphql_iap_challenge_received();
+                let _ = base_client.send_auth_event(AuthEvent::IapChallengeReceived);
                 anyhow::bail!(GraphQLError::IapChallengeBlocked);
             }
             Err(err) => {

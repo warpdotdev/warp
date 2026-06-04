@@ -306,13 +306,6 @@ impl BaseClient {
         Ok(options)
     }
 
-    pub fn on_graphql_staging_access_blocked(&self) {
-        let _ = self.send_auth_event(AuthEvent::StagingAccessBlocked);
-    }
-
-    pub fn on_graphql_iap_challenge_received(&self) {
-        let _ = self.send_auth_event(AuthEvent::IapChallengeReceived);
-    }
     /// Notifies the application when an enabled IAP-backed request receives an IAP challenge.
     pub(crate) fn observe_iap_challenge(&self, response: &http_client::Response) -> bool {
         if !self.observe_iap_challenges
