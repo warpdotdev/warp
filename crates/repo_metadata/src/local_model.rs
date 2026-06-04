@@ -744,15 +744,6 @@ impl LocalRepoMetadataModel {
             if !path_to_add.exists() {
                 continue;
             }
-            // Directory symlinks are intentionally absent from the canonical tree.
-            // Re-hydrate only when the changed entry itself can introduce a
-            // symlinked skill; ordinary descendants should not wake consumers.
-            if path_to_add.is_symlink() && path_to_add.is_dir() {
-                standing_results.record_direct_project_skill_provider_child_change(
-                    path_to_add,
-                    standing_query_definitions,
-                );
-            }
 
             let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
 
@@ -781,7 +772,15 @@ impl LocalRepoMetadataModel {
                             subtree,
                         });
                     }
-                    Err(BuildTreeError::Symlink) => {}
+                    Err(BuildTreeError::Symlink) => {
+                        // Directory symlinks are intentionally absent from the canonical tree.
+                        // Re-hydrate only when the changed entry itself can introduce a
+                        // symlinked skill; ordinary descendants should not wake consumers.
+                        standing_results.record_direct_project_skill_provider_child_change(
+                            path_to_add,
+                            standing_query_definitions,
+                        );
+                    }
                     Err(e) => {
                         log::warn!("Failed to build subtree for directory {path_to_add:?}: {e:?}");
                         mutations.push(FileTreeMutation::AddEmptyDirectory {

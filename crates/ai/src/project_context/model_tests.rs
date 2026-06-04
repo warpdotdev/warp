@@ -295,6 +295,38 @@ fn test_merge_rediscovery_keeps_latest() {
     assert_eq!(delta.discovered_rules.len(), 1);
     assert!(delta.deleted_rules.is_empty());
 }
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_failed_standing_rule_read_preserves_cached_content() {
+    let rule_path = PathBuf::from("/unavailable/project/WARP.md");
+    let mut existing_rules = ProjectRules::default();
+    existing_rules.upsert_rule(&rule_path, "cached content".to_string());
+
+    let rules = futures::executor::block_on(ProjectContextModel::read_standing_project_rules(
+        vec![rule_path.clone()],
+        existing_rules,
+    ));
+    let result = rules.find_active_or_applicable_rules(Path::new("/unavailable/project/main.rs"));
+
+    assert_eq!(result.active_rules.len(), 1);
+    assert_eq!(result.active_rules[0].path, rule_path);
+    assert_eq!(result.active_rules[0].content, "cached content");
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_rule_missing_from_standing_results_is_removed_from_cached_content() {
+    let rule_path = PathBuf::from("/unavailable/project/WARP.md");
+    let mut existing_rules = ProjectRules::default();
+    existing_rules.upsert_rule(&rule_path, "cached content".to_string());
+
+    let rules = futures::executor::block_on(ProjectContextModel::read_standing_project_rules(
+        Vec::new(),
+        existing_rules,
+    ));
+
+    assert!(rules.all_rule_paths().next().is_none());
+}
 
 // Helper for global-rules tests: inserts a synthetic global rule directly into
 // the model. Bypasses the watcher infrastructure (which requires the warpui

@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(feature = "local_fs")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -66,6 +68,26 @@ impl ProjectRules {
                 .chain(rule.agents_md.iter())
                 .map(|rule| &rule.path)
         })
+    }
+    #[cfg(feature = "local_fs")]
+    fn retain_rule_paths(&mut self, retained_paths: &HashSet<PathBuf>) {
+        self.rules.retain_mut(|rule| {
+            if rule
+                .warp_md
+                .as_ref()
+                .is_some_and(|rule| !retained_paths.contains(&rule.path))
+            {
+                rule.warp_md = None;
+            }
+            if rule
+                .agents_md
+                .as_ref()
+                .is_some_and(|rule| !retained_paths.contains(&rule.path))
+            {
+                rule.agents_md = None;
+            }
+            rule.warp_md.is_some() || rule.agents_md.is_some()
+        });
     }
     /// Finds the set of rules that are active in the given path and the set that are available to be applied.
     fn find_active_or_applicable_rules(&self, path: &Path) -> FindRulesResult {
@@ -302,6 +324,11 @@ impl ProjectContextModel {
             .filter(|content| !content.is_directory)
             .filter_map(|content| content.path.to_local_path())
             .collect::<Vec<_>>();
+        let existing_rules = self
+            .path_to_rules
+            .get(&project_root)
+            .cloned()
+            .unwrap_or_default();
 
         self.next_rule_refresh_generation += 1;
         let refresh_generation = self.next_rule_refresh_generation;
@@ -309,19 +336,7 @@ impl ProjectContextModel {
             .insert(project_root.clone(), refresh_generation);
         let project_root_for_read = project_root.clone();
         ctx.spawn(
-            async move {
-                let mut rules = ProjectRules::default();
-                for rule_path in rule_paths {
-                    match async_fs::read_to_string(&rule_path).await {
-                        Ok(content) => rules.upsert_rule(&rule_path, content),
-                        Err(error) => log::debug!(
-                            "Failed to read project rule file {}: {error}",
-                            rule_path.display()
-                        ),
-                    }
-                }
-                rules
-            },
+            async move { Self::read_standing_project_rules(rule_paths, existing_rules).await },
             move |me, rules, ctx| {
                 if me.rule_refresh_generations.get(&project_root_for_read)
                     != Some(&refresh_generation)
@@ -352,6 +367,26 @@ impl ProjectContextModel {
                 ctx.emit(ProjectContextModelEvent::PathIndexed);
             },
         );
+    }
+
+    #[cfg(feature = "local_fs")]
+    async fn read_standing_project_rules(
+        rule_paths: Vec<PathBuf>,
+        mut existing_rules: ProjectRules,
+    ) -> ProjectRules {
+        let retained_paths = rule_paths.iter().cloned().collect::<HashSet<_>>();
+        existing_rules.retain_rule_paths(&retained_paths);
+
+        for rule_path in rule_paths {
+            match async_fs::read_to_string(&rule_path).await {
+                Ok(content) => existing_rules.upsert_rule(&rule_path, content),
+                Err(error) => log::debug!(
+                    "Failed to read project rule file {}: {error}",
+                    rule_path.display()
+                ),
+            }
+        }
+        existing_rules
     }
 
     #[cfg(feature = "local_fs")]
