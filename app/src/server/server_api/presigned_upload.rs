@@ -29,7 +29,7 @@ pub struct HttpStatusError {
 
 impl ErrorExt for HttpStatusError {
     fn is_actionable(&self) -> bool {
-        !matches!(self.status, 408 | 429 | 500..=599)
+        !matches!(self.status, 408 | 429)
     }
 }
 register_error!(HttpStatusError);

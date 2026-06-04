@@ -388,7 +388,7 @@ fn zero_threshold_disables_stream_error_escalation() {
 
 #[test]
 fn non_actionable_stream_statuses_do_not_report_at_threshold() {
-    for status in [408, 429, 500, 503] {
+    for status in [408, 429] {
         let err = make_http_status_error(status);
         assert!(
             !agent_event_failure_should_log_error(&err, 5, 5),
@@ -398,9 +398,16 @@ fn non_actionable_stream_statuses_do_not_report_at_threshold() {
 }
 
 #[test]
+fn server_error_status_reports_at_threshold_crossing() {
+    let err = make_http_status_error(500);
+    assert!(agent_event_failure_should_log_error(&err, 5, 5));
+}
+
+#[test]
 fn http_status_error_actionability_follows_status_classification() {
     assert!(make_http_status_error(400).is_actionable());
-    assert!(!make_http_status_error(500).is_actionable());
+    assert!(make_http_status_error(500).is_actionable());
+    assert!(!make_http_status_error(429).is_actionable());
 }
 
 #[tokio::test]
