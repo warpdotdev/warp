@@ -394,7 +394,14 @@ impl ContextChipKind {
             Self::Username => ChipValue::Text("alice".to_string()),
             Self::Hostname => ChipValue::Text("ubuntu-04".to_string()),
             Self::ShellGitBranch => ChipValue::Text("git-feature-branch".to_string()),
-            Self::GitBranchStatus => ChipValue::Text("git-feature-branch ↑2 ↓1".to_string()),
+            Self::GitBranchStatus => {
+                ChipValue::GitBranchStatus(display_chip::GitBranchTrackingStatus::new(
+                    "main".to_string(),
+                    Some("origin/main".to_string()),
+                    1,
+                    2,
+                ))
+            }
             Self::GitDiffStats => ChipValue::Text("3 • +10 -2".to_string()),
             Self::GithubPullRequest => ChipValue::Text("PR #123".to_string()),
             Self::VirtualEnvironment => ChipValue::Text("pyenv".to_string()),

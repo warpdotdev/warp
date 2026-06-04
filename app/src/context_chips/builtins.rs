@@ -168,9 +168,20 @@ pub fn shell_git_branch_status() -> ShellCommandGenerator {
         sh -c 'branch=$(GIT_OPTIONAL_LOCKS=0 git symbolic-ref --short HEAD 2>/dev/null || \
         GIT_OPTIONAL_LOCKS=0 git rev-parse --short HEAD 2>/dev/null) || exit 1; \
         [ -n \"$branch\" ] || exit 1; \
-        if counts=$(GIT_OPTIONAL_LOCKS=0 git rev-list --left-right --count HEAD...@{u} 2>/dev/null); then \
+        display_count() { if [ \"$1\" -gt 999 ]; then printf \"999+\"; else printf \"%s\" \"$1\"; fi; }; \
+        if counts=$(GIT_OPTIONAL_LOCKS=0 git rev-list --left-right --cherry-mark --count HEAD...@{u} 2>/dev/null); then \
             set -- $counts; \
-            printf \"%s ↑%s ↓%s\\n\" \"$branch\" \"$1\" \"$2\"; \
+            ahead=${1:-0}; behind=${2:-0}; equivalent=${3:-0}; status=\"\"; \
+            if [ \"$ahead\" -eq 0 ] && [ \"$behind\" -eq 0 ] && [ \"$equivalent\" -gt 0 ]; then \
+                status=\"⇅\"; \
+            else \
+                if [ \"$ahead\" -gt 0 ]; then status=\"↑$(display_count \"$ahead\")\"; fi; \
+                if [ \"$behind\" -gt 0 ]; then \
+                    behind_status=\"↓$(display_count \"$behind\")\"; \
+                    if [ -n \"$status\" ]; then status=\"$status $behind_status\"; else status=\"$behind_status\"; fi; \
+                fi; \
+            fi; \
+            if [ -n \"$status\" ]; then printf \"%s • %s\\n\" \"$branch\" \"$status\"; else printf \"%s\\n\" \"$branch\"; fi; \
         else \
             printf \"%s\\n\" \"$branch\"; \
         fi'";
@@ -180,11 +191,22 @@ pub fn shell_git_branch_status() -> ShellCommandGenerator {
             $branch = git rev-parse --short HEAD 2>$null; \
         } \
         if ($LASTEXITCODE -ne 0 -or -not $branch) { throw } \
-        $counts = git rev-list --left-right --count 'HEAD...@{u}' 2>$null; \
+        function Format-GitCount($count) { if ($count -gt 999) { '999+' } else { [string]$count } } \
+        $counts = git rev-list --left-right --cherry-mark --count 'HEAD...@{u}' 2>$null; \
         if ($LASTEXITCODE -eq 0 -and $counts) { \
             $parts = $counts -split '\\s+'; \
             if ($parts.Length -ge 2) { \
-                \"$branch ↑$($parts[0]) ↓$($parts[1])\"; \
+                $ahead = [int]$parts[0]; \
+                $behind = [int]$parts[1]; \
+                $equivalent = if ($parts.Length -ge 3) { [int]$parts[2] } else { 0 }; \
+                $status = @(); \
+                if ($ahead -eq 0 -and $behind -eq 0 -and $equivalent -gt 0) { \
+                    $status += '⇅'; \
+                } else { \
+                    if ($ahead -gt 0) { $status += \"↑$(Format-GitCount $ahead)\" } \
+                    if ($behind -gt 0) { $status += \"↓$(Format-GitCount $behind)\" } \
+                } \
+                if ($status.Count -gt 0) { \"$branch • $($status -join ' ')\" } else { $branch } \
             } else { \
                 $branch; \
             } \

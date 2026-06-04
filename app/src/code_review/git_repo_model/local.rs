@@ -168,11 +168,12 @@ impl LocalGitRepoStatusModel {
         changed_count > 0
     }
 
-    fn parse_ahead_behind_counts(output: &str) -> Option<(u32, u32)> {
+    fn parse_branch_tracking_counts(output: &str) -> Option<(u32, u32, u32)> {
         let mut parts = output.split_whitespace();
         let ahead = parts.next()?.parse().ok()?;
         let behind = parts.next()?.parse().ok()?;
-        Some((ahead, behind))
+        let equivalent = parts.next().map(str::parse).transpose().ok()?.unwrap_or(0);
+        Some((ahead, behind, equivalent))
     }
 
     async fn branch_tracking_status(
@@ -200,18 +201,28 @@ impl LocalGitRepoStatusModel {
 
         let counts = warp_util::git::run_git_command(
             repo_path,
-            &["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+            &[
+                "rev-list",
+                "--left-right",
+                "--cherry-mark",
+                "--count",
+                "HEAD...@{u}",
+            ],
         )
         .await
         .ok()
-        .and_then(|output| Self::parse_ahead_behind_counts(&output));
+        .and_then(|output| Self::parse_branch_tracking_counts(&output));
 
-        let Some((ahead, behind)) = counts else {
+        let Some((ahead, behind, equivalent)) = counts else {
             return GitBranchTrackingStatus::without_counts(
                 current_branch_name.to_string(),
                 Some(upstream),
             );
         };
+
+        if ahead == 0 && behind == 0 && equivalent > 0 {
+            return GitBranchTrackingStatus::rebased(current_branch_name.to_string(), upstream);
+        }
 
         GitBranchTrackingStatus::new(
             current_branch_name.to_string(),
