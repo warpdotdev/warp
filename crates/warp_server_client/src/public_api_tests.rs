@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use warp_core::channel::ChannelState;
+use warp_core::errors::AnyhowErrorExt as _;
 use warp_server_auth::auth_state::AuthState;
 use warp_server_auth::credentials::AuthToken;
 
-use super::get_authenticated_public_api;
+use super::{HttpStatusError, get_authenticated_public_api};
 use crate::auth::AuthEvent;
 use crate::base_client::{AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig};
 
@@ -46,6 +47,11 @@ fn iap_challenge_failure_emits_event_when_observation_is_enabled() {
     .unwrap_err();
 
     assert!(error.to_string().contains("IAP challenge"));
+    assert!(
+        error
+            .chain()
+            .any(|cause| cause.downcast_ref::<HttpStatusError>().is_some())
+    );
     assert!(matches!(
         event_receiver.try_recv().unwrap(),
         AuthEvent::IapChallengeReceived
@@ -73,4 +79,15 @@ fn iap_challenge_failure_emits_no_event_when_observation_is_disabled() {
     .unwrap_err();
 
     assert!(event_receiver.try_recv().is_err());
+}
+
+#[test]
+fn shared_status_error_actionability_ignores_retryable_client_failures() {
+    let error = anyhow::Error::new(HttpStatusError {
+        status: 429,
+        body: "retry later".to_string(),
+    })
+    .context("Public API request failed");
+
+    assert!(!error.is_actionable());
 }

@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use serde::de::DeserializeOwned;
 use warp_core::channel::ChannelState;
+use warp_core::errors::{ErrorExt, register_error};
 use warp_server_auth::credentials::AuthToken;
 
 use crate::base_client::{AmbientHeaderPolicy, BaseClient};
@@ -12,6 +13,12 @@ pub struct HttpStatusError {
     pub status: u16,
     pub body: String,
 }
+impl ErrorExt for HttpStatusError {
+    fn is_actionable(&self) -> bool {
+        !matches!(self.status, 408 | 429)
+    }
+}
+register_error!(HttpStatusError);
 
 #[derive(serde::Deserialize)]
 struct PublicApiError {

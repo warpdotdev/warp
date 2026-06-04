@@ -1575,10 +1575,7 @@ impl ServerApiProvider {
             |_, _| {},
         );
         let server_api = Arc::new(server_api);
-        let auth_client = Arc::new(AuthClientImpl::new(
-            server_api.base_client.clone(),
-            server_api.auth_session(),
-        ));
+        let auth_client = Arc::new(AuthClientImpl::new(server_api.base_client.clone()));
         Self {
             server_api,
             auth_client,
@@ -1602,10 +1599,7 @@ impl ServerApiProvider {
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         let server_api = Arc::new(ServerApi::new_for_test());
-        let auth_client = Arc::new(AuthClientImpl::new(
-            server_api.base_client.clone(),
-            server_api.auth_session(),
-        ));
+        let auth_client = Arc::new(AuthClientImpl::new(server_api.base_client.clone()));
         Self {
             server_api,
             auth_client,

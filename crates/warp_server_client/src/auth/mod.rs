@@ -175,7 +175,8 @@ pub struct AuthClientImpl {
 }
 
 impl AuthClientImpl {
-    pub fn new(base_client: Arc<BaseClient>, auth_session: Arc<AuthSession>) -> Self {
+    pub fn new(base_client: Arc<BaseClient>) -> Self {
+        let auth_session = base_client.auth_session();
         Self {
             base_client,
             auth_session,
