@@ -56,7 +56,57 @@ fn test_git_branch_tracking_status_displays_ahead_and_behind_when_upstream_exist
         1,
     );
 
-    assert_eq!(status.display_text(), "feature-a ↑2 ↓1");
+    assert_eq!(status.display_text(), "feature-a • ↑2 ↓1");
+}
+
+#[test]
+fn test_git_branch_tracking_status_hides_zero_counts() {
+    let status = GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        2,
+        0,
+    );
+
+    assert_eq!(status.display_text(), "feature-a • ↑2");
+}
+
+#[test]
+fn test_git_branch_tracking_status_caps_large_counts() {
+    let status = GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        1000,
+        1001,
+    );
+
+    assert_eq!(status.display_text(), "feature-a • ↑999+ ↓999+");
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_rebased_indicator() {
+    let status =
+        GitBranchTrackingStatus::rebased("feature-a".to_string(), "origin/feature-a".to_string());
+
+    assert_eq!(status.display_text(), "feature-a • ⇅");
+}
+
+#[test]
+fn test_git_branch_tracking_status_parses_shell_fallback_display_text() {
+    let status = GitBranchTrackingStatus::from_display_text("feature-a • ↑999+ ↓2").unwrap();
+
+    assert_eq!(status.branch, "feature-a");
+    assert_eq!(status.ahead, 1000);
+    assert_eq!(status.behind, 2);
+    assert!(status.counts_available);
+}
+
+#[test]
+fn test_git_branch_tracking_status_parses_shell_fallback_rebased_text() {
+    let status = GitBranchTrackingStatus::from_display_text("feature-a • ⇅").unwrap();
+
+    assert_eq!(status.branch, "feature-a");
+    assert!(status.is_rebased());
 }
 
 #[test]
@@ -87,7 +137,7 @@ fn test_git_branch_status_chip_display_value_uses_git_prefix() {
 
     assert_eq!(
         ContextChipKind::GitBranchStatus.display_value(&value),
-        "git:(feature-a ↑2 ↓1)"
+        "git:(feature-a • ↑2 ↓1)"
     );
 }
 
