@@ -21,72 +21,62 @@ The SVN chips (`SvnBranch`, `SvnDirtyItems`) are the closest analogue: shell-bas
 
 ### `jj_bookmark()`
 
-Produces the chip value text using the prototype command from the issue body:
+Produces the chip value text using `jj log` with output templates. Uses `bookmarks.map()`
+to list bookmarks on the current change, falling back to `change_id.shortest(8)` when
+anonymous.
 
 ```rust
-const SH_COMMAND: &str = concat!(
-    "_jj_bm=$(jj log -r @ --no-graph --ignore-working-copy",
-    " --template 'if(bookmarks,bookmarks,\"\")' 2>/dev/null);",
-    " if [ -n \"$_jj_bm\" ]; then echo \"$_jj_bm\";",
-    " else _jj_cid=$(jj log -r @ --no-graph --ignore-working-copy",
-    " --template 'change_id.short(8)' 2>/dev/null);",
-    " _jj_abm=$(jj log -r 'latest(ancestors(@) & bookmarks() ~ @)'",
-    " --no-graph --ignore-working-copy --template 'bookmarks' 2>/dev/null);",
-    " [ -n \"$_jj_abm\" ] && echo \"$_jj_cid on $_jj_abm\" || echo \"$_jj_cid\"; fi",
-);
+// Bash/Zsh:
+const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph \
+    -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
+    && if [ -n \"$bookmarks\" ]; then echo \"$bookmarks\"; \
+    else jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null; fi";
 ```
-
-This single shell command handles all five bookmark/change states listed in the issue description. Fish and PowerShell need their own variants:
 
 ```fish
 # Fish:
-set _jj_bm (jj log -r @ --no-graph --ignore-working-copy \
-    --template 'if(bookmarks,bookmarks,"")' 2>/dev/null)
-if test -n "$_jj_bm"
-    echo "$_jj_bm"
-else
-    set _jj_cid (jj log -r @ --no-graph --ignore-working-copy \
-        --template 'change_id.short(8)' 2>/dev/null)
-    set _jj_abm (jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' \
-        --no-graph --ignore-working-copy --template 'bookmarks' 2>/dev/null)
-    if test -n "$_jj_abm"
-        echo "$_jj_cid on $_jj_abm"
-    else
-        echo "$_jj_cid"
-    end
-end
+const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph \
+    -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
+    && if test -n \"$bookmarks\"; echo $bookmarks; \
+    else; jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null; end";
 ```
 
 ```powershell
-# PowerShell:
-$_jj_bm = jj log -r @ --no-graph --ignore-working-copy `
-    --template 'if(bookmarks,bookmarks,"")' 2>$null
-if ($_jj_bm) { $_jj_bm }
-else {
-    $_jj_cid = jj log -r @ --no-graph --ignore-working-copy `
-        --template 'change_id.short(8)' 2>$null
-    $_jj_abm = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' `
-        --no-graph --ignore-working-copy --template 'bookmarks' 2>$null
-    if ($_jj_abm) { "$_jj_cid on $_jj_abm" } else { $_jj_cid }
-}
+// PowerShell:
+const PWSH_BOOKMARK_CMD: &str = "$bookmarks = jj log -r '@' --no-graph \
+    -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
+    if ($bookmarks) { $bookmarks } \
+    else { jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>$null }";
 ```
+
+All three shell variants use `ShellCommand::shell_specific([...])` with per-shell entries,
+following the `svn_branch_context()` / `svn_dirty_items()` pattern.
 
 ### `jj_dirty_items()`
 
 Produces the count of changed files in the working copy:
 
-```bash
-# Bash/Zsh:
-count=$(jj diff --summary 2>/dev/null | wc -l) && (( $count > 0 )) && echo $(( $count ))
-
-# Fish:
-set count (jj diff --summary 2>/dev/null | wc -l); test $count -gt 0 && string trim $count
-
-# PowerShell:
-$count = (jj diff --summary 2>$null | Measure-Object -line).Lines; if ($count -gt 0) { $count }
+```rust
+// Bash/Zsh:
+const SH_DIRTY_CMD: &str =
+    "count=$(jj diff --summary 2>/dev/null | wc -l) && [ \"$count\" -gt 0 ] && echo \"$count\"";
 ```
 
-`jj diff --summary` outputs one line per changed file and produces no output when the workspace is clean, so `wc -l` gives an accurate count without header noise.
+```rust
+// Fish:
+const FISH_DIRTY_CMD: &str = "set count (jj diff --summary 2>/dev/null | wc -l) \
+    && test $count -gt 0 && string trim $count";
+```
+
+```rust
+// PowerShell:
+const PWSH_DIRTY_CMD: &str = "jj diff --summary 2>$null | Measure-Object -Line | \
+    Where-Object { $_.Lines -gt 0 } | ForEach-Object { $_.Lines }";
+```
+
+`jj diff --summary` outputs one line per changed file. The pipe to `wc -l` / `Measure-Object` gives
+an accurate count. When the workspace is clean (zero changes), the chip value is empty and the chip
+is hidden.
 
 ## Proposed changes
 
@@ -140,7 +130,7 @@ Self::GitDiffStats | Self::SvnDirtyItems | Self::JjDirtyItems => Some(Icon::File
 ```
 
 **1g. `render_text_from_kind()` (~line 627):** Add match arms for both variants, mirroring `SvnBranch`/`SvnDirtyItems` rendering:
-- `JjBookmark`: prefix `jj:(` and suffix `)` use `input_prompt_branch` (matching `ShellGitBranch`'s use of `input_prompt_git`).
+- `JjBookmark`: prefix `jj:(` and suffix `)` use `input_prompt_branch`.
 - `JjDirtyItems`: prefix `±` uses `input_prompt_svn`.
 
 **1h. `available_chips()` (~line 539):** Add `ContextChipKind::JjBookmark,` and `ContextChipKind::JjDirtyItems,` to the list.
@@ -168,13 +158,17 @@ For PowerShell variants, port the bash logic to PowerShell using `jj` commands d
 
 ## Testing and validation
 
+Each shell-specific command variant (Bash/Zsh, Fish, PowerShell) should be exercised to ensure
+the template string escaping is correct across all platforms.
+
 | Product invariant | Test approach |
 |---|---|
-| 1. Chips appear in picker UI | Unit test in `builtins_tests.rs`: verify `available_chips()` includes both new variants |
-| 2. Runtime disable when `jj` absent | Unit test in `current_prompt_tests.rs`: mirror `test_shell_chip_disabled_when_executable_is_missing` for `jj` |
+| 1. Chips appear in picker UI | Unit test: `available_chips()` includes `JjBookmark` and `JjDirtyItems` |
+| 2. Runtime disable when `jj` absent | Unit test: `dependencies()` returns `["jj"]`; ChipRuntimePolicy disables chip |
 | 3–5. JjBookmark display text | Shell command test: run `jj log` in a `jj` repo with various states and verify output format |
 | 6. Empty when no jj repo | Manual: `cd /tmp && warp` — chip should not render |
 | 7. JjDirtyItems count | Shell command test: run `jj diff --summary` in a repo with known changes and verify count |
-| 8–9. Rendering | Unit test in `display_chip_tests.rs` or `renderer_tests.rs`: verify `render_text_from_kind` produces correct styled spans |
-| 10. Adjacent spacing | Unit test in `prompt_tests.rs` or `mod.rs` test: verify `chips_to_string` omits space between `JjBookmark`/`JjDirtyItems` |
-| 13. Icons | Unit test: verify `udi_icon()` returns correct icon for both variants |
+| 8–9. Rendering | Unit test: verify `render_text_from_kind` produces correct prefix/suffix styled spans |
+| 10. Adjacent spacing | Unit test: verify `chips_to_string` omits space between `JjBookmark`/`JjDirtyItems` in both orders |
+| 11. Placeholders | Unit test: `placeholder_value()` returns `jj-feature-bookmark` and `3` |
+| 12. Icons | Unit test: `udi_icon()` returns `Icon::GitBranch` / `Icon::File` |
