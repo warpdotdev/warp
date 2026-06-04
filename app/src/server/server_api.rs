@@ -749,9 +749,17 @@ impl ServerApi {
     /// Opens an SSE stream against the ancestor-scoped endpoint that serves
     /// every direct child of the supplied parent run. Mirrors
     /// [`Self::stream_agent_events`] in transport, auth, and header handling.
+    ///
+    /// When `include_self` is true the stream additionally serves the parent
+    /// run's own events (parent-family scope), which owner-side orchestrators
+    /// use to receive their inbox alongside child lifecycle events on one
+    /// ordered stream. Viewer-mode callers pass false to preserve the
+    /// direct-children-only contract. `include_self=true` is sent on the wire
+    /// only when requested so the viewer-mode URL is byte-for-byte unchanged.
     pub async fn stream_agent_events_for_ancestor(
         &self,
         ancestor_run_id: &str,
+        include_self: bool,
         since_sequence: i64,
     ) -> Result<http_client::EventSourceStream> {
         debug_assert!(
@@ -763,8 +771,13 @@ impl ServerApi {
             .await
             .context("Failed to get access token for SSE stream")?;
 
+        let include_self_param = if include_self {
+            "&include_self=true"
+        } else {
+            ""
+        };
         let url = format!(
-            "{}/api/v1/agent/events/stream?ancestor_run_id={}&since={since_sequence}",
+            "{}/api/v1/agent/events/stream?ancestor_run_id={}&since={since_sequence}{include_self_param}",
             ChannelState::rtc_http_url(),
             urlencoding::encode(ancestor_run_id),
         );

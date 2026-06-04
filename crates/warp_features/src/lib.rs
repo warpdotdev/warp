@@ -726,6 +726,15 @@ pub enum FeatureFlag {
     /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
     OrchestrationViewerStreamer,
 
+    /// Migrates owner-side (orchestrator) event delivery from per-conversation
+    /// explicit `run_ids[]` SSE streams to a single parent-family
+    /// `ancestor_run_id&include_self=true` stream. This removes the >100
+    /// explicit-run-id limit for orchestrators with many children and avoids
+    /// reconnecting every time a new child is discovered. Dogfood-only while
+    /// the server endpoint rolls out; layered on top of `OrchestrationV2`.
+    /// See `specs/too-many-agents/TECH.md`.
+    OwnerOrchestrationAncestorStreamer,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -956,6 +965,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::OwnerOrchestrationAncestorStreamer,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

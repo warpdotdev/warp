@@ -423,6 +423,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OrchestrationViewerPillBar,
         #[cfg(feature = "orchestration_viewer_streamer")]
         FeatureFlag::OrchestrationViewerStreamer,
+        #[cfg(feature = "owner_orchestration_ancestor_streamer")]
+        FeatureFlag::OwnerOrchestrationAncestorStreamer,
         #[cfg(feature = "run_agents_tool")]
         FeatureFlag::RunAgentsTool,
         #[cfg(feature = "pending_user_query_indicator")]
