@@ -1,4 +1,6 @@
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+#[cfg(feature = "local_fs")]
+use ai::skills::SKILL_PROVIDER_DEFINITIONS;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
@@ -131,7 +133,22 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
     #[cfg(feature = "local_fs")]
-    app.add_singleton_model(RepoMetadataModel::new);
+    app.add_singleton_model(|ctx| {
+        let model = RepoMetadataModel::new(ctx);
+        model.register_ignored_path_interests(
+            SKILL_PROVIDER_DEFINITIONS
+                .iter()
+                .map(|provider| provider.skills_path.clone()),
+            ctx,
+        );
+        model.set_project_skill_provider_paths(
+            SKILL_PROVIDER_DEFINITIONS
+                .iter()
+                .map(|provider| provider.skills_path.clone()),
+            ctx,
+        );
+        model
+    });
     app.add_singleton_model(FileSearchModel::new);
     app.add_singleton_model(|_| GitStatusUpdateModel::new());
     app.add_singleton_model(RepoOutlines::new_for_test);
