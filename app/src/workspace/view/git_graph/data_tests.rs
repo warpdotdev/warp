@@ -225,6 +225,32 @@ fn parse_commit_detail_extracts_header_and_files() {
 }
 
 #[test]
+fn parse_numstat_normalizes_renamed_paths() {
+    // Git's --numstat compresses renames/moves into a single path column.
+    // We keep the post-rename real path so the tree splits cleanly and opening
+    // a diff hits an existing file.
+    let input = "\
+        1\t1\tsrc/pane_group/{child_agent.rs => child_agent/mod.rs}\n\
+        2\t0\tapp/src/{auth => crates/warp_server_auth/src}/lib.rs\n\
+        3\t0\tapp/src/{ => v2}/file.rs\n\
+        4\t0\told/path.rs => new/path.rs\n\
+        5\t0\tsrc/plain.rs\n";
+    let files = parse_numstat(input);
+
+    let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "src/pane_group/child_agent/mod.rs",
+            "app/src/crates/warp_server_auth/src/lib.rs",
+            "app/src/v2/file.rs",
+            "new/path.rs",
+            "src/plain.rs",
+        ]
+    );
+}
+
+#[test]
 fn parse_commit_detail_handles_empty_numstat() {
     let input = format!("Ann{US}100{US}msg{RS}", US = UNIT_SEP, RS = RECORD_SEP);
     let detail = parse_commit_detail(&input);

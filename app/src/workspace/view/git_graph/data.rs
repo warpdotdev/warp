@@ -594,6 +594,28 @@ pub(crate) fn parse_commit_detail(stdout: &str) -> CommitDetail {
     }
 }
 
+/// Normalize the `--numstat` path column into the post-rename real path.
+///
+/// Git compresses renames/moves into one column with two shapes:
+///   - braced, sharing a prefix/suffix: `a/{old => new}/c.rs` -> `a/new/c.rs`
+///     (either side of `=>` may be empty, e.g. `a/{ => v2}/c.rs`);
+///   - unbraced, when nothing is shared: `old => new` -> `new`.
+/// Keeping the new path lets the file tree split cleanly on `/` and lets a
+/// click open a diff against a path that actually exists in the commit.
+fn rename_target_path(raw: &str) -> String {
+    const ARROW: &str = " => ";
+    if let Some((prefix, rest)) = raw.split_once('{') {
+        if let Some((inside, suffix)) = rest.split_once('}') {
+            let new = inside.split_once(ARROW).map_or(inside, |(_, new)| new);
+            return format!("{prefix}{new}{suffix}");
+        }
+    }
+    if let Some((_, new)) = raw.split_once(ARROW) {
+        return new.to_string();
+    }
+    raw.to_string()
+}
+
 /// Parse `--numstat` output (each line is `additions\tdeletions\tpath`; binary
 /// files use `-`).
 fn parse_numstat(stdout: &str) -> Vec<ChangedFile> {
@@ -607,7 +629,7 @@ fn parse_numstat(stdout: &str) -> Vec<ChangedFile> {
             let mut parts = line.splitn(3, '\t');
             let additions = parts.next()?;
             let deletions = parts.next()?;
-            let path = parts.next()?.to_string();
+            let path = rename_target_path(parts.next()?);
             Some(ChangedFile {
                 path,
                 // Binary files report "-" in these columns; treat as 0.
