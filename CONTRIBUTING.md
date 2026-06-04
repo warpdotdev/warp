@@ -9,6 +9,7 @@ Thanks for helping improve Warp! This guide explains how to open issues, propose
 
 - Bug fixes are welcome once the report is actionable from the provided details or maintainer triage.
 - Feature requests must be marked `ready-to-spec` or `ready-to-implement` before PRs are accepted.
+- Issues marked `warp:reserved-internal` are being handled by the Warp team and are not open for contributor PRs.
 - Specs are the place where technical and design discussion on larger issues happen.
 - Oz automatically triages incoming issues and reviews open PRs.
 - Implementation PRs must include proof of manual testing.
@@ -31,6 +32,7 @@ The Warp team applies one of the following labels when an issue is ready for con
 - **`ready-to-spec`** — The problem is understood but the design is open. Open a spec PR with a *product spec* (`product.md`) and a *tech spec* (`tech.md`) under [`specs/`](specs/) — see [Opening a Spec PR](#opening-a-spec-pr) for what goes in each. This label is **reserved for feature requests**.
 - **`ready-to-implement`** — The issue is ready for a code PR. For bugs, this means the report is sufficiently reproducible or actionable and the likely fix does not need a spec, mocks, or deeper investigation.
 - **`needs-mocks`** — Design mocks are required before implementation can begin. Wait for the Warp team to land them.
+- **`warp:reserved-internal`** — The Warp team is reserving this work for internal implementation or alignment. Do not open a spec or code PR for issues with this label; Oz will reject contributor PRs linked to them with an explanatory comment.
 
 Anyone can pick up a ready issue — readiness labels are not assignments, and the best implementation wins through normal review. If an issue has been sitting un-triaged or you'd like readiness re-evaluated, mention **@oss-maintainers** in a comment to flag it for the team.
 
