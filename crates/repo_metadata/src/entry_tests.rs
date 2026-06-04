@@ -348,7 +348,7 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = 1000;
-    super::Entry::build_tree_with_options(
+    super::Entry::build_tree_with_force_included_paths(
         root,
         &mut files,
         &mut gitignores,
@@ -360,7 +360,6 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
             force_included_paths: &[std::path::PathBuf::from(".agents/skills")],
             budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
         },
-        super::BuildTreeRootContext::default(),
     )
     .unwrap()
 }
@@ -381,7 +380,7 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
         let mut results = StandingQueryResults::default();
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
-        let tree = Entry::build_tree_with_options(
+        let tree = Entry::build_tree_with_standing_queries(
             &repo,
             &mut files,
             &mut gitignores,
@@ -393,8 +392,8 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
                 force_included_paths: &[std::path::PathBuf::from(".agents/skills")],
                 budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
             },
-            super::BuildTreeRootContext::default()
-                .with_standing_queries(&mut results, &definitions),
+            &mut results,
+            &definitions,
         )
         .unwrap();
 
@@ -425,8 +424,7 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
         let mut files = Vec::new();
         let mut gitignores = Vec::new();
         let mut results = StandingQueryResults::default();
-        let definitions = StandingQueryDefinitions::default();
-        let tree = Entry::build_tree_with_options(
+        let tree = Entry::build_tree_with_standing_queries(
             &repo,
             &mut files,
             &mut gitignores,
@@ -438,8 +436,8 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
                 force_included_paths: &[],
                 budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
             },
-            super::BuildTreeRootContext::default()
-                .with_standing_queries(&mut results, &definitions),
+            &mut results,
+            &StandingQueryDefinitions::default(),
         )
         .unwrap();
 
@@ -808,7 +806,7 @@ fn build_with_budget(
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = budget;
-    super::Entry::build_tree_with_options(
+    super::Entry::build_tree_with_force_included_paths(
         root,
         &mut files,
         &mut gitignores,
@@ -820,7 +818,6 @@ fn build_with_budget(
             force_included_paths,
             budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
         },
-        super::BuildTreeRootContext::default(),
     )
     .unwrap()
 }

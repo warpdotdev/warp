@@ -2,10 +2,7 @@ use repo_metadata::file_tree_update::RepoMetadataUpdate;
 use repo_metadata::{StandingQueryContent, StandingQueryResultsDelta};
 use warp_util::standardized_path::StandardizedPath;
 
-use super::{
-    proto_load_repo_metadata_directory_response_to_update, proto_snapshot_to_update,
-    proto_to_repo_metadata_update,
-};
+use super::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 use crate::proto;
 
 fn path(path: &str) -> StandardizedPath {
@@ -56,21 +53,6 @@ fn snapshot_conversion_seeds_standing_results() {
     };
 
     let update = proto_snapshot_to_update(&snapshot).unwrap();
-
-    assert_eq!(update.standing_results_delta, delta);
-}
-
-#[test]
-fn directory_load_response_conversion_preserves_standing_results_delta() {
-    let delta = standing_delta();
-    let response = proto::LoadRepoMetadataDirectoryResponse {
-        repo_path: "/repo".to_string(),
-        dir_path: "/repo/src".to_string(),
-        entries: Vec::new(),
-        standing_results_delta: Some((&delta).into()),
-    };
-
-    let update = proto_load_repo_metadata_directory_response_to_update(&response).unwrap();
 
     assert_eq!(update.standing_results_delta, delta);
 }

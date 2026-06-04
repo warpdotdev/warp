@@ -456,7 +456,7 @@ fn failed_lazy_loaded_path_registration_is_retried() {
 
             file_tree_view.read(&app, |view, _ctx| {
                 assert!(view.registered_lazy_loaded_paths.contains(&std_path(&displayed_root)));
-                assert!(!matches!(
+                assert!(matches!(
                     view.root_directories.get(&std_path(&displayed_root)).map(|root_dir| &root_dir.entry),
                     Some(entry)
                         if entry.contains(&std_path(&displayed_root.join("file.txt")))
@@ -469,20 +469,6 @@ fn failed_lazy_loaded_path_registration_is_retried() {
                     )
                     .unwrap(),
                     ctx
-                ));
-            });
-            file_tree_view.update(&mut app, |view, ctx| {
-                view.toggle_folder_expansion(
-                    &std_path(&displayed_root),
-                    &std_path(&displayed_root),
-                    ctx,
-                );
-            });
-            file_tree_view.read(&app, |view, _ctx| {
-                assert!(matches!(
-                    view.root_directories.get(&std_path(&displayed_root)).map(|root_dir| &root_dir.entry),
-                    Some(entry)
-                        if entry.contains(&std_path(&displayed_root.join("file.txt")))
                 ));
             });
         });
@@ -584,7 +570,6 @@ fn auto_expand_preserves_existing_selection() {
                 // Simulate a prior explicit selection (e.g. user focused a
                 // file in the code editor and `scroll_to_file` selected it).
                 file_tree_view.update(&mut app, |view, ctx| {
-                    view.toggle_folder_expansion(&std_path(&tree), &std_path(&tree), ctx);
                     view.toggle_folder_expansion(&std_path(&tree), &std_path(&sub), ctx);
                     let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
                     let (index, _) = root_dir
@@ -644,7 +629,6 @@ fn click_on_file_under_absorbed_descendant_keeps_file_selected() {
                 file_tree_view.update(&mut app, |view, ctx| {
                     view.set_is_active(true, ctx);
                     view.set_root_directories(vec![code.clone()], ctx);
-                    view.toggle_folder_expansion(&std_path(&code), &std_path(&code), ctx);
                     view.toggle_folder_expansion(&std_path(&code), &std_path(&warp_server), ctx);
                 });
 
@@ -708,9 +692,6 @@ fn pending_focus_target_does_not_re_scroll_after_first_apply() {
             file_tree_view.update(&mut app, |view, ctx| {
                 view.set_is_active(true, ctx);
                 view.set_root_directories(vec![warp_server.clone(), tree.clone()], ctx);
-                view.ensure_loaded_path(&std_path(&tree), &std_path(&tree), ctx);
-                view.expand_folder_if_loaded(&std_path(&tree), &std_path(&tree));
-                view.apply_pending_focus_target();
             });
 
             // Initial apply should have scrolled once.
@@ -755,7 +736,8 @@ fn focus_follows_absorbed_descendant_once_its_item_is_materialized() {
             let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
 
             // User cd's into warp-server with ~/tree as the ancestor root.
-            // Automatic focus-follow must leave the unloaded ancestor inert.
+            // The warp-server entry should be materialized by indexing and
+            // selected as the focus-follow target.
             file_tree_view.update(&mut app, |view, ctx| {
                 view.set_is_active(true, ctx);
                 view.set_root_directories(vec![warp_server.clone(), tree.clone()], ctx);
@@ -764,55 +746,41 @@ fn focus_follows_absorbed_descendant_once_its_item_is_materialized() {
             file_tree_view.read(&app, |view, _ctx| {
                 // Single displayed root, descendant absorbed.
                 assert_eq!(view.displayed_directories, vec![std_path(&tree)]);
+                // Selection landed on warp-server's directory header.
+                let selected = view.selected_item.clone().expect("selection set");
+                assert_eq!(selected.root, std_path(&tree));
                 let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
-                assert!(!root_dir.entry.contains(&std_path(&warp_server)));
+                let selected_item = root_dir
+                    .items
+                    .get(selected.index)
+                    .expect("selected index in range");
+                assert_eq!(selected_item.path(), &std_path(&warp_server));
                 // Pending target is preserved across rebuilds so later
-                // explicit expansion can select the cwd once it becomes
-                // available.
+                // repo-metadata updates don't override the cwd-follow
+                // selection. It clears when the user interacts explicitly
+                // (see pending_focus_target_cleared_on_user_select).
                 let pending = view
                     .pending_focus_target
                     .as_ref()
                     .expect("pending target preserved");
                 assert_eq!(pending.root, std_path(&tree));
                 assert_eq!(pending.path, std_path(&warp_server));
-                assert!(
-                    !pending.scrolled,
-                    "unloaded target is not scrolled into view"
-                );
-            });
-
-            // A later model load materializes warp-server.
-            file_tree_view.update(&mut app, |view, ctx| {
-                view.ensure_loaded_path(&std_path(&tree), &std_path(&tree), ctx);
-                view.expand_folder_if_loaded(&std_path(&tree), &std_path(&tree));
-                view.apply_pending_focus_target();
-            });
-            file_tree_view.read(&app, |view, _ctx| {
-                let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
-                let selected = view.selected_item.clone().expect("selection set");
-                assert_eq!(
-                    root_dir.items.get(selected.index).unwrap().path(),
-                    &std_path(&warp_server)
-                );
-                assert!(view.pending_focus_target.as_ref().unwrap().scrolled);
+                // The initial apply scrolled; later applies must not
+                // re-scroll so user scrolling is respected.
+                assert!(pending.scrolled, "initial apply scrolls the tree");
             });
 
             // User clicks somewhere else (simulated via select_id). Pending
             // target must clear so future rebuilds don't re-steal focus.
             file_tree_view.update(&mut app, |view, ctx| {
+                let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
                 let id = super::FileTreeIdentifier {
                     root: std_path(&tree),
                     index: 0,
                 };
                 // Sanity: the first item is the root header, not warp-server.
                 assert_ne!(
-                    view.root_directories
-                        .get(&std_path(&tree))
-                        .unwrap()
-                        .items
-                        .first()
-                        .unwrap()
-                        .path(),
+                    root_dir.items.first().unwrap().path(),
                     &std_path(&warp_server)
                 );
                 view.select_id(&id, ctx);
@@ -848,10 +816,9 @@ fn descendant_is_absorbed_into_ancestor() {
                 assert_eq!(view.displayed_directories, vec![std_path(&tree)]);
                 assert!(view.root_directories.contains_key(&std_path(&tree)));
                 assert!(!view.root_directories.contains_key(&std_path(&a)));
-                // Absorption alone does not materialize or expand the descendant.
+                // The absorbed descendant is expanded inside the surviving root.
                 let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
-                assert!(!root_dir.entry.contains(&std_path(&a)));
-                assert!(!root_dir.expanded_folders.contains(&std_path(&a)));
+                assert!(root_dir.expanded_folders.contains(&std_path(&a)));
             });
         });
     });
@@ -884,12 +851,12 @@ fn cd_into_descendant_absorbs_into_existing_ancestor_root() {
             file_tree_view.read(&app, |view, _ctx| {
                 // Still a single root, no new top-level entry.
                 assert_eq!(view.displayed_directories, vec![std_path(&tree)]);
-                // The unloaded ancestor chain is not automatically materialized.
+                // Ancestor chain is auto-expanded down to the cwd.
                 let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
-                assert!(!root_dir
+                assert!(root_dir
                     .expanded_folders
                     .contains(&std_path(&tree.join("a"))));
-                assert!(!root_dir.expanded_folders.contains(&std_path(&z)));
+                assert!(root_dir.expanded_folders.contains(&std_path(&z)));
             });
         });
     });
@@ -912,7 +879,6 @@ fn explicit_collapse_blocks_auto_expand_on_absorption() {
             file_tree_view.update(&mut app, |view, ctx| {
                 view.set_is_active(true, ctx);
                 view.set_root_directories(vec![tree.clone()], ctx);
-                view.toggle_folder_expansion(&std_path(&tree), &std_path(&tree), ctx);
                 // First expand so the toggle records a collapse.
                 view.toggle_folder_expansion(&std_path(&tree), &std_path(&a), ctx);
                 view.toggle_folder_expansion(&std_path(&tree), &std_path(&a), ctx);
@@ -955,7 +921,6 @@ fn absorption_migrates_expanded_and_explicitly_collapsed_state() {
             file_tree_view.update(&mut app, |view, ctx| {
                 view.set_is_active(true, ctx);
                 view.set_root_directories(vec![a.clone()], ctx);
-                view.toggle_folder_expansion(&std_path(&a), &std_path(&a), ctx);
                 // Expand then collapse z so the toggle records a collapse on it.
                 view.toggle_folder_expansion(&std_path(&a), &std_path(&z), ctx);
                 view.toggle_folder_expansion(&std_path(&a), &std_path(&z), ctx);

@@ -304,11 +304,7 @@ pub fn proto_load_repo_metadata_directory_response_to_update(
         repo_path,
         remove_entries: Vec::new(),
         update_entries,
-        standing_results_delta: resp
-            .standing_results_delta
-            .as_ref()
-            .map(proto_to_standing_results_delta)
-            .unwrap_or_default(),
+        standing_results_delta: StandingQueryResultsDelta::default(),
     })
 }
 

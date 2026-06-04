@@ -82,30 +82,6 @@ struct StandingQueryBuildState<'a> {
     results: &'a mut StandingQueryResults,
     definitions: &'a StandingQueryDefinitions,
 }
-#[derive(Default)]
-pub(crate) struct BuildTreeRootContext<'a> {
-    ancestor_is_ignored: bool,
-    standing_queries: Option<StandingQueryBuildState<'a>>,
-}
-
-impl<'a> BuildTreeRootContext<'a> {
-    pub(crate) fn with_ignored_ancestor(mut self, ancestor_is_ignored: bool) -> Self {
-        self.ancestor_is_ignored = ancestor_is_ignored;
-        self
-    }
-
-    pub(crate) fn with_standing_queries(
-        mut self,
-        results: &'a mut StandingQueryResults,
-        definitions: &'a StandingQueryDefinitions,
-    ) -> Self {
-        self.standing_queries = Some(StandingQueryBuildState {
-            results,
-            definitions,
-        });
-        self
-    }
-}
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub struct FileId(usize);
@@ -158,7 +134,7 @@ impl Entry {
         ignored_path_strategy: &IgnoredPathStrategy,
         budget_exceeded_behavior: BudgetExceededBehavior,
     ) -> Result<Self, BuildTreeError> {
-        Self::build_tree_with_options(
+        Self::build_tree_with_force_included_paths_and_ancestor(
             path,
             files,
             gitignores,
@@ -170,21 +146,94 @@ impl Entry {
                 force_included_paths: &[],
                 budget_exceeded_behavior,
             },
-            BuildTreeRootContext::default(),
+            false,
+            None,
         )
     }
-
-    /// Builds a tree with explicit traversal options and optional root context.
-    ///
-    /// The root context carries inherited ignored state for subtree loads and
-    /// optionally collects standing-query matches during the same filesystem traversal.
-    pub(crate) fn build_tree_with_options(
+    /// Builds the materialized tree and standing results during the same filesystem traversal.
+    pub(crate) fn build_tree_with_standing_queries(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
-        mut root_context: BuildTreeRootContext<'_>,
+        standing_results: &mut StandingQueryResults,
+        definitions: &StandingQueryDefinitions,
+    ) -> Result<Self, BuildTreeError> {
+        let mut standing_queries = StandingQueryBuildState {
+            results: standing_results,
+            definitions,
+        };
+        Self::build_tree_with_force_included_paths_and_ancestor(
+            path,
+            files,
+            gitignores,
+            remaining_file_quota,
+            options,
+            false,
+            Some(&mut standing_queries),
+        )
+    }
+
+    /// Builds a tree of entries from a given path, eagerly loading any path that
+    /// matches one of the supplied force-included paths instead of leaving it
+    /// lazy (see [`BuildTreeOptions::force_included_paths`]).
+    #[cfg(test)]
+    pub(crate) fn build_tree_with_force_included_paths(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        options: BuildTreeOptions<'_>,
+    ) -> Result<Self, BuildTreeError> {
+        Self::build_tree_with_force_included_paths_and_ancestor(
+            path,
+            files,
+            gitignores,
+            remaining_file_quota,
+            options,
+            false,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_tree_with_ignored_ancestor(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        max_depth: usize,
+        current_depth: usize,
+        ignored_path_strategy: &IgnoredPathStrategy,
+        ancestor_is_ignored: bool,
+    ) -> Result<Self, BuildTreeError> {
+        Self::build_tree_with_force_included_paths_and_ancestor(
+            path,
+            files,
+            gitignores,
+            remaining_file_quota,
+            BuildTreeOptions {
+                max_depth,
+                current_depth,
+                ignored_path_strategy,
+                force_included_paths: &[],
+                budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
+            },
+            ancestor_is_ignored,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_tree_with_force_included_paths_and_ancestor(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignores: &mut Vec<Gitignore>,
+        remaining_file_quota: Option<&mut usize>,
+        options: BuildTreeOptions<'_>,
+        ancestor_is_ignored: bool,
+        mut standing_queries: Option<&mut StandingQueryBuildState<'_>>,
     ) -> Result<Self, BuildTreeError> {
         let root_path: PathBuf = path.into();
 
@@ -204,7 +253,7 @@ impl Entry {
         // Classify the root. Unlike child entries (which are simply omitted when
         // ignored/symlinked), a classification failure at the root propagates to
         // the caller, preserving existing error behavior.
-        if let Some(state) = root_context.standing_queries.as_mut() {
+        if let Some(state) = standing_queries.as_deref_mut() {
             state
                 .results
                 .record_path(&root_path, root_path.is_dir(), state.definitions);
@@ -214,7 +263,7 @@ impl Entry {
             gitignores,
             &options,
             options.current_depth,
-            root_context.ancestor_is_ignored,
+            ancestor_is_ignored,
         )? {
             EvaluatedEntry::File { ignored } => {
                 if quota == Some(0)
@@ -306,7 +355,7 @@ impl Entry {
                         let Some(child_path) = canonical_path else {
                             continue;
                         };
-                        if let Some(state) = root_context.standing_queries.as_mut() {
+                        if let Some(state) = standing_queries.as_deref_mut() {
                             state.results.record_path(
                                 &child_path,
                                 child_path.is_dir(),
@@ -409,19 +458,15 @@ impl Entry {
         let mut files = Vec::new();
         let ancestor_is_ignored = directory.ignored;
 
-        let result = Entry::build_tree_with_options(
+        let result = Entry::build_tree_with_ignored_ancestor(
             directory.path.to_local_path_lossy(),
             &mut files,
             gitignores,
             Some(&mut remaining_file_quota),
-            BuildTreeOptions {
-                max_depth: 1,
-                current_depth: 0,
-                ignored_path_strategy: &IgnoredPathStrategy::Include,
-                force_included_paths: &[],
-                budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
-            },
-            BuildTreeRootContext::default().with_ignored_ancestor(ancestor_is_ignored),
+            1, /* max_depth */
+            0, /* current_depth */
+            &IgnoredPathStrategy::Include,
+            ancestor_is_ignored,
         );
 
         result.map(|entry| match entry {
