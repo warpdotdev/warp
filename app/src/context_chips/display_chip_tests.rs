@@ -102,6 +102,16 @@ fn test_git_branch_tracking_status_parses_shell_fallback_display_text() {
 }
 
 #[test]
+fn test_git_branch_tracking_status_tooltip_reports_fallback_counts_without_upstream() {
+    let status = GitBranchTrackingStatus::from_display_text("feature-a • ↑2 ↓1").unwrap();
+
+    assert_eq!(
+        status.tooltip_text(),
+        "Ahead 2, behind 1; upstream name is unavailable"
+    );
+}
+
+#[test]
 fn test_git_branch_tracking_status_parses_shell_fallback_rebased_text() {
     let status = GitBranchTrackingStatus::from_display_text("feature-a • ⇅").unwrap();
 
