@@ -226,11 +226,25 @@ pub fn svn_dirty_items() -> ShellCommandGenerator {
 /// Generator function that shows the current jj bookmark or change ID.
 pub fn jj_bookmark() -> ShellCommandGenerator {
     const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
-        && if [ -n \"$bookmarks\" ]; then echo \"$bookmarks\"; else jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null; fi";
+        && if [ -n \"$bookmarks\" ]; then echo \"$bookmarks\"; \
+        else cid=$(jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null); \
+        ancestor_bookmarks=$(jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+        -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
+        if [ -n \"$ancestor_bookmarks\" ]; then echo \"${cid} on ${ancestor_bookmarks}\"; \
+        else echo \"$cid\"; fi; fi";
     const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
-        && if test -n \"$bookmarks\"; echo $bookmarks; else; jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null; end";
+        && if test -n \"$bookmarks\"; echo $bookmarks; \
+        else; set cid (jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null); \
+        set ancestor_bookmarks (jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+        -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
+        if test -n \"$ancestor_bookmarks\"; echo \"${cid} on ${ancestor_bookmarks}\"; \
+        else; echo $cid; end; end";
     const PWSH_BOOKMARK_CMD: &str = "$bookmarks = jj log -r '@' --no-graph -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
-        if ($bookmarks) { $bookmarks } else { jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>$null }";
+        if ($bookmarks) { $bookmarks } \
+        else { $cid = jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>$null; \
+        $ancestorBookmarks = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+        -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
+        if ($ancestorBookmarks) { \"${cid} on ${ancestorBookmarks}\" } else { $cid } }";
     let command = ShellCommand::shell_specific([
         (ShellType::Bash, SH_BOOKMARK_CMD.to_string()),
         (ShellType::Zsh, SH_BOOKMARK_CMD.to_string()),
