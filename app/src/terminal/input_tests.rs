@@ -7116,14 +7116,6 @@ fn test_custom_terminal_page_scroll_binding_applies_when_prompt_is_focused() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Issue #11588 — Rich Input submit on Ctrl+Enter toggle
-//
-// The four-cell matrix from the AC, plus the shell-mode regression case and a
-// settings smoke test.  These tests were written BEFORE the implementation and
-// are intentionally compiled against the un-stashed (baseline) tree first to
-// confirm RED, then against the implementation to confirm GREEN.
-//
 // Helper: open the CLI-agent rich input for the terminal view under test.
 fn open_rich_input_for_terminal(terminal: &ViewHandle<TerminalView>, app: &mut App) {
     terminal.update(app, |view, ctx| {
@@ -7162,12 +7154,6 @@ fn open_rich_input_for_terminal(terminal: &ViewHandle<TerminalView>, app: &mut A
     });
 }
 
-// ---------------------------------------------------------------------------
-// AC#3 behavioural matrix — cell 1: setting=false, Enter submits
-// ---------------------------------------------------------------------------
-
-/// When `submit_on_ctrl_enter` is `false` (the default) and the CLI agent
-/// rich input is open, pressing Enter must emit `Event::SubmitCLIAgentInput`.
 #[test]
 fn enter_submits_when_submit_on_ctrl_enter_is_false() {
     use std::cell::RefCell;
@@ -7196,7 +7182,6 @@ fn enter_submits_when_submit_on_ctrl_enter_is_false() {
 
         open_rich_input_for_terminal(&terminal, &mut app);
 
-        // Capture SubmitCLIAgentInput events.
         let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
         let submitted_clone = submitted.clone();
         app.update(|ctx| {
@@ -7228,13 +7213,6 @@ fn enter_submits_when_submit_on_ctrl_enter_is_false() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// AC#3 behavioural matrix — cell 2: setting=false, Ctrl+Enter emits CtrlEnter
-// ---------------------------------------------------------------------------
-
-/// When `submit_on_ctrl_enter` is `false` (the default) and the CLI agent
-/// rich input is open, pressing Ctrl+Enter must emit the existing
-/// `Event::CtrlEnter` and must NOT emit `Event::SubmitCLIAgentInput`.
 #[test]
 fn ctrl_enter_emits_ctrl_enter_event_when_submit_on_ctrl_enter_is_false() {
     use std::cell::RefCell;
@@ -7276,7 +7254,6 @@ fn ctrl_enter_emits_ctrl_enter_event_when_submit_on_ctrl_enter_is_false() {
             input.clear_buffer_and_reset_undo_stack(ctx);
             input.user_insert("hello", ctx);
         });
-        // Call the ctrl-enter handler (new method — fails until implemented).
         input.update(&mut app, |input, ctx| {
             input.input_ctrl_enter(ctx);
         });
@@ -7292,13 +7269,6 @@ fn ctrl_enter_emits_ctrl_enter_event_when_submit_on_ctrl_enter_is_false() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// AC#3 behavioural matrix — cell 3: setting=true, Enter inserts newline
-// ---------------------------------------------------------------------------
-
-/// When `submit_on_ctrl_enter` is `true` and the CLI agent rich input is open,
-/// pressing Enter must insert a newline and must NOT emit
-/// `Event::SubmitCLIAgentInput`.
 #[test]
 fn enter_inserts_newline_when_submit_on_ctrl_enter_is_true() {
     use std::cell::RefCell;
@@ -7339,13 +7309,11 @@ fn enter_inserts_newline_when_submit_on_ctrl_enter_is_true() {
             input.input_enter(ctx);
         });
 
-        // No submission should have occurred.
         assert!(
             submitted.borrow().is_empty(),
             "Enter must NOT submit when submit_on_ctrl_enter=true"
         );
 
-        // The buffer should now contain a newline after the original text.
         input.read(&app, |input, ctx| {
             let text = input.buffer_text(ctx);
             assert!(
@@ -7356,13 +7324,6 @@ fn enter_inserts_newline_when_submit_on_ctrl_enter_is_true() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// AC#3 behavioural matrix — cell 4: setting=true, Ctrl+Enter submits
-// ---------------------------------------------------------------------------
-
-/// When `submit_on_ctrl_enter` is `true` and the CLI agent rich input is open,
-/// pressing Ctrl+Enter must emit `Event::SubmitCLIAgentInput` with the buffer
-/// text and must NOT emit `Event::CtrlEnter`.
 #[test]
 fn ctrl_enter_submits_when_submit_on_ctrl_enter_is_true() {
     use std::cell::RefCell;
@@ -7403,7 +7364,6 @@ fn ctrl_enter_submits_when_submit_on_ctrl_enter_is_true() {
             input.clear_buffer_and_reset_undo_stack(ctx);
             input.user_insert("world", ctx);
         });
-        // Call the ctrl-enter handler (new method — fails until implemented).
         input.update(&mut app, |input, ctx| {
             input.input_ctrl_enter(ctx);
         });
@@ -7432,12 +7392,6 @@ fn ctrl_enter_submits_when_submit_on_ctrl_enter_is_true() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Issue #11588 — Selection-preservation regression (PR #11723)
-// ---------------------------------------------------------------------------
-
-/// Regression (#11588): with toggle ON and text selected, Ctrl+Enter must
-/// submit the full buffer — the selected portion must not be lost.
 #[test]
 fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true() {
     use std::cell::RefCell;
@@ -7470,7 +7424,6 @@ fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true(
             });
         });
 
-        // Insert "hello world" into the buffer.
         input.update(&mut app, |input, ctx| {
             input.clear_buffer_and_reset_undo_stack(ctx);
             input.user_insert("hello world", ctx);
@@ -7485,7 +7438,6 @@ fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true(
             });
         });
 
-        // Trigger Ctrl+Enter via the submit handler (same pattern as existing tests).
         input.update(&mut app, |input, ctx| {
             input.input_ctrl_enter(ctx);
         });
@@ -7501,7 +7453,6 @@ fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true(
             "submitted text must equal the full buffer — selected text must not be dropped"
         );
 
-        // Buffer should be empty after submission.
         input.read(&app, |input, ctx| {
             assert!(
                 input.buffer_text(ctx).is_empty(),
@@ -7511,13 +7462,6 @@ fn ctrl_enter_with_selection_preserves_selection_in_submit_when_setting_is_true(
     });
 }
 
-// ---------------------------------------------------------------------------
-// Issue #11588 — Keymap-context predicate: rich input open suppresses flag
-// ---------------------------------------------------------------------------
-
-/// Regression (#11588): with the CLI agent rich input open, the editor keymap
-/// context must NOT contain `CTRL_ENTER_ENTERS_AGENT_VIEW` (so the binding
-/// fires) and MUST contain `CLI_AGENT_RICH_INPUT_OPEN`.
 #[test]
 fn editor_keymap_context_excludes_ctrl_enter_enters_agent_view_when_rich_input_is_open() {
     App::test((), |mut app| async move {
@@ -7529,13 +7473,8 @@ fn editor_keymap_context_excludes_ctrl_enter_enters_agent_view_when_rich_input_i
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |terminal, _| terminal.input().clone());
 
-        // Open the CLI agent rich input.
         open_rich_input_for_terminal(&terminal, &mut app);
 
-        // The EditorView's keymap context (which drives the ctrl-enter binding
-        // predicate) must not set CTRL_ENTER_ENTERS_AGENT_VIEW when the rich
-        // input is open — otherwise the binding is suppressed and ctrl-enter
-        // is silently dropped.
         input.read(&app, |input, ctx| {
             let km_ctx = input
                 .editor
@@ -7556,12 +7495,6 @@ fn editor_keymap_context_excludes_ctrl_enter_enters_agent_view_when_rich_input_i
     });
 }
 
-// ---------------------------------------------------------------------------
-// Issue #11588 — Enter must accept inline menus when submit_on_ctrl_enter=true
-// ---------------------------------------------------------------------------
-
-/// Regression (#11588): with toggle ON, Enter while a slash-commands menu is
-/// active must route to menu acceptance, not newline insertion.
 #[test]
 fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
     use std::cell::RefCell;
@@ -7584,7 +7517,6 @@ fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
 
         open_rich_input_for_terminal(&terminal, &mut app);
 
-        // Track whether a submit event fired (it must not).
         let submitted: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
         let submitted_clone = submitted.clone();
         app.update(|ctx| {
@@ -7610,7 +7542,6 @@ fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
             });
         });
 
-        // Verify the mode is set as expected before pressing Enter.
         input.read(&app, |input, ctx| {
             assert!(
                 matches!(
@@ -7621,20 +7552,15 @@ fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
             );
         });
 
-        // Press Enter — this must dispatch to the slash-commands acceptance
-        // branch, NOT the newline-insertion branch.
         input.update(&mut app, |input, ctx| {
             input.input_enter(ctx);
         });
 
-        // No submission should have occurred.
         assert!(
             submitted.borrow().is_empty(),
             "Enter must NOT submit when the slash-commands menu is open"
         );
 
-        // The buffer must NOT contain a newline — that would mean the
-        // newline-insertion branch fired instead of the menu-acceptance branch.
         input.read(&app, |input, ctx| {
             let text = input.buffer_text(ctx);
             assert!(
@@ -7646,17 +7572,8 @@ fn enter_accepts_inline_menu_item_when_submit_on_ctrl_enter_is_true() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Issue #11588 / PR #11723 — Bug 4: Ctrl+Enter no-op when toggle is OFF
-// ---------------------------------------------------------------------------
-
-/// Regression test: when `submit_on_ctrl_enter` is `false` and the CLI agent
-/// rich input is open, the editor's `ctrl_enter` setting must be
-/// `InsertNewLineIfMultiLine` so that Ctrl+Enter inserts a newline.
-///
-/// Pre-fix this fails because `update_cli_agent_enter_settings` always set
-/// `ctrl_enter: Emit` regardless of the toggle, causing the editor's
-/// `ctrl_enter()` to hit the `_ => ()` no-op arm (issue #11588).
+/// Pre-fix this failed because `update_cli_agent_enter_settings` always set `ctrl_enter: Emit`
+/// regardless of toggle, causing `ctrl_enter()` to hit the `_ => ()` no-op arm (#11588).
 #[test]
 fn ctrl_enter_inserts_newline_when_submit_on_ctrl_enter_is_false() {
     use crate::editor::EnterAction;
@@ -7677,8 +7594,6 @@ fn ctrl_enter_inserts_newline_when_submit_on_ctrl_enter_is_false() {
         // Open the rich input — update_cli_agent_enter_settings fires.
         open_rich_input_for_terminal(&terminal, &mut app);
 
-        // With toggle=false, ctrl_enter must be InsertNewLineIfMultiLine so
-        // that pressing Ctrl+Enter inserts a newline instead of no-op'ing.
         input.read(&app, |input, ctx| {
             let settings = input.editor().as_ref(ctx).enter_settings();
             assert!(
@@ -7690,12 +7605,6 @@ fn ctrl_enter_inserts_newline_when_submit_on_ctrl_enter_is_false() {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Issue #11588 / PR #11723 — enter_settings restored when rich input closes
-// ---------------------------------------------------------------------------
-
-/// Regression (#11588): after a Rich Input session closes, `ctrl_enter` must
-/// be restored to `InsertNewLineIfMultiLine` (the `EnterSettings::default()`).
 #[test]
 fn ctrl_enter_inserts_newline_in_normal_input_after_rich_input_closes() {
     use crate::editor::EnterAction;
