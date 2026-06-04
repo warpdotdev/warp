@@ -60,7 +60,8 @@ pub(crate) enum ShareSessionError {
 }
 
 const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
-const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(10);
+/// The total time to wait for session sharing to start, including retries.
+const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(20);
 
 /// Options for creating the terminal view before constructing a [`TerminalDriver`].
 pub(crate) struct TerminalDriverOptions {

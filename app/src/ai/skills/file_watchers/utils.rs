@@ -26,40 +26,23 @@ fn local_or_remote_path_for_repo_path(
     }
 }
 
-/// Finds project skill files and local symlinked skill files from stored standing results.
+/// Finds project skill files from stored standing results.
 ///
-/// Local provider directories are included in the metadata query so filesystem hydration can
-/// supplement indexed files with directory symlinks. Remote repositories only return indexed
-/// skill files because their filesystems are unavailable to the client.
+/// Symlinked project skills are resolved while evaluating standing queries on the process that
+/// owns the repository. This consumer treats those results as authoritative for both local and
+/// remote repositories; direct filesystem discovery remains confined to metadata-failure fallback.
 pub(super) fn find_project_skill_files_in_tree(
     repo_id: &RepositoryIdentifier,
     repo_metadata: &RepoMetadataModel,
     ctx: &AppContext,
 ) -> Vec<LocalOrRemotePath> {
-    let mut skill_files = Vec::new();
-    let mut local_provider_directories = Vec::new();
-    for content in repo_metadata
+    repo_metadata
         .standing_query_results(repo_id, ctx)
         .into_iter()
         .flat_map(|results| results.project_skills())
-    {
-        if content.is_directory {
-            if matches!(repo_id, RepositoryIdentifier::Local(_)) {
-                if let Some(path) = content.path.to_local_path() {
-                    local_provider_directories.push(path);
-                }
-            }
-        } else {
-            skill_files.push(local_or_remote_path_for_repo_path(repo_id, &content.path));
-        }
-    }
-
-    skill_files.extend(
-        find_symlinked_skill_files_in_local_provider_directories(local_provider_directories)
-            .into_iter()
-            .map(LocalOrRemotePath::Local),
-    );
-    skill_files
+        .filter(|content| !content.is_directory)
+        .map(|content| local_or_remote_path_for_repo_path(repo_id, &content.path))
+        .collect()
 }
 
 /// Finds local project skill files by discovering provider directories on the filesystem.
@@ -116,35 +99,6 @@ fn find_local_provider_directories_on_filesystem(scan_root: &Path) -> Vec<PathBu
 
 fn is_ignored_fallback_scan_entry(entry: &DirEntry) -> bool {
     entry.file_name().to_str() == Some(".git")
-}
-
-/// Finds symlinked skill directories under loaded local provider directories in a repository.
-///
-/// Repo metadata intentionally skips directory symlinks to avoid duplicate trees/cycles. Project
-/// skill refreshes are still triggered by repo metadata, but local hydration supplements the tree
-/// with `SKILL.md` files from symlinked skill directories so existing symlink handling is preserved.
-fn find_symlinked_skill_files_in_local_provider_directories(
-    provider_dirs: Vec<PathBuf>,
-) -> Vec<PathBuf> {
-    provider_dirs
-        .into_iter()
-        .flat_map(|provider_dir| {
-            std::fs::read_dir(provider_dir)
-                .into_iter()
-                .flatten()
-                .filter_map(|entry| entry.ok())
-                .filter_map(|entry| {
-                    let skill_dir = entry.path();
-                    if skill_dir.is_symlink() && skill_dir.is_dir() {
-                        let skill_file = skill_dir.join("SKILL.md");
-                        if skill_file.exists() {
-                            return Some(skill_file);
-                        }
-                    }
-                    None
-                })
-        })
-        .collect()
 }
 
 fn is_project_provider_path(path: &Path) -> bool {

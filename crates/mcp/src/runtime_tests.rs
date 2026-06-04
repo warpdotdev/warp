@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
 
-use crate::ai::mcp::templatable_manager::utils::{
-    query_resources_for, query_tools_for, should_query_resources, should_query_tools,
-};
+use super::{query_resources_for, query_tools_for, should_query_resources, should_query_tools};
 
 /// Build a `ServerCapabilities` with selected capability flags toggled on.
 /// Each `Some(default)` mirrors how rmcp deserializes a capability the
@@ -39,8 +37,6 @@ fn test_resource(uri: &str) -> Resource {
     .expect("Resource deserialization")
 }
 
-// ---------- predicate-level tests ----------
-
 /// Regression test for warpdotdev/warp#6798: each capability is queried
 /// independently. Previously, asymmetric handling could cause `tools/list`
 /// to be skipped when a server advertised both `tools` and `resources`,
@@ -66,8 +62,6 @@ fn each_capability_is_queried_independently() {
     assert!(!should_query_resources(None));
 }
 
-// ---------- query_tools_for control-flow tests ----------
-
 /// When `tools` is not advertised, the helper must skip the list call so
 /// we don't waste a round trip and pollute the wire log with a request
 /// that's destined to return `METHOD_NOT_FOUND`.
@@ -84,14 +78,10 @@ async fn query_tools_for_skips_listing_when_capability_not_advertised() {
     .await;
 
     assert!(result.is_empty());
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        0,
-        "list function must not be called when tools capability is absent",
-    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
-/// `None` server info follows the same skip-listing path as "no capability".
+/// Skips `tools/list` when server info is absent.
 #[tokio::test]
 async fn query_tools_for_skips_listing_when_server_info_is_none() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -107,7 +97,7 @@ async fn query_tools_for_skips_listing_when_server_info_is_none() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
-/// Happy path: tools advertised, list call succeeds, tools returned.
+/// Returns listed tools when `tools` is advertised.
 #[tokio::test]
 async fn query_tools_for_returns_listed_tools_when_capability_advertised() {
     let c = caps(true, false);
@@ -119,8 +109,7 @@ async fn query_tools_for_returns_listed_tools_when_capability_advertised() {
     assert_eq!(result, expected);
 }
 
-/// `tools` advertised but server returns an empty list — distinct from the
-/// "skipped" case in that we still made the call.
+/// Returns an empty vector when the server lists no tools.
 #[tokio::test]
 async fn query_tools_for_returns_empty_vec_when_server_lists_no_tools() {
     let c = caps(true, false);
@@ -134,11 +123,7 @@ async fn query_tools_for_returns_empty_vec_when_server_lists_no_tools() {
     .await;
 
     assert!(result.is_empty());
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "list function still called when capability is advertised",
-    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 /// **The fail-soft test the bug ticket implicitly demands.** Transport-
@@ -173,9 +158,7 @@ async fn query_tools_for_returns_empty_on_mcp_error() {
     assert!(result.is_empty());
 }
 
-/// The list function must be called exactly once per query — not zero
-/// (that would be the skip path) and not multiple times (no implicit
-/// retry inside the helper).
+/// Calls the `tools/list` function exactly once per query.
 #[tokio::test]
 async fn query_tools_for_calls_list_function_exactly_once() {
     let c = caps(true, false);
@@ -191,10 +174,7 @@ async fn query_tools_for_calls_list_function_exactly_once() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
-/// Independence: tools-listing decision must not depend on whether
-/// resources are also advertised. Run the full happy-path flow under
-/// every (tools, resources) combination and assert tools come back iff
-/// the tools capability is advertised.
+/// Keeps the tools-listing decision independent of resource capability state.
 #[tokio::test]
 async fn query_tools_for_decision_independent_of_other_capabilities() {
     let tools = vec![test_tool("x")];
@@ -205,24 +185,15 @@ async fn query_tools_for_decision_independent_of_other_capabilities() {
             let result = query_tools_for(Some(&c), "srv", || async move { Ok(to_return) }).await;
 
             if has_tools {
-                assert_eq!(
-                    result, tools,
-                    "expected tools when advertised \
-                     (tools={has_tools}, resources={has_resources})",
-                );
+                assert_eq!(result, tools);
             } else {
-                assert!(
-                    result.is_empty(),
-                    "expected empty when tools not advertised \
-                     (tools={has_tools}, resources={has_resources})",
-                );
+                assert!(result.is_empty());
             }
         }
     }
 }
 
-// ---------- query_resources_for control-flow tests ----------
-
+/// Skips `resources/list` when `resources` is not advertised.
 #[tokio::test]
 async fn query_resources_for_skips_listing_when_capability_not_advertised() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -239,6 +210,7 @@ async fn query_resources_for_skips_listing_when_capability_not_advertised() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+/// Skips `resources/list` when server info is absent.
 #[tokio::test]
 async fn query_resources_for_skips_listing_when_server_info_is_none() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -254,6 +226,7 @@ async fn query_resources_for_skips_listing_when_server_info_is_none() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+/// Returns listed resources when `resources` is advertised.
 #[tokio::test]
 async fn query_resources_for_returns_listed_resources_when_capability_advertised() {
     let c = caps(false, true);
@@ -265,8 +238,7 @@ async fn query_resources_for_returns_listed_resources_when_capability_advertised
     assert_eq!(result, expected);
 }
 
-/// Fail-soft on transport errors — same contract as `query_tools_for`,
-/// matching the existing behavior the predicate refactor preserved.
+/// Fails soft when `resources/list` sees a transport error.
 #[tokio::test]
 async fn query_resources_for_returns_empty_on_transport_error() {
     let c = caps(false, true);
@@ -277,6 +249,7 @@ async fn query_resources_for_returns_empty_on_transport_error() {
     assert!(result.is_empty());
 }
 
+/// Fails soft when `resources/list` returns an MCP protocol error.
 #[tokio::test]
 async fn query_resources_for_returns_empty_on_mcp_error() {
     let c = caps(false, true);
@@ -291,6 +264,7 @@ async fn query_resources_for_returns_empty_on_mcp_error() {
     assert!(result.is_empty());
 }
 
+/// Calls the `resources/list` function exactly once per query.
 #[tokio::test]
 async fn query_resources_for_calls_list_function_exactly_once() {
     let c = caps(false, true);

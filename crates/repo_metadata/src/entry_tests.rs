@@ -3,6 +3,8 @@ use std::fs;
 use ignore::gitignore::Gitignore;
 
 use super::{matches_gitignores, Entry, IgnoredPathStrategy};
+#[cfg(unix)]
+use crate::StandingQueryContent;
 use crate::{StandingQueryDefinitions, StandingQueryResults};
 #[test]
 fn test_git_path_filtering_allowlist() {
@@ -411,6 +413,59 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
     });
 }
 
+#[cfg(unix)]
+#[test]
+fn standing_queries_report_symlinked_skills_without_materializing_symlinked_directories() {
+    virtual_fs::VirtualFS::test(
+        "standing_queries_report_symlinked_skills",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.agents/skills")
+                .mkdir("targets/linked")
+                .with_files(vec![virtual_fs::Stub::FileWithContent(
+                    "targets/linked/SKILL.md",
+                    "name: linked",
+                )]);
+            let repo = dirs.tests().join("repo");
+            let linked_directory = repo.join(".agents/skills/linked");
+            std::os::unix::fs::symlink(dirs.tests().join("targets/linked"), &linked_directory)
+                .unwrap();
+
+            let mut files = Vec::new();
+            let mut gitignores = Vec::new();
+            let mut results = StandingQueryResults::default();
+            let mut definitions = StandingQueryDefinitions::default();
+            definitions
+                .set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
+            let tree = Entry::build_tree_with_standing_queries(
+                &repo,
+                &mut files,
+                &mut gitignores,
+                None,
+                super::BuildTreeOptions {
+                    max_depth: 200,
+                    current_depth: 0,
+                    ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                    force_included_paths: &[],
+                    budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
+                },
+                &mut results,
+                &definitions,
+            )
+            .unwrap();
+
+            assert!(find_entry(&tree, &linked_directory).is_none());
+            assert!(results.project_skills().any(|content| {
+                content
+                    == &StandingQueryContent::file(
+                        warp_util::standardized_path::StandardizedPath::try_from_local(
+                            &linked_directory.join("SKILL.md"),
+                        )
+                        .unwrap(),
+                    )
+            }));
+        },
+    );
+}
 #[test]
 fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
     virtual_fs::VirtualFS::test("standing_queries_report_shallow_rules", |dirs, mut vfs| {

@@ -5,6 +5,8 @@
 //! all repositories tracked by Warp.
 
 use std::collections::HashMap;
+#[cfg(feature = "local_fs")]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -140,7 +142,9 @@ impl IndexedRepoState {
             }
         }
     }
+}
 
+impl IndexedRepoState {
     pub(crate) fn complete_if_pending(&self) {
         if let Self::Pending(condition) = self {
             condition.set();
@@ -176,6 +180,12 @@ pub struct LocalRepoMetadataModel {
     force_included_paths: Vec<PathBuf>,
     /// Configured standing-query matchers.
     standing_query_definitions: StandingQueryDefinitions,
+    /// Resolved symlink target directories for direct children of ignored-path interests.
+    ///
+    /// One resolved target may be referenced by multiple lexical symlinks, so retain every
+    /// alias rather than using a one-to-one bidirectional map.
+    #[cfg(feature = "local_fs")]
+    symlink_targets: HashMap<PathBuf, HashSet<SymlinkTarget>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -183,6 +193,12 @@ struct RepoUpdate {
     added: Vec<PathBuf>,
     deleted: Vec<PathBuf>,
     moved: HashMap<PathBuf, PathBuf>,
+}
+#[cfg(feature = "local_fs")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SymlinkTarget {
+    repo_path: StandardizedPath,
+    current_path: PathBuf,
 }
 
 /// Describes a single file-tree mutation computed on a background thread.
@@ -263,6 +279,8 @@ impl LocalRepoMetadataModel {
             emit_incremental_updates: false,
             force_included_paths: Vec::new(),
             standing_query_definitions: StandingQueryDefinitions::default(),
+            #[cfg(feature = "local_fs")]
+            symlink_targets: HashMap::new(),
         };
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -306,6 +324,10 @@ impl LocalRepoMetadataModel {
     /// be represented eagerly instead of as lazy placeholders.
     pub fn register_force_included_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
         for path in paths {
+            assert!(
+                !path.is_absolute(),
+                "force-included paths must be repository-relative"
+            );
             if !self
                 .force_included_paths
                 .iter()
@@ -321,6 +343,133 @@ impl LocalRepoMetadataModel {
             .set_project_skill_provider_paths(paths);
     }
 
+    /// Adds synthetic lexical repository updates for changes beneath resolved symlink targets.
+    ///
+    /// Directory symlinks are intentionally absent from the canonical tree, so target changes
+    /// must be replayed through their lexical paths to refresh standing-query results.
+    #[cfg(feature = "local_fs")]
+    fn add_symlink_target_updates(
+        &self,
+        event: &BulkFilesystemWatcherEvent,
+        repo_updates: &mut HashMap<StandardizedPath, RepoUpdate>,
+    ) -> HashSet<PathBuf> {
+        let mut matched_paths = HashSet::new();
+        let mut append_updates = |path: &Path| {
+            for (original_path, targets) in &self.symlink_targets {
+                if path != original_path && !path.starts_with(original_path) {
+                    continue;
+                }
+                matched_paths.insert(path.to_path_buf());
+                for target in targets {
+                    let update = repo_updates.entry(target.repo_path.clone()).or_default();
+                    if !update.deleted.contains(&target.current_path) {
+                        update.deleted.push(target.current_path.clone());
+                    }
+                    if target.current_path.is_dir() && !update.added.contains(&target.current_path)
+                    {
+                        update.added.push(target.current_path.clone());
+                    }
+                }
+            }
+        };
+
+        for path in event.added_or_updated_iter() {
+            append_updates(path);
+        }
+        for path in &event.deleted {
+            append_updates(path);
+        }
+        for (to_path, from_path) in &event.moved {
+            append_updates(from_path);
+            append_updates(to_path);
+        }
+        matched_paths
+    }
+
+    /// Synchronizes producer-side target watches for symlinked children of ignored-path interests.
+    #[cfg(feature = "local_fs")]
+    fn refresh_symlink_targets(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.emit_incremental_updates {
+            return;
+        }
+        let previously_watched = self.symlink_targets.keys().cloned().collect::<HashSet<_>>();
+        self.remove_symlink_targets_for_repo(repo_path);
+        let Some(local_repo_path) = repo_path.to_local_path() else {
+            return;
+        };
+        for interest in &self.force_included_paths {
+            let Ok(entries) = std::fs::read_dir(local_repo_path.join(interest)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let current_path = entry.path();
+                if !current_path.is_symlink() || !current_path.is_dir() {
+                    continue;
+                }
+                let Ok(original_path) = dunce::canonicalize(&current_path) else {
+                    continue;
+                };
+                self.symlink_targets
+                    .entry(original_path)
+                    .or_default()
+                    .insert(SymlinkTarget {
+                        repo_path: repo_path.clone(),
+                        current_path,
+                    });
+            }
+        }
+        self.sync_symlink_target_watches(previously_watched, ctx);
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn remove_symlink_targets_for_repo(&mut self, repo_path: &StandardizedPath) {
+        for targets in self.symlink_targets.values_mut() {
+            targets.retain(|target| &target.repo_path != repo_path);
+        }
+        self.symlink_targets
+            .retain(|_, targets| !targets.is_empty());
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn clear_symlink_targets_for_repo(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let previously_watched = self.symlink_targets.keys().cloned().collect();
+        self.remove_symlink_targets_for_repo(repo_path);
+        self.sync_symlink_target_watches(previously_watched, ctx);
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn sync_symlink_target_watches(
+        &self,
+        previously_watched: HashSet<PathBuf>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let desired_target_dirs = self.symlink_targets.keys().cloned().collect::<HashSet<_>>();
+        if let Some(ref watcher) = self.watcher {
+            for target_dir in desired_target_dirs.difference(&previously_watched) {
+                watcher.update(ctx, |watcher, _ctx| {
+                    std::mem::drop(watcher.register_path(
+                        target_dir,
+                        repo_watch_filter(Vec::new(), Vec::new()),
+                        RecursiveMode::NonRecursive,
+                    ));
+                });
+            }
+            for target_dir in previously_watched.difference(&desired_target_dirs) {
+                watcher.update(ctx, |watcher, _ctx| {
+                    std::mem::drop(watcher.unregister_path(target_dir));
+                });
+            }
+        }
+    }
+
     /// Handles events from the BulkFilesystemWatcher.
     #[cfg(feature = "local_fs")]
     fn handle_watcher_event(
@@ -330,6 +479,7 @@ impl LocalRepoMetadataModel {
     ) {
         // Create a map to collect changes per repository
         let mut repo_updates: HashMap<StandardizedPath, RepoUpdate> = HashMap::new();
+        let symlink_target_paths = self.add_symlink_target_updates(event, &mut repo_updates);
 
         // Process added or updated files
         for path in event.added_or_updated_iter() {
@@ -346,7 +496,7 @@ impl LocalRepoMetadataModel {
             {
                 let repo_update = repo_updates.entry(repo_path).or_default();
                 repo_update.deleted.push(path.to_path_buf());
-            } else {
+            } else if !symlink_target_paths.contains(path) {
                 log::warn!("Deleted file not found in any repo: {path:?} not found in any repo");
             }
         }
@@ -411,6 +561,7 @@ impl LocalRepoMetadataModel {
                                 .entry(repo_path.clone())
                                 .or_default()
                                 .replace_subtrees(&removed_roots, discovered_results);
+                            model.refresh_symlink_targets(&repo_path, ctx);
                             update.standing_results_delta = standing_delta.clone();
                             ctx.emit(RepositoryMetadataEvent::FileTreeEntryUpdated {
                                 path: repo_path.clone(),
@@ -522,6 +673,8 @@ impl LocalRepoMetadataModel {
         // Insert the repository state into the map
         let repo_path_for_event = repo_path.clone();
         self.replace_repository_state(repo_path, IndexedRepoState::Indexed(state));
+        #[cfg(feature = "local_fs")]
+        self.refresh_symlink_targets(&repo_path_for_event, ctx);
 
         ctx.emit(RepositoryMetadataEvent::RepositoryUpdated {
             path: repo_path_for_event,
@@ -538,6 +691,8 @@ impl LocalRepoMetadataModel {
     ) -> Result<(), RepoMetadataError> {
         if self.remove_repository_state(repo_path).is_some() {
             self.standing_results.remove(repo_path);
+            #[cfg(feature = "local_fs")]
+            self.clear_symlink_targets_for_repo(repo_path, ctx);
             // Unregister from watcher
             #[cfg(feature = "local_fs")]
             {
@@ -783,6 +938,10 @@ impl LocalRepoMetadataModel {
                         // Re-hydrate only when the changed entry itself can introduce a
                         // symlinked skill; ordinary descendants should not wake consumers.
                         standing_results.record_direct_project_skill_provider_child_change(
+                            path_to_add,
+                            standing_query_definitions,
+                        );
+                        standing_results.record_followed_project_skill_directory(
                             path_to_add,
                             standing_query_definitions,
                         );
@@ -1239,6 +1398,8 @@ impl LocalRepoMetadataModel {
         ctx: &mut ModelContext<Self>,
     ) {
         self.standing_results.remove(&repo_path);
+        #[cfg(feature = "local_fs")]
+        self.clear_symlink_targets_for_repo(&repo_path, ctx);
         self.replace_repository_state(repo_path.clone(), IndexedRepoState::Failed(error));
         ctx.emit(RepositoryMetadataEvent::UpdatingRepositoryFailed { path: repo_path });
     }

@@ -7898,16 +7898,31 @@ dependencies = [
 name = "mcp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "cfg-if",
+ "cloud_object_models",
  "futures",
  "http 1.4.0",
+ "log",
+ "oauth2",
  "pin-project-lite",
  "reqwest",
  "rmcp",
+ "serde",
  "serde_json",
+ "simple_logger",
  "sse-stream",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "url",
+ "uuid",
+ "warp_core",
+ "warpui",
+ "warpui_extras",
+ "windows 0.62.2",
 ]
 
 [[package]]

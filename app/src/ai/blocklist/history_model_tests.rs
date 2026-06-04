@@ -6,7 +6,6 @@ use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use super::{
@@ -188,13 +187,16 @@ fn start_new_child_conversation_persists_harness_metadata() {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
+        // Pick a non-nil UUID for the parent run_id so the orchestration
+        // capability gate (which now reads run_id() exclusively) sees a valid
+        // agent identifier when seeding the child's parent_agent_id.
+        const PARENT_RUN_ID: &str = "00000000-0000-0000-0000-000000000001";
         let (child_a, child_b, child_ids) = history_model.update(&mut app, |history_model, ctx| {
             let parent_conversation_id =
                 history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
-            history_model.set_server_conversation_token_for_conversation(
-                parent_conversation_id,
-                "parent-agent-id".to_string(),
-            );
+            if let Some(parent) = history_model.conversation_mut(&parent_conversation_id) {
+                parent.set_run_id(PARENT_RUN_ID.to_string());
+            }
             let child_a = history_model.start_new_child_conversation(
                 terminal_view_id,
                 "Agent 1".to_string(),
@@ -242,21 +244,14 @@ fn start_new_child_conversation_persists_harness_metadata() {
                 child_b_conversation.orchestration_harness(),
                 Some(Harness::Codex)
             );
-            assert_eq!(
-                child_a_conversation.parent_agent_id(),
-                Some("parent-agent-id")
-            );
-            assert_eq!(
-                child_b_conversation.parent_agent_id(),
-                Some("parent-agent-id")
-            );
+            assert_eq!(child_a_conversation.parent_agent_id(), Some(PARENT_RUN_ID));
+            assert_eq!(child_b_conversation.parent_agent_id(), Some(PARENT_RUN_ID));
         });
     });
 }
 
 #[test]
 fn test_initialize_historical_conversations_resolves_parent_agent_id_children_via_seeded_run_ids() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();
         let child_id = AIConversationId::new();
@@ -335,7 +330,6 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
     // orchestration transcript name resolution can find them before the parent's
     // hidden child pane materializes lazily. Non-orchestration historical rows
     // must stay on the lazy path.
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();
         let child_id = AIConversationId::new();
@@ -1311,8 +1305,6 @@ fn test_restore_conversations_maintains_children_by_parent() {
 fn test_restore_conversations_indexes_child_by_parent_agent_id() {
     use crate::ai::agent::conversation::AIConversation;
 
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
@@ -1791,7 +1783,6 @@ fn test_optimistic_root_restore_round_trip_yields_in_progress_optimistic_root() 
 
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);

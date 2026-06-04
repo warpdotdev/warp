@@ -371,11 +371,11 @@ fn test_refresh_project_skills_for_repo_loads_indexed_and_symlinked_skill_direct
                 project_state(&repo, Some(&indexed_skill)),
                 ctx,
             );
-            model.insert_test_standing_results(
-                repo_key,
-                project_standing_results(&repo, Some(&indexed_skill)),
-                ctx,
-            );
+            let mut standing_results = project_standing_results(&repo, Some(&indexed_skill));
+            standing_results.insert_project_skill(StandingQueryContent::file(
+                StandardizedPath::try_from_local(&skill_local_path(&expected_skill)).unwrap(),
+            ));
+            model.insert_test_standing_results(repo_key, standing_results, ctx);
         });
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {

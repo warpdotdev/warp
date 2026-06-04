@@ -142,6 +142,23 @@ impl StandingQueryResults {
         }
     }
 
+    /// Records an eligible project skill reached through a directory symlink during standing
+    /// query evaluation. The lexical path is intentionally retained so consumers address the
+    /// skill through the provider entry rather than the symlink target.
+    pub(crate) fn record_followed_project_skill_directory(
+        &mut self,
+        path: &Path,
+        definitions: &StandingQueryDefinitions,
+    ) {
+        if !definitions.is_direct_project_skill_provider_child(path) {
+            return;
+        }
+
+        let skill_file = path.join("SKILL.md");
+        if skill_file.is_file() {
+            self.record_path(&skill_file, false, definitions);
+        }
+    }
     pub fn insert_project_skill(&mut self, content: StandingQueryContent) {
         self.project_skills.insert(content);
     }

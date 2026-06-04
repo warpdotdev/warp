@@ -28,7 +28,6 @@ use crate::ai::ambient_agents::task::{normalize_orchestrator_agent_name, Harness
 use crate::ai::ambient_agents::{AgentConfigSnapshot, AmbientAgentTaskId};
 use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryOrigin};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
-use crate::ai::blocklist::orchestration_events::{OrchestrationEventService, SendEventResult};
 #[cfg(feature = "local_fs")]
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
@@ -37,6 +36,7 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillManager;
 use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
 use crate::code::buffer_location::LocalOrRemotePath;
+#[cfg(not(target_family = "wasm"))]
 use crate::features::FeatureFlag;
 use crate::pane_group::child_agent::{
     create_error_child_agent_conversation, ErrorChildAgentConversationRequest,
@@ -68,7 +68,6 @@ use crate::AIExecutionProfilesModel;
 // dispatch helpers; gating them keeps the wasm build warning-clean.
 #[cfg(not(target_family = "wasm"))]
 use crate::{
-    ai::agent::LifecycleEventType,
     pane_group::child_agent::{
         create_hidden_child_agent_conversation, HiddenChildAgentConversation,
         HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
@@ -139,31 +138,6 @@ fn apply_child_model_id_override(
     LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
         llm_prefs.update_preferred_agent_mode_llm(&llm_id, child_terminal_view_id, ctx);
     });
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn register_legacy_local_lifecycle_subscription(
-    parent_conversation_id: AIConversationId,
-    child_conversation_id: AIConversationId,
-    lifecycle_subscription: Option<Vec<LifecycleEventType>>,
-    ctx: &mut ViewContext<PaneGroup>,
-) {
-    if let Some(parent_agent_id) = BlocklistAIHistoryModel::as_ref(ctx)
-        .conversation(&parent_conversation_id)
-        .and_then(|conversation| {
-            conversation
-                .server_conversation_token()
-                .map(|token| token.as_str().to_string())
-        })
-    {
-        OrchestrationEventService::handle(ctx).update(ctx, |svc, _| {
-            svc.register_lifecycle_subscription(
-                child_conversation_id,
-                parent_agent_id,
-                lifecycle_subscription,
-            );
-        });
-    }
 }
 
 /// Returns the host terminal's `SharedSessionSource`, or `None` if it is
@@ -896,27 +870,10 @@ fn kill_agent_conversation(
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let state = agent_conversation_action_state(conversation_id, ctx);
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
-            match service.emit_child_killed(conversation_id, ctx) {
-                SendEventResult::LifecycleSent => {}
-                SendEventResult::LifecycleDropped => {
-                    log::info!(
-                        "KillAgentConversation: killed lifecycle event not emitted for {conversation_id:?}"
-                    );
-                }
-                SendEventResult::Error(error) => {
-                    log::warn!(
-                        "KillAgentConversation: failed to emit killed lifecycle event for {conversation_id:?}: {error}"
-                    );
-                }
-            }
-        });
-        // Tombstone every Kill so late events cannot restore a removed child.
-        OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
-            streamer.mark_conversation_killed(conversation_id, ctx);
-        });
-    }
+    // Tombstone every Kill so late events cannot restore a removed child.
+    OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
+        streamer.mark_conversation_killed(conversation_id, ctx);
+    });
 
     if let Some(state) = state {
         if state.is_in_progress {
@@ -1687,7 +1644,6 @@ fn launch_local_no_harness_child(
     let parent_conversation_id = request.parent_conversation_id;
     let parent_run_id = request.parent_run_id.clone();
     let prompt = request.prompt.clone();
-    let lifecycle_subscription = request.lifecycle_subscription.clone();
 
     // Snapshot the host terminal's shared-session source before the spawn
     // so we can cascade it onto the child's source type once the spawn
@@ -1756,13 +1712,6 @@ fn launch_local_no_harness_child(
                             ctx,
                         );
                     });
-
-                    register_legacy_local_lifecycle_subscription(
-                        parent_conversation_id,
-                        conversation_id,
-                        lifecycle_subscription.clone(),
-                        ctx,
-                    );
 
                     new_terminal_view.update(ctx, |terminal_view, ctx| {
                         terminal_view
@@ -1838,7 +1787,6 @@ fn launch_local_harness_child(
     let parent_conversation_id = request.parent_conversation_id;
     let parent_run_id = request.parent_run_id.clone();
     let prompt = request.prompt.clone();
-    let lifecycle_subscription = request.lifecycle_subscription.clone();
     let orchestration_harness =
         Harness::parse_orchestration_harness(&harness_type).unwrap_or(Harness::Unknown);
     let shell_type = group
@@ -1914,13 +1862,6 @@ fn launch_local_harness_child(
                             ctx,
                         );
                     });
-
-                    register_legacy_local_lifecycle_subscription(
-                        parent_conversation_id,
-                        conversation_id,
-                        lifecycle_subscription.clone(),
-                        ctx,
-                    );
 
                     new_terminal_view.update(ctx, |terminal_view, ctx| {
                         terminal_view.execute_command_or_set_pending(&command, ctx);
