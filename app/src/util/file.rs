@@ -26,21 +26,12 @@ pub enum ShellPathType {
     PlatformNative(PathBuf),
 }
 
-/// On Windows the kernel silently normalizes trailing periods in path lookups,
-/// so `fs::metadata("foo.md.")` resolves `foo.md` and succeeds, but the literal
-/// `PathBuf` still carries the trailing dot. Strip it so downstream callers
-/// (e.g. `is_markdown_file`) see the canonical form.
+/// Strips a single trailing dot from `path` on Windows.
 ///
-/// **Verbatim paths are left unchanged.** A `\\?\`-prefixed path bypasses Win32
-/// normalization entirely; on a POSIX-backed SMB/NAS mount the server may expose
-/// distinct `foo.md` and `foo.md.` entries. We must not conflate them.
-/// (The companion guard in `link_detection::compute_valid_paths` applies the same
-/// rule before calling this function, so the two sites agree.)
-///
-/// **Exactly one trailing dot is removed**, matching the single-character strip
-/// performed by the `compute_valid_paths` highlight-parity branch in
-/// `link_detection.rs` (`&path[..path.len() - 1]`). Multi-dot names like
-/// `archive..` lose only the outermost dot.
+/// The NT kernel normalizes trailing periods in `fs::metadata` lookups, so the resolved
+/// `PathBuf` can carry a literal dot that downstream callers (e.g. `is_markdown_file`)
+/// would misinterpret. Verbatim (`\\?\`) paths are left unchanged — Win32 normalization
+/// is bypassed there and a trailing dot may be a distinct file.
 #[cfg(windows)]
 fn strip_trailing_dot(path: PathBuf) -> PathBuf {
     match path.to_str() {

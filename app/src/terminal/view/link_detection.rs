@@ -511,26 +511,12 @@ impl super::TerminalView {
             );
 
             if let Some(absolute_path) = absolute_path {
-                // On Windows the NT kernel transparently normalizes trailing periods
-                // during `fs::metadata` lookups, so the literal capture of "foo.md."
-                // already succeeds above — the SUFFIXES_TO_REMOVE fallback loop never
-                // runs, and the highlight end_point is never shrunk.  We fix that
-                // parity gap here: when the captured token ends with '.' and the
-                // resolved absolute path is not in verbatim (\\?\) space (which bypasses
-                // NT normalization and may legitimately name a file ending in '.'),
-                // retry with the dot stripped.  If the stripped form also resolves,
-                // prefer it and shrink end_point by 1 so the visible link excludes the
-                // punctuation period.
-                //
-                // The \\?\ guard is necessary because on NAS/SMB servers backed by a
-                // POSIX filesystem, Win32 normalization is bypassed and "foo.md" and
-                // "foo.md." could be two distinct files; we must not conflate them.
-                //
-                // IMPORTANT: we test the RESOLVED `absolute_path`, not the captured
-                // token `possible_path.path.path`.  A relative token like "foo.md."
-                // does not start with \\?\ even when the working directory is a
-                // \\?\-prefixed verbatim path, so testing the token would miss that
-                // case and incorrectly enter the retry branch.
+                // Windows NT normalizes trailing '.' in metadata lookups, so the literal
+                // capture succeeds but SUFFIXES_TO_REMOVE never shrinks end_point.  Retry
+                // with the dot stripped when the resolved path is non-verbatim (verbatim
+                // \\?\ paths bypass NT normalization and may have distinct foo.md vs foo.md.).
+                // We test the resolved `absolute_path`, not the captured token, because a
+                // relative token never starts with \\?\ even in a verbatim working directory.
                 #[cfg(target_os = "windows")]
                 if possible_path.path.path.ends_with('.')
                     && !absolute_path
@@ -689,14 +675,8 @@ mod tests {
 
     use super::{super::TerminalView, GridHighlightedLink};
 
-    /// Build a minimal `PossiblePath` wrapping the given path string with a trivial
-    /// grid range (row 0, col 0 → col len-1).
-    ///
-    /// The inclusive end is `path.len() - 1`, i.e. the index of the last character,
-    /// which is the canonical representation of a grid range.  Using `path.len()`
-    /// (one past the end) was off-by-one: it produced a non-canonical range whose
-    /// synthetic "extra" column masked how the highlight-shrink assertions were
-    /// computed and could hide future regressions.
+    /// Build a minimal `PossiblePath` wrapping `path` with a grid range of row 0,
+    /// col 0 → col `path.len() - 1` (inclusive end = index of last character).
     fn make_possible_path(path: &str) -> WithinModel<PossiblePath> {
         let range: RangeInclusive<Point> = Point { row: 0, col: 0 }..=Point {
             row: 0,
@@ -713,29 +693,8 @@ mod tests {
 
     /// Regression test for warpdotdev/warp#11477.
     ///
-    /// A file path that ends with a trailing period (e.g. "foo.md." as it would appear
-    /// at the end of a sentence) must produce a valid link after the period is stripped,
-    /// and the returned path must not carry the trailing dot.
-    ///
-    /// Three layers are exercised:
-    ///
-    /// 1. On POSIX: `SUFFIXES_TO_REMOVE` now includes `"."`, so `"foo.md."` produces a
-    ///    `"foo.md"` fallback candidate when the literal name is not found on disk.
-    ///
-    /// 2. On Windows (path resolution): the NT kernel silently normalizes trailing periods
-    ///    in path lookups, so `fs::metadata("foo.md.")` resolves to `foo.md` and succeeds
-    ///    — but the returned `PathBuf` previously carried the literal trailing dot through
-    ///    to `is_markdown_file`, where `Path::extension()` returned `Some("")` and rejected
-    ///    the file.  `absolute_path_if_valid` now strips the trailing dot before returning.
-    ///
-    /// 3. On Windows (highlight parity): because the literal lookup succeeds (layer 2),
-    ///    the `SUFFIXES_TO_REMOVE` fallback loop in `compute_valid_paths` never runs, so
-    ///    the highlight `end_point` was never shrunk.  A `cfg(target_os = "windows")`-gated
-    ///    branch in the success arm retries the stripped form and, when it resolves, uses
-    ///    the shrunk `end_point` — see `compute_valid_paths_windows_highlight_range_parity`.
-    ///
-    /// This test asserts both that a link is found **and** that the path in the link does
-    /// not end with a period, catching regressions on either platform.
+    /// A trailing-period path like `"foo.md."` must produce a valid link with the dot
+    /// stripped — via `SUFFIXES_TO_REMOVE` on POSIX or `strip_trailing_dot` on Windows.
     #[test]
     fn compute_valid_paths_strips_trailing_period() {
         // Create a real temp file so that `absolute_path_if_valid` can resolve the path.
@@ -771,26 +730,11 @@ mod tests {
         );
     }
 
-    /// Windows highlight-range parity for warpdotdev/warp#11477.
+    /// Regression test for warpdotdev/warp#11477 — Windows highlight-range parity.
     ///
-    /// On Windows the NT kernel normalizes trailing '.' in `fs::metadata` calls, so
-    /// `absolute_path_if_valid("foo.md.")` succeeds on the *first* call.  That means the
-    /// `SUFFIXES_TO_REMOVE` fallback loop in `compute_valid_paths` never executes, and
-    /// the highlight `end_point` is never shrunk — the user sees the trailing period
-    /// included in the clickable link region even though the file opens correctly.
-    ///
-    /// The `cfg(target_os = "windows")`-gated branch in the literal-lookup success arm
-    /// detects this situation, retries the stripped form, and — when it resolves — builds
-    /// the link with `end_point` shrunk by 1 column so the visible highlight excludes the
-    /// punctuation period.
-    ///
-    /// This test asserts that `Link.range.end().col` is `path.len() - 1` (the trailing '.'
-    /// excluded) and that the resolved path classifies as markdown (stripped form preferred).
-    ///
-    /// Note on the `\\?\` guard: the branch is skipped for `\\?\`-prefixed verbatim paths
-    /// because Win32 normalization is bypassed there and a POSIX-backed NAS could serve
-    /// distinct `foo.md` and `foo.md.` files.  The guard is exercised hermetically by
-    /// `compute_valid_paths_windows_verbatim_cwd_guard`.
+    /// NT normalizes trailing '.' so the literal lookup succeeds, meaning `SUFFIXES_TO_REMOVE`
+    /// never shrinks `end_point`. The Windows-gated retry branch must shrink it by 1 so the
+    /// visible highlight excludes the punctuation period.
     #[cfg(target_os = "windows")]
     #[test]
     fn compute_valid_paths_windows_highlight_range_parity() {
@@ -847,27 +791,12 @@ mod tests {
         );
     }
 
-    /// Verbatim-path guard predicate for warpdotdev/warp#11477 (Oz's second-round finding).
+    /// Regression test for warpdotdev/warp#11477 — verbatim-path guard predicate.
     ///
-    /// Oz observed that the old guard tested the **captured token** (`possible_path.path.path`)
-    /// rather than the **resolved absolute path** (`absolute_path`).  A relative token like
-    /// `"foo.md."` never starts with `\\?\` even when the working directory is verbatim
-    /// (`\\?\C:\...`), so the old guard would incorrectly enter the retry branch.
-    ///
-    /// The fix tests `absolute_path` instead.  This unit test directly verifies the predicate:
-    /// given a resolved `PathBuf` that starts with `\\?\`, the guard condition evaluates to
-    /// `false`, preventing the retry.  Conversely, a non-verbatim path evaluates to `true`,
-    /// allowing the retry.
-    ///
-    /// We use a focused predicate test (Option B from the implementation brief) rather than an
-    /// end-to-end `compute_valid_paths` call with a verbatim temp directory because on local
-    /// NTFS `\\?\` disables Win32 normalization — meaning `fs::metadata(r"\\?\...\foo.md.")`
-    /// fails (no transparent period-stripping in verbatim space), so `absolute_path_if_valid`
-    /// returns `None` and the guard branch is never reached at all.  The SUFFIXES_TO_REMOVE
-    /// fallback then handles the link correctly via a different code path.  The guard only
-    /// activates in the non-verbatim case where NT kernel normalization makes the literal
-    /// lookup succeed; testing the predicate in isolation is the only hermetic way to verify
-    /// the corrected logic.
+    /// The guard tests the resolved `absolute_path` (not the captured token) for the `\\?\`
+    /// prefix, because a relative token never starts with `\\?\` even in a verbatim cwd.
+    /// An end-to-end test is impractical (verbatim paths disable NT normalization, so the
+    /// guard branch is unreachable on local NTFS), so we verify the predicate directly.
     #[cfg(target_os = "windows")]
     #[test]
     fn verbatim_path_guard_predicate() {
