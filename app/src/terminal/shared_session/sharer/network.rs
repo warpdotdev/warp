@@ -72,6 +72,42 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
 )
 .with_jitter(0.2);
 
+macro_rules! sharer_info {
+    ($network:expr, $($arg:tt)+) => {{
+        let (session_id, source_task_id) = $network.log_context();
+        log::info!(
+            "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
+            message = format_args!($($arg)+),
+            session_id = session_id,
+            source_task_id = source_task_id,
+        );
+    }};
+}
+
+macro_rules! sharer_warn {
+    ($network:expr, $($arg:tt)+) => {{
+        let (session_id, source_task_id) = $network.log_context();
+        log::warn!(
+            "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
+            message = format_args!($($arg)+),
+            session_id = session_id,
+            source_task_id = source_task_id,
+        );
+    }};
+}
+
+macro_rules! sharer_error {
+    ($network:expr, $($arg:tt)+) => {{
+        let (session_id, source_task_id) = $network.log_context();
+        log::error!(
+            "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
+            message = format_args!($($arg)+),
+            session_id = session_id,
+            source_task_id = source_task_id,
+        );
+    }};
+}
+
 /// How far along the starting process we are.
 #[derive(Debug)]
 enum Stage {
@@ -108,6 +144,7 @@ struct CachedLatestState {
     selection: Selection,
     universal_developer_input_context: Option<UniversalDeveloperInputContext>,
 }
+
 #[derive(Clone)]
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 struct StartupConfig {
@@ -117,7 +154,6 @@ struct StartupConfig {
     input_replica_id: ReplicaId,
     universal_developer_input_context: UniversalDeveloperInputContext,
     lifetime: Lifetime,
-    source: SharedSessionSource,
     selected_model_id: String,
 }
 
@@ -246,6 +282,7 @@ pub struct Network {
     reconnect_token: Option<ReconnectToken>,
     sharer_id: Option<ParticipantId>,
     startup_config: Option<StartupConfig>,
+    source: SharedSessionSource,
 
     /// HashMap from event_no to the event. We keep these in memory to support reconnections
     /// until the server acks that they have been processed and are safe to remove.
@@ -300,6 +337,7 @@ impl Network {
             reconnect_token: None,
             sharer_id: None,
             startup_config: None,
+            source: SharedSessionSource::default(),
             unacked_terminal_events: HashMap::new(),
             next_buffer_seq_no: (init_block_id, InputOperationSeqNo::zero()),
         };
@@ -370,7 +408,6 @@ impl Network {
             input_replica_id,
             universal_developer_input_context: universal_developer_input_context.clone(),
             lifetime,
-            source,
             selected_model_id,
         };
 
@@ -397,13 +434,17 @@ impl Network {
             reconnect_token: None,
             sharer_id: None,
             startup_config: Some(startup_config),
+            source,
             unacked_terminal_events: HashMap::new(),
             next_buffer_seq_no: (init_block_id.clone(), InputOperationSeqNo::zero()),
         };
 
         // We should validate the scrollback is under the limit before creating the Network, but check here just to be safe.
         if num_bytes_scrollback > network.max_session_size {
-            log::warn!("Session sharing scrollback exceeds max session size; failing startup");
+            sharer_warn!(
+                network,
+                "Session sharing scrollback exceeds max session size; failing startup"
+            );
             ctx.emit(NetworkEvent::FailedToCreateSharedSession {
                 reason: FailedToInitializeSessionReason::ScrollbackTooLarge {},
                 cause: None,
@@ -446,6 +487,10 @@ impl Network {
         self.max_session_size
     }
 
+    fn log_context(&self) -> (Option<SessionId>, Option<&str>) {
+        (self.session_id, self.source.orchestrator_task_id())
+    }
+
     fn stage_label(&self) -> &'static str {
         match self.stage {
             Stage::BeforeStarted { .. } => "before_started",
@@ -459,7 +504,7 @@ impl Network {
     /// This is important to guarantee that we correctly close the socket and
     /// notify viewers with the session ended reason.
     pub fn end_session(&mut self, reason: SessionEndedReason) {
-        log::info!("Ending shared session: reason={reason:?}");
+        sharer_info!(self, "Ending shared session: reason={reason:?}");
         let message = UpstreamMessage::EndSession { reason };
         self.send_message_to_server(message);
         self.close_without_reconnection();
@@ -474,7 +519,7 @@ impl Network {
                 self.send_message_to_server(UpstreamMessage::Ping { data: vec![] });
             }
             HeartbeatEvent::Idle => {
-                log::info!("Sharer reconnecting: heartbeat idle timeout");
+                sharer_info!(self, "Sharer reconnecting: heartbeat idle timeout");
                 self.reconnect_websocket(ctx);
             }
         }
@@ -510,7 +555,8 @@ impl Network {
     fn send_presence_selection(&mut self, selection: Selection) {
         self.cached_latest_state.selection = selection.clone();
         if let Err(e) = self.selection_throttled_tx.try_send(selection) {
-            log::warn!(
+            sharer_warn!(
+                self,
                 "Failed to send message over selection_throttled_tx channel in sharer network: {e}"
             );
         }
@@ -595,7 +641,10 @@ impl Network {
         let ops = match operations {
             Ok(operations) => operations,
             Err(e) => {
-                log::warn!("Failed to serialize CRDT operations to send to server: {e}");
+                sharer_warn!(
+                    self,
+                    "Failed to serialize CRDT operations to send to server: {e}"
+                );
                 return;
             }
         };
@@ -706,7 +755,7 @@ impl Network {
             return;
         }
         let Some(config) = self.startup_config.clone() else {
-            log::error!("Cannot create shared session without startup config");
+            sharer_error!(self, "Cannot create shared session without startup config");
             return;
         };
 
@@ -793,8 +842,8 @@ impl Network {
                             ..universal_developer_input_context
                         }),
                         lifetime: config.lifetime,
-                        source_type: config.source.source_type,
-                        source_task_id: config.source.source_task_id,
+                        source_type: network.source.source_type.clone(),
+                        source_task_id: network.source.source_task_id.clone(),
                         feature_support: FeatureSupport {
                             supports_agent_view: FeatureFlag::AgentView.is_enabled(),
                             supports_full_role: true,
@@ -802,11 +851,11 @@ impl Network {
                         },
                     });
                     if let Err(e) = network.ws_proxy_tx.try_send(message) {
-                        log::error!("Sharer failed to send initialization message: {e}");
+                        sharer_error!(network, "Sharer failed to send initialization message: {e}");
                         network.handle_startup_failure(StartupFailure::InitializeSend, ctx);
                         return;
                     }
-                    log::info!("Sent session sharing initialization message");
+                    sharer_info!(network, "Sent session sharing initialization message");
                     network.on_websocket_connected(
                         Some(attempt),
                         ws_proxy_rx.clone(),
@@ -938,11 +987,13 @@ impl Network {
         let reason = failure.diagnostic_label();
         if self.should_retry_startup_failure(&failure) {
             if let Some(cause) = cause.as_ref() {
-                log::warn!(
+                sharer_warn!(
+                    self,
                     "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} reason={reason} cause={cause:#}"
                 );
             } else {
-                log::warn!(
+                sharer_warn!(
+                    self,
                     "Shared session creation attempt failed, will retry; attempt={attempt} max_attempts={max_attempts} reason={reason}"
                 );
             }
@@ -955,11 +1006,13 @@ impl Network {
         }
 
         if let Some(cause) = cause.as_ref() {
-            log::warn!(
+            sharer_warn!(
+                self,
                 "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} reason={reason} cause={cause:#}"
             );
         } else {
-            log::warn!(
+            sharer_warn!(
+                self,
                 "Shared session creation failed, retries exhausted; attempt={attempt} max_attempts={max_attempts} reason={reason}"
             );
         }
@@ -991,14 +1044,15 @@ impl Network {
         let (Some(session_id), Some(reconnect_token)) =
             (self.session_id, self.reconnect_token.clone())
         else {
-            log::error!(
+            sharer_error!(
+                self,
                 "Cannot reconnect to session as sharer without session_id, and reconnect_token"
             );
             return;
         };
         let Some(reconnect_endpoint) = connect_endpoint(format!("/sessions/{session_id}/resume"))
         else {
-            log::error!("This channel does not support session-sharing.");
+            sharer_error!(self, "This channel does not support session-sharing.");
             return;
         };
 
@@ -1044,7 +1098,8 @@ impl Network {
                 RECONNECT_RETRY_STRATEGY,
                 move |network, res, ctx| match res {
                     RequestState::RequestSucceeded(((sink, stream), user_id)) => {
-                        log::info!(
+                        sharer_info!(
+                            network,
                             "Connected to session sharing server for reconnect; waiting for server confirmation"
                         );
                         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
@@ -1068,7 +1123,7 @@ impl Network {
                             },
                         });
                         if let Err(e) = network.ws_proxy_tx.try_send(message) {
-                            log::error!("Sharer failed to send reconnect message: {e}");
+                            sharer_error!(network, "Sharer failed to send reconnect message: {e}");
                             return;
                         }
 
@@ -1078,10 +1133,14 @@ impl Network {
                         IapManager::handle(ctx).update(ctx, |manager, ctx| {
                             manager.check_ws_connect_error(&e, ctx);
                         });
-                        log::warn!("Failed to reconnect to shared session, will retry: {e}");
+                        sharer_warn!(
+                            network,
+                            "Failed to reconnect to shared session, will retry: {e}"
+                        );
                     }
                     RequestState::RequestFailed(e) => {
-                        log::warn!(
+                        sharer_warn!(
+                            network,
                             "Failed to reconnect to shared session, and retries exhausted: {e}"
                         );
                         network.close_without_reconnection();
@@ -1130,7 +1189,10 @@ impl Network {
                     }) {
                         return;
                     }
-                    log::error!("Got error from shared session sharer websocket: {e}");
+                    sharer_error!(
+                        network,
+                        "Got error from shared session sharer websocket: {e}"
+                    );
                     if startup_attempt.is_some()
                         && matches!(network.stage, Stage::BeforeStarted { .. })
                     {
@@ -1145,14 +1207,17 @@ impl Network {
                     return;
                 }
                 let stage = network.stage_label();
-                log::info!("Session sharing server closed websocket to sharer; stage={stage}");
+                sharer_info!(
+                    network,
+                    "Session sharing server closed websocket to sharer; stage={stage}"
+                );
                 // Close our current websocket proxy, because we may try to reconnect and that will create a new websocket proxy.
                 // This must be done before trying to reconnect.
                 network.close();
                 // The connection may have timed out or the server restarted.
                 // We don't emit this event if we haven't started successfully to avoid an infinite retry loop.
                 if matches!(network.stage, Stage::StartedSuccessfully { .. }) {
-                    log::info!("Sharer reconnecting: websocket closed by server");
+                    sharer_info!(network, "Sharer reconnecting: websocket closed by server");
                     network.reconnect_websocket(ctx);
                 } else if matches!(network.stage, Stage::BeforeStarted { .. }) {
                     // If the websocket is closed while we were waiting for it to start, emit an error.
@@ -1220,7 +1285,10 @@ impl Network {
             .text()
             .and_then(|t| DownstreamMessage::from_json(t).ok())
         else {
-            log::warn!("Received unexpected message from shared session websocket as sharer");
+            sharer_warn!(
+                self,
+                "Received unexpected message from shared session websocket as sharer"
+            );
             return;
         };
         match downstream_message {
@@ -1232,20 +1300,23 @@ impl Network {
                 ..
             } => {
                 let Stage::BeforeStarted { startup_retry } = &self.stage else {
-                    log::warn!("Received unexpected SessionInitialized message when we weren't in BeforeStarted stage");
+                    sharer_warn!(
+                        self,
+                        "Received unexpected SessionInitialized message when we weren't in BeforeStarted stage"
+                    );
                     return;
                 };
                 let attempt = startup_retry.current_attempt;
                 let max_attempts = startup_retry.max_attempts;
-                log::info!(
-                    "Successfully created shared session; session_id={session_id:?} attempt={attempt} max_attempts={max_attempts}"
-                );
-                self.abort_startup_handles();
-                self.startup_config = None;
-
                 self.session_id = Some(session_id);
                 self.reconnect_token = Some(reconnect_token);
                 self.sharer_id = Some(sharer_id.clone());
+                sharer_info!(
+                    self,
+                    "Successfully created shared session; attempt={attempt} max_attempts={max_attempts}"
+                );
+                self.abort_startup_handles();
+                self.startup_config = None;
 
                 self.stage = Stage::StartedSuccessfully {
                     startup_attempt: Some(attempt),
@@ -1263,7 +1334,7 @@ impl Network {
                 });
             }
             DownstreamMessage::FailedToInitializeSession { reason } => {
-                log::warn!("Failed to initialize session: {reason:?}");
+                sharer_warn!(self, "Failed to initialize session: {reason:?}");
                 self.handle_startup_failure(StartupFailure::ServerRejected(reason), ctx);
             }
             DownstreamMessage::SessionReconnected {
@@ -1271,10 +1342,16 @@ impl Network {
                 participant_list,
             } => {
                 if !matches!(self.stage, Stage::Reconnecting { .. }) {
-                    log::warn!("Received unexpected SessionReconnected message when we weren't reconnecting");
+                    sharer_warn!(
+                        self,
+                        "Received unexpected SessionReconnected message when we weren't reconnecting"
+                    );
                     return;
                 }
-                log::info!("Successfully reconnected to shared session server as sharer.");
+                sharer_info!(
+                    self,
+                    "Successfully reconnected to shared session server as sharer."
+                );
                 self.stage = Stage::StartedSuccessfully {
                     startup_attempt: None,
                 };
@@ -1290,7 +1367,8 @@ impl Network {
                 )));
             }
             DownstreamMessage::FailedToReconnect { reason } => {
-                log::warn!(
+                sharer_warn!(
+                    self,
                     "Session sharing server rejected sharer reconnect request: reason={reason:?}"
                 );
                 self.close_without_reconnection();
@@ -1298,7 +1376,8 @@ impl Network {
             }
             DownstreamMessage::SessionTerminated { reason } => {
                 let reason_label = session_terminated_reason_diagnostic_label(&reason);
-                log::warn!(
+                sharer_warn!(
+                    self,
                     "Session sharing server terminated sharer session: reason={reason_label}"
                 );
                 self.close_without_reconnection();
@@ -1351,7 +1430,10 @@ impl Network {
                 let operations = match operations {
                     Ok(operations) => operations,
                     Err(e) => {
-                        log::warn!("Failed to deserialize CRDT operations from server: {e}");
+                        sharer_warn!(
+                            self,
+                            "Failed to deserialize CRDT operations from server: {e}"
+                        );
                         return;
                     }
                 };
@@ -1548,7 +1630,7 @@ impl Network {
         let num_bytes = event_type.num_bytes();
         self.num_bytes_shared = self.num_bytes_shared.add(num_bytes).unwrap_or(Byte::MAX);
         if self.num_bytes_shared > self.max_session_size {
-            log::info!("Stopping shared session because max bytes exceeded.");
+            sharer_info!(self, "Stopping shared session because max bytes exceeded.");
             self.end_session(SessionEndedReason::ExceededSizeLimit);
             return;
         }
@@ -1574,13 +1656,19 @@ impl Network {
 
         if let Stage::StartedSuccessfully { .. } = self.stage {
             if let Err(e) = self.ws_proxy_tx.try_send(message) {
-                log::warn!("Failed to send message over ws_proxy channel in session sharer: {e}");
+                sharer_warn!(
+                    self,
+                    "Failed to send message over ws_proxy channel in session sharer: {e}"
+                );
             }
         }
     }
 
     pub fn extend_session_retention(&mut self, reason: SessionRetentionReason) {
-        log::info!("Requesting extended shared session retention: {reason:?}");
+        sharer_info!(
+            self,
+            "Requesting extended shared session retention: {reason:?}"
+        );
         self.send_message_to_server(UpstreamMessage::ExtendSessionRetention { reason });
     }
     /// Send all stored terminal events from [start_event_no, ...) to the server
@@ -1593,7 +1681,10 @@ impl Network {
                 .try_send(UpstreamMessage::OrderedTerminalEvent(event.clone()))
             {
                 // Failures to send are due to be full or closed, so it doesn't make sense to keep trying.
-                log::warn!("Failed to send message over ws_proxy channel in session sharer: {e}");
+                sharer_warn!(
+                    self,
+                    "Failed to send message over ws_proxy channel in session sharer: {e}"
+                );
                 return;
             }
             event_no += 1;
@@ -1776,9 +1867,9 @@ impl Entity for Network {
 impl Drop for Network {
     fn drop(&mut self) {
         let stage = self.stage_label();
-        log::info!(
-            "Dropping shared session sharer network; session_id={:?} stage={stage}",
-            self.session_id
+        sharer_info!(
+            self,
+            "Dropping shared session sharer network; stage={stage}"
         );
         // This is needed to gracefully close the websocket when Network is dropped.
         self.close();
