@@ -903,16 +903,17 @@ impl TypedActionView for MCPServersEditPageView {
                         return;
                     }
 
-                    for parsed_server in &parsed_servers {
-                        if self
-                            .detect_secrets_in_templatable_mcp_server(
+                    if parsed_servers
+                        .iter()
+                        .try_for_each(|parsed_server| {
+                            self.detect_secrets_in_templatable_mcp_server(
                                 ctx,
                                 &parsed_server.templatable_mcp_server,
                             )
-                            .is_err()
-                        {
-                            return;
-                        }
+                        })
+                        .is_err()
+                    {
+                        return;
                     }
 
                     for parsed_server in parsed_servers {
