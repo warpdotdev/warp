@@ -21,24 +21,35 @@ The SVN chips (`SvnBranch`, `SvnDirtyItems`) are the closest analogue: shell-bas
 
 ### `jj_bookmark()`
 
-Produces the chip value text using `jj log` with output templates. Uses `bookmarks.map()`
-to list bookmarks on the current change, falling back to `change_id.shortest(8)` when
-anonymous.
+Produces the chip value text using `jj log` with output templates. Logic:
+
+1. Query bookmarks on `@` — if found, output them directly.
+2. Otherwise, get the change ID via `change_id.shortest(8)`.
+3. Query the nearest bookmarked ancestor via `latest(ancestors(@) & bookmarks() ~ @)`.
+4. If an ancestor bookmark exists, output `"<change_id> on <bookmarks>"`; otherwise output just `<change_id>`.
 
 ```rust
 // Bash/Zsh:
 const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
     && if [ -n \"$bookmarks\" ]; then echo \"$bookmarks\"; \
-    else jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null; fi";
+    else cid=$(jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null); \
+    ancestor_bookmarks=$(jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+    -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
+    if [ -n \"$ancestor_bookmarks\" ]; then echo \"${cid} on ${ancestor_bookmarks}\"; \
+    else echo \"$cid\"; fi; fi";
 ```
 
 ```fish
-# Fish:
+// Fish:
 const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
     && if test -n \"$bookmarks\"; echo $bookmarks; \
-    else; jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null; end";
+    else; set cid (jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null); \
+    set ancestor_bookmarks (jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+    -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
+    if test -n \"$ancestor_bookmarks\"; echo \"${cid} on ${ancestor_bookmarks}\"; \
+    else; echo $cid; end; end";
 ```
 
 ```powershell
@@ -46,7 +57,10 @@ const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph \
 const PWSH_BOOKMARK_CMD: &str = "$bookmarks = jj log -r '@' --no-graph \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
     if ($bookmarks) { $bookmarks } \
-    else { jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>$null }";
+    else { $cid = jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>$null; \
+    $ancestorBookmarks = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+    -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
+    if ($ancestorBookmarks) { \"${cid} on ${ancestorBookmarks}\" } else { $cid } }";
 ```
 
 All three shell variants use `ShellCommand::shell_specific([...])` with per-shell entries,
