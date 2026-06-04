@@ -171,6 +171,7 @@ use crate::server::telemetry::{
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AgentModeCodingPermissionsType, FontSettings,
     InputModeSettings, InputModeSettingsChangedEvent, InputSettings,
+    OrchestrationMessageDisplayMode,
 };
 use crate::settings_view::SettingsSection;
 use crate::terminal::find::TerminalFindModel;
@@ -852,11 +853,32 @@ pub(crate) fn received_message_collapsible_id(message_id: &str) -> MessageId {
 
 fn default_collapsible_state_for_orchestration_action(
     action: &AIAgentActionType,
+    display_mode: OrchestrationMessageDisplayMode,
 ) -> Option<CollapsibleElementState> {
     match action {
-        AIAgentActionType::StartAgent { .. } => Some(CollapsibleElementState::default()),
-        AIAgentActionType::SendMessageToAgent { .. } => Some(CollapsibleElementState::collapsed()),
+        AIAgentActionType::StartAgent { .. } => Some(default_orchestration_collapsible_state(
+            display_mode.should_expand_start_agent_prompt(),
+        )),
+        AIAgentActionType::SendMessageToAgent { .. } => {
+            Some(default_orchestration_collapsible_state(
+                display_mode.should_expand_agent_message_body(),
+            ))
+        }
         _ => None,
+    }
+}
+
+fn default_collapsible_state_for_orchestration_message(
+    display_mode: OrchestrationMessageDisplayMode,
+) -> CollapsibleElementState {
+    default_orchestration_collapsible_state(display_mode.should_expand_agent_message_body())
+}
+
+fn default_orchestration_collapsible_state(expanded: bool) -> CollapsibleElementState {
+    if expanded {
+        CollapsibleElementState::default()
+    } else {
+        CollapsibleElementState::collapsed()
     }
 }
 
@@ -1131,6 +1153,10 @@ impl AIBlock {
                         }
                         _ => {}
                     }
+                    ctx.notify();
+                }
+                AISettingsChangedEvent::ThinkingDisplayMode { .. }
+                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
                     ctx.notify();
                 }
                 _ => {}
@@ -2148,10 +2174,14 @@ impl AIBlock {
             }
 
             // Register collapsible state for orchestration action messages.
+            let orchestration_message_display_mode =
+                AISettings::as_ref(ctx).orchestration_message_display_mode;
             match &message.message {
                 AIAgentOutputMessageType::Action(AIAgentAction { action, .. }) => {
-                    if let Some(state) = default_collapsible_state_for_orchestration_action(action)
-                    {
+                    if let Some(state) = default_collapsible_state_for_orchestration_action(
+                        action,
+                        orchestration_message_display_mode,
+                    ) {
                         self.collapsible_block_states
                             .entry(message.id.clone())
                             .or_insert(state);
@@ -2163,7 +2193,11 @@ impl AIBlock {
                             received_message_collapsible_id(&received_message.message_id);
                         self.collapsible_block_states
                             .entry(collapsible_id.clone())
-                            .or_insert_with(CollapsibleElementState::collapsed);
+                            .or_insert_with(|| {
+                                default_collapsible_state_for_orchestration_message(
+                                    orchestration_message_display_mode,
+                                )
+                            });
                         self.state_handles
                             .transcript_avatar_handles
                             .entry(collapsible_id)

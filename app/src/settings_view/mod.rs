@@ -507,6 +507,12 @@ pub mod flags {
     pub const THINKING_DISPLAY_SHOW_AND_COLLAPSE: &str = "Thinking_Display_ShowAndCollapse";
     pub const THINKING_DISPLAY_ALWAYS_SHOW: &str = "Thinking_Display_AlwaysShow";
     pub const THINKING_DISPLAY_NEVER_SHOW: &str = "Thinking_Display_NeverShow";
+    pub const ORCHESTRATION_MESSAGE_DISPLAY_CURRENT_BEHAVIOR: &str =
+        "Orchestration_Message_Display_CurrentBehavior";
+    pub const ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_SHOW: &str =
+        "Orchestration_Message_Display_AlwaysShow";
+    pub const ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_COLLAPSE: &str =
+        "Orchestration_Message_Display_AlwaysCollapse";
     pub const PROMPT_SUBMISSION_INTERRUPT: &str = "Prompt_Submission_Interrupt";
     pub const PROMPT_SUBMISSION_QUEUE: &str = "Prompt_Submission_Queue";
     pub const SHOW_TERMINAL_INPUT_MESSAGE_LINE_FLAG: &str = "Show_Terminal_Input_Message_Line";

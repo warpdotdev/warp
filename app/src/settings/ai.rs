@@ -395,6 +395,80 @@ impl ThinkingDisplayMode {
     }
 }
 
+/// Controls how orchestration message bodies are expanded by default.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Controls how orchestration messages are expanded by default.",
+    rename_all = "snake_case"
+)]
+pub enum OrchestrationMessageDisplayMode {
+    /// Preserve the existing behavior: start-agent prompts expand, messages collapse.
+    #[default]
+    CurrentBehavior,
+    /// Start all orchestration message bodies expanded.
+    AlwaysShow,
+    /// Start all orchestration message bodies collapsed.
+    AlwaysCollapse,
+}
+
+settings::macros::implement_setting_for_enum!(
+    OrchestrationMessageDisplayMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "agents.warp_agent.other.orchestration_message_display_mode",
+    description: "Controls how orchestration message bodies are expanded by default.",
+);
+
+impl OrchestrationMessageDisplayMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            OrchestrationMessageDisplayMode::CurrentBehavior => "Current behavior",
+            OrchestrationMessageDisplayMode::AlwaysShow => "Always expand",
+            OrchestrationMessageDisplayMode::AlwaysCollapse => "Always collapse",
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            OrchestrationMessageDisplayMode::CurrentBehavior => {
+                "Set orchestration message display: current behavior"
+            }
+            OrchestrationMessageDisplayMode::AlwaysShow => {
+                "Set orchestration message display: always expand"
+            }
+            OrchestrationMessageDisplayMode::AlwaysCollapse => {
+                "Set orchestration message display: always collapse"
+            }
+        }
+    }
+
+    pub fn should_expand_start_agent_prompt(&self) -> bool {
+        matches!(
+            self,
+            OrchestrationMessageDisplayMode::CurrentBehavior
+                | OrchestrationMessageDisplayMode::AlwaysShow
+        )
+    }
+
+    pub fn should_expand_agent_message_body(&self) -> bool {
+        matches!(self, OrchestrationMessageDisplayMode::AlwaysShow)
+    }
+}
+
 /// Controls what happens when a user submits a new prompt while the agent is
 /// still responding to an earlier prompt.
 ///
@@ -1321,6 +1395,9 @@ define_settings_group!(AISettings, settings: [
 
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
+
+    // Controls how orchestration message bodies are expanded by default.
+    orchestration_message_display_mode: OrchestrationMessageDisplayMode,
 
     // Default behavior when the user submits a new prompt while the agent is still
     // responding. Per-conversation overrides live on `QueuedQueryModel`; this
