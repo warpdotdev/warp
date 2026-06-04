@@ -14,7 +14,7 @@ use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::r#async::FutureExt as _;
 use warpui_core::App;
-#[cfg(all(unix, feature = "local_fs"))]
+#[cfg(feature = "local_fs")]
 use watcher::BulkFilesystemWatcherEvent;
 
 use crate::entry::{DirectoryEntry, Entry, FileMetadata};
@@ -448,6 +448,101 @@ fn test_lazy_loaded_path_does_not_build_standing_rule_results_below_shallow_tree
     });
 }
 
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_lazy_loaded_path_discovers_force_included_skills_and_emits_watcher_delta() {
+    VirtualFS::test("lazy_loaded_path_force_included_skills", |dirs, mut vfs| {
+        vfs.mkdir("workspace/.agents/skills/review")
+            .mkdir("workspace/src/deep")
+            .with_files(vec![
+                Stub::FileWithContent("workspace/.agents/skills/review/SKILL.md", "name: review"),
+                Stub::FileWithContent("workspace/src/deep/WARP.md", "project rules"),
+            ]);
+
+        let workspace = dirs.tests().join("workspace");
+        let skill_path = workspace.join(".agents/skills/review/SKILL.md");
+        let src_path = workspace.join("src");
+        let rule_path = workspace.join("src/deep/WARP.md");
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| {
+                let mut model = LocalRepoMetadataModel::new_for_test();
+                model.register_force_included_paths([PathBuf::from(".agents/skills")]);
+                model.set_project_skill_provider_paths([PathBuf::from(".agents/skills")]);
+                model
+            });
+            let workspace_path = StandardizedPath::from_local_canonicalized(&workspace).unwrap();
+            let skill_path = StandardizedPath::try_from_local(&skill_path).unwrap();
+            let src_path = StandardizedPath::try_from_local(&src_path).unwrap();
+            let rule_path = StandardizedPath::try_from_local(&rule_path).unwrap();
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.index_lazy_loaded_path(&workspace_path, ctx).unwrap();
+            });
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&workspace_path)
+                else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&skill_path));
+                assert!(
+                    matches!(state.entry.get(&src_path), Some(FileTreeEntryState::Directory(dir)) if !dir.loaded)
+                );
+                assert!(!state.entry.contains(&rule_path));
+
+                let results = model
+                    .standing_query_results(&workspace_path)
+                    .expect("lazy indexed paths should retain standing results");
+                assert!(results
+                    .project_skills()
+                    .any(|content| content.path == skill_path && !content.is_directory));
+                assert!(!results
+                    .project_rules()
+                    .any(|content| content.path == rule_path));
+            });
+
+            let (tx, rx) = oneshot::channel();
+            let received_delta = Rc::new(RefCell::new(Some(tx)));
+            let received_delta_for_event = received_delta.clone();
+            let workspace_path_for_event = workspace_path.clone();
+            let skill_path_for_event = skill_path.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if let RepositoryMetadataEvent::StandingQueryResultsUpdated { path, delta } =
+                        event
+                    {
+                        if path == &workspace_path_for_event
+                            && delta.upserted_project_skills.iter().any(|content| {
+                                content.path == skill_path_for_event && !content.is_directory
+                            })
+                        {
+                            if let Some(tx) = received_delta_for_event.borrow_mut().take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                    }
+                });
+            });
+
+            let skill_path = skill_path.to_local_path().unwrap();
+            std::fs::write(&skill_path, "name: updated review").unwrap();
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        modified: std::collections::HashSet::from([skill_path]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for standing project-skill update")
+                .expect("standing project-skill update sender dropped");
+        });
+    });
+}
 #[cfg(feature = "local_fs")]
 #[test]
 fn test_index_directory_upgrades_lazy_loaded_path_to_repo() {
