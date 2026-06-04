@@ -702,7 +702,7 @@ pub(crate) fn matches_ignored_path_interest(path: &Path, ignored_path_interests:
         })
         .collect();
 
-    force_included_paths.iter().any(|force_included| {
+    ignored_path_interests.iter().any(|force_included| {
         let force_included_components: Vec<_> = force_included
             .components()
             .filter_map(|component| match component {

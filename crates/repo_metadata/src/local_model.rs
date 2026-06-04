@@ -51,6 +51,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use notify_debouncer_full::notify::RecursiveMode;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+        use crate::entry::repo_watch_filter;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui_core::SingletonEntity as _;
 
