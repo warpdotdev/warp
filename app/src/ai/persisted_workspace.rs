@@ -19,12 +19,14 @@ use lsp::LspEvent;
 use lsp::{LspManagerModel, LspServerConfig};
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+#[cfg(feature = "local_fs")]
+use repo_metadata::RepoMetadataModel;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "local_fs")]
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
-use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::{local_or_remote_path::LocalOrRemotePath, standardized_path::StandardizedPath};
 #[cfg(feature = "local_fs")]
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -685,7 +687,8 @@ impl PersistedWorkspace {
     /// Explicitly registers a directory as a workspace, as if the user had navigated there.
     ///
     /// Creates or updates the entry with `navigated_ts = now`, persists to SQLite,
-    /// triggers project-rules and codebase-index scanning, and emits
+    /// starts full repo-metadata indexing before triggering project-rules and codebase-index
+    /// scanning, and emits
     /// [`PersistedWorkspaceEvent::WorkspaceAdded`] so subscribers can refresh their UI.
     pub fn user_added_workspace(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
         let now = Utc::now();
@@ -711,6 +714,22 @@ impl PersistedWorkspace {
         }
 
         self.persist_metadata_for_index(&path);
+        #[cfg(feature = "local_fs")]
+        match StandardizedPath::from_local_canonicalized(&path) {
+            Ok(path) => {
+                if let Err(error) = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.index_local_directory_path(&path, ctx)
+                }) {
+                    log::warn!("Failed to start full repo metadata indexing for {path}: {error}");
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to canonicalize user-added workspace {} for full repo metadata indexing: {error}",
+                    path.display()
+                );
+            }
+        }
         self.index_repo(path.clone(), ctx);
         ctx.emit(PersistedWorkspaceEvent::WorkspaceAdded { path });
     }
@@ -1267,3 +1286,7 @@ pub fn all_working_directories(app: &AppContext) -> HashSet<PathBuf> {
     }
     working_directories
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "persisted_workspace_tests.rs"]
+mod tests;

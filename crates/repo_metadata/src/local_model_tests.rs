@@ -450,6 +450,68 @@ fn test_lazy_loaded_path_does_not_build_standing_rule_results_below_shallow_tree
 
 #[cfg(feature = "local_fs")]
 #[test]
+fn test_index_directory_path_fully_indexes_non_git_directory() {
+    VirtualFS::test("full_index_non_git_directory", |dirs, mut vfs| {
+        vfs.mkdir("workspace/src/deep")
+            .with_files(vec![Stub::FileWithContent(
+                "workspace/src/deep/main.rs",
+                "fn main() {}\n",
+            )]);
+
+        let workspace = dirs.tests().join("workspace");
+        let deep_file = workspace.join("src/deep/main.rs");
+
+        App::test((), |mut app| async move {
+            app.add_singleton_model(DirectoryWatcher::new_for_testing);
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            let workspace_path = StandardizedPath::from_local_canonicalized(&workspace).unwrap();
+            let deep_file_path = StandardizedPath::try_from_local(&deep_file).unwrap();
+
+            let (tx, rx) = oneshot::channel();
+            let completed = Rc::new(RefCell::new(Some(tx)));
+            let completed_for_event = completed.clone();
+            let workspace_path_for_event = workspace_path.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if matches!(
+                        event,
+                        RepositoryMetadataEvent::RepositoryUpdated { path }
+                            if path == &workspace_path_for_event
+                    ) {
+                        if let Some(tx) = completed_for_event.borrow_mut().take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                });
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.index_directory_path(&workspace_path, ctx).unwrap();
+                assert!(matches!(
+                    model.repository_state(&workspace_path),
+                    Some(IndexedRepoState::Pending(_))
+                ));
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for full directory index")
+                .expect("full directory index completion sender dropped");
+
+            model_handle.read(&app, |model, _ctx| {
+                assert!(!model.is_lazy_loaded_path(&workspace_path));
+                let Some(IndexedRepoState::Indexed(state)) =
+                    model.repository_state(&workspace_path)
+                else {
+                    panic!("expected fully indexed directory");
+                };
+                assert!(state.entry.contains(&deep_file_path));
+            });
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
 fn test_index_directory_upgrades_lazy_loaded_path_to_repo() {
     VirtualFS::test("lazy_loaded_path_upgrade", |dirs, mut vfs| {
         vfs.mkdir("repo/.git/objects")

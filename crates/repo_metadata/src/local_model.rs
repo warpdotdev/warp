@@ -52,6 +52,7 @@ cfg_if::cfg_if! {
         use notify_debouncer_full::notify::RecursiveMode;
         use crate::entry::repo_watch_filter;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+        use crate::watcher::DirectoryWatcher;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui_core::SingletonEntity as _;
 
@@ -1168,6 +1169,19 @@ impl LocalRepoMetadataModel {
         matches_gitignores(path, is_dir, gitignores, true)
     }
 
+    /// Fully indexes a local directory after registering it with the directory watcher.
+    #[cfg(feature = "local_fs")]
+    pub fn index_directory_path(
+        &mut self,
+        path: &StandardizedPath,
+        ctx: &mut ModelContext<'_, Self>,
+    ) -> Result<(), RepoMetadataError> {
+        let path = path.clone();
+        let repository = DirectoryWatcher::handle(ctx)
+            .update(ctx, |watcher, ctx| watcher.add_directory(path, ctx))?;
+        self.index_directory(repository, ctx)
+    }
+
     /// Indexes a repository from the given repository handle.
     pub fn index_directory(
         &mut self,
@@ -1202,8 +1216,10 @@ impl LocalRepoMetadataModel {
                 return Ok(());
             }
             Some(IndexedRepoState::Indexed(_)) => {
-                // Was a lazy-loaded path – allow upgrading to a real repo.
-                log::info!("Upgrading lazy-loaded path to git repo: {repo_path_str}");
+                // Was a lazy-loaded path – allow upgrading to a fully indexed directory.
+                log::info!(
+                    "Upgrading lazy-loaded path to fully indexed directory: {repo_path_str}"
+                );
                 self.lazy_loaded_paths.remove(&std_path);
             }
             Some(IndexedRepoState::Pending(_)) => {
