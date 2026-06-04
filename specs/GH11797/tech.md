@@ -22,7 +22,9 @@ The SVN chips (`SvnBranch`, `SvnDirtyItems`) are the closest analogue: shell-bas
 ### `jj_bookmark()`
 
 Produces the chip value text using `jj log` with output templates. `change_id.shortest(8)`
-returns at most 8 hex chars that uniquely identify the change (e.g., `qquqvwzk`). Logic:
+returns the shortest unique prefix of the change ID, up to 8 characters (e.g., `qquqvwzk`).
+All `jj log` and `jj diff` invocations include `--ignore-working-copy` to prevent
+unintentional auto-snapshots during prompt rendering. Logic:
 
 1. Query bookmarks on `@` — if found, output them directly.
 2. Otherwise, get the change ID via `change_id.shortest(8)`.
@@ -31,11 +33,13 @@ returns at most 8 hex chars that uniquely identify the change (e.g., `qquqvwzk`)
 
 ```rust
 // Bash/Zsh:
-const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph \
+const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
     && if [ -n \"$bookmarks\" ]; then echo \"$bookmarks\"; \
-    else cid=$(jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null); \
+    else cid=$(jj log -r '@' --no-graph --ignore-working-copy \
+    -T 'change_id.shortest(8)' 2>/dev/null); \
     ancestor_bookmarks=$(jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+    --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
     if [ -n \"$ancestor_bookmarks\" ]; then echo \"${cid} on ${ancestor_bookmarks}\"; \
     else echo \"$cid\"; fi; fi";
@@ -43,11 +47,13 @@ const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph \
 
 ```fish
 // Fish:
-const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph \
+const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
     && if test -n \"$bookmarks\"; echo $bookmarks; \
-    else; set cid (jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>/dev/null); \
+    else; set cid (jj log -r '@' --no-graph --ignore-working-copy \
+    -T 'change_id.shortest(8)' 2>/dev/null); \
     set ancestor_bookmarks (jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+    --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
     if test -n \"$ancestor_bookmarks\"; echo \"${cid} on ${ancestor_bookmarks}\"; \
     else; echo $cid; end; end";
@@ -55,11 +61,13 @@ const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph \
 
 ```powershell
 // PowerShell:
-const PWSH_BOOKMARK_CMD: &str = "$bookmarks = jj log -r '@' --no-graph \
+const PWSH_BOOKMARK_CMD: &str = "$bookmarks = jj log -r '@' --no-graph --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
     if ($bookmarks) { $bookmarks } \
-    else { $cid = jj log -r '@' --no-graph -T 'change_id.shortest(8)' 2>$null; \
+    else { $cid = jj log -r '@' --no-graph --ignore-working-copy \
+    -T 'change_id.shortest(8)' 2>$null; \
     $ancestorBookmarks = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
+    --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
     if ($ancestorBookmarks) { \"${cid} on ${ancestorBookmarks}\" } else { $cid } }";
 ```
@@ -74,24 +82,25 @@ Produces the count of changed files in the working copy:
 ```rust
 // Bash/Zsh:
 const SH_DIRTY_CMD: &str =
-    "count=$(jj diff --summary 2>/dev/null | wc -l) && [ \"$count\" -gt 0 ] && echo \"$count\"";
+    "count=$(jj diff --summary --ignore-working-copy 2>/dev/null | wc -l) && [ \"$count\" -gt 0 ] && echo \"$count\"";
 ```
 
 ```rust
 // Fish:
-const FISH_DIRTY_CMD: &str = "set count (jj diff --summary 2>/dev/null | wc -l) \
+const FISH_DIRTY_CMD: &str = "set count (jj diff --summary --ignore-working-copy 2>/dev/null | wc -l) \
     && test $count -gt 0 && string trim $count";
 ```
 
 ```rust
 // PowerShell:
-const PWSH_DIRTY_CMD: &str = "jj diff --summary 2>$null | Measure-Object -Line | \
+const PWSH_DIRTY_CMD: &str = "jj diff --summary --ignore-working-copy 2>$null | Measure-Object -Line | \
     Where-Object { $_.Lines -gt 0 } | ForEach-Object { $_.Lines }";
 ```
 
-`jj diff --summary` outputs one line per changed file. The pipe to `wc -l` / `Measure-Object` gives
-an accurate count. When the workspace is clean (zero changes), the chip value is empty and the chip
-is hidden.
+`jj diff --summary` outputs one line per changed file. The `--ignore-working-copy` flag prevents
+auto-snapshotting during prompt rendering while still showing accurate file counts. The pipe to
+`wc -l` / `Measure-Object` gives an accurate count. When the workspace is clean (zero changes),
+the chip value is empty and the chip is hidden.
 
 ## Proposed changes
 

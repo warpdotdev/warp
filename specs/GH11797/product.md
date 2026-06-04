@@ -20,7 +20,7 @@ Warp currently supports prompt chips for Git and SVN but has no equivalent for `
 ## Non-goals
 
 - Full `jj` VCS support in Warp (tracked in #11774).
-- Bookmark-list menu on click (unlike Git branches, `jj` bookmarks don't have a native list command).
+- Bookmark-list menu on click — intentionally out of scope for the initial implementation.
 - Configurable display format beyond the established `jj:(…)` / `±N` conventions.
 - Automatically tracking `jj` bookmark changes — both chips refresh on demand only.
 
