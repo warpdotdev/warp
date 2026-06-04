@@ -1134,13 +1134,25 @@ impl FileModel {
             return;
         }
 
-        // Autoreload modified files.
+        // Autoreload modified files, enforcing the same size limit as open().
         ctx.spawn(
             async move {
                 let mut res = Vec::new();
                 for file_path in matching_files {
-                    if let Ok(content) = async_fs::read_to_string(&file_path).await {
-                        res.push((file_path, content));
+                    match Self::read_file_with_size_limit(&file_path).await {
+                        Ok(content) => res.push((file_path, content)),
+                        Err(FileLoadError::FileTooLarge {
+                            size_bytes,
+                            limit_bytes,
+                        }) => {
+                            log::warn!(
+                                "Skipping reload of {}: file size {} bytes exceeds {} byte limit",
+                                file_path.display(),
+                                size_bytes,
+                                limit_bytes,
+                            );
+                        }
+                        Err(_) => {}
                     }
                 }
                 res
