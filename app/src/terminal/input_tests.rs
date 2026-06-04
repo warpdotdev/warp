@@ -1187,6 +1187,7 @@ fn send_now_event_submits_through_active_pane_and_preserves_draft() {
                     conversation_id,
                     query_id,
                     text: "queued prompt".to_owned(),
+                    is_command: false,
                 },
                 ctx,
             );
@@ -1201,6 +1202,84 @@ fn send_now_event_submits_through_active_pane_and_preserves_draft() {
         // ...and the host removed the fired row from the queue.
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn send_now_command_event_executes_command_and_arms_in_flight() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal =
+            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "~");
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let executed_commands = Rc::new(RefCell::new(Vec::<String>::new()));
+        let executed_commands_for_subscription = executed_commands.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if let super::Event::ExecuteCommand(event) = event {
+                    executed_commands_for_subscription
+                        .borrow_mut()
+                        .push(event.command.clone());
+                }
+            });
+        });
+
+        let conversation_id = AIConversationId::new();
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new_command("echo 1".to_owned(), QueuedQueryOrigin::AutoQueueToggle),
+                ctx,
+            )
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.handle_queued_prompts_panel_event(
+                &QueuedPromptsPanelEvent::SendNow {
+                    conversation_id,
+                    query_id,
+                    text: "echo 1".to_owned(),
+                    is_command: true,
+                },
+                ctx,
+            );
+        });
+
+        assert_eq!(executed_commands.borrow().as_slice(), ["echo 1"]);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+            assert!(model.has_command_in_flight(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn deleted_command_row_restores_text_in_shell_mode() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.handle_queued_prompts_panel_event(
+                &QueuedPromptsPanelEvent::RowDeleted {
+                    text: "echo 1".to_owned(),
+                    is_command: true,
+                },
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo 1");
+            assert!(!input.ai_input_model.as_ref(ctx).is_ai_input_enabled());
         });
     });
 }

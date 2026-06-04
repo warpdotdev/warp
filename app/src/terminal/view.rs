@@ -4842,18 +4842,21 @@ impl TerminalView {
 
     /// Advances the queued-prompts queue after a dispatched queued command finishes. Shared by the
     /// local `AfterBlockCompleted` path and the shared-session `CommandExecutionFinished` path.
-    /// No-ops unless a queued command is in flight for the active conversation; clearing the flag
-    /// before draining keeps it idempotent if both signals arrive for the same command.
+    /// No-ops unless a queued command is in flight for a conversation owned by this terminal view;
+    /// clearing the flag before draining keeps it idempotent if both signals arrive for the same
+    /// command.
     pub(crate) fn on_queued_command_finished(&mut self, ctx: &mut ViewContext<Self>) {
+        let queued_query_model = QueuedQueryModel::as_ref(ctx);
         let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
-            .active_conversation(self.view_id)
-            .map(|conversation| conversation.id())
+            .all_live_conversations_for_terminal_view(self.view_id)
+            .find_map(|conversation| {
+                queued_query_model
+                    .has_command_in_flight(conversation.id())
+                    .then_some(conversation.id())
+            })
         else {
             return;
         };
-        if !QueuedQueryModel::as_ref(ctx).has_command_in_flight(conversation_id) {
-            return;
-        }
         QueuedQueryModel::handle(ctx).update(ctx, |model, _ctx| {
             model.clear_command_in_flight(conversation_id);
         });
@@ -5331,11 +5334,10 @@ impl TerminalView {
                         // `on_queued_command_finished`).
                         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                             model.remove_fired_row(conversation_id, query_id, ctx);
-                            model.arm_command_in_flight(conversation_id);
                         });
-                        let started = self
-                            .input
-                            .update(ctx, |input, ctx| input.try_execute_command(&command, ctx));
+                        let started = self.input.update(ctx, |input, ctx| {
+                            input.execute_queued_command(&command, conversation_id, ctx)
+                        });
                         // If the command couldn't start (e.g. precmd not yet received) no
                         // completion will arrive, so don't wedge the queue: clear the flag and
                         // restore the command text into an empty input.
@@ -5346,6 +5348,8 @@ impl TerminalView {
                             if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
                                 self.input.update(ctx, |input, ctx| {
                                     input.replace_buffer_content(&command, ctx);
+                                    input
+                                        .set_input_mode_terminal(/* steal_focus */ false, ctx);
                                 });
                             }
                         }

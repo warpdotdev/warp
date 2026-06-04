@@ -573,16 +573,28 @@ fn command_execution_finished_advances_queued_command_idempotently() {
         let terminal_view = terminal_view(&mut app);
         let terminal_view_id = terminal_view.read(&app, |view, _| view.id());
 
-        // Start a conversation, make it the view's active conversation, and arm an in-flight
-        // queued command for it.
-        let conversation_id =
+        // Start a conversation and arm an in-flight queued command for it.
+        let command_conversation_id =
             BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
                 let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
                 history.set_active_conversation_id(id, terminal_view_id, ctx);
                 id
             });
         QueuedQueryModel::handle(&app).update(&mut app, |model, _| {
-            model.arm_command_in_flight(conversation_id);
+            model.arm_command_in_flight(command_conversation_id);
+        });
+
+        // Switch the pane to another conversation before the command finishes. Completion must
+        // still clear the queue state for the conversation that dispatched the command.
+        let active_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.has_command_in_flight(command_conversation_id));
+            assert!(!model.has_command_in_flight(active_conversation_id));
         });
 
         let event_loop = app.add_model(|ctx| {
@@ -616,7 +628,8 @@ fn command_execution_finished_advances_queued_command_idempotently() {
         }
 
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
-            assert!(!model.has_command_in_flight(conversation_id))
+            assert!(!model.has_command_in_flight(command_conversation_id));
+            assert!(!model.has_command_in_flight(active_conversation_id));
         });
     })
 }

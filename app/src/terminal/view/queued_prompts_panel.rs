@@ -13,7 +13,6 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::elements::new_scrollable::{NewScrollable, ScrollableAppearance, SingleAxisConfig};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container,
@@ -186,12 +185,13 @@ pub enum QueuedPromptsPanelAction {
 /// Events emitted to the host input view.
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelEvent {
-    /// A row's send-now button was clicked. The row is left in the queue so the host can read its
-    /// attachments by id; the host submits `text` immediately and then removes the fired row.
+    /// A row's send-now button was clicked. The row is left in the queue so the host can dispatch
+    /// it according to its kind, read prompt attachments by id, and remove it after dispatch.
     SendNow {
         conversation_id: AIConversationId,
         query_id: QueuedQueryId,
         text: String,
+        is_command: bool,
     },
     /// A row was deleted via the trash button. The host should refocus the input.
     RowDeleted,
@@ -604,16 +604,17 @@ impl TypedActionView for QueuedPromptsPanelView {
                 // Leave the row in the queue so the host can read its attachments by id when it
                 // fires; the host removes the fired row afterward. Locked rows (the initial
                 // cloud-mode prompt) are not send-now-able.
-                let text = QueuedQueryModel::as_ref(ctx)
+                let row = QueuedQueryModel::as_ref(ctx)
                     .queue(conv_id)
                     .iter()
                     .find(|row| row.id() == query_id && !row.is_locked())
-                    .map(|row| row.text().to_owned());
-                if let Some(text) = text {
+                    .map(|row| (row.text().to_owned(), row.is_command()));
+                if let Some((text, is_command)) = row {
                     ctx.emit(QueuedPromptsPanelEvent::SendNow {
                         conversation_id: conv_id,
                         query_id,
                         text,
+                        is_command,
                     });
                 }
             }
@@ -938,10 +939,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
     // Match the prompt input, which renders at the monospace font size.
     let queued_input_font_size = appearance.monospace_font_size();
     // Blue used for the `!` prefix on command rows, matching shell-mode input styling.
-    let command_prefix_color: ColorU = {
-        let blue = AnsiColorIdentifier::Blue.to_ansi_color(&theme.terminal_colors().normal);
-        ColorU::new(blue.r, blue.g, blue.b, 255)
-    };
+    let command_prefix_color = theme.ansi_fg_blue();
 
     let row_action_button_size = ButtonSize::XSmall.button_height(appearance, app);
     let editor_handle = edit_editor.clone();

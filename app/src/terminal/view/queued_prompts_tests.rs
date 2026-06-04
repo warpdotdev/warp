@@ -78,49 +78,6 @@ fn drain_one(
     })
 }
 
-/// Mirrors the full Complete drain including the command path: a fired command row is removed
-/// AND arms the in-flight flag, so the next row only fires once the command finishes. Prompt and
-/// edit-mode rows behave exactly like [`drain_one`].
-fn drain_complete(
-    model: &warpui::ModelHandle<QueuedQueryModel>,
-    app: &mut App,
-    conv: AIConversationId,
-) -> Option<AutofireAction> {
-    model.update(app, |m, ctx| {
-        let action = m.peek_autofire(conv);
-        match &action {
-            Some(
-                AutofireAction::Submit { query_id, .. }
-                | AutofireAction::PopFromEditMode { query_id, .. },
-            ) => {
-                m.remove_fired_row(conv, *query_id, ctx);
-            }
-            Some(AutofireAction::ExecuteCommand { query_id, .. }) => {
-                m.remove_fired_row(conv, *query_id, ctx);
-                m.arm_command_in_flight(conv);
-            }
-            None => {}
-        }
-        action
-    })
-}
-
-/// Mirrors `TerminalView::on_queued_command_finished`: when a command is in flight, clear the flag
-/// and drain the next row. No-ops when no command is in flight, which keeps it idempotent if both
-/// the local `AfterBlockCompleted` and shared-session `CommandExecutionFinished` signals fire for
-/// the same command.
-fn finish_command(
-    model: &warpui::ModelHandle<QueuedQueryModel>,
-    app: &mut App,
-    conv: AIConversationId,
-) -> Option<AutofireAction> {
-    if !model.read(app, |m, _| m.has_command_in_flight(conv)) {
-        return None;
-    }
-    model.update(app, |m, _| m.clear_command_in_flight(conv));
-    drain_complete(model, app, conv)
-}
-
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
     let tips_model = app.add_model(|_| Default::default());
     let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
@@ -1161,10 +1118,10 @@ fn drain_is_isolated_per_conversation() {
 }
 
 #[test]
-fn send_now_action_emits_event_and_leaves_row_for_host_to_fire() {
-    // Clicking "send now" emits a SendNow event identifying the row, but leaves the row in the
-    // queue so the host can read its attachments by id when it fires; the host removes the fired
-    // row afterward. The locked initial cloud-mode row is rejected by the model (covered by
+fn send_now_action_emits_row_kind_and_leaves_rows_for_host_to_fire() {
+    // Clicking "send now" emits a SendNow event identifying the row and whether it is a command,
+    // but leaves the row in the queue so the host can dispatch it and remove it afterward. The
+    // locked initial cloud-mode row is rejected by the model (covered by
     // `initial_cloud_mode_head_rejects_user_mutations_and_autofire`) and has its button disabled
     // in the panel, so it needs no separate panel test.
     App::test((), |mut app| async move {
@@ -1197,13 +1154,19 @@ fn send_now_action_emits_event_and_leaves_row_for_host_to_fire() {
             })
         });
 
-        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
-            model.append(conversation_id, user_query("send me now"), ctx)
-        });
+        let (prompt_id, command_id) =
+            QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+                let prompt_id = model.append(conversation_id, user_query("send me now"), ctx);
+                let command_id = model.append(conversation_id, command_query("echo 1"), ctx);
+                (prompt_id, command_id)
+            });
 
-        let send_now_events = Rc::new(RefCell::new(
-            Vec::<(AIConversationId, QueuedQueryId, String)>::new(),
-        ));
+        let send_now_events = Rc::new(RefCell::new(Vec::<(
+            AIConversationId,
+            QueuedQueryId,
+            String,
+            bool,
+        )>::new()));
         let send_now_events_for_subscription = send_now_events.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&panel, move |_, event: &QueuedPromptsPanelEvent, _| {
@@ -1211,28 +1174,34 @@ fn send_now_action_emits_event_and_leaves_row_for_host_to_fire() {
                     conversation_id,
                     query_id,
                     text,
+                    is_command,
                 } = event
                 {
                     send_now_events_for_subscription.borrow_mut().push((
                         *conversation_id,
                         *query_id,
                         text.clone(),
+                        *is_command,
                     ));
                 }
             });
         });
 
         panel.update(&mut app, |panel, ctx| {
-            panel.handle_action(&QueuedPromptsPanelAction::SendNow(query_id), ctx);
+            panel.handle_action(&QueuedPromptsPanelAction::SendNow(prompt_id), ctx);
+            panel.handle_action(&QueuedPromptsPanelAction::SendNow(command_id), ctx);
         });
 
         assert_eq!(
             send_now_events.borrow().as_slice(),
-            [(conversation_id, query_id, "send me now".to_owned())]
+            [
+                (conversation_id, prompt_id, "send me now".to_owned(), false),
+                (conversation_id, command_id, "echo 1".to_owned(), true)
+            ]
         );
-        // The panel leaves the row in place; the host removes it after firing.
+        // The panel leaves each row in place; the host removes it after firing.
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
-            assert_eq!(model.queue(conversation_id).len(), 1);
+            assert_eq!(model.queue(conversation_id).len(), 2);
         });
     });
 }
@@ -1307,109 +1276,6 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
                 Some(false)
             );
         });
-    });
-}
-
-#[test]
-fn complete_drain_executes_command_and_arms_in_flight() {
-    // A command head fires via ExecuteCommand, is removed immediately, and arms the in-flight
-    // flag so the next row waits for the command to finish.
-    with_singleton(|mut app, model, conv| {
-        model.update(&mut app, |m, ctx| {
-            m.append(conv, command_query("echo 1"), ctx)
-        });
-
-        match drain_complete(&model, &mut app, conv) {
-            Some(AutofireAction::ExecuteCommand { command, .. }) => assert_eq!(command, "echo 1"),
-            other => panic!("expected ExecuteCommand, got {other:?}"),
-        }
-        model.read(&app, |m, _| {
-            assert!(m.queue(conv).is_empty());
-            assert!(m.has_command_in_flight(conv));
-        });
-    });
-}
-
-#[test]
-fn command_finished_clears_in_flight_and_drains_next_row() {
-    // While a command runs the next row stays queued; when the command finishes the flag clears
-    // and the following prompt fires.
-    with_singleton(|mut app, model, conv| {
-        model.update(&mut app, |m, ctx| {
-            m.append(conv, command_query("echo 1"), ctx);
-            m.append(conv, user_query("after the command"), ctx);
-        });
-
-        drain_complete(&model, &mut app, conv);
-        model.read(&app, |m, _| {
-            assert!(m.has_command_in_flight(conv));
-            assert_eq!(m.queue(conv).len(), 1);
-            assert_eq!(m.queue(conv)[0].text(), "after the command");
-        });
-
-        match finish_command(&model, &mut app, conv) {
-            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "after the command"),
-            other => panic!("expected Submit, got {other:?}"),
-        }
-        model.read(&app, |m, _| {
-            assert!(!m.has_command_in_flight(conv));
-            assert!(m.queue(conv).is_empty());
-        });
-    });
-}
-
-#[test]
-fn command_finished_is_idempotent_across_both_signals() {
-    // The local AfterBlockCompleted and shared-session CommandExecutionFinished signals can both
-    // arrive for the same command. The first clears the flag and drains; the second no-ops.
-    with_singleton(|mut app, model, conv| {
-        model.update(&mut app, |m, ctx| {
-            m.append(conv, command_query("echo 1"), ctx);
-            m.append(conv, user_query("after the command"), ctx);
-        });
-        drain_complete(&model, &mut app, conv);
-
-        let first = finish_command(&model, &mut app, conv);
-        assert!(matches!(first, Some(AutofireAction::Submit { .. })));
-
-        // Second signal: no command in flight, so it must not double-drain.
-        let second = finish_command(&model, &mut app, conv);
-        assert!(second.is_none());
-        model.read(&app, |m, _| assert!(m.queue(conv).is_empty()));
-    });
-}
-
-#[test]
-fn prompt_command_prompt_fire_in_strict_fifo_order() {
-    // The spec's worked example: a prompt, then a command, then a prompt. The command fires only
-    // after the first prompt's conversation completes, and the last prompt fires only after the
-    // command finishes.
-    with_singleton(|mut app, model, conv| {
-        model.update(&mut app, |m, ctx| {
-            m.append(conv, user_query("haiku about Rust"), ctx);
-            m.append(conv, command_query("echo 1"), ctx);
-            m.append(conv, user_query("say hello world"), ctx);
-        });
-
-        // First prompt fires on completion.
-        match drain_complete(&model, &mut app, conv) {
-            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "haiku about Rust"),
-            other => panic!("expected Submit(haiku), got {other:?}"),
-        }
-
-        // Prompt's conversation completes -> the command fires and arms in-flight.
-        match drain_complete(&model, &mut app, conv) {
-            Some(AutofireAction::ExecuteCommand { command, .. }) => assert_eq!(command, "echo 1"),
-            other => panic!("expected ExecuteCommand(echo 1), got {other:?}"),
-        }
-        model.read(&app, |m, _| assert!(m.has_command_in_flight(conv)));
-
-        // Command finishes -> the last prompt fires.
-        match finish_command(&model, &mut app, conv) {
-            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "say hello world"),
-            other => panic!("expected Submit(hello), got {other:?}"),
-        }
-        model.read(&app, |m, _| assert!(m.queue(conv).is_empty()));
     });
 }
 

@@ -48,7 +48,7 @@ Today, when auto-queue is enabled and an agent run is in progress, submitting a 
 17. When the in-progress conversation finishes for a non-clean reason (error, cancellation, cancellation during requested command execution), draining pauses immediately, exactly as for queued prompts. If the input editor is empty, the head item is removed from the panel and its text is placed in the input editor (a command's text is restored with the input forced into shell mode, so it stays a command rather than an agent prompt); if the editor is non-empty, nothing is removed or modified. Remaining rows stay intact, and draining resumes the next time the conversation completes an exchange cleanly.
 
 ### Lifecycle
-18. The queue (including command rows and any in-flight-command tracking) is scoped to the active conversation in the pane, and is cleared on agent-view exit, conversation removal, tab close, and conversation switch — identical to queued-prompt lifecycle today.
+18. The queue (including command rows and any in-flight-command tracking) is scoped to its conversation. It persists across agent-view exit and conversation switches so a background conversation can continue draining, and is cleared when the conversation is removed or its owning terminal view is cleared — identical to queued-prompt lifecycle today.
 
 ### Cloud mode
 19. All of the above applies in cloud-mode panes. Commands queue while the cloud agent run is in progress and, when drained, are submitted via the shared session to the remote environment; the queue advances when the remote command's block completes. Draining off the cloud conversation's completion uses the same conversation-status path that cloud-mode queued prompts already use.
