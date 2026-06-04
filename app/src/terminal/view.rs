@@ -8237,6 +8237,9 @@ impl TerminalView {
     /// don't steal focus from the user if they've focused another part of the app
     /// (e.g. another session).
     ///
+    /// Skips the steal when the user is navigating another AI block / code diff
+    /// (e.g. arrowing diff hunks), unless the target block is blocked on user input.
+    ///
     /// Warning: this should not be called when focusing the [`TerminalView`]. It could
     /// lead to a focus cycle because [`AIBlock::try_focus`] conditionally yields focus
     /// back to the [`TerminalView`].
@@ -8245,9 +8248,23 @@ impl TerminalView {
         block: &ViewHandle<AIBlock>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if ctx.is_self_or_child_focused() {
+        if !ctx.is_self_or_child_focused() {
+            return;
+        }
+        let target_needs_attention = block.as_ref(ctx).is_blocked_on_user_confirmation(ctx);
+        if target_needs_attention || !self.is_any_ai_block_focused(ctx) {
             block.update(ctx, |block, ctx| block.try_steal_focus(ctx));
         }
+    }
+
+    /// Returns `true` if focus is inside any AI block (e.g. the user is arrowing
+    /// through a code diff's hunks).
+    fn is_any_ai_block_focused(&self, ctx: &mut ViewContext<Self>) -> bool {
+        self.rich_content_views.iter().any(|rich_content| {
+            rich_content
+                .ai_block_metadata()
+                .is_some_and(|metadata| metadata.ai_block_handle.is_self_or_child_focused(ctx))
+        })
     }
 
     #[cfg(not(windows))]
@@ -10816,11 +10833,12 @@ impl TerminalView {
     ///
     /// See [`Self::redetermine_global_focus`] to change focus without checking that the terminal is focused.
     fn redetermine_terminal_focus(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        // Only reset the focus if this terminal is currently focused, don't steal it from
-        // another part of the app
+        // Only reset focus if this terminal is focused; don't steal it from another part
+        // of the app, or from an AI block / code diff the user is navigating.
         let reset_focus = ctx.is_self_or_child_focused()
             && !self.find_bar.is_self_or_child_focused(ctx)
-            && !self.block_filter_editor.is_self_or_child_focused(ctx);
+            && !self.block_filter_editor.is_self_or_child_focused(ctx)
+            && !self.is_any_ai_block_focused(ctx);
         if reset_focus {
             self.redetermine_global_focus(ctx);
         }

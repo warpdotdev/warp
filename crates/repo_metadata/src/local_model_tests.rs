@@ -35,7 +35,7 @@ impl LocalRepoMetadataModel {
             #[cfg(feature = "local_fs")]
             watcher: Default::default(),
             emit_incremental_updates: false,
-            ignored_path_interests: Default::default(),
+            force_included_paths: Default::default(),
             standing_query_definitions: Default::default(),
         }
     }

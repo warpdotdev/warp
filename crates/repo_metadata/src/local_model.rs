@@ -169,10 +169,11 @@ pub struct LocalRepoMetadataModel {
     /// events after applying watcher mutations. Only the remote server
     /// variant enables this.
     emit_incremental_updates: bool,
-    /// Component-sequence paths that consumers need loaded even when ignored.
-    /// For example, a consumer can register `.foo/bar` so ignored `.foo`,
-    /// `.foo/bar`, and descendants of `.foo/bar` are loaded into the tree.
-    ignored_path_interests: Vec<PathBuf>,
+    /// Paths that must be loaded even when gitignored or beyond the tree's size
+    /// limit. For example, a consumer can register `.foo/bar` so ignored
+    /// `.foo`, `.foo/bar`, and descendants of `.foo/bar` are loaded into the
+    /// tree.
+    force_included_paths: Vec<PathBuf>,
     /// Configured standing-query matchers.
     standing_query_definitions: StandingQueryDefinitions,
 }
@@ -260,7 +261,7 @@ impl LocalRepoMetadataModel {
             #[cfg(feature = "local_fs")]
             watcher: None,
             emit_incremental_updates: false,
-            ignored_path_interests: Vec::new(),
+            force_included_paths: Vec::new(),
             standing_query_definitions: StandingQueryDefinitions::default(),
         };
         cfg_if::cfg_if! {
@@ -296,22 +297,21 @@ impl LocalRepoMetadataModel {
     pub fn set_emit_incremental_updates(&mut self, enabled: bool) {
         self.emit_incremental_updates = enabled;
     }
-    /// Registers component-sequence paths that should be loaded even when ignored.
+
+    /// Registers paths that must be loaded even when gitignored or beyond the
+    /// tree's size limit.
     ///
     /// This stays intentionally generic: consumers own the meaning of the paths,
     /// while repo metadata only uses them to decide which ignored subtrees should
     /// be represented eagerly instead of as lazy placeholders.
-    pub fn register_ignored_path_interests(
-        &mut self,
-        interests: impl IntoIterator<Item = PathBuf>,
-    ) {
-        for interest in interests {
+    pub fn register_force_included_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for path in paths {
             if !self
-                .ignored_path_interests
+                .force_included_paths
                 .iter()
-                .any(|existing| existing == &interest)
+                .any(|existing| existing == &path)
             {
-                self.ignored_path_interests.push(interest);
+                self.force_included_paths.push(path);
             }
         }
     }
@@ -372,7 +372,7 @@ impl LocalRepoMetadataModel {
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&repo_path) {
                 let repo_path_clone = repo_path.clone();
                 let gitignores_clone = state.gitignores.clone();
-                let ignored_path_interests = self.ignored_path_interests.clone();
+                let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
                 let lazy_load = self.lazy_loaded_paths.contains_key(&repo_path);
                 ctx.spawn(
@@ -381,7 +381,7 @@ impl LocalRepoMetadataModel {
                             Self::compute_file_tree_mutations(
                                 &repo_scoped_update,
                                 &gitignores_clone,
-                                &ignored_path_interests,
+                                &force_included_paths,
                                 &standing_query_definitions,
                             )
                             .await;
@@ -498,15 +498,21 @@ impl LocalRepoMetadataModel {
             ));
         }
 
-        // Register this path with the watcher if we have one.
+        // Register this path with the watcher if we have one
         #[cfg(feature = "local_fs")]
         {
             if let Some(ref watcher) = self.watcher {
                 let watch_path = local_path.clone();
+                // Build the gitignore set (root + global) and force-included
+                // path list so the descend filter prunes gitignored subtrees
+                // while still watching registered force-included paths (e.g.
+                // skills).
+                let gitignores = crate::gitignores_for_directory(&watch_path);
+                let force_included_paths = self.force_included_paths.clone();
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(),
+                        repo_watch_filter(gitignores, force_included_paths),
                         RecursiveMode::Recursive,
                     ));
                 });
@@ -638,7 +644,7 @@ impl LocalRepoMetadataModel {
                 max_depth: 1, // Only first level.
                 current_depth: 0,
                 ignored_path_strategy: &IgnoredPathStrategy::Include,
-                ignored_path_interests: &self.ignored_path_interests,
+                force_included_paths: &self.force_included_paths,
                 budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
             },
             &mut standing_results,
@@ -714,7 +720,7 @@ impl LocalRepoMetadataModel {
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
         gitignores: &[Gitignore],
-        ignored_path_interests: &[PathBuf],
+        force_included_paths: &[PathBuf],
         standing_query_definitions: &StandingQueryDefinitions,
     ) -> (
         Vec<FileTreeMutation>,
@@ -760,7 +766,7 @@ impl LocalRepoMetadataModel {
                         max_depth: MAX_TREE_DEPTH,
                         current_depth: 0,
                         ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
-                        ignored_path_interests,
+                        force_included_paths,
                         budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
                     &mut standing_results,
@@ -1055,7 +1061,7 @@ impl LocalRepoMetadataModel {
         // Build the complete file tree for the repository asynchronously
         let repo_path_for_build = local_path;
         let gitignores_for_build = gitignores.clone();
-        let ignored_path_interests = self.ignored_path_interests.clone();
+        let force_included_paths = self.force_included_paths.clone();
         let standing_query_definitions = self.standing_query_definitions.clone();
         let repo_path_str_for_log = std_path.to_string();
         let std_path_for_completion = std_path;
@@ -1071,7 +1077,7 @@ impl LocalRepoMetadataModel {
                 // stops descending breadth-first and leaves the remaining
                 // directories as unloaded placeholders (lazy-loaded on demand)
                 // instead of failing the whole build. Gitignored subtrees stay
-                // lazy and registered ignored-path interests are always loaded;
+                // lazy and registered force-included paths are always loaded;
                 // both are handled inside the builder.
                 let mut file_limit = MAX_FILES_PER_REPO;
 
@@ -1084,7 +1090,7 @@ impl LocalRepoMetadataModel {
                         max_depth: MAX_TREE_DEPTH,
                         current_depth: 0,
                         ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
-                        ignored_path_interests: &ignored_path_interests,
+                        force_included_paths: &force_included_paths,
                         budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
                     },
                     &mut standing_results,

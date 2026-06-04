@@ -77,7 +77,7 @@ pub(crate) struct BuildTreeOptions<'a> {
     pub max_depth: usize,
     pub current_depth: usize,
     pub ignored_path_strategy: &'a IgnoredPathStrategy,
-    pub ignored_path_interests: &'a [PathBuf],
+    pub force_included_paths: &'a [PathBuf],
     pub budget_exceeded_behavior: BudgetExceededBehavior,
 }
 struct StandingQueryBuildState<'a> {
@@ -172,7 +172,7 @@ impl Entry {
         ignored_path_strategy: &IgnoredPathStrategy,
         budget_exceeded_behavior: BudgetExceededBehavior,
     ) -> Result<Self, BuildTreeError> {
-        Self::build_tree_with_ignored_path_interests_and_ancestor(
+        Self::build_tree_with_force_included_paths_and_ancestor(
             path,
             files,
             gitignores,
@@ -181,7 +181,7 @@ impl Entry {
                 max_depth,
                 current_depth,
                 ignored_path_strategy,
-                ignored_path_interests: &[],
+                force_included_paths: &[],
                 budget_exceeded_behavior,
             },
             false,
@@ -202,7 +202,7 @@ impl Entry {
             results: standing_results,
             definitions,
         };
-        Self::build_tree_with_ignored_path_interests_and_ancestor(
+        Self::build_tree_with_force_included_paths_and_ancestor(
             path,
             files,
             gitignores,
@@ -213,17 +213,18 @@ impl Entry {
         )
     }
 
-    /// Builds a tree of entries from a given path, loading ignored paths that match
-    /// one of the supplied component-sequence interests instead of leaving them lazy.
-    #[allow(dead_code)]
-    pub(crate) fn build_tree_with_ignored_path_interests(
+    /// Builds a tree of entries from a given path, eagerly loading any path that
+    /// matches one of the supplied force-included paths instead of leaving it
+    /// lazy (see [`BuildTreeOptions::force_included_paths`]).
+    #[cfg(test)]
+    pub(crate) fn build_tree_with_force_included_paths(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
     ) -> Result<Self, BuildTreeError> {
-        Self::build_tree_with_ignored_path_interests_and_ancestor(
+        Self::build_tree_with_force_included_paths_and_ancestor(
             path,
             files,
             gitignores,
@@ -245,7 +246,7 @@ impl Entry {
         ignored_path_strategy: &IgnoredPathStrategy,
         ancestor_is_ignored: bool,
     ) -> Result<Self, BuildTreeError> {
-        Self::build_tree_with_ignored_path_interests_and_ancestor(
+        Self::build_tree_with_force_included_paths_and_ancestor(
             path,
             files,
             gitignores,
@@ -254,7 +255,7 @@ impl Entry {
                 max_depth,
                 current_depth,
                 ignored_path_strategy,
-                ignored_path_interests: &[],
+                force_included_paths: &[],
                 budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
             },
             ancestor_is_ignored,
@@ -263,7 +264,7 @@ impl Entry {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn build_tree_with_ignored_path_interests_and_ancestor(
+    fn build_tree_with_force_included_paths_and_ancestor(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
         gitignores: &mut Vec<Gitignore>,
@@ -340,18 +341,17 @@ impl Entry {
                     // Budget handling. With `StopAndLazyLoad` (the default), once
                     // the file quota is exhausted we stop expanding directories
                     // and leave them as unloaded placeholders; directories on the
-                    // path to a registered ignored-path interest (e.g. skill
-                    // provider directories) are always expanded so
-                    // discovery-critical files stay reachable. With `FailFast` we
-                    // keep descending and abort below as soon as a file would
-                    // exceed the budget.
+                    // path to a force-included path (e.g. skill provider
+                    // directories) are always expanded so discovery-critical
+                    // files stay reachable. With `FailFast` we keep descending
+                    // and abort below as soon as a file would exceed the budget.
                     let should_expand = match options.budget_exceeded_behavior {
                         BudgetExceededBehavior::FailFast => true,
                         BudgetExceededBehavior::StopAndLazyLoad => {
                             quota.is_none_or(|remaining| remaining > 0)
-                                || matches_ignored_path_interest(
+                                || matches_force_included_path(
                                     &job.path,
-                                    options.ignored_path_interests,
+                                    options.force_included_paths,
                                 )
                         }
                     };
@@ -439,9 +439,9 @@ impl Entry {
                                 }));
                                 push_child(&mut nodes, job.index, child_index);
                                 // Lazy directories (past max depth, or ignored
-                                // without a matching interest) stay unloaded.
-                                // Everything else is queued for expansion,
-                                // subject to the budget gate above.
+                                // without a matching force-included path) stay
+                                // unloaded. Everything else is queued for
+                                // expansion, subject to the budget gate above.
                                 if lazy {
                                     if let Some(state) = standing_queries.as_deref_mut() {
                                         Self::collect_standing_descendants(&child_path, 0, state);
@@ -638,7 +638,7 @@ fn evaluate_entry(
                 }
             }
             IgnoredPathStrategy::IncludeLazy => {
-                lazy = !matches_ignored_path_interest(curr_path, options.ignored_path_interests);
+                lazy = !matches_force_included_path(curr_path, options.force_included_paths);
             }
             IgnoredPathStrategy::Include => {}
         }
@@ -726,7 +726,11 @@ pub fn is_git_internal_path(path: &Path) -> bool {
     })
 }
 
-fn matches_ignored_path_interest(path: &Path, ignored_path_interests: &[PathBuf]) -> bool {
+/// Returns `true` when `path` is, contains, or lies on the way to one of the
+/// `force_included_paths`. Each force-included path is a relative component
+/// sequence (e.g. `.agents/skills`) matched against the tail of `path`, so a
+/// match also holds for the ancestor prefixes leading to it.
+fn matches_force_included_path(path: &Path, force_included_paths: &[PathBuf]) -> bool {
     let path_components: Vec<_> = path
         .components()
         .filter_map(|component| match component {
@@ -738,8 +742,8 @@ fn matches_ignored_path_interest(path: &Path, ignored_path_interests: &[PathBuf]
         })
         .collect();
 
-    ignored_path_interests.iter().any(|interest| {
-        let interest_components: Vec<_> = interest
+    force_included_paths.iter().any(|force_included| {
+        let force_included_components: Vec<_> = force_included
             .components()
             .filter_map(|component| match component {
                 Component::Normal(name) => Some(name),
@@ -750,21 +754,21 @@ fn matches_ignored_path_interest(path: &Path, ignored_path_interests: &[PathBuf]
             })
             .collect();
 
-        if interest_components.is_empty() {
+        if force_included_components.is_empty() {
             return false;
         }
 
         if path_components
-            .windows(interest_components.len())
-            .any(|window| window == interest_components.as_slice())
+            .windows(force_included_components.len())
+            .any(|window| window == force_included_components.as_slice())
         {
             return true;
         }
 
-        (1..interest_components.len()).any(|prefix_len| {
+        (1..force_included_components.len()).any(|prefix_len| {
             path_components.len() >= prefix_len
                 && path_components[path_components.len() - prefix_len..]
-                    == interest_components[..prefix_len]
+                    == force_included_components[..prefix_len]
         })
     })
 }
@@ -1007,21 +1011,63 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
     }
 }
 
+/// Returns whether a repository file watcher should descend into (and register
+/// a watch on) the directory at `path`.
+///
+/// Directories inside `.git/` follow the watcher allowlist, force-included
+/// paths are always watched even when gitignored, and any other gitignored
+/// directory is pruned so we don't register watches on `node_modules`, build
+/// output, vendored deps, etc.
+pub fn should_watch_repo_directory(
+    path: &Path,
+    gitignores: &[Gitignore],
+    force_included_paths: &[PathBuf],
+) -> bool {
+    if is_git_internal_path(path) {
+        return should_watch_directory_in_git_path(path);
+    }
+
+    if matches_force_included_path(path, force_included_paths) {
+        return true;
+    }
+
+    !matches_gitignores(
+        path,
+        path.is_dir(),
+        gitignores,
+        /* check_ancestors */ true,
+    )
+}
+
 /// Returns the [`WatchFilter`] used by repository file watchers.
 ///
 /// Emit predicate: forwards events for everything outside `.git/` plus the
 /// allowlisted files inside `.git/` (HEAD, refs/heads/*, index.lock,
 /// config, config.worktree, refs/remotes/<r>/*, and worktree equivalents).
+/// Gitignored files that live directly in a watched (non-ignored) directory
+/// are still emitted here and tagged `is_ignored` downstream, preserving
+/// existing behavior.
 ///
-/// Descend predicate: prunes `.git/objects/`, `.git/hooks/`, `.git/logs/`,
-/// `.git/info/`, `.git/lfs/`, etc. so the recursive walk does not register
-/// watches on those subtrees, but still descends into `.git/`,
-/// `.git/refs/heads/`, `.git/refs/remotes/<r>/`, and `.git/worktrees/<n>/`
-/// so the allowlisted children remain reachable on Linux.
+/// Descend predicate: see [`should_watch_repo_directory`]. In addition to the
+/// `.git/` allowlist, it prunes gitignored directories (honoring registered
+/// force-included paths) so the recursive walk does not register watches on
+/// gitignored subtrees.
+///
+/// `gitignores` should be the repo's root + global gitignores (as produced by
+/// [`gitignores_for_directory`]), matching `Repository::check_gitignore_status`
+/// so descend decisions and the downstream `is_ignored` tagging stay
+/// consistent. Nested per-directory `.gitignore` files are not consulted here
+/// (same limitation as the existing tagging), which can only cause us to
+/// over-watch, never to miss events.
 #[cfg(feature = "local_fs")]
-pub fn repo_watch_filter() -> WatchFilter {
+pub fn repo_watch_filter(
+    gitignores: Vec<Gitignore>,
+    force_included_paths: Vec<PathBuf>,
+) -> WatchFilter {
+    let should_watch =
+        move |path: &Path| should_watch_repo_directory(path, &gitignores, &force_included_paths);
     WatchFilter::with_filter(
-        Arc::new(should_watch_directory_in_git_path),
+        Arc::new(should_watch),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),
     )
 }
