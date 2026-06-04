@@ -190,6 +190,11 @@ pub enum WorkspaceAction {
     ShiftSelectTabRange {
         locator: PaneViewLocator,
     },
+    /// Toggles whether the tab at `locator` is part of the active multi-selection.
+    /// Dispatched on cmd-click of a vertical tab row.
+    ToggleTabMultiSelection {
+        locator: PaneViewLocator,
+    },
     ToggleTabGroupRightClickMenu {
         group_id: TabGroupId,
         anchor: TabContextMenuAnchor,
@@ -1017,6 +1022,7 @@ impl WorkspaceAction {
             | FocusTerminalViewInWorkspace { .. }
             | FocusPane(..)
             | ShiftSelectTabRange { .. }
+            | ToggleTabMultiSelection { .. }
             | StartNewConversation { .. }
             | UndoRevertInCodeReviewPane { .. }
             | JumpToLatestToast

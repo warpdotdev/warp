@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+
 use warp_core::features::FeatureFlag;
 use warpui::ViewContext;
 
@@ -8,22 +9,18 @@ use crate::workspace::util::PaneViewLocator;
 
 // TODO(johnturcoo) move tab grouping helpers here from workspace/view.rs.
 impl Workspace {
-    /// Clears the range selection.
-    pub(super) fn clear_tab_range_selection(&mut self, ctx: &mut ViewContext<Self>) {
-        let mut changed = false;
+    /// Clears the multi-selection on every tab.
+    pub(super) fn clear_tab_multi_selection(&mut self, ctx: &mut ViewContext<Self>) {
         for tab in &mut self.tabs {
-            if tab.in_range_selected {
-                tab.in_range_selected = false;
-                changed = true;
-            }
+            tab.in_multi_selection = false;
         }
-        if changed {
-            ctx.notify();
-        }
+        ctx.notify();
     }
 
-    /// Selects the inclusive range between `anchor_index` and `clicked_index`,
-    /// expanding any collapsed groups the range crosses.
+    /// Adds the inclusive range between `anchor_index` and `clicked_index` to
+    /// the multi-selection, expanding any collapsed groups the range crosses.
+    /// Existing multi-selection outside the range is preserved (additive
+    /// semantics), so cmd-click selections survive a subsequent shift-click.
     fn set_tab_range_selection(
         &mut self,
         anchor_index: usize,
@@ -31,36 +28,32 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         // Determine the bounds for our range selection.
-        let lo = anchor_index.min(clicked_index);
-        let hi = anchor_index.max(clicked_index);
+        let lo_index = anchor_index.min(clicked_index);
+        let hi_index = anchor_index.max(clicked_index);
 
         // Identify groups in the selection range.
         let crossed_group_ids: HashSet<TabGroupId> = self
             .tabs
-            .get(lo..=hi)
+            .get(lo_index..=hi_index)
             .into_iter()
             .flatten()
             .filter_map(|tab| tab.group_id)
             .collect();
-        let mut expanded_any = false;
 
         // Expand any groups within the selected range, so user can see what they are selecting.
-        for group_id in crossed_group_ids {
-            if let Some(group) = self.tab_groups.get_mut(&group_id) {
-                if group.collapsed {
-                    group.collapsed = false;
-                    expanded_any = true;
-                }
-            }
-        }
+        self.tab_groups
+            .iter_mut()
+            .filter(|(group_id, _)| crossed_group_ids.contains(group_id))
+            .for_each(|(_, group)| group.collapsed = false);
 
-        // Update flag for all tabs that are in the selected range.
-        for (index, tab) in self.tabs.iter_mut().enumerate() {
-            tab.in_range_selected = index >= lo && index <= hi;
-        }
-        if expanded_any {
-            ctx.dispatch_global_action("workspace:save_app", ());
-        }
+        // Add tabs in the selected range to the multi-selection.
+        self.tabs
+            .iter_mut()
+            .enumerate()
+            .filter(|(index, _)| (lo_index..=hi_index).contains(index))
+            .for_each(|(_, tab)| tab.in_multi_selection = true);
+
+        ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
 
@@ -75,13 +68,33 @@ impl Workspace {
             return;
         }
         // Identify index of the tab that was shift-clicked.
-        let Some(clicked_index) = self
+        if let Some(clicked_index) = self
             .tabs
             .iter()
             .position(|tab| tab.pane_group.id() == locator.pane_group_id)
-        else {
+        {
+            self.set_tab_range_selection(self.active_tab_index, clicked_index, ctx);
+        }
+    }
+
+    /// Cmd-click on a tab: toggles the multi-selection flag
+    /// for a single tab. 
+    pub(super) fn toggle_tab_multi_selection(
+        &mut self,
+        locator: PaneViewLocator,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
             return;
-        };
-        self.set_tab_range_selection(self.active_tab_index, clicked_index, ctx);
+        }
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.pane_group.id() == locator.pane_group_id)
+        {
+            // Toggle multi selection flag for this tab.
+            tab.in_multi_selection = !tab.in_multi_selection;
+            ctx.notify();
+        }
     }
 }
