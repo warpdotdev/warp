@@ -123,3 +123,43 @@ fn empty_repo_list_selects_nothing() {
         None
     );
 }
+
+/// Builds a local-branch [`BranchRef`] from a display name (its full ref is
+/// `refs/heads/<name>`); enough for the summary tests, which only read
+/// `display_name` / `ref_name`.
+fn local_branch(name: &str) -> BranchRef {
+    BranchRef {
+        display_name: name.to_string(),
+        ref_name: format!("refs/heads/{name}"),
+        kind: RefKind::LocalBranch,
+    }
+}
+
+#[test]
+fn summary_empty_selection_is_show_all() {
+    let branches = vec![local_branch("main"), local_branch("dev")];
+    assert_eq!(branch_summary_text(&branches, &HashSet::new()), "Show All");
+}
+
+#[test]
+fn summary_single_selection_is_the_branch_name() {
+    let branches = vec![local_branch("main"), local_branch("dev")];
+    let selected = HashSet::from(["refs/heads/dev".to_string()]);
+    assert_eq!(branch_summary_text(&branches, &selected), "dev");
+}
+
+#[test]
+fn summary_multi_selection_joins_in_list_order() {
+    // The selection set is unordered; the summary must follow `branches` order
+    // (not insertion order) so the button text is stable.
+    let branches = vec![
+        local_branch("main"),
+        local_branch("dev"),
+        local_branch("feature"),
+    ];
+    let selected = HashSet::from([
+        "refs/heads/feature".to_string(),
+        "refs/heads/main".to_string(),
+    ]);
+    assert_eq!(branch_summary_text(&branches, &selected), "main, feature");
+}

@@ -105,12 +105,12 @@ pub(crate) enum GitGraphAction {
     /// Close the branch filter overlay (when clicking outside it).
     CloseBranchFilter,
     /// Toggle visibility of a branch ref (the value is the full ref, e.g.
-    /// `refs/heads/main`).
+    /// `refs/heads/main`). Selecting a branch while in "Show All" mode switches
+    /// out of it (the selection set becomes non-empty).
     ToggleBranch(String),
-    /// Select all branches.
-    SelectAllBranches,
-    /// Deselect all branches.
-    DeselectAllBranches,
+    /// Clear the branch selection back to "Show All" (no ref filter = every
+    /// branch shown). Dispatched by the overlay's pinned "Show All" row.
+    ShowAllBranches,
     /// Manually rescan the working directory and reload the graph.
     Refresh,
     /// Close the detail area (clear selection).
@@ -280,10 +280,14 @@ pub(crate) struct GitGraphView {
     branch_filter_expanded: bool,
     /// Mouse state of the branch filter button.
     branch_filter_button_mouse_state: MouseStateHandle,
-    /// Mouse state of the branch overlay's "select all" button.
-    branch_select_all_mouse_state: MouseStateHandle,
-    /// Mouse state of the branch overlay's "deselect all" button.
-    branch_deselect_all_mouse_state: MouseStateHandle,
+    /// Mouse state of the branch overlay's pinned "Show All" row.
+    branch_show_all_mouse_state: MouseStateHandle,
+    /// Single-line editor backing the overlay's "Filter Branches…" search box.
+    branch_filter_input: ViewHandle<EditorView>,
+    /// Current branch-list search query (lower-cased), narrowing which branch
+    /// rows the overlay shows. Mirrors `branch_filter_input`'s text; kept in
+    /// state because render has no `ctx` to read the editor buffer.
+    branch_filter_query: String,
     /// Per-row mouse state inside the branch overlay (for hover highlight),
     /// same length as `branches`.
     branch_mouse_states: Arc<Vec<MouseStateHandle>>,
@@ -438,6 +442,22 @@ fn pick_selected_repo(
     }
 }
 
+/// Summary text for the branch filter button (pure; unit-tested). An empty
+/// selection is "Show All"; otherwise the selected branches' display names, in
+/// `branches` order (the selection set is unordered), comma-joined. The button
+/// itself truncates the result with an ellipsis when it's too long.
+fn branch_summary_text(branches: &[BranchRef], selected: &HashSet<String>) -> String {
+    if selected.is_empty() {
+        return "Show All".to_string();
+    }
+    branches
+        .iter()
+        .filter(|b| selected.contains(&b.ref_name))
+        .map(|b| b.display_name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl GitGraphView {
     pub(crate) fn new(ctx: &mut ViewContext<Self>) -> Self {
         // UniformList reports its current visible row range over this channel,
@@ -502,6 +522,19 @@ impl GitGraphView {
             _ => {}
         });
 
+        // Single-line editor backing the branch overlay's filter box. Each edit
+        // re-narrows the visible branch rows; Escape closes the overlay.
+        let branch_filter_input = ctx.add_view(|ctx| {
+            let mut editor = EditorView::single_line(SingleLineEditorOptions::default(), ctx);
+            editor.set_placeholder_text("Filter Branches…", ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&branch_filter_input, |me, _, event, ctx| match event {
+            EditorEvent::Edited(_) => me.on_branch_filter_query_changed(ctx),
+            EditorEvent::Escape => me.close_branch_filter(ctx),
+            _ => {}
+        });
+
         Self {
             scan_anchor: None,
             repositories: Arc::new(Vec::new()),
@@ -513,8 +546,9 @@ impl GitGraphView {
             saved_repo_selections: HashMap::new(),
             branch_filter_expanded: false,
             branch_filter_button_mouse_state: MouseStateHandle::default(),
-            branch_select_all_mouse_state: MouseStateHandle::default(),
-            branch_deselect_all_mouse_state: MouseStateHandle::default(),
+            branch_show_all_mouse_state: MouseStateHandle::default(),
+            branch_filter_input,
+            branch_filter_query: String::new(),
             branch_mouse_states: Arc::new(Vec::new()),
             branch_scroll_state: ClippedScrollStateHandle::new(),
             commits: Arc::new(Vec::new()),
@@ -814,25 +848,47 @@ impl GitGraphView {
         self.load_commits(LoadAnchor::Top, ctx);
     }
 
-    /// Selects all branches (skips if already all selected, to avoid a needless
-    /// reload).
-    fn select_all_branches(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.branches.is_empty() || self.selected_branches.len() == self.branches.len() {
-            return;
-        }
-        self.selected_branches = self.branches.iter().map(|b| b.ref_name.clone()).collect();
-        self.persist_branch_selection();
-        self.load_commits(LoadAnchor::Top, ctx);
-    }
-
-    /// Deselects all branches (skips if already none selected).
-    fn deselect_all_branches(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Clears the branch selection back to "Show All" (an empty selection set =
+    /// no ref filter = `--all`). Skips the reload if already showing all.
+    fn show_all_branches(&mut self, ctx: &mut ViewContext<Self>) {
         if self.selected_branches.is_empty() {
             return;
         }
         self.selected_branches.clear();
         self.persist_branch_selection();
         self.load_commits(LoadAnchor::Top, ctx);
+    }
+
+    /// Re-reads the filter box into `branch_filter_query` (lower-cased so the
+    /// match is case-insensitive) and re-renders the overlay so the branch rows
+    /// narrow as the user types.
+    fn on_branch_filter_query_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.branch_filter_query = self
+            .branch_filter_input
+            .as_ref(ctx)
+            .buffer_text(ctx)
+            .trim()
+            .to_lowercase();
+        ctx.notify();
+    }
+
+    /// Collapses the branch overlay, clears its filter, and returns focus to the
+    /// panel (so the view's key bindings keep working). Shared by the outside-
+    /// click dismiss and the filter box's Escape key.
+    fn close_branch_filter(&mut self, ctx: &mut ViewContext<Self>) {
+        self.branch_filter_expanded = false;
+        self.clear_branch_filter_query(ctx);
+        ctx.focus_self();
+        ctx.notify();
+    }
+
+    /// Resets the filter box to empty (text + cached query), so the overlay
+    /// opens fresh next time.
+    fn clear_branch_filter_query(&mut self, ctx: &mut ViewContext<Self>) {
+        self.branch_filter_query.clear();
+        self.branch_filter_input.update(ctx, |editor, ctx| {
+            editor.set_buffer_text("", ctx);
+        });
     }
 
     /// Persists the current branch selection back to its repo (called after the
@@ -971,19 +1027,20 @@ impl GitGraphView {
         });
     }
 
-    /// Reloads the currently selected repo: first fetch the branch list (all
-    /// selected by default), then load the commit graph for the selected
-    /// branches. Switching repos resets the branch filter (different repos have
-    /// different branches) and collapses the overlay.
+    /// Reloads the currently selected repo: first fetch the branch list
+    /// (defaulting to "Show All"), then load the commit graph. Switching repos
+    /// resets the branch filter (different repos have different branches) and
+    /// collapses the overlay.
     fn reload(&mut self, anchor: LoadAnchor, ctx: &mut ViewContext<Self>) {
         // An auto-refresh keeps the branch overlay as-is; a manual repo/branch
-        // change collapses it.
+        // change collapses it and clears its search box.
         #[cfg(feature = "local_fs")]
         let preserve = matches!(anchor, LoadAnchor::Preserve { .. });
         #[cfg(not(feature = "local_fs"))]
         let preserve = false;
         if !preserve {
             self.branch_filter_expanded = false;
+            self.clear_branch_filter_query(ctx);
         }
 
         let Some(dir) = self.current_repo_path() else {
@@ -1020,11 +1077,11 @@ impl GitGraphView {
                     // Restore the repo's saved branch selection (intersected
                     // with the new branch list, dropping branches that have
                     // vanished); if it was never saved (first time seeing this
-                    // repo), default to all selected. Then persist it back as
-                    // the repo's current selection.
+                    // repo), default to an empty set = "Show All". Then persist
+                    // it back as the repo's current selection.
                     view.selected_branches = match view.saved_branch_selections.get(&expected) {
                         Some(saved) => saved.intersection(&new_refs).cloned().collect(),
-                        None => new_refs,
+                        None => HashSet::new(),
                     };
                     view.saved_branch_selections
                         .insert(expected.clone(), view.selected_branches.clone());
@@ -1046,12 +1103,12 @@ impl GitGraphView {
         }
     }
 
-    /// The current branch filter: returns `None` when the branch list is empty
-    /// (unknown / failed to load) — which falls back to `--all` to avoid an
-    /// empty graph; otherwise returns the selected branch refs (which may be
-    /// empty = the user deselected all branches = empty graph).
+    /// The current branch filter: an empty selection means "Show All", which
+    /// returns `None` to fall back to `--all` (every ref). This also covers the
+    /// case where the branch list hasn't loaded yet (selection still empty).
+    /// A non-empty selection returns exactly those branch refs.
     fn branch_filter(&self) -> Option<Vec<String>> {
-        if self.branches.is_empty() {
+        if self.selected_branches.is_empty() {
             None
         } else {
             Some(self.selected_branches.iter().cloned().collect())
@@ -1757,8 +1814,9 @@ impl GitGraphView {
             let row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
-                    // Cap the max width + ellipsis so an over-long branch name
-                    // is truncated rather than stretching the button (and the
+                    // Cap the max width + ellipsis so a long summary (a long
+                    // branch name, or a comma-joined multi-selection) is
+                    // truncated rather than stretching the button (and the
                     // refresh button to its right) out.
                     ConstrainedBox::new(
                         Text::new_inline(
@@ -1770,7 +1828,7 @@ impl GitGraphView {
                         .with_clip(ClipConfig::ellipsis())
                         .finish(),
                     )
-                    .with_max_width(120.)
+                    .with_max_width(200.)
                     .finish(),
                 )
                 .with_child(Container::new(chevron).with_padding_left(4.).finish())
@@ -1793,13 +1851,28 @@ impl GitGraphView {
         .finish()
     }
 
-    /// Branch filter overlay: a scrollable list of branch checkboxes, wrapped in
-    /// a [`Dismiss`] to close on clicking outside.
+    /// Branch filter overlay: a pinned "Filter Branches…" search box atop a
+    /// scrollable list whose first row is "Show All" (resets to every branch)
+    /// followed by the branch checkboxes narrowed by the search query. Wrapped
+    /// in a [`Dismiss`] to close on clicking outside.
     fn render_branch_popup(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+
+        // "Show All" is pinned as the first list row and never filtered out (it
+        // resets the selection, it isn't a branch). The branch rows below it are
+        // narrowed by a case-insensitive substring match on the display name.
+        let mut col = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(self.render_show_all_row(appearance));
         for (i, branch) in self.branches.iter().enumerate() {
-            col = col.with_child(self.render_branch_row(i, branch, appearance));
+            if self.branch_filter_query.is_empty()
+                || branch
+                    .display_name
+                    .to_lowercase()
+                    .contains(&self.branch_filter_query)
+            {
+                col = col.with_child(self.render_branch_row(i, branch, appearance));
+            }
         }
 
         let scrollable = ClippedScrollable::vertical(
@@ -1813,12 +1886,11 @@ impl GitGraphView {
         .with_overlayed_scrollbar()
         .finish();
 
-        // The "select all / deselect all" action row is pinned at the top (it
-        // doesn't scroll with the branch list), so batch toggling is one click
-        // even with many branches.
+        // The search box is pinned at the top (it doesn't scroll with the list),
+        // so it stays reachable however far the branch list is scrolled.
         let body = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(self.render_branch_filter_actions(appearance))
+            .with_child(self.render_branch_filter_input(appearance))
             .with_child(
                 ConstrainedBox::new(scrollable)
                     .with_max_height(280.)
@@ -1826,7 +1898,7 @@ impl GitGraphView {
             )
             .finish();
 
-        let panel = Container::new(ConstrainedBox::new(body).with_width(220.).finish())
+        let panel = Container::new(ConstrainedBox::new(body).with_width(240.).finish())
             .with_background_color(theme.background().into_solid())
             .with_border(Border::all(1.).with_border_fill(theme.outline()))
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
@@ -1842,25 +1914,86 @@ impl GitGraphView {
             .finish()
     }
 
-    /// A single branch row in the overlay: a check mark (✓ when selected, an
-    /// equally-sized blank placeholder for alignment when not) + the branch
-    /// name; the whole row is clickable to toggle.
+    /// The pinned "Filter Branches…" search box at the top of the overlay
+    /// (backed by `branch_filter_input`; its edits drive [`Self::
+    /// on_branch_filter_query_changed`]).
+    fn render_branch_filter_input(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let input = appearance
+            .ui_builder()
+            .text_input(self.branch_filter_input.clone())
+            .with_style(UiComponentStyles {
+                border_width: Some(1.),
+                border_color: Some(theme.outline().into()),
+                border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+                padding: Some(Coords {
+                    top: 5.,
+                    bottom: 5.,
+                    left: 8.,
+                    right: 8.,
+                }),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        Container::new(input)
+            .with_horizontal_padding(6.)
+            .with_vertical_padding(4.)
+            .finish()
+    }
+
+    /// The pinned "Show All" row: checked when no specific branch is selected
+    /// (an empty selection = every branch shown); clicking it clears the
+    /// selection back to that state.
+    fn render_show_all_row(&self, appearance: &Appearance) -> Box<dyn Element> {
+        self.render_check_row(
+            self.selected_branches.is_empty(),
+            "Show All".to_string(),
+            false,
+            self.branch_show_all_mouse_state.clone(),
+            GitGraphAction::ShowAllBranches,
+            appearance,
+        )
+    }
+
+    /// A single branch row in the overlay: delegates to [`Self::render_check_row`]
+    /// with the branch's check state, name, and toggle action.
     fn render_branch_row(
         &self,
         index: usize,
         branch: &BranchRef,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let selected = self.selected_branches.contains(&branch.ref_name);
-        let is_remote = branch.kind == RefKind::RemoteBranch;
-        let display = branch.display_name.clone();
-        let ref_name = branch.ref_name.clone();
         let state = self
             .branch_mouse_states
             .get(index)
             .cloned()
             .unwrap_or_default();
+        self.render_check_row(
+            self.selected_branches.contains(&branch.ref_name),
+            branch.display_name.clone(),
+            branch.kind == RefKind::RemoteBranch,
+            state,
+            GitGraphAction::ToggleBranch(branch.ref_name.clone()),
+            appearance,
+        )
+    }
+
+    /// A check row in the overlay: a check mark (✓ when `selected`, an
+    /// equally-sized blank placeholder for alignment otherwise) + a label; the
+    /// whole row fills the overlay width and is clickable to dispatch `action`.
+    /// `is_remote` dims the label to the secondary color. Shared by the "Show
+    /// All" row and each branch row.
+    fn render_check_row(
+        &self,
+        selected: bool,
+        label: String,
+        is_remote: bool,
+        state: MouseStateHandle,
+        action: GitGraphAction,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
         Hoverable::new(state, move |mouse_state| {
             let check: Box<dyn Element> = if selected {
                 ConstrainedBox::new(Icon::Check.to_warpui_icon(theme.foreground()).finish())
@@ -1882,7 +2015,7 @@ impl GitGraphView {
             };
             // The row fills the overlay width so the entire row (including the
             // blank space on the right) is a click target, not just the text.
-            // The name uses Shrinkable to take the remaining width + ellipsis,
+            // The label uses Shrinkable to take the remaining width + ellipsis,
             // so an over-long branch name is truncated rather than overflowing
             // into the commit list.
             let row = Flex::row()
@@ -1893,7 +2026,7 @@ impl GitGraphView {
                     Shrinkable::new(
                         1.0,
                         Text::new_inline(
-                            display,
+                            label,
                             appearance.ui_font_family(),
                             appearance.ui_font_size(),
                         )
@@ -1914,92 +2047,16 @@ impl GitGraphView {
             container.finish()
         })
         .on_click(move |ctx, _, _| {
-            ctx.dispatch_typed_action(GitGraphAction::ToggleBranch(ref_name.clone()));
-        })
-        .finish()
-    }
-
-    /// The "select all / deselect all" action row at the top of the overlay.
-    fn render_branch_filter_actions(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let select_all = self.render_branch_action_button(
-            "Select all",
-            GitGraphAction::SelectAllBranches,
-            self.branch_select_all_mouse_state.clone(),
-            appearance,
-        );
-        let deselect_all = self.render_branch_action_button(
-            "Deselect all",
-            GitGraphAction::DeselectAllBranches,
-            self.branch_deselect_all_mouse_state.clone(),
-            appearance,
-        );
-        Container::new(
-            Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(select_all)
-                .with_child(Container::new(deselect_all).with_padding_left(8.).finish())
-                .finish(),
-        )
-        .with_horizontal_padding(4.)
-        .with_vertical_padding(2.)
-        .finish()
-    }
-
-    /// A small overlay action button (accent-colored text + hover highlight).
-    fn render_branch_action_button(
-        &self,
-        label: &'static str,
-        action: GitGraphAction,
-        state: MouseStateHandle,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        Hoverable::new(state, move |mouse_state| {
-            let mut container = Container::new(
-                Text::new_inline(
-                    label,
-                    appearance.ui_font_family(),
-                    appearance.ui_font_size(),
-                )
-                .with_color(theme.accent().into())
-                .finish(),
-            )
-            .with_horizontal_padding(6.)
-            .with_vertical_padding(3.)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-            let highlight = ItemHighlightState::new(false, mouse_state);
-            if let Some(bg) = highlight.background_color(appearance) {
-                container = container.with_background_color(bg.into_solid());
-            }
-            container.finish()
-        })
-        .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(action.clone());
         })
         .finish()
     }
 
-    /// Summary text on the branch filter button: all selected / none selected /
-    /// the branch name directly when exactly one is selected / a count
-    /// otherwise.
+    /// Summary text on the branch filter button: "Show All" by default,
+    /// otherwise the selected branches' names comma-joined (see
+    /// [`branch_summary_text`]).
     fn branch_filter_summary(&self) -> String {
-        let total = self.branches.len();
-        let selected = self.selected_branches.len().min(total);
-        if selected == total {
-            "All branches".to_string()
-        } else if selected == 0 {
-            "No branches".to_string()
-        } else if selected == 1 {
-            // When only one branch is selected, show its name directly — more
-            // intuitive than "1/N branches".
-            self.branches
-                .iter()
-                .find(|b| self.selected_branches.contains(&b.ref_name))
-                .map(|b| b.display_name.clone())
-                .unwrap_or_else(|| "1 branch".to_string())
-        } else {
-            format!("{selected}/{total} branches")
-        }
+        branch_summary_text(&self.branches, &self.selected_branches)
     }
 
     /// Opens the context menu for `kind` at `offset` (relative to the panel
@@ -3236,15 +3293,18 @@ impl TypedActionView for GitGraphView {
             GitGraphAction::SelectRepository(index) => self.select_repository(*index, ctx),
             GitGraphAction::ToggleBranchFilter => {
                 self.branch_filter_expanded = !self.branch_filter_expanded;
-                ctx.notify();
+                if self.branch_filter_expanded {
+                    // Focus the search box on open so the user can type to
+                    // narrow the list immediately.
+                    ctx.focus(&self.branch_filter_input);
+                    ctx.notify();
+                } else {
+                    self.close_branch_filter(ctx);
+                }
             }
-            GitGraphAction::CloseBranchFilter => {
-                self.branch_filter_expanded = false;
-                ctx.notify();
-            }
+            GitGraphAction::CloseBranchFilter => self.close_branch_filter(ctx),
             GitGraphAction::ToggleBranch(ref_name) => self.toggle_branch(ref_name, ctx),
-            GitGraphAction::SelectAllBranches => self.select_all_branches(ctx),
-            GitGraphAction::DeselectAllBranches => self.deselect_all_branches(ctx),
+            GitGraphAction::ShowAllBranches => self.show_all_branches(ctx),
             // Manual refresh: fetch + rescan repos (the user may have
             // added/removed subrepos) while keeping the current repo *and* its
             // branch selection — reload restores the saved selection, only
