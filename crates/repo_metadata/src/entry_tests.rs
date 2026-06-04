@@ -3,7 +3,9 @@ use std::fs;
 use ignore::gitignore::Gitignore;
 
 use super::{matches_gitignores, Entry, IgnoredPathStrategy};
-use crate::{StandingQueryContent, StandingQueryDefinitions, StandingQueryResults};
+#[cfg(unix)]
+use crate::StandingQueryContent;
+use crate::{StandingQueryDefinitions, StandingQueryResults};
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;

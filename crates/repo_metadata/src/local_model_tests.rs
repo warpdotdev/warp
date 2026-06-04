@@ -24,9 +24,9 @@ use crate::local_model::{
 };
 use crate::repositories::DetectedRepositories;
 use crate::watcher::DirectoryWatcher;
-use crate::{
-    RepoMetadataError, StandingQueryContent, StandingQueryDefinitions, StandingQueryResults,
-};
+#[cfg(all(unix, feature = "local_fs"))]
+use crate::StandingQueryResults;
+use crate::{RepoMetadataError, StandingQueryContent, StandingQueryDefinitions};
 
 impl LocalRepoMetadataModel {
     fn new_for_test() -> Self {
@@ -49,7 +49,7 @@ impl LocalRepoMetadataModel {
 #[should_panic(expected = "force-included paths must be repository-relative")]
 fn force_included_paths_must_be_relative() {
     let mut model = LocalRepoMetadataModel::new_for_test();
-    model.register_force_included_paths([PathBuf::from("/absolute/path")]);
+    model.register_force_included_paths([std::env::temp_dir().join("absolute/path")]);
 }
 fn empty_repo_state(repo_path: &StandardizedPath) -> FileTreeState {
     let root = Entry::Directory(DirectoryEntry {
