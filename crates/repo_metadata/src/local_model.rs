@@ -713,7 +713,7 @@ impl LocalRepoMetadataModel {
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), RepoMetadataError> {
         // Already tracked as a lazy-loaded path — increase the refcount and keep the
-        // existing watcher/model entry alive.
+        // existing model entry and any expanded-directory watches alive.
         if let Some(refcount) = self.lazy_loaded_paths.get_mut(path) {
             *refcount += 1;
             return Ok(());
@@ -755,7 +755,8 @@ impl LocalRepoMetadataModel {
         Ok(())
     }
 
-    /// Removes a lazily-loaded standalone path from tracking and unregisters the file watcher.
+    /// Removes a lazily-loaded standalone path from tracking and unregisters any
+    /// expanded-directory watches.
     #[cfg(feature = "local_fs")]
     pub fn remove_lazy_loaded_path(
         &mut self,
