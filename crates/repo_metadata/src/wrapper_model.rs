@@ -303,6 +303,18 @@ impl RepoMetadataModel {
     // These delegate to the local sub-model. Remote equivalents will be
     // added once the remote client ↔ server sync layer is in place.
 
+    /// Fully indexes a local directory identified by a standardized path.
+    #[cfg(feature = "local_fs")]
+    pub fn index_local_directory_path(
+        &self,
+        path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), RepoMetadataError> {
+        let path = path.clone();
+        self.local
+            .update(ctx, |local, ctx| local.index_directory_path(&path, ctx))
+    }
+
     /// Indexes a local repository from the given repository handle.
     #[cfg(feature = "local_fs")]
     pub fn index_directory(

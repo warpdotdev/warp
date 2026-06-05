@@ -52,7 +52,12 @@ pub(super) fn input_context_for_request(
     additional_context: Vec<AIAgentContext>,
     app: &AppContext,
 ) -> Arc<[AIAgentContext]> {
-    let mut context = context_model.pending_context(app, is_user_query);
+    let current_working_directory_location = active_session.current_working_directory_location(app);
+    let mut context = context_model.pending_context(
+        app,
+        is_user_query,
+        current_working_directory_location.as_ref(),
+    );
 
     context.push(AIAgentContext::CurrentTime {
         current_time: Local::now(),

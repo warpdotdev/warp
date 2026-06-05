@@ -511,6 +511,67 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
 }
 
 #[test]
+fn shallow_tree_expands_force_included_skill_branch_only() {
+    virtual_fs::VirtualFS::test("shallow_tree_force_included_skills", |dirs, mut vfs| {
+        vfs.mkdir("workspace/.agents/skills/review")
+            .mkdir("workspace/src/deep")
+            .with_files(vec![
+                virtual_fs::Stub::FileWithContent(
+                    "workspace/.agents/skills/review/SKILL.md",
+                    "name: review",
+                ),
+                virtual_fs::Stub::FileWithContent("workspace/src/deep/WARP.md", "project rules"),
+            ]);
+        let workspace = dirs.tests().join("workspace");
+        let skill_path = workspace.join(".agents/skills/review/SKILL.md");
+        let rule_path = workspace.join("src/deep/WARP.md");
+
+        let mut files = Vec::new();
+        let mut gitignores = Vec::new();
+        let mut results = StandingQueryResults::default();
+        let mut definitions = StandingQueryDefinitions::default();
+        definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
+        let tree = Entry::build_tree_with_standing_queries(
+            &workspace,
+            &mut files,
+            &mut gitignores,
+            None,
+            super::BuildTreeOptions {
+                max_depth: 1,
+                current_depth: 0,
+                ignored_path_strategy: &IgnoredPathStrategy::IncludeLazy,
+                force_included_paths: &[std::path::PathBuf::from(".agents/skills")],
+                budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
+            },
+            &mut results,
+            &definitions,
+        )
+        .unwrap();
+
+        let agents = find_entry(&tree, &workspace.join(".agents"))
+            .expect("force-included ancestor should be represented");
+        assert!(agents.loaded());
+        assert!(find_entry(&tree, &skill_path).is_some());
+
+        let src = find_entry(&tree, &workspace.join("src"))
+            .expect("unrelated shallow directory should be represented");
+        assert!(!src.loaded());
+        assert!(find_entry(&tree, &rule_path).is_none());
+
+        let skill_path =
+            warp_util::standardized_path::StandardizedPath::try_from_local(&skill_path).unwrap();
+        let rule_path =
+            warp_util::standardized_path::StandardizedPath::try_from_local(&rule_path).unwrap();
+        assert!(results
+            .project_skills()
+            .any(|content| content.path == skill_path && !content.is_directory));
+        assert!(!results
+            .project_rules()
+            .any(|content| content.path == rule_path));
+    });
+}
+
+#[test]
 fn ignored_directory_stays_lazy() {
     virtual_fs::VirtualFS::test("ignored_dir_lazy", |dirs, mut vfs| {
         vfs.mkdir("repo/target/debug")
@@ -778,6 +839,46 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
         "/repo/.git/config"
     )));
 }
+
+/// Documents the watch-filter invariant: gitignore is applied only by the
+/// descend predicate (`should_watch_repo_directory`), so gitignored paths are
+/// pruned from recursive registration but their events are still emitted (the
+/// emit predicate only suppresses non-allowlisted `.git/` internals).
+#[test]
+fn gitignore_affects_descend_predicate_but_not_emitted_events() {
+    use std::path::Path;
+
+    use super::{gitignores_for_directory, should_ignore_git_path, should_watch_repo_directory};
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root_path = dunce::canonicalize(temp_dir.path()).unwrap();
+    fs::write(root_path.join(".gitignore"), "node_modules/\n").unwrap();
+    fs::create_dir(root_path.join("node_modules")).unwrap();
+    fs::create_dir(root_path.join("src")).unwrap();
+
+    let gitignores = gitignores_for_directory(&root_path);
+    let node_modules = root_path.join("node_modules");
+    let src = root_path.join("src");
+
+    // Descend predicate: the gitignored dir is pruned from recursive
+    // registration, while a tracked dir is still descended into.
+    assert!(!should_watch_repo_directory(
+        &node_modules,
+        &gitignores,
+        &[]
+    ));
+    assert!(should_watch_repo_directory(&src, &gitignores, &[]));
+
+    // Emit predicate building block (`!should_ignore_git_path`): gitignored,
+    // non-`.git` paths are NOT suppressed, so their events still flow. Only
+    // non-allowlisted `.git/` internals are suppressed.
+    assert!(!should_ignore_git_path(&node_modules));
+    assert!(!should_ignore_git_path(&node_modules.join("pkg/index.js")));
+    assert!(should_ignore_git_path(Path::new(
+        "/repo/.git/objects/ab/blob"
+    )));
+}
+
 #[test]
 fn test_is_shared_git_ref() {
     use std::path::Path;

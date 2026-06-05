@@ -144,6 +144,7 @@ use ai::ambient_agents::scheduled::ScheduledAgentManager;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
 use auth::auth_manager::AuthManager;
 use auth::auth_state::{AuthState, AuthStateProvider};
@@ -2017,7 +2018,11 @@ pub(crate) fn initialize_app(
     });
 
     ctx.add_singleton_model(|ctx| {
-        ProjectContextModel::new_from_persisted(persisted_project_rules, ctx)
+        ProjectContextModel::new_from_persisted(
+            persisted_project_rules,
+            read_project_rule_contents,
+            ctx,
+        )
     });
 
     // Index global rules (e.g. ~/.agents/AGENTS.md) on a background task so

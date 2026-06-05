@@ -4092,14 +4092,13 @@ impl CodeReviewView {
                     .with_margin_top(16.)
                     .finish(),
             );
-        } else if let Some(repo_path) = self.repo_path().and_then(LocalOrRemotePath::to_local_path)
-        {
+        } else if let Some(repo_path) = self.repo_path() {
             // Check for initialized project-scoped rules.
             if let Some(rules) =
                 ProjectContextModel::as_ref(app).find_applicable_project_rules(repo_path)
             {
                 if let Some(first_rule) = rules.active_rules.first() {
-                    if let Some(file_name) = first_rule.path.file_name().and_then(|n| n.to_str()) {
+                    if let Some(file_name) = first_rule.path.file_name() {
                         zero_state_column.add_child(
                             Container::new(
                                 Text::new(
