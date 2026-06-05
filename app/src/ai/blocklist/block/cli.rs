@@ -971,8 +971,8 @@ impl View for CLISubagentView {
         let resizable_height = self
             .resizable_height
             .lock()
-            .expect("Resizable state should be accessible")
-            .size();
+            .map(|g| g.size())
+            .unwrap_or(DEFAULT_RESIZABLE_HEIGHT);
 
         let mut result = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)

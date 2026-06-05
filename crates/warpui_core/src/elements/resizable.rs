@@ -331,6 +331,15 @@ impl Element for Resizable {
         // Use the window size to set bounds on the width/height
         if let Some(bounds_callback) = self.bounds_callback.as_mut() {
             let mut new_bounds = bounds_callback(ctx.window_size);
+            // Also clamp the max bound to the parent layout constraint so the stored
+            // size never exceeds what can actually be rendered. Without this, on narrow
+            // panes the stored size can sit above the constraint max, creating a dead
+            // zone where dragging the handle produces no visual change.
+            let constraint_max = match self.direction {
+                ResizeDirection::Horizontal => constraint.max.x(),
+                ResizeDirection::Vertical => constraint.max.y(),
+            };
+            new_bounds.1 = new_bounds.1.min(constraint_max);
             if new_bounds.0 > new_bounds.1 {
                 log::error!("Resizable: min bound is greater than max bound");
                 new_bounds = (new_bounds.0, new_bounds.0);
