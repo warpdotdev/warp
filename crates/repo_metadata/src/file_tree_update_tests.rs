@@ -218,7 +218,7 @@ fn apply_mutations_generates_update_for_add_empty_directory() {
 
     let initial = dir("/repo", vec![dir("/repo/src", vec![])]);
     let mut tree = build_tree_from_entry(initial);
-    let mutations = vec![FileTreeMutation::AddEmptyDirectory {
+    let mutations = vec![FileTreeMutation::AddUnloadedDirectory {
         path: mutation_path("/repo/src/empty"),
         is_ignored: true,
     }];
@@ -250,7 +250,7 @@ fn apply_mutations_generates_update_for_mixed_mutations() {
             is_ignored: false,
             extension: Some("rs".to_string()),
         },
-        FileTreeMutation::AddEmptyDirectory {
+        FileTreeMutation::AddUnloadedDirectory {
             path: mutation_path("/repo/new_dir"),
             is_ignored: false,
         },

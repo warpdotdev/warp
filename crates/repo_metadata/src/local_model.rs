@@ -279,7 +279,7 @@ pub(crate) enum FileTreeMutation {
     /// Add a bare (unloaded) directory placeholder, materialized on demand when
     /// the user expands it. Used for newly created directories under lazy roots
     /// and as a fallback when `build_tree` fails.
-    AddEmptyDirectory { path: PathBuf, is_ignored: bool },
+    AddUnloadedDirectory { path: PathBuf, is_ignored: bool },
 }
 
 /// A filter function for filtering repo contents during traversal.
@@ -1179,7 +1179,7 @@ impl LocalRepoMetadataModel {
                     // is created; insert it as an unloaded placeholder and build
                     // the subtree on demand when the user expands it (see
                     // `load_directory`).
-                    mutations.push(FileTreeMutation::AddEmptyDirectory {
+                    mutations.push(FileTreeMutation::AddUnloadedDirectory {
                         path: path_to_add.clone(),
                         is_ignored,
                     });
@@ -1225,7 +1225,7 @@ impl LocalRepoMetadataModel {
                     }
                     Err(e) => {
                         log::warn!("Failed to build subtree for directory {path_to_add:?}: {e:?}");
-                        mutations.push(FileTreeMutation::AddEmptyDirectory {
+                        mutations.push(FileTreeMutation::AddUnloadedDirectory {
                             path: path_to_add.clone(),
                             is_ignored,
                         });
@@ -1355,7 +1355,7 @@ impl LocalRepoMetadataModel {
                         }
                     }
                 }
-                FileTreeMutation::AddEmptyDirectory {
+                FileTreeMutation::AddUnloadedDirectory {
                     ref path,
                     is_ignored,
                 } => {
