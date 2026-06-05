@@ -170,14 +170,16 @@ elif [[ $RELEASE_CHANNEL = "dev" ]]; then
   BINARY_NAME="warp-dev"
   APP_NAME="WarpDev"
   FEATURES="$FEATURES,agent_mode_debug"
-  # Enable heap profiling using jemalloc through pprof.
-  FEATURES="$FEATURES,jemalloc_pprof"
+  # Enable heap usage tracking & profiling using jemalloc through pprof.
+  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
   WARP_BIN="preview"
   BINARY_NAME="warp-preview"
   APP_NAME="WarpPreview"
   FEATURES="$FEATURES,preview_channel"
+  # Enable heap usage tracking & profiling using jemalloc through pprof.
+  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   WARP_BIN="stable"
   BINARY_NAME="warp"
@@ -243,9 +245,11 @@ if [[ "$BUILD" == "true" ]]; then
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
   echo "Stripping debug symbols from '$EXECUTABLE_PATH'"
-  if [[ $RELEASE_CHANNEL = "dev" ]]; then
-    # For dev builds, only strip debug symbols, as we want to keep some
-    # symbols for profiling purposes.
+  if [[ $RELEASE_CHANNEL = "dev" || ",$FEATURES," == *",heap_usage_tracking,"* ]]; then
+    # Only strip debug sections, keeping the symbol table, for dev builds and
+    # any build with heap profiling enabled. In-process jemalloc heap-profile
+    # symbolization resolves addresses against the running binary's own
+    # symbols, so a fully stripped binary would produce unsymbolized profiles.
     strip --strip-debug "$EXECUTABLE_PATH"
   else
     # For production builds, strip all symbols, to keep the binary size
