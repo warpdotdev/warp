@@ -2,6 +2,7 @@ use crate::object::ObjectMetadata;
 use crate::object_permissions::ObjectPermissions;
 use crate::scalars::Time;
 use crate::schema;
+use crate::user::PublicUserProfile;
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
 pub enum RequestLimitRefreshDuration {
@@ -149,6 +150,7 @@ pub struct AIConversation {
     pub working_directory: Option<String>,
     pub usage: ConversationUsage,
     pub metadata: ObjectMetadata,
+    pub creator: Option<PublicUserProfile>,
     pub permissions: ObjectPermissions,
     pub ambient_agent_task_id: Option<cynic::Id>,
     pub artifacts: Option<Vec<AIConversationArtifact>>,

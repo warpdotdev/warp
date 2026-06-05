@@ -3837,7 +3837,7 @@ dependencies = [
 [[package]]
 name = "dagre_rust"
 version = "0.0.5"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775746cd86bdeec29cb96ba278fd08c9074"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=40cecf2be376e47e15053eadbfb782a531777420#40cecf2be376e47e15053eadbfb782a531777420"
 dependencies = [
  "graphlib_rust",
  "ordered_hashmap",
@@ -7898,16 +7898,31 @@ dependencies = [
 name = "mcp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "cfg-if",
+ "cloud_object_models",
  "futures",
  "http 1.4.0",
+ "log",
+ "oauth2",
  "pin-project-lite",
  "reqwest",
  "rmcp",
+ "serde",
  "serde_json",
+ "simple_logger",
  "sse-stream",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "url",
+ "uuid",
+ "warp_core",
+ "warpui",
+ "warpui_extras",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -7981,7 +7996,7 @@ dependencies = [
 [[package]]
 name = "mermaid_to_svg"
 version = "0.1.0"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775746cd86bdeec29cb96ba278fd08c9074"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=40cecf2be376e47e15053eadbfb782a531777420#40cecf2be376e47e15053eadbfb782a531777420"
 dependencies = [
  "dagre_rust",
  "graphlib_rust",
@@ -12020,7 +12035,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=9e437df5be3c318999a9c94dba1826ebb33ad679#9e437df5be3c318999a9c94dba1826ebb33ad679"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d#c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d"
 dependencies = [
  "byte-unit",
  "serde",
@@ -15126,21 +15141,33 @@ name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "async-trait",
+ "bincode",
  "chrono",
  "cloud_object_client",
  "cloud_object_models",
  "cloud_objects",
  "cynic",
  "derivative",
+ "diesel",
+ "firebase",
+ "futures",
+ "http 1.4.0",
+ "http_client",
+ "instant",
  "itertools 0.14.0",
  "lasso",
  "log",
+ "mockall",
+ "oauth2",
  "pathfinder_geometry",
  "schemars",
  "serde",
  "session-sharing-protocol",
  "settings_value",
  "thiserror 2.0.17",
+ "url",
  "uuid",
  "warp_core",
  "warp_graphql",

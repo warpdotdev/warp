@@ -8,7 +8,8 @@ use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
 use repo_metadata::file_tree_store::FileTreeState;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{
-    DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate, TargetFile,
+    DirectoryWatcher, RepoMetadataModel, RepositoryIdentifier, RepositoryUpdate,
+    StandingQueryContent, StandingQueryResults, StandingQueryResultsDelta, TargetFile,
 };
 use tempfile::TempDir;
 use warp_util::host_id::HostId;
@@ -365,7 +366,16 @@ fn test_refresh_project_skills_for_repo_loads_indexed_and_symlinked_skill_direct
         let repo_id = RepositoryIdentifier::try_local(&repo).unwrap();
         let repo_key = StandardizedPath::try_from_local(&repo).unwrap();
         repo_metadata_handle.update(&mut app, |model, ctx| {
-            model.insert_test_state(repo_key, project_state(&repo, Some(&indexed_skill)), ctx);
+            model.insert_test_state(
+                repo_key.clone(),
+                project_state(&repo, Some(&indexed_skill)),
+                ctx,
+            );
+            let mut standing_results = project_standing_results(&repo, Some(&indexed_skill));
+            standing_results.insert_project_skill(StandingQueryContent::file(
+                StandardizedPath::try_from_local(&skill_local_path(&expected_skill)).unwrap(),
+            ));
+            model.insert_test_standing_results(repo_key, standing_results, ctx);
         });
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -398,7 +408,12 @@ fn test_refresh_project_skills_for_repo_uses_repo_metadata_without_fallback_watc
         let repo_key = StandardizedPath::try_from_local(&repo).unwrap();
 
         repo_metadata_handle.update(&mut app, |model, ctx| {
-            model.insert_test_state(repo_key, project_state(&repo, Some(&skill)), ctx);
+            model.insert_test_state(repo_key.clone(), project_state(&repo, Some(&skill)), ctx);
+            model.insert_test_standing_results(
+                repo_key,
+                project_standing_results(&repo, Some(&skill)),
+                ctx,
+            );
         });
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
             skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);
@@ -808,6 +823,28 @@ fn project_state(repo: &std::path::Path, skill: Option<&ParsedSkill>) -> FileTre
     FileTreeState::new(root, Vec::new(), None)
 }
 
+fn project_standing_results(
+    repo: &std::path::Path,
+    skill: Option<&ParsedSkill>,
+) -> StandingQueryResults {
+    let mut delta = StandingQueryResultsDelta {
+        upserted_project_skills: vec![StandingQueryContent::directory(
+            StandardizedPath::try_from_local(&repo.join(".agents/skills")).unwrap(),
+        )],
+        ..StandingQueryResultsDelta::default()
+    };
+    if let Some(skill) = skill {
+        delta
+            .upserted_project_skills
+            .push(StandingQueryContent::file(
+                StandardizedPath::try_from_local(&skill_local_path(skill)).unwrap(),
+            ));
+    }
+    let mut results = StandingQueryResults::default();
+    results.apply_delta(&delta);
+    results
+}
+
 #[test]
 fn test_refresh_project_skills_for_repo_removes_missing_project_skill_paths() {
     let (tx, rx) = async_channel::unbounded();
@@ -826,6 +863,11 @@ fn test_refresh_project_skills_for_repo_removes_missing_project_skill_paths() {
 
         repo_metadata_handle.update(&mut app, |model, ctx| {
             model.insert_test_state(repo_key.clone(), project_state(&repo, Some(&skill)), ctx);
+            model.insert_test_standing_results(
+                repo_key.clone(),
+                project_standing_results(&repo, Some(&skill)),
+                ctx,
+            );
         });
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
             skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);
@@ -839,7 +881,12 @@ fn test_refresh_project_skills_for_repo_removes_missing_project_skill_paths() {
         );
 
         repo_metadata_handle.update(&mut app, |model, ctx| {
-            model.insert_test_state(repo_key, project_state(&repo, None), ctx);
+            model.insert_test_state(repo_key.clone(), project_state(&repo, None), ctx);
+            model.insert_test_standing_results(
+                repo_key,
+                project_standing_results(&repo, None),
+                ctx,
+            );
         });
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
             skill_watcher.refresh_project_skills_for_repo(&repo_id, ctx);

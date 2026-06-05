@@ -14,6 +14,7 @@ pub use convert_from::{
     MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
 };
 use futures_lite::Stream;
+use mcp::TemplatableMCPServerInfo;
 pub use r#impl::generate_multi_agent_output;
 use serde::Serialize;
 use warp_core::channel::ChannelState;
@@ -29,7 +30,6 @@ use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext}
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AIExecutionProfileAppExt;
 use crate::ai::llms::LLMId;
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
@@ -298,19 +298,10 @@ impl RequestParams {
         // server-side, drop the override; otherwise clamp it to the model's
         // current `[min, max]` range. This closes the window between an
         // in-flight model metadata refresh and the next request.
-        let context_window_limit = {
-            let profile_data = AIExecutionProfilesModel::as_ref(app)
-                .active_profile(terminal_view_id, app)
-                .data()
-                .clone();
-            profile_data
-                .configurable_context_window(app)
-                .and_then(|cw| {
-                    profile_data
-                        .context_window_limit
-                        .map(|v| v.clamp(cw.min, cw.max))
-                })
-        };
+        let context_window_limit = AIExecutionProfilesModel::as_ref(app)
+            .active_profile(terminal_view_id, app)
+            .data()
+            .context_window_limit_for_request(app);
 
         Self {
             input: request_input.all_inputs().cloned().collect(),

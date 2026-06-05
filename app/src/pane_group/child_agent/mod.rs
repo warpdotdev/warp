@@ -1,3 +1,6 @@
+pub(in crate::pane_group) mod hydration;
+mod restoration;
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;

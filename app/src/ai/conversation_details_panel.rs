@@ -70,7 +70,7 @@ use crate::view_components::copyable_text_field::{
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
-use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
@@ -182,6 +182,24 @@ impl PrincipalInfo {
         let first_char = uid.chars().next().unwrap_or('?').to_uppercase().to_string();
         Self::new(first_char, None)
     }
+
+    fn from_user_profile(profile: &UserProfileWithUID) -> Self {
+        let display_name = profile
+            .display_name
+            .as_ref()
+            .filter(|name| !name.is_empty())
+            .or_else(|| (!profile.email.is_empty()).then_some(&profile.email))
+            .cloned()
+            .unwrap_or_else(|| profile.firebase_uid.to_string());
+        let photo_url = Some(profile.photo_url.clone()).filter(|url| !url.is_empty());
+
+        Self {
+            display_name,
+            photo_url,
+            uid: Some(profile.firebase_uid.to_string()),
+            is_service_account: false,
+        }
+    }
 }
 
 impl From<&TaskPrincipalInfo> for PrincipalInfo {
@@ -261,7 +279,9 @@ impl ConversationDetailsData {
         // Server metadata (creator, timestamps)
         let mut creator = None;
         if let Some(server_metadata) = conversation.server_metadata() {
-            if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
+            if let Some(creator_profile) = &server_metadata.creator {
+                creator = Some(PrincipalInfo::from_user_profile(creator_profile));
+            } else if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
                 let creator_uid = UserUid::new(creator_uid_str);
                 let user_profiles = UserProfiles::handle(app).as_ref(app);
 

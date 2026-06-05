@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, bail};
+use futures::future::BoxFuture;
 use oauth2::{RefreshToken, TokenResponse as _};
 use rmcp::transport::auth::{
     AuthClient, AuthorizationManager, CredentialStore, InMemoryCredentialStore, OAuthClientConfig,
@@ -12,14 +12,10 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
-use warpui::{ModelSpawner, SingletonEntity};
 use warpui_extras::secure_storage::AppContextExt as _;
 
-use super::{MCPServerState, TemplatableMCPServerManager};
-use crate::ai::mcp::FileBasedMCPManager;
-
-pub(crate) const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";
-pub(crate) const FILE_BASED_MCP_CREDENTIALS_KEY: &str = "FileBasedMcpCredentials";
+pub const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";
+pub const FILE_BASED_MCP_CREDENTIALS_KEY: &str = "FileBasedMcpCredentials";
 
 /// The issuer URL for GitHub's OAuth provider.
 const GITHUB_ISSUER: &str = "https://github.com/login/oauth";
@@ -51,6 +47,12 @@ pub type PersistedCredentialsMap = HashMap<Uuid, PersistedCredentials>;
 
 // Maps a consistent hash of the installation to its persisted credentials
 pub type FileBasedPersistedCredentialsMap = HashMap<u64, PersistedCredentials>;
+pub type PersistCredentialsCallback =
+    Box<dyn Fn(Uuid, PersistedCredentials) -> BoxFuture<'static, anyhow::Result<()>> + Send>;
+pub type RequiresAuthenticationCallback =
+    Box<dyn Fn(Uuid, String, String) -> BoxFuture<'static, anyhow::Result<()>> + Send>;
+pub type AuthenticatedCallback =
+    Box<dyn Fn(String) -> BoxFuture<'static, anyhow::Result<()>> + Send>;
 
 /// A credential store that wraps [`InMemoryCredentialStore`] and persists token
 /// updates to Warp's secure storage via a channel.
@@ -132,7 +134,7 @@ impl CredentialStore for PersistingCredentialStore {
 /// runtime token auto-refreshes are written back to Warp's secure storage.
 ///
 /// A background tokio task is spawned to receive credential updates and persist
-/// them via the [`ModelSpawner`]. The task terminates when the auth manager (and
+/// them via the provided callback. The task terminates when the auth manager (and
 /// thus the credential store's sender) is dropped.
 ///
 /// Note: this store is not responsible for the initial population of credentials.
@@ -142,7 +144,7 @@ impl CredentialStore for PersistingCredentialStore {
 async fn install_persisting_credential_store(
     auth_manager: &mut AuthorizationManager,
     persisted_credentials: Option<PersistedCredentials>,
-    spawner: ModelSpawner<TemplatableMCPServerManager>,
+    persist_credentials: PersistCredentialsCallback,
     installation_uuid: Uuid,
 ) {
     let client_secret = persisted_credentials
@@ -166,13 +168,8 @@ async fn install_persisting_credential_store(
 
     tokio::spawn(async move {
         while let Ok(credentials) = persist_rx.recv().await {
-            if let Err(e) = spawner
-                .spawn(move |manager, ctx| {
-                    manager.save_credentials_to_secure_storage(ctx, installation_uuid, credentials);
-                })
-                .await
-            {
-                log::warn!("Failed to persist auto-refreshed MCP credentials: {e:?}");
+            if let Err(err) = persist_credentials(installation_uuid, credentials).await {
+                log::warn!("Failed to persist auto-refreshed MCP credentials: {err:?}");
             }
         }
     });
@@ -181,13 +178,15 @@ async fn install_persisting_credential_store(
 /// Context for OAuth authentication flows.
 pub struct AuthContext {
     pub oauth_result_rx: async_channel::Receiver<CallbackResult>,
-    pub spawner: ModelSpawner<TemplatableMCPServerManager>,
     pub uuid: Uuid,
     pub persisted_credentials: Option<PersistedCredentials>,
     /// Whether the client is running in headless/CLI mode.
     pub is_headless: bool,
     /// Whether this server was auto-discovered from a repo MCP configuration file.
     pub is_file_based: bool,
+    pub persist_credentials: PersistCredentialsCallback,
+    pub requires_authentication: RequiresAuthenticationCallback,
+    pub authenticated: Option<AuthenticatedCallback>,
 }
 
 /// Result of OAuth callback.
@@ -210,11 +209,13 @@ pub async fn make_authenticated_client(
 ) -> Result<(AuthClient<reqwest::Client>, bool), AuthError> {
     let AuthContext {
         oauth_result_rx,
-        spawner,
         uuid,
         persisted_credentials,
         is_headless,
         is_file_based,
+        persist_credentials,
+        requires_authentication,
+        ..
     } = auth_context;
 
     // Build the redirect URI using the channel's URL scheme.
@@ -235,7 +236,7 @@ pub async fn make_authenticated_client(
     install_persisting_credential_store(
         &mut auth_manager,
         persisted_credentials,
-        spawner.clone(),
+        persist_credentials,
         uuid,
     )
     .await;
@@ -329,17 +330,8 @@ pub async fn make_authenticated_client(
         })
         .unwrap_or_default();
 
-    if let Err(e) = spawner
-        .spawn(move |manager, ctx| {
-            if !csrf_state.is_empty() {
-                manager.pending_oauth_csrf.insert(csrf_state, uuid);
-            }
-            ctx.open_url(&auth_url);
-            manager.change_server_state(uuid, MCPServerState::Authenticating, ctx);
-        })
-        .await
-    {
-        log::warn!("Failed to emit RequiresAuthentication state: {e:?}");
+    if let Err(err) = requires_authentication(uuid, csrf_state, auth_url).await {
+        log::warn!("Failed to emit RequiresAuthentication state: {err:?}");
     }
 
     // Wait for the authorization code from the OAuth callback channel.
@@ -367,108 +359,8 @@ pub async fn make_authenticated_client(
     Ok((AuthClient::new(reqwest::Client::new(), auth_manager), true))
 }
 
-impl TemplatableMCPServerManager {
-    /// Handles an incoming OAuth callback URL.
-    ///
-    /// Routes the callback to the correct in-flight OAuth flow using the `state` query
-    /// parameter (the CSRF token that rmcp embedded in the authorization URL). This avoids
-    /// encoding routing data in the redirect URI, keeping it RFC 6749 §3.1.2.2 compliant.
-    pub fn handle_oauth_callback(&mut self, url: &Url) -> anyhow::Result<()> {
-        // Ensure the URL has the expected path
-        if url.path() != "/oauth2callback" {
-            bail!(
-                "Invalid OAuth callback path: expected '/oauth2callback', got '{}'",
-                url.path()
-            );
-        }
-
-        let query_params: HashMap<_, _> = url.query_pairs().collect();
-
-        let Some(state) = query_params.get("state") else {
-            bail!("Missing 'state' parameter in OAuth callback");
-        };
-
-        let code = query_params.get("code");
-        let error = query_params.get("error");
-
-        let result = match code {
-            Some(code) => CallbackResult::Success {
-                code: code.to_string(),
-                // Pass the state value through as the CSRF token; rmcp will validate it
-                // against the token it stored when generating the authorization URL.
-                csrf_token: state.to_string(),
-            },
-            None => CallbackResult::Error {
-                error: error.map(|e| e.to_string()),
-            },
-        };
-
-        let Some(&server_uuid) = self.pending_oauth_csrf.get(state.as_ref() as &str) else {
-            bail!("No active OAuth flow found for state={state}");
-        };
-
-        let Some(server_info) = self.spawned_servers.get(&server_uuid) else {
-            bail!("No spawned server found for uuid={server_uuid}");
-        };
-
-        warpui::r#async::block_on(server_info.oauth_result_tx.send(result)).map_err(|_| {
-            anyhow!("Failed to send OAuth result to server {server_uuid} - receiver dropped")
-        })?;
-
-        self.pending_oauth_csrf.remove(state.as_ref() as &str);
-        Ok(())
-    }
-
-    pub fn save_credentials_to_secure_storage(
-        &mut self,
-        app: &mut warpui::AppContext,
-        installation_uuid: Uuid,
-        credentials: PersistedCredentials,
-    ) {
-        if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
-            self.file_based_server_credentials.insert(hash, credentials);
-            write_to_secure_storage(
-                app,
-                FILE_BASED_MCP_CREDENTIALS_KEY,
-                &self.file_based_server_credentials,
-            );
-            return;
-        }
-
-        if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
-            self.server_credentials.insert(template_uuid, credentials);
-            write_to_secure_storage(
-                app,
-                TEMPLATABLE_MCP_CREDENTIALS_KEY,
-                &self.server_credentials,
-            );
-        } else {
-            log::error!(
-                "Corresponding file or cloud-based server not found for installation UUID {installation_uuid}"
-            );
-        }
-    }
-
-    pub fn delete_credentials_from_secure_storage(
-        &mut self,
-        installation_uuid: Uuid,
-        app: &mut warpui::AppContext,
-    ) {
-        if let Some(template_uuid) = self.get_template_uuid(installation_uuid) {
-            self.server_credentials.remove(&template_uuid);
-            write_to_secure_storage(
-                app,
-                TEMPLATABLE_MCP_CREDENTIALS_KEY,
-                &self.server_credentials,
-            );
-        } else {
-            log::error!("No template UUID found for installation UUID {installation_uuid}");
-        }
-    }
-}
-
 /// Loads credentials from secure storage at the provided key.
-pub(crate) fn load_credentials_from_secure_storage<T: DeserializeOwned + Default>(
+pub fn load_credentials_from_secure_storage<T: DeserializeOwned + Default>(
     app: &mut warpui::AppContext,
     key: &str,
 ) -> T {
@@ -485,7 +377,7 @@ pub(crate) fn load_credentials_from_secure_storage<T: DeserializeOwned + Default
 }
 
 /// Writes credentials to secure storage at the provided key.
-pub(crate) fn write_to_secure_storage<T: Serialize>(
+pub fn write_to_secure_storage<T: Serialize>(
     app: &mut warpui::AppContext,
     key: &str,
     credentials: &T,

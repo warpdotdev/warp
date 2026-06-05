@@ -604,21 +604,6 @@ impl FileNotebookView {
                 _ => {}
             }
         });
-        let client = manager.as_ref(ctx).client_for_host(&host_id).cloned();
-
-        let Some(client) = client else {
-            safe_warn!(
-                safe: ("No remote server client for host when opening markdown file"),
-                full: ("No remote server client for host {host_id:?} when opening markdown file")
-            );
-            self.file_state = match mem::replace(&mut self.file_state, FileState::NoFile) {
-                FileState::Loading(source) => FileState::Error(source),
-                other => other,
-            };
-            ctx.notify();
-            return;
-        };
-
         let request = remote_server::proto::ReadFileContextRequest {
             files: vec![remote_server::proto::ReadFileContextFile {
                 path: path_str,
@@ -628,8 +613,9 @@ impl FileNotebookView {
             max_batch_bytes: None,
         };
 
+        let handle = manager.as_ref(ctx).host_request_handle(&host_id);
         ctx.spawn(
-            async move { client.read_file_context(request).await },
+            async move { handle.read_file_context(request).await },
             move |me, result, ctx| match result {
                 Ok(response) => {
                     if let Some(file_ctx) = response.file_contexts.first() {

@@ -3,12 +3,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 
 use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
 };
@@ -393,7 +393,14 @@ impl BlocklistAIContextModel {
     /// Returns `AIAgentContext` for the blocks to be included in the current AI query.
     /// If `is_user_query` is true, includes blocks, selected text, and images as context.
     /// If false, excludes these user-specific contexts but includes everything else.
-    pub fn pending_context(&self, app: &AppContext, is_user_query: bool) -> Vec<AIAgentContext> {
+    pub fn pending_context(
+        &self,
+        app: &AppContext,
+        is_user_query: bool,
+        current_working_directory_location: Option<&LocalOrRemotePath>,
+    ) -> Vec<AIAgentContext> {
+        // `pwd` is the shell-reported path used for directory context and local indexing.
+        // The location is passed separately because it preserves remote host identity for rules.
         let pwd = self.current_pwd();
         let is_pwd_indexed = if cfg!(feature = "agent_mode_evals") {
             // In evals, we want to disable file outline based search. Full
@@ -406,15 +413,8 @@ impl BlocklistAIContextModel {
                 })
         };
 
-        let project_rules = if let Some(pwd) = pwd.clone().and_then(|path| {
-            PathBuf::from_str(&path)
-                .ok()
-                .and_then(|s| s.canonicalize().ok())
-        }) {
-            ProjectContextModel::as_ref(app).find_applicable_rules(&pwd)
-        } else {
-            None
-        };
+        let project_rules = current_working_directory_location
+            .and_then(|pwd| ProjectContextModel::as_ref(app).find_applicable_rules(pwd));
 
         let mut context = Vec::new();
 
@@ -451,14 +451,14 @@ impl BlocklistAIContextModel {
         // Always include project rules if available
         if let Some(rules) = project_rules {
             context.push(AIAgentContext::ProjectRules {
-                root_path: rules.root_path.to_string_lossy().into(),
+                root_path: rules.root_path.display_path(),
                 active_rules: rules
                     .active_rules
                     .into_iter()
                     .map(|rule| {
                         let line_count = rule.content.lines().count();
                         FileContext {
-                            file_name: rule.path.to_string_lossy().into(),
+                            file_name: rule.path.display_path(),
                             content: AnyFileContent::StringContent(rule.content.clone()),
                             line_range: None,
                             last_modified: None,

@@ -48,6 +48,14 @@ impl Heartbeat {
         self.reset_idle_timeout(ctx);
         self.periodic_ping(ctx);
     }
+    pub fn stop(&mut self) {
+        if let Some(handle) = self.idle_timeout_abort_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.periodic_ping_abort_handle.take() {
+            handle.abort();
+        }
+    }
 
     /// Resets the idle timeout to expire after [`Self::idle_timeout`] from now.
     pub fn reset_idle_timeout(&mut self, ctx: &mut ModelContext<Self>) {

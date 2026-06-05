@@ -19,12 +19,14 @@ use lsp::LspEvent;
 use lsp::{LspManagerModel, LspServerConfig};
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+#[cfg(feature = "local_fs")]
+use repo_metadata::RepoMetadataModel;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "local_fs")]
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
-use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::{local_or_remote_path::LocalOrRemotePath, standardized_path::StandardizedPath};
 #[cfg(feature = "local_fs")]
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
@@ -34,6 +36,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::codebase_auto_indexing::{
     auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
 };
+use crate::ai::metadata_project_rules::read_project_rule_contents;
 use crate::ai::AIRequestUsageModel;
 #[cfg(feature = "local_fs")]
 use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager;
@@ -670,7 +673,11 @@ impl PersistedWorkspace {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn index_repo(&self, directory_path: PathBuf, ctx: &mut ModelContext<Self>) {
         ProjectContextModel::handle(ctx).update(ctx, |model, ctx| {
-            let _ = model.index_and_store_rules(directory_path.clone(), ctx);
+            let _ = model.index_and_store_rules(
+                directory_path.clone(),
+                read_project_rule_contents,
+                ctx,
+            );
         });
         if FeatureFlag::FullSourceCodeEmbedding.is_enabled()
             && UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
@@ -685,7 +692,8 @@ impl PersistedWorkspace {
     /// Explicitly registers a directory as a workspace, as if the user had navigated there.
     ///
     /// Creates or updates the entry with `navigated_ts = now`, persists to SQLite,
-    /// triggers project-rules and codebase-index scanning, and emits
+    /// starts full repo-metadata indexing before triggering project-rules and codebase-index
+    /// scanning, and emits
     /// [`PersistedWorkspaceEvent::WorkspaceAdded`] so subscribers can refresh their UI.
     pub fn user_added_workspace(&mut self, path: PathBuf, ctx: &mut ModelContext<Self>) {
         let now = Utc::now();
@@ -711,6 +719,22 @@ impl PersistedWorkspace {
         }
 
         self.persist_metadata_for_index(&path);
+        #[cfg(feature = "local_fs")]
+        match StandardizedPath::from_local_canonicalized(&path) {
+            Ok(path) => {
+                if let Err(error) = RepoMetadataModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.index_local_directory_path(&path, ctx)
+                }) {
+                    log::warn!("Failed to start full repo metadata indexing for {path}: {error}");
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "Failed to canonicalize user-added workspace {} for full repo metadata indexing: {error}",
+                    path.display()
+                );
+            }
+        }
         self.index_repo(path.clone(), ctx);
         ctx.emit(PersistedWorkspaceEvent::WorkspaceAdded { path });
     }

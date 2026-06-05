@@ -127,9 +127,68 @@ impl WebSocket {
         Ok(Self(socket))
     }
 
+    /// Connect to `url`, attaching the provided extra request headers to the
+    /// HTTP upgrade handshake.
+    ///
+    /// Custom handshake headers are not supported on wasm websockets, so
+    /// `headers` is ignored there.
+    pub async fn connect_with_headers<'a>(
+        url: &str,
+        protocols: impl IntoIterator<Item = &'a str>,
+        headers: Vec<(&'a str, String)>,
+    ) -> anyhow::Result<Self> {
+        cfg_if::cfg_if! {
+            if #[cfg(not(target_family = "wasm"))] {
+                // `connect` accepts any `IntoClientRequest` and handles
+                // protocol negotiation + wrapping, so build the enriched
+                // request and hand it off.
+                let request = build_request_with_headers(url, headers)?;
+                Self::connect(request, protocols).await
+            } else {
+                let _ = headers;
+                Self::connect(url, protocols).await
+            }
+        }
+    }
+
     pub async fn into_graphql_client_builder(self) -> graphql_ws_client::ClientBuilder {
         self.0.into_graphql_client_builder().await
     }
+}
+
+/// If `err` originated from a websocket handshake that received a non-101 HTTP
+/// response (e.g. an auth or proxy challenge), returns that response so callers
+/// can inspect its status and headers (for example, to detect a GCP IAP
+/// challenge). Native-only: wasm websockets do not surface the handshake
+/// response on error.
+#[cfg(not(target_family = "wasm"))]
+pub fn connect_error_http_response(
+    err: &anyhow::Error,
+) -> Option<&tungstenite::http::Response<Option<Vec<u8>>>> {
+    err.chain()
+        .find_map(|cause| match cause.downcast_ref::<tungstenite::Error>() {
+            Some(tungstenite::Error::Http(response)) => Some(response),
+            _ => None,
+        })
+}
+
+/// Builds a native websocket client request for `url`, attaching the provided
+/// extra request headers to the handshake.
+#[cfg(not(target_family = "wasm"))]
+fn build_request_with_headers(
+    url: &str,
+    headers: Vec<(&str, String)>,
+) -> anyhow::Result<tungstenite::handshake::client::Request> {
+    let mut request = url.into_client_request()?;
+    let request_headers = request.headers_mut();
+    for (name, value) in headers {
+        let header_name = http::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| anyhow!("invalid websocket header name `{name}`: {err}"))?;
+        let header_value = http::HeaderValue::from_str(&value)
+            .map_err(|err| anyhow!("invalid websocket header value: {err}"))?;
+        request_headers.insert(header_name, header_value);
+    }
+    Ok(request)
 }
 
 /// Trait that defines a [`Sink`] returned by the websocket.

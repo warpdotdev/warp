@@ -22,7 +22,6 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::{self, TableFormat};
 use crate::server::ids::ApiKeyUid;
-use crate::server::server_api::auth::AuthClient;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::ServerApiProvider;
 
@@ -64,11 +63,11 @@ impl ApiKeyCommandRunner {
         args: ListApiKeysArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
         ctx.spawn(
             async move {
-                let mut keys: Vec<_> = server_api
+                let mut keys: Vec<_> = auth_client
                     .list_api_keys()
                     .await?
                     .into_iter()
@@ -92,14 +91,14 @@ impl ApiKeyCommandRunner {
         args: CreateApiKeyArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
         ctx.spawn(
             async move {
                 let json_output = args.json_output;
                 let expires_at = expires_at_from_args(args.expiration)?;
                 let agent_uid = args.agent_uid.map(cynic::Id::new);
-                let result = server_api
+                let result = auth_client
                     .create_api_key(args.name, None, agent_uid, expires_at)
                     .await?;
                 let result = match result {
@@ -132,11 +131,11 @@ impl ApiKeyCommandRunner {
         let key_identifier = args.key_uid;
         let force = args.force;
         let json_output = args.json_output;
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
         ctx.spawn(
             async move {
-                let keys = server_api
+                let keys = auth_client
                     .list_api_keys()
                     .await?
                     .into_iter()
@@ -201,10 +200,10 @@ impl ApiKeyCommandRunner {
                 }
 
                 let uid = ApiKeyUid::from(key.uid);
-                let server_api = ServerApiProvider::as_ref(ctx).get();
+                let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
                 ctx.spawn(
                     async move {
-                        let result = server_api.expire_api_key(&uid).await?;
+                        let result = auth_client.expire_api_key(&uid).await?;
                         let expired = match result {
                             ExpireApiKeyResult::ExpireApiKeyOutput(output) => output.success,
                             ExpireApiKeyResult::UserFacingError(e) => {

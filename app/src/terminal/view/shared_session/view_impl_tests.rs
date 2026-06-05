@@ -596,6 +596,7 @@ fn server_conversation_metadata(
             last_editor_uid: None,
             current_editor_uid: None,
         },
+        creator: None,
         permissions,
         ambient_agent_task_id: Some(ambient_agent_task_id),
         server_conversation_token: ServerConversationToken::new(server_conversation_token),
@@ -810,6 +811,7 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                         submission_state: HandoffSubmissionState::Idle,
                         auto_submit: None,
                         orchestration_handoff: None,
+                        should_inject_continue: false,
                     }),
                     ctx,
                 );
@@ -1991,7 +1993,6 @@ fn test_non_owned_tombstone_is_removed_for_followup_and_reinserted_after_complet
 fn test_on_ambient_agent_execution_ended_refreshes_open_details_panel_to_terminal_status() {
     let _cloud_mode_flag = FeatureFlag::CloudMode.override_enabled(true);
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
-    let _orchestration_v2_flag = FeatureFlag::OrchestrationV2.override_enabled(true);
     let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
     App::test((), |mut app| async move {

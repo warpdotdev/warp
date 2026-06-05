@@ -19,7 +19,7 @@ use vec1::Vec1;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::{safe_error, safe_info};
+use warp_core::{safe_error, safe_info, SessionId};
 use warp_editor::content::buffer::{AutoScrollBehavior, InitialBufferState, SelectionOffsets};
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::element::VerticalExpansionBehavior;
@@ -678,6 +678,17 @@ impl CodeReviewView {
         &self.diff_state_model
     }
 
+    /// The session this review is being shown in, when available. Supplied
+    /// per-call as the preferred dispatch session for remote `GetDiffState`
+    /// RPCs so the request rides the connection that's actually showing the
+    /// review; `None` falls back to any connected session for the host.
+    fn preferred_review_session(&self, ctx: &ViewContext<Self>) -> Option<SessionId> {
+        self.terminal_view
+            .as_ref()
+            .and_then(|tv| tv.upgrade(ctx))
+            .and_then(|tv| tv.as_ref(ctx).active_block_session_id())
+    }
+
     /// Called when the code review view is opened/attached to a pane group.
     /// Subscribes to the diff state model and enables metadata refresh.
     pub fn on_open(&mut self, ctx: &mut ViewContext<Self>) {
@@ -733,9 +744,10 @@ impl CodeReviewView {
         // (and will make an RPC once that path is wired). We pass
         // should_fetch_base: false because re-opening the panel doesn't
         // need to fetch the base branch from origin.
+        let preferred_session = self.preferred_review_session(ctx);
         self.diff_state_model.update(ctx, |model, ctx| {
             model.set_code_review_metadata_refresh_enabled(true, ctx);
-            model.load_diffs_for_current_repo(false, true, ctx);
+            model.load_diffs_for_current_repo(false, true, preferred_session, ctx);
         });
     }
 
@@ -1567,8 +1579,9 @@ impl CodeReviewView {
             ctx
         );
 
+        let preferred_session = self.preferred_review_session(ctx);
         self.diff_state_model.update(ctx, |model, ctx| {
-            model.set_diff_mode(mode, false, true, ctx);
+            model.set_diff_mode(mode, false, true, preferred_session, ctx);
         });
         self.update_diff_selector_selection(ctx);
         self.invalidate_all(None, None, ctx);
@@ -4079,14 +4092,13 @@ impl CodeReviewView {
                     .with_margin_top(16.)
                     .finish(),
             );
-        } else if let Some(repo_path) = self.repo_path().and_then(LocalOrRemotePath::to_local_path)
-        {
+        } else if let Some(repo_path) = self.repo_path() {
             // Check for initialized project-scoped rules.
             if let Some(rules) =
                 ProjectContextModel::as_ref(app).find_applicable_project_rules(repo_path)
             {
                 if let Some(first_rule) = rules.active_rules.first() {
-                    if let Some(file_name) = first_rule.path.file_name().and_then(|n| n.to_str()) {
+                    if let Some(file_name) = first_rule.path.file_name() {
                         zero_state_column.add_child(
                             Container::new(
                                 Text::new(
@@ -5941,8 +5953,9 @@ impl CodeReviewView {
     }
 
     pub(crate) fn set_diff_base(&mut self, diff_mode: DiffMode, ctx: &mut ViewContext<Self>) {
+        let preferred_session = self.preferred_review_session(ctx);
         self.diff_state_model.update(ctx, |diff_state_model, ctx| {
-            diff_state_model.set_diff_mode_and_fetch_base(diff_mode, ctx);
+            diff_state_model.set_diff_mode_and_fetch_base(diff_mode, preferred_session, ctx);
         });
         self.update_diff_selector_selection(ctx);
         self.invalidate_all(None, None, ctx);
@@ -6508,6 +6521,24 @@ impl CodeReviewView {
     /// Updates the primary git operations button, chevron visibility, and
     /// related state to match the current [`PrimaryGitActionMode`].
     fn update_git_operations_ui(&mut self, ctx: &mut ViewContext<Self>) {
+        // Disable the button for remote sessions.
+        if self.repo_path().is_some_and(LocalOrRemotePath::is_remote) {
+            const REMOTE_TOOLTIP: &str = "Git operations aren't available in remote sessions";
+            self.git_primary_action_button.update(ctx, |button, ctx| {
+                button.set_label("Commit", ctx);
+                button.set_icon(Some(Icon::GitCommit), ctx);
+                button.set_disabled(true, ctx);
+                button.set_tooltip(Some(REMOTE_TOOLTIP), ctx);
+                button.set_adjoined_side(AdjoinedSide::Right, ctx);
+            });
+            self.git_operations_chevron.update(ctx, |button, ctx| {
+                button.set_disabled(true, ctx);
+                button.set_tooltip(Some(REMOTE_TOOLTIP), ctx);
+            });
+            ctx.notify();
+            return;
+        }
+
         let mode = self.primary_git_action_mode(ctx);
 
         match mode {
@@ -7245,8 +7276,9 @@ impl TypedActionView for CodeReviewView {
                 self.save_files(unsaved_files.as_slice(), ctx);
             }
             CodeReviewAction::RefreshGitState => {
+                let preferred_session = self.preferred_review_session(ctx);
                 self.diff_state_model.update(ctx, |model, ctx| {
-                    model.load_diffs_for_current_repo(false, true, ctx);
+                    model.load_diffs_for_current_repo(false, true, preferred_session, ctx);
                     model.refresh_metadata_after_git_operation(ctx);
                 });
                 self.refresh_pr_info(ctx);

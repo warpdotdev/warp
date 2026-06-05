@@ -1,11 +1,94 @@
+use std::borrow::Cow;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use anyhow::{Result, bail};
+use async_trait::async_trait;
 use cynic::{GraphQlError, GraphQlResponse};
 use futures::executor::block_on;
+use http::StatusCode;
+use instant::Duration;
+use warp_graphql::client::{GraphQLError, RequestOptions};
 
-use super::*;
+use super::send_graphql_request;
+use crate::auth::AgentIdentity;
+use crate::base_client::BaseClient;
+
+struct FakeBaseClient {
+    auth_token: Option<String>,
+    request_options_error: Option<&'static str>,
+    auth_refresh_allowed: bool,
+    disabled_event_count: Arc<AtomicUsize>,
+}
+
+impl FakeBaseClient {
+    fn configured(auth_token: Option<&str>, auth_refresh_allowed: bool) -> Self {
+        Self {
+            auth_token: auth_token.map(ToOwned::to_owned),
+            request_options_error: None,
+            auth_refresh_allowed,
+            disabled_event_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn missing_credentials() -> Self {
+        Self {
+            auth_token: None,
+            request_options_error: Some("missing authentication credentials"),
+            auth_refresh_allowed: false,
+            disabled_event_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+#[cfg_attr(not(target_family = "wasm"), async_trait)]
+#[cfg_attr(target_family = "wasm", async_trait(?Send))]
+impl BaseClient for FakeBaseClient {
+    fn http_client(&self) -> Arc<http_client::Client> {
+        Arc::new(http_client::Client::new())
+    }
+
+    fn anonymous_id(&self) -> String {
+        String::new()
+    }
+
+    fn unauthenticated_graphql_request_options(&self) -> RequestOptions {
+        RequestOptions::default()
+    }
+
+    async fn graphql_request_options(&self, timeout: Option<Duration>) -> Result<RequestOptions> {
+        if let Some(message) = self.request_options_error {
+            bail!(message);
+        }
+        Ok(RequestOptions {
+            auth_token: self.auth_token.clone(),
+            timeout,
+            ..RequestOptions::default()
+        })
+    }
+
+    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn is_auth_refresh_allowed(&self) -> bool {
+        self.auth_refresh_allowed
+    }
+
+    fn on_graphql_staging_access_blocked(&self) {}
+
+    fn on_graphql_iap_challenge_received(&self) {}
+
+    fn on_graphql_user_account_disabled(&self) {
+        self.disabled_event_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 struct FakeGraphqlOperation {
     expected_auth_token: Option<String>,
@@ -61,7 +144,7 @@ impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
     fn send_request(
         self,
         _client: Arc<http_client::Client>,
-        options: warp_graphql::client::RequestOptions,
+        options: RequestOptions,
     ) -> Pin<
         Box<
             dyn Future<Output = std::result::Result<GraphQlResponse<()>, GraphQLError>>
@@ -103,44 +186,44 @@ fn has_error_message(error: &anyhow::Error, expected: &str) -> bool {
 }
 
 #[test]
-fn send_graphql_request_refresh_enabled_uses_auth_state() {
-    let server_api = ServerApi::new_for_test();
+fn refresh_enabled_sends_configured_request_options() {
+    let base_client = FakeBaseClient::configured(None, true);
     let send_count = Arc::new(AtomicUsize::new(0));
 
-    block_on(server_api.send_graphql_request(
+    block_on(send_graphql_request(
+        &base_client,
         FakeGraphqlOperation::successful(None, send_count.clone()),
         None,
     ))
     .unwrap();
 
-    assert!(server_api.allowed_to_refresh_token());
+    assert!(base_client.is_auth_refresh_allowed());
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn send_graphql_request_refresh_disabled_uses_provided_bearer_token() {
-    let (event_sender, _) = async_channel::unbounded();
-    let server_api =
-        ServerApi::new_for_test_with_bearer_token(Some("daemon-token".to_string()), event_sender);
+fn refresh_disabled_sends_provided_bearer_token() {
+    let base_client = FakeBaseClient::configured(Some("daemon-token"), false);
     let send_count = Arc::new(AtomicUsize::new(0));
 
-    block_on(server_api.send_graphql_request(
+    block_on(send_graphql_request(
+        &base_client,
         FakeGraphqlOperation::successful(Some("daemon-token"), send_count.clone()),
         None,
     ))
     .unwrap();
 
-    assert!(!server_api.allowed_to_refresh_token());
+    assert!(!base_client.is_auth_refresh_allowed());
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn send_graphql_request_refresh_disabled_missing_token_returns_auth_error() {
-    let (event_sender, event_receiver) = async_channel::unbounded();
-    let server_api = ServerApi::new_for_test_with_bearer_token(None, event_sender);
+fn missing_request_credentials_returns_before_sending() {
+    let base_client = FakeBaseClient::missing_credentials();
     let send_count = Arc::new(AtomicUsize::new(0));
 
-    let error = block_on(server_api.send_graphql_request(
+    let error = block_on(send_graphql_request(
+        &base_client,
         FakeGraphqlOperation::successful(Some("unused-token"), send_count.clone()),
         None,
     ))
@@ -151,17 +234,16 @@ fn send_graphql_request_refresh_disabled_missing_token_returns_auth_error() {
         "missing authentication credentials"
     ));
     assert_eq!(send_count.load(Ordering::SeqCst), 0);
-    assert!(event_receiver.try_recv().is_err());
+    assert_eq!(base_client.disabled_event_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn send_graphql_request_refresh_disabled_auth_rejection_is_credentials_rejected() {
-    let (event_sender, event_receiver) = async_channel::unbounded();
-    let server_api =
-        ServerApi::new_for_test_with_bearer_token(Some("daemon-token".to_string()), event_sender);
+fn external_auth_rejection_returns_credentials_rejected_without_account_event() {
+    let base_client = FakeBaseClient::configured(Some("daemon-token"), false);
     let send_count = Arc::new(AtomicUsize::new(0));
 
-    let error = block_on(server_api.send_graphql_request(
+    let error = block_on(send_graphql_request(
+        &base_client,
         FakeGraphqlOperation::rejected(
             Some("daemon-token"),
             send_count.clone(),
@@ -176,17 +258,16 @@ fn send_graphql_request_refresh_disabled_auth_rejection_is_credentials_rejected(
         "server rejected authentication credentials"
     ));
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    assert!(event_receiver.try_recv().is_err());
+    assert_eq!(base_client.disabled_event_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn send_graphql_request_refresh_disabled_user_not_in_context_is_credentials_rejected() {
-    let (event_sender, event_receiver) = async_channel::unbounded();
-    let server_api =
-        ServerApi::new_for_test_with_bearer_token(Some("daemon-token".to_string()), event_sender);
+fn external_user_not_in_context_returns_credentials_rejected_without_account_event() {
+    let base_client = FakeBaseClient::configured(Some("daemon-token"), false);
     let send_count = Arc::new(AtomicUsize::new(0));
 
-    let error = block_on(server_api.send_graphql_request(
+    let error = block_on(send_graphql_request(
+        &base_client,
         FakeGraphqlOperation::response_errors(
             Some("daemon-token"),
             send_count.clone(),
@@ -201,5 +282,5 @@ fn send_graphql_request_refresh_disabled_user_not_in_context_is_credentials_reje
         "server rejected authentication credentials"
     ));
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    assert!(event_receiver.try_recv().is_err());
+    assert_eq!(base_client.disabled_event_count.load(Ordering::SeqCst), 0);
 }

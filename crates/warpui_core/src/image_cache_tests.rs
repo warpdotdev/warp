@@ -16,6 +16,12 @@ impl AssetProvider for Assets {
     fn get(&self, path: &str) -> Result<Cow<'_, [u8]>> {
         match path {
             "animated.webp" => Ok(Cow::Borrowed(include_bytes!("../test_data/animated.webp"))),
+            "cache-test.svg" => Ok(Cow::Borrowed(
+                br##"<svg width="20" height="10" viewBox="0 0 20 10" xmlns="http://www.w3.org/2000/svg"><rect width="20" height="10" fill="#ffffff"/></svg>"##,
+            )),
+            "fit-test.rgba" => Ok(Cow::Borrowed(
+                b"warp-img:rgba:4:2:\xff\x00\x00\xff\xff\x00\x00\xff\x00\x00\xff\xff\x00\x00\xff\xff\x00\xff\x00\xff\x00\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff",
+            )),
             "numbers-1000ms.gif" => Ok(Cow::Borrowed(include_bytes!(
                 "../../warpui/examples/assets/numbers-1000ms.gif"
             ))),
@@ -133,6 +139,66 @@ fn test_passes_through_asset_cache_original_when_target_size_matches_source_size
     // in the asset cache point to the same underlying data (i.e.: there were
     // no copies made).
     assert!(image_asset_weak.ptr_eq(&Arc::downgrade(image)));
+}
+
+#[test]
+fn test_caches_svg_rendered_at_intrinsic_size() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+    let bounds = Vector2I::new(20, 10);
+
+    let image = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "cache-test.svg",
+        bounds,
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+    );
+    let image_again = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "cache-test.svg",
+        bounds,
+        FitType::Contain,
+        AnimatedImageBehavior::FullAnimation,
+    );
+
+    assert!(Rc::ptr_eq(&image, &image_again));
+}
+
+#[test]
+fn test_different_fit_types_do_not_collide_in_rendered_image_cache() {
+    let asset_cache = new_asset_cache();
+    let image_cache = ImageCache::new();
+    let bounds = Vector2I::new(8, 8);
+
+    let cover = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "fit-test.rgba",
+        bounds,
+        FitType::Cover,
+        AnimatedImageBehavior::FullAnimation,
+    );
+    let stretch = load_bundled_image(
+        &image_cache,
+        &asset_cache,
+        "fit-test.rgba",
+        bounds,
+        FitType::Stretch,
+        AnimatedImageBehavior::FullAnimation,
+    );
+    assert!(!Rc::ptr_eq(&cover, &stretch));
+    let Image::Static(cover) = cover.as_ref() else {
+        panic!("Expected static image but got animated image!");
+    };
+    let Image::Static(stretch) = stretch.as_ref() else {
+        panic!("Expected static image but got animated image!");
+    };
+    assert_eq!(cover.img.dimensions(), (8, 8));
+    assert_eq!(stretch.img.dimensions(), (8, 8));
+    assert_ne!(cover.rgba_bytes(), stretch.rgba_bytes());
 }
 
 #[test]
@@ -531,7 +597,12 @@ fn test_evict_size_drops_arc_only_for_targeted_entry() {
     assert_eq!(weak_large.strong_count(), 1);
 
     // Evict only the small size entry.
-    image_cache.evict_size(&source, small_bounds, AnimatedImageBehavior::FullAnimation);
+    image_cache.evict_size(
+        &source,
+        small_bounds,
+        FitType::Cover,
+        AnimatedImageBehavior::FullAnimation,
+    );
 
     assert_eq!(
         weak_small.strong_count(),

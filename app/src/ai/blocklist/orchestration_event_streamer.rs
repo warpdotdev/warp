@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use futures::channel::mpsc;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
@@ -1254,14 +1253,6 @@ impl OrchestrationEventStreamer {
         conversation_ids: Vec<AIConversationId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Orchestration v2 owns the events endpoints and the cursor model.
-        // V1 conversations may carry a run_id but the v2-only event APIs
-        // would return spurious 4xx responses, so skip restore entirely
-        // when V2 is disabled.
-        if !FeatureFlag::OrchestrationV2.is_enabled() {
-            return;
-        }
-
         for conv_id in conversation_ids {
             let (run_id, cursor, is_remote_view) = {
                 let history = BlocklistAIHistoryModel::as_ref(ctx);
@@ -1957,7 +1948,7 @@ impl OrchestrationEventStreamer {
             return;
         }
 
-        let pending = build_pending_events(&events, messages, lifecycle_events);
+        let pending = build_pending_events(messages, lifecycle_events);
         OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
             svc.enqueue_event_batch(conversation_id, pending, ctx);
         });
@@ -2150,32 +2141,20 @@ fn convert_lifecycle_events(events: &[AgentRunEvent], self_run_id: &str) -> Vec<
 }
 
 fn build_pending_events(
-    events: &[AgentRunEvent],
     messages: Vec<ReceivedMessageInput>,
     lifecycle_events: Vec<api::AgentEvent>,
 ) -> Vec<PendingEvent> {
     let mut pending = Vec::with_capacity(messages.len() + lifecycle_events.len());
     for msg in &messages {
-        let metadata = events
-            .iter()
-            .find(|event| {
-                event.event_type == "new_message"
-                    && event.ref_id.as_deref() == Some(msg.message_id.as_str())
-            })
-            .map(|event| (event.sequence, event.occurred_at.clone()));
-        let (sequence, occurred_at) =
-            metadata.unwrap_or_else(|| (0, chrono::Utc::now().to_rfc3339()));
         pending.push(PendingEvent {
             event_id: msg.message_id.clone(),
             source_agent_id: msg.sender_agent_id.clone(),
             attempt_count: 0,
             detail: PendingEventDetail::Message {
-                sequence,
                 message_id: msg.message_id.clone(),
                 addresses: msg.addresses.clone(),
                 subject: msg.subject.clone(),
                 message_body: msg.message_body.clone(),
-                occurred_at,
             },
         });
     }
@@ -2192,9 +2171,9 @@ fn build_pending_events(
 
 // ---- Free-function consumer registration helpers ---------------------
 //
-// Wrap the feature-flag check + singleton handle update so call sites
-// in `ActiveAgentViewsModel` and the agent_sdk driver don't have to
-// repeat the boilerplate. The generic bound covers both
+// Wrap the singleton handle update so call sites in `ActiveAgentViewsModel`
+// and the agent_sdk driver don't have to repeat the boilerplate.
+// The generic bound covers both
 // `&mut AppContext` and `&mut ModelContext<T>` / `&mut ViewContext<T>`.
 //
 // Consumers are identified by an `EntityId` — the terminal pane's id
@@ -2202,8 +2181,7 @@ fn build_pending_events(
 // streamer never branches on consumer kind, so a single pair of helpers
 // covers both call sites.
 
-/// Registers a consumer of orchestration agent events for
-/// `conversation_id`. No-op when `OrchestrationV2` is disabled.
+/// Registers a consumer of orchestration agent events for `conversation_id`.
 pub fn register_agent_event_consumer<C>(
     conversation_id: AIConversationId,
     consumer_id: EntityId,
@@ -2211,9 +2189,6 @@ pub fn register_agent_event_consumer<C>(
 ) where
     C: GetSingletonModelHandle + UpdateModel,
 {
-    if !FeatureFlag::OrchestrationV2.is_enabled() {
-        return;
-    }
     OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
         streamer.register_consumer(conversation_id, consumer_id, ctx);
     });
@@ -2227,9 +2202,6 @@ pub fn unregister_agent_event_consumer<C>(
 ) where
     C: GetSingletonModelHandle + UpdateModel,
 {
-    if !FeatureFlag::OrchestrationV2.is_enabled() {
-        return;
-    }
     OrchestrationEventStreamer::handle(ctx).update(ctx, |streamer, ctx| {
         streamer.unregister_consumer(conversation_id, consumer_id, ctx);
     });

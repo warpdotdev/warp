@@ -25,6 +25,15 @@ pub enum CLIAgentEventType {
     Unknown(String),
 }
 
+/// How a CLI agent event reached Warp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CLIAgentEventSource {
+    /// Structured OSC 777 notification from a rich plugin.
+    RichPlugin,
+    /// Native Codex OSC 9 fallback notification.
+    CodexOsc9Fallback,
+}
+
 /// Event-specific fields that vary by event type.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
@@ -49,6 +58,7 @@ pub struct CLIAgentEvent {
     pub cwd: Option<String>,
     pub project: Option<String>,
     pub payload: CLIAgentEventPayload,
+    pub source: CLIAgentEventSource,
 }
 
 /// Version-specific parsers, indexed by (version - 1).

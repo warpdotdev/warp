@@ -71,6 +71,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warp_editor::editor::NavigationKey;
+use warp_server_client::auth::AuthEvent;
 use warp_util::path::{user_friendly_path, LineAndColumnArg};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use warp_util::standardized_path::StandardizedPath;
@@ -163,9 +164,9 @@ use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
 use crate::ai::agent_management::AgentManagementEvent;
-#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::ai::ambient_agents::telemetry::{HandoffEntryPoint, HandoffInjectionPath};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::AgentToolbarEditorMode;
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
@@ -308,8 +309,7 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{ObjectUid, ServerId, SyncId};
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::auth::AuthClient;
-use crate::server::server_api::{ServerApi, ServerApiEvent, ServerApiProvider, ServerTime};
+use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
     FileTreeSource, KnowledgePaneEntrypoint, LaunchConfigUiLocation,
@@ -750,6 +750,7 @@ struct LocalToCloudHandoffOpenParams {
     launch: Option<PendingCloudLaunch>,
     environment_id: Option<SyncId>,
     intent: LocalToCloudHandoffIntent,
+    should_inject_continue: bool,
 }
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -2528,7 +2529,7 @@ impl Workspace {
     fn observe_server_api(ctx: &mut ViewContext<Self>) {
         let server_api_events = ServerApiProvider::handle(ctx);
         ctx.subscribe_to_model(&server_api_events, |me, _, event, ctx| {
-            if let ServerApiEvent::StagingAccessBlocked = event {
+            if let AuthEvent::StagingAccessBlocked = event {
                 if ChannelState::uses_staging_server() && me.shown_staging_banner_count < 5 {
                     me.shown_staging_banner_count += 1;
                     me.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -5856,28 +5857,42 @@ impl Workspace {
                 self.show_settings_with_section(Some(SettingsSection::WarpAgent), ctx);
             }
             #[allow(unused_variables)]
-            AIFactViewEvent::OpenFile(path) => {
+            AIFactViewEvent::OpenFile(location) => {
                 #[cfg(feature = "local_fs")]
                 {
-                    let settings = EditorSettings::as_ref(ctx);
-                    let target = resolve_file_target_with_editor_choice(
-                        path,
-                        *settings.open_file_editor,
-                        *settings.prefer_markdown_viewer,
-                        *settings.open_file_layout,
-                        None,
-                    );
-                    self.open_file_with_target(
-                        path.clone(),
-                        target,
-                        None,
-                        CodeSource::Link {
-                            path: path.clone(),
-                            range_start: None,
-                            range_end: None,
-                        },
-                        ctx,
-                    );
+                    match location {
+                        LocalOrRemotePath::Local(path) => {
+                            let settings = EditorSettings::as_ref(ctx);
+                            let target = resolve_file_target_with_editor_choice(
+                                path,
+                                *settings.open_file_editor,
+                                *settings.prefer_markdown_viewer,
+                                *settings.open_file_layout,
+                                None,
+                            );
+                            self.open_file_with_target(
+                                path.clone(),
+                                target,
+                                None,
+                                CodeSource::ProjectRules {
+                                    location: location.clone(),
+                                },
+                                ctx,
+                            );
+                        }
+                        LocalOrRemotePath::Remote(_) => {
+                            self.open_code(
+                                CodeSource::ProjectRules {
+                                    location: location.clone(),
+                                },
+                                EditorLayout::SplitPane,
+                                None,
+                                false,
+                                &[],
+                                ctx,
+                            );
+                        }
+                    }
                 }
             }
             AIFactViewEvent::InitializeProject(path) => {
@@ -8783,14 +8798,15 @@ impl Workspace {
             let read_result = active_pane_group.read(ctx, |pane_group, ctx| {
                 pane_group.active_session_view(ctx).map(|terminal_view| {
                     let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
-                    (repo_path, terminal_view.downgrade())
+                    let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
+                    (repo_path, preferred_session, terminal_view.downgrade())
                 })
             });
             // Resolve DiffStateModel outside the read closure (needs mutable context).
-            read_result.and_then(|(repo_path, terminal_view)| {
+            read_result.and_then(|(repo_path, preferred_session, terminal_view)| {
                 let diff_state_model = repo_path.as_ref().and_then(|rp| {
                     self.working_directories_model.update(ctx, |model, ctx| {
-                        model.get_or_create_diff_state_model(rp.clone(), ctx)
+                        model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
                     })
                 })?;
                 Some((repo_path, diff_state_model, terminal_view))
@@ -8827,9 +8843,13 @@ impl Workspace {
         }
 
         let repo_location = panel_context.repo_path.clone();
+        let preferred_session = panel_context
+            .terminal_view
+            .upgrade(ctx)
+            .and_then(|tv| tv.as_ref(ctx).active_block_session_id());
         let diff_state_model = repo_location.as_ref().and_then(|rp| {
             self.working_directories_model.update(ctx, |model, ctx| {
-                model.get_or_create_diff_state_model(rp.clone(), ctx)
+                model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
             })
         });
         let Some(diff_state_model) = diff_state_model else {
@@ -8942,18 +8962,20 @@ impl Workspace {
         let read_result = pane_group_handle.read(ctx, |pane_group, ctx| {
             pane_group.active_session_view(ctx).map(|terminal_view| {
                 let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
-                (repo_path, terminal_view.downgrade())
+                let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
+                (repo_path, preferred_session, terminal_view.downgrade())
             })
         });
         // Resolve DiffStateModel outside the read closure (needs mutable context).
         let context = read_result.and_then(
-            |(repo_path, terminal_view): (
+            |(repo_path, preferred_session, terminal_view): (
                 Option<LocalOrRemotePath>,
+                Option<SessionId>,
                 WeakViewHandle<TerminalView>,
             )| {
                 let diff_state_model = repo_path.as_ref().and_then(|rp| {
                     self.working_directories_model.update(ctx, |model, ctx| {
-                        model.get_or_create_diff_state_model(rp.clone(), ctx)
+                        model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
                     })
                 })?;
                 Some(CodeReviewPaneContext {
@@ -14539,6 +14561,7 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             orchestration_handoff: None,
+            should_inject_continue: false,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);
@@ -14665,12 +14688,57 @@ impl Workspace {
             }
         };
 
+        // Chip, `&` Enter, and `/handoff` with no arg dispatch `launch: None`;
+        // synthesize an empty `PendingCloudLaunch` so auto-submit fires. The
+        // empty-prompt substitution happens in `build_handoff_spawn_request`.
+        // Attachments come from the source input for symmetry across entry points.
+        let launch = match (launch, intent) {
+            (
+                None,
+                LocalToCloudHandoffIntent::UserInitiated(
+                    HandoffEntryPoint::FooterChip
+                    | HandoffEntryPoint::Ampersand
+                    | HandoffEntryPoint::SlashCommand,
+                ),
+            ) => {
+                let attachments = source_view.update(ctx, |view, ctx| {
+                    let input = view.input().clone();
+                    input.update(ctx, |input, ctx| {
+                        input.collect_cloud_launch_attachments(ctx)
+                    })
+                });
+                Some(PendingCloudLaunch {
+                    prompt: String::new(),
+                    attachments,
+                })
+            }
+            (launch, _) => launch,
+        };
+
         let has_existing_conversation = source_conversation.as_ref().is_some_and(|c| !c.is_empty());
+
+        // Capture the source-conversation state once. An "active" source is
+        // non-empty AND in-progress/blocked; the wire-level substitution and
+        // the telemetry injection_path read the same bool so the two cannot
+        // drift across the in-progress cancellation below.
+        let source_conversation_active = source_conversation.as_ref().is_some_and(|c| {
+            !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+        });
+        let empty_prompt = launch.as_ref().is_none_or(|l| l.prompt.is_empty());
+        let injection_path = if !empty_prompt {
+            HandoffInjectionPath::None
+        } else if source_conversation_active {
+            HandoffInjectionPath::Continue
+        } else {
+            HandoffInjectionPath::SnapshotRehydration
+        };
 
         send_telemetry_from_ctx!(
             CloudAgentTelemetryEvent::HandoffInitiated {
                 entry_point: intent.entry_point(),
                 forked_existing_conversation: has_existing_conversation,
+                empty_prompt,
+                injection_path,
             },
             ctx
         );
@@ -14696,9 +14764,7 @@ impl Workspace {
             return;
         }
 
-        if source_conversation.status().is_in_progress()
-            || source_conversation.status().is_blocked()
-        {
+        if source_conversation_active {
             let has_long_running_command =
                 source_view.as_ref(ctx).has_active_long_running_command();
 
@@ -14780,6 +14846,7 @@ impl Workspace {
                             launch,
                             environment_id,
                             intent,
+                            should_inject_continue: source_conversation_active,
                         },
                         ctx,
                     );
@@ -14816,6 +14883,7 @@ impl Workspace {
     /// Finishes the handoff after the fork RPC returns by restoring the forked
     /// conversation in a cloud pane and starting snapshot prep.
     #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+    #[allow(clippy::too_many_arguments)]
     fn complete_local_to_cloud_handoff_open(
         &mut self,
         source_view: ViewHandle<TerminalView>,
@@ -14828,6 +14896,7 @@ impl Workspace {
             launch,
             environment_id,
             intent,
+            should_inject_continue,
         } = params;
         let show_user_feedback = intent.shows_user_feedback();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
@@ -14946,6 +15015,7 @@ impl Workspace {
             submission_state: HandoffSubmissionState::Idle,
             auto_submit: launch,
             orchestration_handoff,
+            should_inject_continue,
         };
         model_handle.update(ctx, |model, model_ctx| {
             model.set_pending_handoff(Some(pending), model_ctx);
@@ -22840,13 +22910,19 @@ impl TypedActionView for Workspace {
                             .map(|terminal_view| {
                                 let repo_path =
                                     terminal_view.as_ref(ctx).current_repo_path().cloned();
-                                (repo_path, terminal_view.downgrade())
+                                let preferred_session =
+                                    terminal_view.as_ref(ctx).active_block_session_id();
+                                (repo_path, preferred_session, terminal_view.downgrade())
                             })
                     });
-                    if let Some((repo_path, terminal_view)) = read_result {
+                    if let Some((repo_path, preferred_session, terminal_view)) = read_result {
                         let diff_state_model = repo_path.as_ref().and_then(|rp| {
                             self.working_directories_model.update(ctx, |model, ctx| {
-                                model.get_or_create_diff_state_model(rp.clone(), ctx)
+                                model.get_or_create_diff_state_model(
+                                    rp.clone(),
+                                    preferred_session,
+                                    ctx,
+                                )
                             })
                         });
                         if let Some(diff_state_model) = diff_state_model {
@@ -24082,6 +24158,11 @@ impl TypedActionView for Workspace {
                         ctx,
                     );
                 }
+            }
+            ToggleHiddenFiles => {
+                CodeSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.show_hidden_files.toggle_and_save_value(ctx));
+                });
             }
             OpenGlobalSearch => {
                 if FeatureFlag::GlobalSearch.is_enabled()

@@ -61,7 +61,8 @@ use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, WriteToPtyPermission,
+    long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt,
+    ActionPermission, WriteToPtyPermission,
 };
 use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -90,7 +91,10 @@ use crate::settings::{
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
-use crate::view_components::{FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent};
+use crate::view_components::{
+    render_warning_box, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
+    WarningBoxConfig,
+};
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 
 /// Identifies which subpage of the AI settings the user is viewing.
@@ -634,6 +638,7 @@ pub struct AISettingsPageView {
     context_window_slider_state: SliderStateHandle,
     context_window_editor: ViewHandle<EditorView>,
     last_synced_context_window_editor_value: Option<u32>,
+    dragged_context_window_value: Option<u32>,
 
     thinking_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     default_prompt_submission_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -1707,6 +1712,7 @@ impl AISettingsPageView {
             context_window_slider_state,
             context_window_editor,
             last_synced_context_window_editor_value,
+            dragged_context_window_value: None,
             autonomy_dropdown_menu,
             code_read_allowlist_editor,
             code_read_autonomy_dropdown_menu,
@@ -2244,6 +2250,7 @@ impl AISettingsPageView {
     }
 
     fn sync_context_window_editor(&mut self, ctx: &mut ViewContext<Self>, force: bool) {
+        self.dragged_context_window_value = None;
         let Some(value) = Self::current_context_window_display_value(ctx) else {
             self.last_synced_context_window_editor_value = None;
             self.context_window_slider_state.reset_offset();
@@ -2887,6 +2894,7 @@ pub enum AISettingsPageAction {
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
     ToggleAutoDismissRichInputAfterSubmit,
+    ToggleSubmitRichInputOnCtrlEnter,
     SetCLIAgentForCommand {
         pattern: String,
         agent: Option<CLIAgent>,
@@ -3165,6 +3173,12 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.submit_on_ctrl_enter.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
             AISettingsPageAction::ToggleUseAgentToolbar => {
                 match AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings
@@ -3347,6 +3361,7 @@ impl TypedActionView for AISettingsPageView {
                     return;
                 }
                 if Self::configurable_context_window(ctx).is_some() {
+                    self.dragged_context_window_value = Some(*value);
                     let formatted = value.to_string();
                     self.context_window_editor.update(ctx, |editor, ctx| {
                         editor.system_reset_buffer_text(&formatted, ctx);
@@ -3355,6 +3370,7 @@ impl TypedActionView for AISettingsPageView {
                 }
             }
             AISettingsPageAction::SetContextWindowSize(value) => {
+                self.dragged_context_window_value = None;
                 if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     self.sync_context_window_editor(ctx, true);
                     return;
@@ -4796,8 +4812,7 @@ impl AgentsWidget {
 
     /// Renders the context window slider + numeric input row shown below the
     /// base model dropdown. Returns `None` if the active base model does not
-    /// advertise a configurable context window, global AI is disabled, or the
-    /// [`FeatureFlag::ConfigurableContextWindow`] flag is disabled.
+    /// advertise a configurable context window or global AI is disabled.
     fn render_context_window_setting(
         &self,
         view: &AISettingsPageView,
@@ -4805,9 +4820,6 @@ impl AgentsWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        if !FeatureFlag::ConfigurableContextWindow.is_enabled() {
-            return None;
-        }
         if !ai_settings.is_any_ai_enabled(app) {
             return None;
         }
@@ -4907,12 +4919,22 @@ impl AgentsWidget {
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(min_label)
-            .with_child(slider)
+            .with_child(Shrinkable::new(1., slider).finish())
             .with_child(max_label)
             .with_child(input_box)
             .finish();
 
-        Some(Flex::column().with_child(label).with_child(row).finish())
+        let mut column = Flex::column().with_child(label).with_child(row);
+        if AISettingsPageView::active_profile_data(app)
+            .should_show_long_context_pricing_warning(view.dragged_context_window_value, app)
+        {
+            column.add_child(render_warning_box(
+                WarningBoxConfig::formatted_title(long_context_pricing_warning_title()),
+                appearance,
+            ));
+        }
+
+        Some(column.finish())
     }
 
     fn render_permissions_section(
@@ -6475,13 +6497,14 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    submit_on_ctrl_enter_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CLIAgentWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss"
+        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss ctrl enter submit newline"
     }
 
     fn render(
@@ -6551,7 +6574,7 @@ impl SettingsWidget for CLIAgentWidget {
             use super::settings_page::AdditionalInfo;
             use crate::settings::{
                 AutoDismissRichInputAfterSubmit, AutoOpenRichInputOnCLIAgentStart,
-                AutoToggleRichInput,
+                AutoToggleRichInput, SubmitRichInputOnCtrlEnter,
             };
 
             if FeatureFlag::CLIAgentRichInput.is_enabled() {
@@ -6608,6 +6631,17 @@ impl SettingsWidget for CLIAgentWidget {
                     *ai_settings.auto_dismiss_rich_input_after_submit,
                     true,
                     self.auto_dismiss_rich_input_toggle.clone(),
+                    &view.local_only_icon_tooltip_states,
+                    app,
+                ));
+
+                // Setting 3: Submit Rich Input with Ctrl+Enter
+                column.add_child(render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
+                    "Submit Rich Input with Ctrl+Enter",
+                    AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter,
+                    *ai_settings.submit_on_ctrl_enter,
+                    true,
+                    self.submit_on_ctrl_enter_toggle.clone(),
                     &view.local_only_icon_tooltip_states,
                     app,
                 ));

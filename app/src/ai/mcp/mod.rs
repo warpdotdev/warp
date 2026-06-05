@@ -1,3 +1,6 @@
+pub mod manager;
+pub mod templatable_manager;
+
 #[cfg(not(target_family = "wasm"))]
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -6,6 +9,9 @@ use std::path::{Path, PathBuf};
 use diesel::{QueryDsl, RunQueryDsl, SqliteConnection};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
+#[cfg(not(target_family = "wasm"))]
+pub use templatable_manager::McpIntegration;
+pub use templatable_manager::TemplatableMCPServerManager;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
 
@@ -22,12 +28,6 @@ use crate::drive::CloudObjectTypeAndId;
 use crate::persistence::model::MCPEnvironmentVariables;
 use crate::server::ids::SyncId;
 use crate::server::sync_queue::QueueItem;
-
-pub mod manager;
-pub mod templatable_manager;
-#[cfg(not(target_family = "wasm"))]
-pub use templatable_manager::McpIntegration;
-pub use templatable_manager::TemplatableMCPServerManager;
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "local_fs"))] {
@@ -66,8 +66,6 @@ pub use templatable_installation::{VariableType, VariableValue};
 pub mod parsing;
 #[cfg(not(target_family = "wasm"))]
 pub use parsing::ParsedTemplatableMCPServerResult;
-#[cfg(not(target_family = "wasm"))]
-pub mod http_client;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconnecting_peer;
 
