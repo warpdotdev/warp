@@ -180,7 +180,12 @@ impl LocalControlServer {
         });
         let registered_instance = RegisteredInstance::register(record)?;
         #[cfg(unix)]
-        let broker_listener = bind_credential_broker(registered_instance.record())?;
+        let broker_listener = {
+            let runtime_guard = runtime.enter();
+            let listener = bind_credential_broker(registered_instance.record())?;
+            drop(runtime_guard);
+            listener
+        };
         let state = ControlServerState {
             bridge_spawner,
             instance_id,
