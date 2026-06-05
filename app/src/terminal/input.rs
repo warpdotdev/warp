@@ -881,10 +881,16 @@ pub enum CommandExecutionSource {
         /// in a shared session. This is used to associate the resulting command block
         /// with the original agent command.
         ai_metadata: Option<AgentInteractionMetadata>,
+        /// True when the command was dispatched by a queued command row rather than the current
+        /// editor buffer, so input draft state should be preserved.
+        preserve_input: bool,
     },
 
     /// A normal command execution request.
     User,
+    /// A command dispatched by the queued-prompts panel. It should execute like a user command but
+    /// must not treat the current editor contents as the submitted command.
+    QueuedCommand,
 
     EnvVarCollection {
         metadata: BlocklistEnvVarMetadata,
@@ -901,6 +907,17 @@ impl CommandExecutionSource {
             CommandExecutionSource::AI { .. }
                 | CommandExecutionSource::SharedSession {
                     ai_metadata: Some(_),
+                    ..
+                }
+        )
+    }
+
+    pub fn should_preserve_input(&self) -> bool {
+        matches!(
+            self,
+            CommandExecutionSource::QueuedCommand
+                | CommandExecutionSource::SharedSession {
+                    preserve_input: true,
                     ..
                 }
         )
@@ -6844,6 +6861,21 @@ impl Input {
         participant_id: ParticipantId,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        self.try_execute_command_on_behalf_of_shared_session_participant_with_options(
+            command,
+            participant_id,
+            false,
+            ctx,
+        )
+    }
+
+    fn try_execute_command_on_behalf_of_shared_session_participant_with_options(
+        &mut self,
+        command: &str,
+        participant_id: ParticipantId,
+        preserve_input: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
         // Cancel any active agent conversation when the sharer executes a command on behalf of the viewer
         // (this is handled automatically when the sharer executes a command that they requested).
         // This will also notify viewers to cancel their representation of the conversation.
@@ -6870,6 +6902,7 @@ impl Input {
                 participant_id,
                 block_id,
                 ai_metadata: None,
+                preserve_input,
             },
             ctx,
         )
@@ -6909,6 +6942,15 @@ impl Input {
     }
 
     pub fn try_execute_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) -> bool {
+        self.try_execute_command_with_options(command, false, ctx)
+    }
+
+    fn try_execute_command_with_options(
+        &mut self,
+        command: &str,
+        preserve_input: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
         let shared_session_status = self.model.lock().shared_session_status().clone();
         if shared_session_status.is_sharer_or_viewer() {
             // If this is a viewer who isn't also an executor, they should not
@@ -6919,7 +6961,7 @@ impl Input {
                 // caller of this API is the `enter` handler.
                 log::warn!("Viewer tried to execute a command as a reader");
                 return false;
-            } else if shared_session_status.is_executor() {
+            } else if shared_session_status.is_executor() && !preserve_input {
                 let original_buffer = self.freeze_input_in_loading_state(ctx);
 
                 if let Some(shared_session_input_state) = self.shared_session_input_state.as_mut() {
@@ -6936,9 +6978,16 @@ impl Input {
             else {
                 return false;
             };
-            self.try_execute_command_on_behalf_of_shared_session_participant(
+            self.try_execute_command_on_behalf_of_shared_session_participant_with_options(
                 command,
                 participant_id,
+                preserve_input,
+                ctx,
+            )
+        } else if preserve_input {
+            self.try_execute_command_from_source(
+                command,
+                CommandExecutionSource::QueuedCommand,
                 ctx,
             )
         } else {
@@ -6954,13 +7003,22 @@ impl Input {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        let started = self.try_execute_command(command, ctx);
+        let started = self.try_execute_command_with_options(command, true, ctx);
         if started {
             QueuedQueryModel::handle(ctx).update(ctx, |model, _| {
                 model.arm_command_in_flight(conversation_id);
             });
         }
         started
+    }
+
+    fn has_queued_command_in_flight(&self, ctx: &AppContext) -> bool {
+        QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(
+                self.terminal_view_id,
+                BlocklistAIHistoryModel::as_ref(ctx),
+            )
+            .is_some()
     }
 
     /// Executes the given command if the terminal session is in a valid state to accept and
@@ -14576,8 +14634,9 @@ impl Input {
                     ctx,
                 );
             // Only clear the input buffer for user-executed commands, not agent-executed ones.
-            let should_clear_buffer =
-                !user_block.was_part_of_agent_interaction && !cloud_setup_pre_first_exchange;
+            let should_clear_buffer = !user_block.was_part_of_agent_interaction
+                && !cloud_setup_pre_first_exchange
+                && !self.has_queued_command_in_flight(ctx);
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
             let input_contents_before_prompt_chip_command =
                 self.input_contents_before_prompt_chip_command.take();

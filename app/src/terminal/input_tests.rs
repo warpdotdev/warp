@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -69,7 +70,10 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext,
     CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::event::{BlockMetadataReceivedEvent, BootstrappedEvent};
+use crate::terminal::event::{
+    BlockCompletedEvent, BlockMetadataReceivedEvent, BlockType, BootstrappedEvent,
+    UserBlockCompleted,
+};
 use crate::terminal::general_settings::UserDefaultShellUnsupportedBannerState;
 use crate::terminal::input::slash_command_model::SlashCommandEntryState;
 use crate::terminal::input::slash_commands::SlashCommandsEvent;
@@ -77,7 +81,7 @@ use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::local_tty::shell::ShellStarter;
 use crate::terminal::model::ansi::{Handler, PrecmdValue};
-use crate::terminal::model::block::SerializedBlock;
+use crate::terminal::model::block::{BlockId, SerializedBlock};
 use crate::terminal::model::blocks::{insert_block, BlockListPoint};
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
@@ -1218,14 +1222,14 @@ fn send_now_command_event_executes_command_and_arms_in_flight() {
         simulate_directory_for_completion(session_id, &terminal, &mut app, "~");
         let input = terminal.read(&app, |view, _| view.input().clone());
 
-        let executed_commands = Rc::new(RefCell::new(Vec::<String>::new()));
+        let executed_commands = Rc::new(RefCell::new(Vec::<(String, bool)>::new()));
         let executed_commands_for_subscription = executed_commands.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
                 if let super::Event::ExecuteCommand(event) = event {
                     executed_commands_for_subscription
                         .borrow_mut()
-                        .push(event.command.clone());
+                        .push((event.command.clone(), event.source.should_preserve_input()));
                 }
             });
         });
@@ -1240,6 +1244,7 @@ fn send_now_command_event_executes_command_and_arms_in_flight() {
         });
 
         input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("draft in progress", ctx);
             input.handle_queued_prompts_panel_event(
                 &QueuedPromptsPanelEvent::SendNow {
                     conversation_id,
@@ -1251,10 +1256,71 @@ fn send_now_command_event_executes_command_and_arms_in_flight() {
             );
         });
 
-        assert_eq!(executed_commands.borrow().as_slice(), ["echo 1"]);
+        assert_eq!(
+            executed_commands.borrow().as_slice(),
+            [("echo 1".to_owned(), true)]
+        );
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "draft in progress");
+        });
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             assert!(model.queue(conversation_id).is_empty());
             assert!(model.has_command_in_flight(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn queued_command_completion_preserves_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, _| {
+            model.arm_command_in_flight(conversation_id);
+        });
+
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("draft in progress", ctx);
+            input.deferred_remote_operations.latest_block_id = BlockId::new();
+            input.handle_block_completed_event(
+                BlockCompletedEvent {
+                    block_latency_data: None,
+                    block_type: BlockType::User(UserBlockCompleted {
+                        index: BlockIndex::zero(),
+                        serialized_block: Arc::new(SerializedBlock::new_for_test(
+                            b"echo 1".to_vec(),
+                            vec![],
+                        )),
+                        command: "echo 1".to_owned(),
+                        command_with_obfuscated_secrets: "echo 1".to_owned(),
+                        output_truncated: String::new(),
+                        output_truncated_with_obfuscated_secrets: String::new(),
+                        was_part_of_agent_interaction: false,
+                        started_at: None,
+                        num_output_lines: 0,
+                        num_output_lines_truncated: 0,
+                    }),
+                    num_secrets_obfuscated: 0,
+                    block_index: BlockIndex::zero(),
+                    block_id: BlockId::new(),
+                    session_id: None,
+                    restored_block_was_local: None,
+                },
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "draft in progress");
         });
     });
 }

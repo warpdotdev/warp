@@ -210,7 +210,8 @@ impl EventLoop {
                                             ctx,
                                         )
                                     };
-                                if skip_clear_during_setup {
+                                if skip_clear_during_setup || view.has_queued_command_in_flight(ctx)
+                                {
                                     return;
                                 }
                                 view.input().update(ctx, |input, ctx| {

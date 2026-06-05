@@ -4846,14 +4846,11 @@ impl TerminalView {
     /// clearing the flag before draining keeps it idempotent if both signals arrive for the same
     /// command.
     pub(crate) fn on_queued_command_finished(&mut self, ctx: &mut ViewContext<Self>) {
-        let queued_query_model = QueuedQueryModel::as_ref(ctx);
-        let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
-            .all_live_conversations_for_terminal_view(self.view_id)
-            .find_map(|conversation| {
-                queued_query_model
-                    .has_command_in_flight(conversation.id())
-                    .then_some(conversation.id())
-            })
+        let Some(conversation_id) = QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(
+                self.view_id,
+                BlocklistAIHistoryModel::as_ref(ctx),
+            )
         else {
             return;
         };
@@ -4861,6 +4858,12 @@ impl TerminalView {
             model.clear_command_in_flight(conversation_id);
         });
         self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+    }
+
+    pub(crate) fn has_queued_command_in_flight(&self, ctx: &AppContext) -> bool {
+        QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(self.view_id, BlocklistAIHistoryModel::as_ref(ctx))
+            .is_some()
     }
 
     #[cfg(feature = "local_fs")]
@@ -7266,6 +7269,7 @@ impl TerminalView {
                             participant_id: participant_id.clone(),
                             block_id: model.block_list().active_block_id().clone(),
                             ai_metadata: Some(agent_metadata.clone()),
+                            preserve_input: false,
                         }
                     }
                 }

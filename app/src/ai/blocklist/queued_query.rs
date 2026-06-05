@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
@@ -325,6 +325,21 @@ impl QueuedQueryModel {
         self.queues
             .get(&conversation_id)
             .is_some_and(|state| state.command_in_flight)
+    }
+
+    /// Returns the conversation owned by `terminal_view_id` that currently has a queued command in
+    /// flight, if any.
+    pub fn command_in_flight_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        history_model: &BlocklistAIHistoryModel,
+    ) -> Option<AIConversationId> {
+        history_model
+            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .find_map(|conversation| {
+                self.has_command_in_flight(conversation.id())
+                    .then_some(conversation.id())
+            })
     }
 
     /// Returns the row currently in edit mode for `conversation_id`, if any.
