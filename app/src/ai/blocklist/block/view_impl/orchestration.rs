@@ -9,15 +9,12 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, SingletonEntity};
 
-use super::common::{
-    render_scrollable_collapsible_content, render_text_sections, TextSectionsProps,
-};
+use super::common::render_scrollable_collapsible_content;
 use super::output::{action_icon, Props};
 use super::WithContentItemSpacing;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
-use crate::ai::agent::parse_markdown_into_text_and_code_sections;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentActionResultType, MessageId, ReceivedMessageDisplay,
     SendMessageToAgentResult, StartAgentExecutionMode, StartAgentResult,
@@ -29,7 +26,6 @@ use crate::ai::blocklist::agent_view::orchestration_conversation_links::{
     dispatch_focus_or_open_child_agent_pane,
 };
 use crate::ai::blocklist::block::model::AIBlockModelHelper;
-use crate::ai::blocklist::block::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::block::{
     received_message_collapsible_id, AIBlockAction, CollapsibleExpansionState,
 };
@@ -42,23 +38,12 @@ use crate::ai::blocklist::inline_action::requested_action::{
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
-use crate::code::editor_management::CodeSource;
 use crate::terminal::view::TerminalAction;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
 const GENERATING_TITLE_PLACEHOLDER: &str = "Generating title...";
 const ORCHESTRATION_COLLAPSED_MAX_HEIGHT: f32 = 200.;
-
-/// Local section counters for markdown blocks outside the main output stream.
-#[derive(Default)]
-struct StandaloneMarkdownSectionIndices {
-    text: usize,
-    code: usize,
-    table: usize,
-    image: usize,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OrchestrationParticipant {
     display_name: String,
@@ -296,8 +281,14 @@ fn render_transcript_row(
         );
     }
     if !data.body.is_empty() {
-        let body_element =
-            render_collapsible_markdown_body(data.body, body_color, false, props, app);
+        let body_element = Container::new(
+            Text::new(data.body.to_string(), font_family, font_size)
+                .with_color(body_color)
+                .with_selectable(true)
+                .finish(),
+        )
+        .with_margin_top(8.)
+        .finish();
         if let Some(body) =
             render_collapsible_body(data.message_id, body_element, data.is_streaming, props)
         {
@@ -543,8 +534,7 @@ pub(super) fn render_send_message(
         } else {
             blended_colors::text_disabled(theme, theme.surface_2())
         };
-        let message_element =
-            render_collapsible_markdown_body(message, message_color, true, props, app);
+        let message_element = render_collapsible_text_body(message, message_color, true, app);
         if let Some(body) = render_collapsible_body(
             message_id,
             message_element,
@@ -631,11 +621,10 @@ pub(super) fn render_start_agent(
         ));
 
         if has_prompt {
-            let prompt_element = render_collapsible_markdown_body(
+            let prompt_element = render_collapsible_text_body(
                 prompt,
                 blended_colors::text_disabled(theme, theme.surface_2()),
                 true,
-                props,
                 app,
             );
             if let Some(body) = render_collapsible_body(message_id, prompt_element, false, props) {
@@ -717,8 +706,7 @@ pub(super) fn render_start_agent(
         } else {
             blended_colors::text_disabled(theme, theme.surface_2())
         };
-        let prompt_element =
-            render_collapsible_markdown_body(prompt, prompt_color, true, props, app);
+        let prompt_element = render_collapsible_text_body(prompt, prompt_color, true, app);
         if let Some(body) = render_collapsible_body(
             message_id,
             prompt_element,
@@ -765,51 +753,26 @@ fn start_agent_in_progress_prefix(execution_mode: &StartAgentExecutionMode) -> &
     }
 }
 
-/// Renders orchestration prompts and messages as markdown-backed sections.
-fn render_collapsible_markdown_body(
+/// Renders a selectable text block below an orchestration action header, using a muted color.
+/// Used for both StartAgent prompts and SendMessageToAgent message bodies.
+fn render_collapsible_text_body(
     text: &str,
     text_color: ColorU,
     align_with_status_row_text: bool,
-    props: Props,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let sections = parse_markdown_into_text_and_code_sections(text);
-    let empty_secret_redaction_state = SecretRedactionState::default();
-    let mut section_indices = StandaloneMarkdownSectionIndices::default();
-    let body = render_text_sections(
-        TextSectionsProps {
-            model: props.model,
-            starting_text_section_index: &mut section_indices.text,
-            starting_code_section_index: &mut section_indices.code,
-            starting_table_section_index: &mut section_indices.table,
-            starting_image_section_index: &mut section_indices.image,
-            sections: &sections,
-            text_color,
-            selectable: true,
-            find_context: None,
-            current_working_directory: props.current_working_directory,
-            shell_launch_data: props.shell_launch_data,
-            embedded_code_editor_views: &[],
-            code_snippet_button_handles: &[],
-            table_section_handles: &[],
-            image_section_tooltip_handles: &[],
-            is_ai_input_enabled: props.is_ai_input_enabled,
-            open_code_block_action_factory: (None as Option<
-                &'static dyn Fn(CodeSource) -> AIBlockAction,
-            >),
-            copy_code_action_factory: (None as Option<&'static dyn Fn(String) -> AIBlockAction>),
-            detected_links: None,
-            secret_redaction_state: &empty_secret_redaction_state,
-            is_selecting_text: props.is_selecting_text,
-            item_spacing: 6.,
-            #[cfg(feature = "local_fs")]
-            resolved_code_block_paths: Some(props.resolved_code_block_paths),
-            #[cfg(feature = "local_fs")]
-            resolved_blocklist_image_sources: Some(props.resolved_blocklist_image_sources),
-        },
-        app,
-    );
-    let mut container = Container::new(body).with_margin_top(4.);
+    let appearance = Appearance::as_ref(app);
+    let mut container = Container::new(
+        Text::new(
+            text.to_string(),
+            appearance.ui_font_family(),
+            appearance.monospace_font_size(),
+        )
+        .with_color(text_color)
+        .with_selectable(true)
+        .finish(),
+    )
+    .with_margin_top(4.);
 
     if align_with_status_row_text {
         container = container

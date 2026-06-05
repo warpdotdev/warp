@@ -32,7 +32,7 @@ lazy_static! {
 }
 
 /// Converts the given `markdown_text` into corresponding `Text` and `Code` `AIAgentOutputStep`s.
-pub(crate) fn parse_markdown_into_text_and_code_sections(
+pub(super) fn parse_markdown_into_text_and_code_sections(
     markdown_text: &str,
 ) -> Vec<AIAgentTextSection> {
     let mut sections = vec![];
