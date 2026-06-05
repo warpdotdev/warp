@@ -92,6 +92,7 @@ struct ProjectRules {
 }
 
 impl ProjectRules {
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn rule_paths(&self) -> impl Iterator<Item = &LocalOrRemotePath> {
         self.rules.iter().flat_map(|rule| {
             rule.warp_md
@@ -100,11 +101,12 @@ impl ProjectRules {
                 .map(|rule| &rule.path)
         })
     }
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn local_rule_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
         self.rule_paths()
             .filter_map(|path| path.to_local_path().map(Path::to_path_buf))
     }
-
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn retain_rule_paths(&mut self, retained_paths: &HashSet<LocalOrRemotePath>) {
         self.rules.retain_mut(|rule| {
             if rule
@@ -399,6 +401,7 @@ impl ProjectContextModel {
         });
     }
 
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn reconcile_project_rules(
         rule_paths: Vec<LocalOrRemotePath>,
         rule_contents: ProjectRuleContents,
