@@ -342,6 +342,7 @@ impl ApiKeyManager {
                 open_router,
                 allow_use_of_warp_credits: false,
                 aws_credentials,
+                google_cloud_credentials: None,
             })
         }
     }
