@@ -479,6 +479,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::HOARemoteControl,
         #[cfg(feature = "codex_notifications")]
         FeatureFlag::CodexNotifications,
+        #[cfg(feature = "gemini_notifications")]
+        FeatureFlag::GeminiNotifications,
         #[cfg(feature = "codex_plugin")]
         FeatureFlag::CodexPlugin,
         #[cfg(feature = "trim_trailing_blank_lines")]

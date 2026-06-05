@@ -650,6 +650,7 @@ default = [
     "hoa_onboarding_flow",
     "hoa_remote_control",
     "codex_notifications",
+    "gemini_notifications",
     "trim_trailing_blank_lines",
     "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
@@ -989,6 +990,7 @@ hoa_onboarding_flow = []
 git_operations_in_code_review = []
 hoa_remote_control = []
 codex_notifications = []
+gemini_notifications = []
 codex_plugin = []
 cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
