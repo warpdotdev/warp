@@ -777,7 +777,8 @@ impl View for QueuedPromptsPanelView {
 
 fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandle<EditorView> {
     let appearance = Appearance::as_ref(ctx);
-    let text_options = TextOptions::ui_text(Some(appearance.ui_font_size()), appearance);
+    // Match the prompt input, which renders at the monospace font size.
+    let text_options = TextOptions::ui_text(Some(appearance.monospace_font_size()), appearance);
     ctx.add_typed_action_view(|ctx| {
         let options = EditorOptions {
             autogrow: true,
@@ -916,7 +917,8 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let ui_font_size = appearance.ui_font_size();
+    // Match the prompt input, which renders at the monospace font size.
+    let prompt_font_size = appearance.monospace_font_size();
 
     let row_action_button_size = ButtonSize::XSmall.button_height(appearance, app);
     let editor_handle = edit_editor.clone();
@@ -960,14 +962,14 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
                     .with_horizontal_padding(4.)
                     .finish(),
             )
-            .with_max_height(ui_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO * MAX_PROMPT_LINES)
+            .with_max_height(prompt_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO * MAX_PROMPT_LINES)
             .finish()
         } else {
             // Single-line preview that truncates by width with a trailing ellipsis.
             Text::new(
                 preview_text.clone(),
                 appearance.ui_font_family(),
-                ui_font_size,
+                prompt_font_size,
             )
             .with_color(theme.foreground().into())
             .with_selectable(false)

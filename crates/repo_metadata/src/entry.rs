@@ -119,7 +119,8 @@ impl Entry {
     }
 
     /// Builds a tree of entries from a given path, handling gitignored files and directories.
-    /// After max_depth is reached, all children are lazy-loaded to prevent deeply nested trees.
+    /// After max_depth is reached, children outside force-included paths are lazy-loaded to
+    /// prevent deeply nested trees.
     /// IgnoredPathStrategy determines what happens when ignored files are encountered.
     /// `budget_exceeded_behavior` controls what happens once the file budget is
     /// exhausted (see [`BudgetExceededBehavior`]).
@@ -580,8 +581,11 @@ fn evaluate_entry(
             false, /* check_ancestors */
         );
 
-    // If we've reached the max depth, force lazy-loading even of non-ignored folders.
-    let mut lazy = current_depth >= options.max_depth;
+    let force_included = matches_force_included_path(curr_path, options.force_included_paths);
+
+    // If we've reached the max depth, force lazy-loading even of non-ignored folders unless the
+    // folder is on the path to a force-included subtree.
+    let mut lazy = current_depth >= options.max_depth && !force_included;
 
     if path_is_ignored {
         match options.ignored_path_strategy {
@@ -594,7 +598,7 @@ fn evaluate_entry(
                 }
             }
             IgnoredPathStrategy::IncludeLazy => {
-                lazy = !matches_force_included_path(curr_path, options.force_included_paths);
+                lazy = !force_included;
             }
             IgnoredPathStrategy::Include => {}
         }
@@ -638,7 +642,8 @@ fn push_child(nodes: &mut [Option<NodeBuilder>], parent: usize, child: usize) {
 }
 
 /// Recursively assembles the nested [`Entry`] tree from the build arena.
-/// Recursion depth is bounded by `BuildTreeOptions::max_depth`.
+/// Recursion depth is normally bounded by `BuildTreeOptions::max_depth`, except for force-included
+/// subtrees.
 fn assemble_node(nodes: &mut [Option<NodeBuilder>], index: usize) -> Entry {
     match nodes[index]
         .take()

@@ -344,4 +344,9 @@ integration_tests! {
     // Video recording test — requires real display, run manually
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
+
+    // Rich Input Ctrl+Enter submit toggle (issue #11588)
+    test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits,
+    // Regression: Enter must accept inline menus (not insert newline) when toggle=true
+    test_rich_input_enter_accepts_menu_item_when_toggle_is_true,
 }
