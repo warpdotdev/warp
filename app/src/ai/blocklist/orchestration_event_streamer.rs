@@ -42,11 +42,7 @@ const RESTORE_FETCH_PERMANENT_BACKOFF_STEPS: &[u64] = &[30];
 const SSE_DRAIN_INTERVAL_MS: u64 = 500;
 /// Cap killed-run tombstones while keeping normal sessions well below the limit.
 const MAX_KILLED_RUN_IDS: usize = 1024;
-/// Maximum number of explicit run IDs the server accepts on a `run_ids[]` SSE
-/// stream (`maxWatchedRunIDs` server-side). Owner-side parents that exceed
-/// this and cannot use parent-family ancestor streaming (flag off / no server
-/// support) would open a stream the server rejects, so we surface a visible
-/// delivery failure instead.
+/// Maximum number of explicit run IDs the server accepts on a `run_ids[]` SSE stream.
 const MAX_RUN_ID_STREAM_FILTER: usize = 100;
 /// Max child runs fetched per cold-start `?ancestor_run_id=` REST seed in
 /// viewer mode. Matches the legacy `OrchestrationViewerModel` poller's value
@@ -67,12 +63,7 @@ struct SseConnectionState {
     generation: u64,
     /// Abort handle for the spawned SSE driver task, used to cancel on teardown.
     abort_handle: futures::future::AbortHandle,
-    /// Wire filter this connection was opened with; compared in
-    /// `reevaluate_eligibility` to skip reconnects when the desired filter is
-    /// unchanged. Stored as the full filter shape (run-id set or
-    /// parent-family ancestor scope) so registering additional children does
-    /// not reconnect a parent-family stream solely because the raw child set
-    /// grew.
+    /// Wire filter this connection was opened with.
     connected_filter: AgentEventFilter,
 }
 
@@ -238,12 +229,6 @@ struct ConversationStreamState {
     /// Consecutive `get_ambient_agent_task` failure count for the
     /// post-restore retry loop; resets on success.
     restore_fetch_failures: usize,
-    /// Set when this conversation is a parent with more watched children than
-    /// the explicit `run_ids[]` stream allows and parent-family ancestor
-    /// streaming is unavailable (owner-ancestor flag off). In that state the
-    /// streamer refuses to open a known-bad stream and records the failure
-    /// here so it is visible rather than silently retrying forever.
-    sse_delivery_blocked: bool,
 }
 
 /// Per-orchestrator SSE stream state. Parallels [`ConversationStreamState`]
@@ -1396,22 +1381,11 @@ impl OrchestrationEventStreamer {
                     let server_seq = task.last_event_sequence.unwrap_or(0);
                     stream.event_cursor = sqlite_cursor.max(server_seq);
 
-                    // Install server-reported children. A restored parent
-                    // with children flips into the parent role here, which
-                    // selects the parent-family ancestor stream when the
-                    // owner-ancestor flag is enabled (or the explicit
-                    // run-id stream otherwise).
+                    // Server-reported children may be absent from local history.
                     for child in task.children {
                         stream.watched_run_ids.insert(child);
                     }
                 }
-                // Re-evaluate eligibility: this opens the stream if none is
-                // running, and reconnects only when the desired filter shape
-                // changed (e.g. a status race opened a self-only run-id
-                // stream before children were known, or a child-only
-                // conversation became a parent). Adding more children to an
-                // already-open parent-family ancestor stream leaves the
-                // filter unchanged and does not reconnect.
                 self.reevaluate_eligibility(conv_id, ctx);
             }
             Err(err) => {
@@ -1596,15 +1570,7 @@ impl OrchestrationEventStreamer {
             .unwrap_or_default()
     }
 
-    /// Selects the wire filter an owner-side conversation should subscribe to.
-    ///
-    /// Parent conversations use a single parent-family ancestor stream
-    /// (`include_self=true`) when the owner-ancestor flag is enabled: one
-    /// constant-size subscription covers the orchestrator's own inbox plus
-    /// every direct child regardless of child count. Child-only conversations
-    /// (and parents while the flag is off) keep the explicit `run_ids[]`
-    /// stream. A parent that exceeds the explicit-run-id limit with the flag
-    /// off cannot open a deliverable stream and is reported as unsupported.
+    /// Selects the owner-side event stream filter for a conversation.
     fn desired_sse_filter(
         &self,
         conversation_id: AIConversationId,
@@ -1812,27 +1778,15 @@ impl OrchestrationEventStreamer {
             DesiredSseFilter::Filter(filter) => filter,
             DesiredSseFilter::NoFilter => return,
             DesiredSseFilter::UnsupportedRunIdCount(count) => {
-                // A parent with more children than the explicit-run-id stream
-                // allows would open a stream the server rejects. Refuse to
-                // open it and surface a visible failure instead of retrying a
-                // known-bad stream every reconnect cycle.
                 log::error!(
                     "Owner-side SSE delivery blocked for {conversation_id:?}: {count} watched \
                      run IDs exceed the {MAX_RUN_ID_STREAM_FILTER} explicit-run-id limit and \
                      parent-family ancestor streaming is disabled; enable \
                      OwnerOrchestrationAncestorStreamer to deliver events for large orchestrators"
                 );
-                if let Some(stream) = self.streams.get_mut(&conversation_id) {
-                    stream.sse_delivery_blocked = true;
-                }
                 return;
             }
         };
-
-        // Opening a deliverable stream clears any prior delivery-blocked state.
-        if let Some(stream) = self.streams.get_mut(&conversation_id) {
-            stream.sse_delivery_blocked = false;
-        }
 
         let cursor = self
             .streams
@@ -1923,11 +1877,6 @@ impl OrchestrationEventStreamer {
             }
             // Nothing watchable tears down through the eligibility predicate.
             DesiredSseFilter::NoFilter => false,
-            // If an already-connected parent grows past the explicit run-id
-            // limit while owner-side ancestor streaming is off, the current
-            // stream has become a partial subscription. Treat it as stale so
-            // reconnect_sse tears it down and records the delivery-blocked
-            // state instead of silently missing newly-registered children.
             DesiredSseFilter::UnsupportedRunIdCount(_) => true,
         }
     }
@@ -2121,10 +2070,6 @@ async fn resolve_dormant_claude_wake_cursor(
     }
 }
 
-/// Compares two [`AgentEventFilter`]s for delivery equivalence. `RunIds` are
-/// compared as sets so a different `HashSet` iteration order (the source of
-/// the run-id vector) does not register as a change and trigger a spurious
-/// reconnect. Filters of different shapes are never equivalent.
 fn agent_event_filters_equivalent(a: &AgentEventFilter, b: &AgentEventFilter) -> bool {
     match (a, b) {
         (AgentEventFilter::RunIds(a), AgentEventFilter::RunIds(b)) => {

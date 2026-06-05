@@ -711,13 +711,7 @@ pub enum FeatureFlag {
     /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
     OrchestrationViewerStreamer,
 
-    /// Migrates owner-side (orchestrator) event delivery from per-conversation
-    /// explicit `run_ids[]` SSE streams to a single parent-family
-    /// `ancestor_run_id&include_self=true` stream. This removes the >100
-    /// explicit-run-id limit for orchestrators with many children and avoids
-    /// reconnecting every time a new child is discovered. Dogfood-only while
-    /// the server endpoint rolls out; layered on top of `OrchestrationV2`.
-    /// See `specs/too-many-agents/TECH.md`.
+    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
     OwnerOrchestrationAncestorStreamer,
 
     /// Shows a pending user query indicator during summarization when a follow-up

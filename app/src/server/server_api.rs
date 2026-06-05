@@ -746,16 +746,7 @@ impl ServerApi {
         Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
-    /// Opens an SSE stream against the ancestor-scoped endpoint that serves
-    /// every direct child of the supplied parent run. Mirrors
-    /// [`Self::stream_agent_events`] in transport, auth, and header handling.
-    ///
-    /// When `include_self` is true the stream additionally serves the parent
-    /// run's own events (parent-family scope), which owner-side orchestrators
-    /// use to receive their inbox alongside child lifecycle events on one
-    /// ordered stream. Viewer-mode callers pass false to preserve the
-    /// direct-children-only contract. `include_self=true` is sent on the wire
-    /// only when requested so the viewer-mode URL is byte-for-byte unchanged.
+    /// Opens an SSE stream against the ancestor-scoped agent event endpoint.
     pub async fn stream_agent_events_for_ancestor(
         &self,
         ancestor_run_id: &str,

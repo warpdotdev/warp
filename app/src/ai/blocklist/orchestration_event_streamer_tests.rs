@@ -2117,10 +2117,10 @@ fn child_only_conversation_opens_self_run_id_filter() {
 }
 
 #[test]
-fn parent_over_run_id_limit_without_flag_records_delivery_failure() {
+fn parent_over_run_id_limit_without_flag_does_not_open_stream() {
     // With owner-ancestor streaming disabled, a parent that exceeds the
     // explicit-run-id limit must not open a known-bad stream; instead it
-    // records a visible delivery failure.
+    // avoids opening a stream the server would reject.
     App::test((), |mut app| async move {
         let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(false);
 
@@ -2163,10 +2163,6 @@ fn parent_over_run_id_limit_without_flag_records_delivery_failure() {
                 stream.sse_connection.is_none(),
                 "must not open an oversized run-id stream the server would reject"
             );
-            assert!(
-                stream.sse_delivery_blocked,
-                "oversized run-id parent must record a visible delivery failure"
-            );
         });
     });
 }
@@ -2175,7 +2171,7 @@ fn parent_over_run_id_limit_without_flag_records_delivery_failure() {
 fn parent_crossing_run_id_limit_without_flag_tears_down_partial_stream() {
     // If a parent starts below the explicit-run-id limit and later registers
     // enough children to exceed it, the old stream has become partial. It must
-    // be torn down and replaced with a visible delivery-blocked state.
+    // be torn down instead of silently missing newly-registered children.
     App::test((), |mut app| async move {
         let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(false);
 
@@ -2218,10 +2214,6 @@ fn parent_crossing_run_id_limit_without_flag_tears_down_partial_stream() {
                 stream.sse_connection.is_some(),
                 "100 watched run IDs is still within the explicit-run-id limit"
             );
-            assert!(
-                !stream.sse_delivery_blocked,
-                "deliverable stream should not be marked blocked"
-            );
         });
 
         poller.update(&mut app, |me, ctx| {
@@ -2233,10 +2225,6 @@ fn parent_crossing_run_id_limit_without_flag_tears_down_partial_stream() {
             assert!(
                 stream.sse_connection.is_none(),
                 "oversized parent must tear down the old partial run-id stream"
-            );
-            assert!(
-                stream.sse_delivery_blocked,
-                "oversized parent must record a visible delivery failure"
             );
         });
     });
