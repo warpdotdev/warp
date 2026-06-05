@@ -666,8 +666,8 @@ fn test_git_status_change_updates_branch_status_chip_value() {
                 .unwrap()
         });
 
-        let git_status =
-            app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
+        let git_status = app
+            .add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
         let sessions = app.add_model(|_| Sessions::new_for_test());
         let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
 

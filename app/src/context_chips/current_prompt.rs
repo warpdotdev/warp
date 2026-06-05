@@ -1540,9 +1540,7 @@ impl CurrentPrompt {
         match chip_kind {
             ContextChipKind::ShellGitBranch
             | ContextChipKind::GitBranchStatus
-            | ContextChipKind::GitDiffStats => {
-                self.git_repo_status.is_some()
-            }
+            | ContextChipKind::GitDiffStats => self.git_repo_status.is_some(),
             ContextChipKind::GithubPullRequest => self.github_repo_model.is_some(),
             _ => false,
         }

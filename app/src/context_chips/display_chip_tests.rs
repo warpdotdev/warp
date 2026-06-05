@@ -1,6 +1,5 @@
 use super::{
-    format_create_git_branch_command, format_git_branch_command, truncate_from_beginning,
-    CreateGitBranch, GitBranch, GitBranchTrackingStatus, GitLineChanges,
+    truncate_from_beginning, CreateGitBranch, GitBranch, GitBranchTrackingStatus, GitLineChanges,
 };
 use crate::context_chips::display_chip::PromptChipShellCommand;
 use crate::context_chips::display_menu::GenericMenuItem;
@@ -98,6 +97,23 @@ fn test_git_branch_tracking_status_parses_shell_fallback_display_text() {
     assert_eq!(status.branch, "feature-a");
     assert_eq!(status.ahead, 1000);
     assert_eq!(status.behind, 2);
+    assert!(status.counts_available);
+}
+
+#[test]
+fn test_git_branch_tracking_status_keeps_branch_names_with_bullet_delimiter() {
+    let status = GitBranchTrackingStatus::from_display_text("feature • test").unwrap();
+
+    assert_eq!(status.branch, "feature • test");
+    assert!(!status.counts_available);
+}
+
+#[test]
+fn test_git_branch_tracking_status_parses_status_after_branch_name_with_bullet_delimiter() {
+    let status = GitBranchTrackingStatus::from_display_text("feature • test • ↑2").unwrap();
+
+    assert_eq!(status.branch, "feature • test");
+    assert_eq!(status.ahead, 2);
     assert!(status.counts_available);
 }
 

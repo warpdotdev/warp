@@ -483,34 +483,30 @@ impl GitBranchTrackingStatus {
             });
         };
 
+        let Some((ahead, behind, rebased)) = Self::parse_display_status(status_text) else {
+            return Some(Self {
+                branch: text.to_string(),
+                upstream: None,
+                ahead: 0,
+                behind: 0,
+                counts_available: false,
+                rebased: false,
+            });
+        };
+
         let branch = branch.trim();
         if branch.is_empty() {
             return None;
         }
 
-        let mut status = Self {
+        Some(Self {
             branch: branch.to_string(),
             upstream: None,
-            ahead: 0,
-            behind: 0,
-            counts_available: false,
-            rebased: false,
-        };
-
-        for part in status_text.split_whitespace() {
-            if part == "⇅" {
-                status.counts_available = true;
-                status.rebased = true;
-            } else if let Some(ahead) = part.strip_prefix('↑') {
-                status.ahead = Self::parse_display_count(ahead)?;
-                status.counts_available = true;
-            } else if let Some(behind) = part.strip_prefix('↓') {
-                status.behind = Self::parse_display_count(behind)?;
-                status.counts_available = true;
-            }
-        }
-
-        Some(status)
+            ahead,
+            behind,
+            counts_available: true,
+            rebased,
+        })
     }
 
     pub fn display_text(&self) -> String {
@@ -562,6 +558,28 @@ impl GitBranchTrackingStatus {
         } else {
             count.parse::<u32>().ok()
         }
+    }
+
+    fn parse_display_status(status_text: &str) -> Option<(u32, u32, bool)> {
+        let mut ahead = 0;
+        let mut behind = 0;
+        let mut rebased = false;
+        let mut saw_status_token = false;
+
+        for part in status_text.split_whitespace() {
+            saw_status_token = true;
+            if part == "⇅" {
+                rebased = true;
+            } else if let Some(ahead_count) = part.strip_prefix('↑') {
+                ahead = Self::parse_display_count(ahead_count)?;
+            } else if let Some(behind_count) = part.strip_prefix('↓') {
+                behind = Self::parse_display_count(behind_count)?;
+            } else {
+                return None;
+            }
+        }
+
+        saw_status_token.then_some((ahead, behind, rebased))
     }
 
     fn tooltip_text(&self) -> String {
