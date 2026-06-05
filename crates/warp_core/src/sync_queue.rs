@@ -305,7 +305,7 @@ impl<T: SyncQueueTaskTrait> SyncQueue<T> {
     pub fn has_queued_task(&self, comparison: impl Fn(&T) -> bool) -> bool {
         self.task_map
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .values()
             .any(|queued_task| comparison(&queued_task.task))
     }
