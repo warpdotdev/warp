@@ -5,13 +5,17 @@
 //! already uses (and its battle-tested `.git` event routing for worktrees /
 //! packed-refs / shared refs), rather than starting a second watcher on `.git`.
 //!
-//! Two concerns live here, both `local_fs`-gated like the rest of the
+//! Three concerns live here, all `local_fs`-gated like the rest of the
 //! `repo_metadata` integration (a non-`local_fs` build has no watcher, so the
 //! graph only refreshes on explicit user actions):
 //! - **Position restore** ([`relocate_view`]): after a refresh re-reads the
 //!   graph, map the pre-refresh selection / scroll anchor onto the new commit
 //!   list *by hash* so an auto-refresh doesn't yank the user away from what they
 //!   were looking at.
+//! - **Throttle** ([`throttle_signal`]): rate-limit reload signals to one
+//!   refresh per [`AUTO_REFRESH_MIN_INTERVAL`], trailing-edge — so an event
+//!   storm (builds, bulk file writes) doesn't fan out into a git-process storm,
+//!   while the graph still converges on the final state.
 //! - **Subscription** ([`should_reload`] + [`GitGraphRepositorySubscriber`]):
 //!   turn a [`repo_metadata::RepositoryUpdate`] into a "reload" signal.
 
@@ -57,6 +61,50 @@ pub(crate) fn relocate_view(
 #[cfg(feature = "local_fs")]
 fn index_of_hash(commits: &[CommitNode], hash: &str) -> Option<usize> {
     commits.iter().position(|c| c.hash == hash)
+}
+
+/// Minimum spacing between two auto-refresh reloads. The first signal after a
+/// quiet period refreshes immediately; within this window further signals
+/// collapse into a single trailing catch-up refresh.
+#[cfg(feature = "local_fs")]
+pub(crate) const AUTO_REFRESH_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// What to do with one watcher signal fed into the refresh throttle.
+#[cfg(feature = "local_fs")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ThrottleDecision {
+    /// Outside the cooldown window (or never refreshed): refresh immediately.
+    RefreshNow,
+    /// First signal inside the window: schedule one catch-up refresh after the
+    /// carried delay (the remainder of the window).
+    Defer(std::time::Duration),
+    /// A catch-up is already scheduled and covers this change too: drop it.
+    AlreadyDeferred,
+}
+
+/// Throttle reload signals to one refresh per `min_interval`, trailing-edge:
+/// the leading signal refreshes immediately (a `git commit` in the terminal
+/// shows up right away), and signals inside the window collapse into a single
+/// catch-up at the window's end — never dropped outright, so the graph always
+/// converges on the final state.
+#[cfg(feature = "local_fs")]
+pub(crate) fn throttle_signal(
+    elapsed_since_last: Option<std::time::Duration>,
+    catch_up_pending: bool,
+    min_interval: std::time::Duration,
+) -> ThrottleDecision {
+    match elapsed_since_last {
+        Some(elapsed) if elapsed < min_interval => {
+            if catch_up_pending {
+                ThrottleDecision::AlreadyDeferred
+            } else {
+                ThrottleDecision::Defer(min_interval - elapsed)
+            }
+        }
+        // Never refreshed, or the window has passed (a stale pending mark is
+        // absorbed by the caller into this refresh).
+        _ => ThrottleDecision::RefreshNow,
+    }
 }
 
 /// What the open detail pane should do after an auto-refresh reload lands.

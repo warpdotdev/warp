@@ -440,6 +440,15 @@ pub(crate) struct GitGraphView {
     /// stream spawned in [`Self::new`]; cloned into each new subscriber.
     #[cfg(feature = "local_fs")]
     auto_refresh_tx: Sender<()>,
+    /// When the last auto-refresh reload was fired; the throttle clock
+    /// (`None` until the first one).
+    #[cfg(feature = "local_fs")]
+    last_auto_refresh: Option<std::time::Instant>,
+    /// Whether a catch-up reload is scheduled for the end of the current
+    /// throttle window (set on the first in-window signal, consumed by the
+    /// catch-up or absorbed by the next immediate refresh).
+    #[cfg(feature = "local_fs")]
+    auto_refresh_pending: bool,
 }
 
 /// Empty layout, used when not loaded / on error.
@@ -632,6 +641,10 @@ impl GitGraphView {
             watched_repo: None,
             #[cfg(feature = "local_fs")]
             auto_refresh_tx,
+            #[cfg(feature = "local_fs")]
+            last_auto_refresh: None,
+            #[cfg(feature = "local_fs")]
+            auto_refresh_pending: false,
         }
     }
 
@@ -965,14 +978,60 @@ impl GitGraphView {
         }
     }
 
-    /// Drains an auto-refresh signal: reloads the graph in place — keeping the
-    /// user's selection and scroll position — when there's a loaded graph to
-    /// refresh. Signals arriving before the first load are ignored.
+    /// Drains an auto-refresh signal through a trailing-edge throttle
+    /// ([`auto_refresh::throttle_signal`]): the first signal after a quiet
+    /// period reloads the graph immediately, while signals inside the cooldown
+    /// window collapse into one catch-up reload at the window's end. Signals
+    /// arriving before the first load are ignored (the load itself reads the
+    /// latest state).
     #[cfg(feature = "local_fs")]
     fn on_auto_refresh_signal(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        match auto_refresh::throttle_signal(
+            self.last_auto_refresh.map(|at| at.elapsed()),
+            self.auto_refresh_pending,
+            auto_refresh::AUTO_REFRESH_MIN_INTERVAL,
+        ) {
+            auto_refresh::ThrottleDecision::RefreshNow => {
+                if !matches!(self.state, LoadState::Loaded) {
+                    return;
+                }
+                self.fire_auto_refresh(ctx);
+            }
+            auto_refresh::ThrottleDecision::Defer(delay) => {
+                self.auto_refresh_pending = true;
+                ctx.spawn(
+                    async move {
+                        warpui::r#async::Timer::after(delay).await;
+                    },
+                    |view, _, ctx| view.fire_pending_auto_refresh(ctx),
+                );
+            }
+            auto_refresh::ThrottleDecision::AlreadyDeferred => {}
+        }
+    }
+
+    /// Fires the catch-up reload scheduled at the end of a throttle window,
+    /// unless its pending mark was already absorbed by an immediate refresh.
+    #[cfg(feature = "local_fs")]
+    fn fire_pending_auto_refresh(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.auto_refresh_pending {
+            return;
+        }
+        self.auto_refresh_pending = false;
         if !matches!(self.state, LoadState::Loaded) {
             return;
         }
+        self.fire_auto_refresh(ctx);
+    }
+
+    /// Reloads the graph in place — keeping the user's selection and scroll
+    /// position — and stamps the throttle clock.
+    #[cfg(feature = "local_fs")]
+    fn fire_auto_refresh(&mut self, ctx: &mut ViewContext<Self>) {
+        self.last_auto_refresh = Some(std::time::Instant::now());
+        // This refresh covers any catch-up still scheduled for the current
+        // window; absorb it so the timer's callback becomes a no-op.
+        self.auto_refresh_pending = false;
         // Convert the visible-row anchor (a UniformList index that includes the
         // synthetic uncommitted row) back to a commit index.
         let offset = usize::from(self.uncommitted_count > 0);

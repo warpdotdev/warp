@@ -1,6 +1,7 @@
 //! Unit tests for [`super::relocate_view`] (position restore by hash),
 //! [`super::detail_refresh_after_reload`] (detail-pane fate after a reload),
-//! and [`super::should_reload`] (the reload predicate).
+//! [`super::throttle_signal`] (the reload-rate throttle), and
+//! [`super::should_reload`] (the reload predicate).
 
 use super::*;
 use crate::workspace::view::git_graph::data::CommitNode;
@@ -101,6 +102,71 @@ mod detail_refresh {
         assert_eq!(
             detail_refresh_after_reload(false, 1, None),
             DetailRefresh::Clear
+        );
+    }
+}
+
+mod throttle {
+    use std::time::Duration;
+
+    use super::super::{throttle_signal, ThrottleDecision};
+
+    const INTERVAL: Duration = Duration::from_secs(3);
+
+    #[test]
+    fn first_signal_after_quiet_refreshes_immediately() {
+        // Leading edge: a `git commit` in the terminal must show up right
+        // away, never wait out a cooldown. `None` = never refreshed yet.
+        assert_eq!(
+            throttle_signal(None, false, INTERVAL),
+            ThrottleDecision::RefreshNow
+        );
+    }
+
+    #[test]
+    fn signal_outside_the_window_refreshes_immediately() {
+        assert_eq!(
+            throttle_signal(Some(Duration::from_secs(4)), false, INTERVAL),
+            ThrottleDecision::RefreshNow
+        );
+    }
+
+    #[test]
+    fn window_boundary_refreshes_immediately() {
+        // elapsed == interval counts as "outside": the cooldown is half-open.
+        assert_eq!(
+            throttle_signal(Some(INTERVAL), false, INTERVAL),
+            ThrottleDecision::RefreshNow
+        );
+    }
+
+    #[test]
+    fn first_signal_inside_the_window_defers_the_remainder() {
+        // Trailing edge: an event storm's second signal schedules exactly one
+        // catch-up at the window's end, so the graph still converges on the
+        // final state instead of dropping it.
+        assert_eq!(
+            throttle_signal(Some(Duration::from_secs(1)), false, INTERVAL),
+            ThrottleDecision::Defer(Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn further_signals_inside_the_window_are_dropped() {
+        // A catch-up is already scheduled; it covers every later change too.
+        assert_eq!(
+            throttle_signal(Some(Duration::from_secs(1)), true, INTERVAL),
+            ThrottleDecision::AlreadyDeferred
+        );
+    }
+
+    #[test]
+    fn a_stale_pending_does_not_block_an_overdue_refresh() {
+        // The catch-up timer hasn't fired yet but the window has passed:
+        // refresh now (the caller absorbs the pending catch-up into it).
+        assert_eq!(
+            throttle_signal(Some(Duration::from_secs(5)), true, INTERVAL),
+            ThrottleDecision::RefreshNow
         );
     }
 }
