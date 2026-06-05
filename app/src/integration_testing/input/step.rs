@@ -111,20 +111,6 @@ pub fn rich_input_buffer_does_not_contain_newline(
     })
 }
 
-/// Asserts that the Rich Input buffer text for `tab_index` is NOT empty.
-pub fn rich_input_buffer_is_not_empty(tab_index: usize) -> warpui::integration::AssertionCallback {
-    Box::new(move |app, window_id| {
-        let input_view = single_input_view_for_tab(app, window_id, tab_index);
-        input_view.read(app, |view, ctx| {
-            let text = view.buffer_text(ctx);
-            warpui::async_assert!(
-                !text.is_empty(),
-                "Expected Rich Input buffer to be non-empty; got: {text:?}"
-            )
-        })
-    })
-}
-
 pub fn open_input_context_menu() -> TestStep {
     new_step_with_default_assertions("Open input context menu")
         .with_action(move |app, _, _| {
