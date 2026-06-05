@@ -1669,7 +1669,6 @@ fn streamer_consumer_is_registered_when_constructed_under_flag() {
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         let parent = task_id(PARENT_TASK_ID);
         let (terminal_view_id, _parent_conv_id, _) = setup_model(&mut app, parent);
@@ -1723,7 +1722,6 @@ fn viewer_model_retries_consumer_registration_on_set_active_conversation() {
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
         let terminal_view = add_window_with_terminal(&mut app, None);
@@ -1790,13 +1788,13 @@ fn viewer_model_does_not_register_when_active_conversation_is_a_child_placeholde
     App::test((), |mut app| async move {
         let _v2_guard = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer_guard = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill_bar_guard = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
         let terminal_view = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal_view.id();
 
         let parent = task_id(PARENT_TASK_ID);
+        // Construct the model with the child discriminator scenario:
         let _model = app.add_model(|ctx| {
             OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
         });

@@ -710,18 +710,6 @@ pub enum FeatureFlag {
     /// `OrchestrationV2`; has no effect when v2 is off.
     RunAgentsTool,
 
-    /// Renders a horizontal pill bar in the agent view pane header showing the
-    /// orchestrator agent and all of its child agents, with click-to-switch
-    /// behavior between siblings.
-    OrchestrationPillBar,
-
-    /// Enables the orchestration pill bar in shared session viewers (web and
-    /// native). When enabled, viewing a shared session that used orchestration
-    /// shows a pill bar above the agent view header with the orchestrator and
-    /// each child agent. Clicking a child pill joins the child's shared session
-    /// and switches the view to its transcript.
-    OrchestrationViewerPillBar,
-
     /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
     /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
     /// viewer-mode entry. Off by default; flipping it on activates the

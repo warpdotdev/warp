@@ -187,17 +187,13 @@ pub(in crate::pane_group) fn host_terminal_shared_session_source_type(
 
 /// Builds the `IsSharedSessionCreator` for a child pane spawned by
 /// `run_agents(local)`. Returns `Yes` (stamped with the child's `task_id`)
-/// only when `OrchestrationViewerPillBar` is enabled and the host carries
-/// an orchestrator `task_id`. The host's variant kind is preserved so
-/// cloud-only UI stays gated on `AmbientAgent`.
+/// when the host carries an orchestrator `task_id`. The host's variant kind
+/// is preserved so cloud-only UI stays gated on `AmbientAgent`.
 #[cfg(not(target_family = "wasm"))]
 pub(in crate::pane_group) fn inherit_share_for_local_child(
     host_source: Option<&SharedSessionSource>,
     child_task_id: AmbientAgentTaskId,
 ) -> IsSharedSessionCreator {
-    if !FeatureFlag::OrchestrationViewerPillBar.is_enabled() {
-        return IsSharedSessionCreator::No;
-    }
     let Some(host_source) = host_source else {
         return IsSharedSessionCreator::No;
     };

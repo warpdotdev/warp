@@ -106,7 +106,6 @@ fn on_view_detached_closed_clears_orchestration_viewer_model_slot() {
     App::test((), |mut app| async move {
         let _v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
 
@@ -151,7 +150,6 @@ fn on_view_detached_hidden_for_close_keeps_orchestration_viewer_model_alive() {
     App::test((), |mut app| async move {
         let _v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
 
@@ -183,7 +181,6 @@ fn on_view_detached_moved_keeps_orchestration_viewer_model_alive() {
     App::test((), |mut app| async move {
         let _v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
 
