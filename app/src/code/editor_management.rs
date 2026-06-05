@@ -1,23 +1,19 @@
-use std::{
-    collections::{hash_map::Entry, HashMap},
-    path::PathBuf,
-};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use super::buffer_location::LocalOrRemotePath;
-use crate::ai::skills::SkillOpenOrigin;
 use ai::skills::SkillReference;
 use serde::{Deserialize, Serialize};
 use warp_util::path::LineAndColumnArg;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
-use crate::{
-    ai::agent::AIAgentActionId,
-    code_review::code_review_view::CodeReviewView,
-    pane_group::{PaneGroup, PaneId},
-    workspace::PaneViewLocator,
-};
-
+use super::buffer_location::LocalOrRemotePath;
 use super::view::CodeView;
+use crate::ai::agent::AIAgentActionId;
+use crate::ai::skills::SkillOpenOrigin;
+use crate::code_review::code_review_view::CodeReviewView;
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::workspace::PaneViewLocator;
 
 pub struct CodeEditorSummary<'a> {
     pub unsaved_changes: Vec<&'a CodeEditorStatus>,
@@ -118,15 +114,17 @@ pub enum CodeSource {
     /// Opened from an active AI agent conversation.
     AIAction { id: AIAgentActionId },
     /// Opened from project rules (WARP.md) file.
-    ProjectRules { path: PathBuf },
+    ProjectRules { location: LocalOrRemotePath },
     /// Opened from file tree (local or remote).
     FileTree { location: LocalOrRemotePath },
+    /// Opened from command palette file search (local or remote).
+    CommandPalette { location: LocalOrRemotePath },
     /// Opened from macOS Finder via "Open With".
     Finder { path: PathBuf },
     /// Opened from a skill.
     Skill {
         reference: SkillReference,
-        path: PathBuf,
+        location: LocalOrRemotePath,
         origin: SkillOpenOrigin,
     },
 }
@@ -141,6 +139,7 @@ impl CodeSource {
             | Self::AIAction { .. }
             | Self::ProjectRules { .. }
             | Self::FileTree { .. }
+            | Self::CommandPalette { .. }
             | Self::Finder { .. }
             | Self::Skill { .. } => None,
         }
@@ -149,21 +148,23 @@ impl CodeSource {
     pub fn path(&self) -> Option<PathBuf> {
         match self {
             Self::New { .. } | Self::AIAction { .. } => None,
-            Self::FileTree { location, .. } => match location {
-                LocalOrRemotePath::Local(path) => Some(path.clone()),
-                LocalOrRemotePath::Remote(_) => None,
-            },
-            Self::Link { path, .. }
-            | Self::ProjectRules { path }
-            | Self::Finder { path }
-            | Self::Skill { path, .. } => Some(path.clone()),
+            Self::FileTree { location, .. } | Self::CommandPalette { location, .. } => {
+                match location {
+                    LocalOrRemotePath::Local(path) => Some(path.clone()),
+                    LocalOrRemotePath::Remote(_) => None,
+                }
+            }
+            Self::Link { path, .. } | Self::Finder { path } => Some(path.clone()),
+            Self::ProjectRules { location } | Self::Skill { location, .. } => {
+                location.to_local_path().map(Path::to_path_buf)
+            }
         }
     }
 
     /// Returns the `LocalOrRemotePath` for file tree sources.
     pub fn file_location(&self) -> Option<&LocalOrRemotePath> {
         match self {
-            Self::FileTree { location } => Some(location),
+            Self::FileTree { location } | Self::CommandPalette { location } => Some(location),
             _ => None,
         }
     }
@@ -176,11 +177,15 @@ impl CodeSource {
     pub fn location(&self) -> Option<LocalOrRemotePath> {
         match self {
             Self::New { .. } | Self::AIAction { .. } => None,
-            Self::FileTree { location } => Some(location.clone()),
-            Self::Link { path, .. }
-            | Self::ProjectRules { path }
-            | Self::Finder { path }
-            | Self::Skill { path, .. } => Some(LocalOrRemotePath::Local(path.clone())),
+            Self::FileTree { location } | Self::CommandPalette { location } => {
+                Some(location.clone())
+            }
+            Self::Link { path, .. } | Self::Finder { path } => {
+                Some(LocalOrRemotePath::Local(path.clone()))
+            }
+            Self::ProjectRules { location } | Self::Skill { location, .. } => {
+                Some(location.clone())
+            }
         }
     }
 
@@ -218,6 +223,10 @@ impl CodeSource {
                 location: LocalOrRemotePath::Remote(_),
             } => "remote_file_tree",
             Self::FileTree { .. } => "file_tree",
+            Self::CommandPalette {
+                location: LocalOrRemotePath::Remote(_),
+            } => "remote_command_palette",
+            Self::CommandPalette { .. } => "command_palette",
             Self::Finder { .. } => "finder",
             Self::Skill { .. } => "skill",
         }
@@ -233,6 +242,16 @@ impl CodeSource {
             Self::AIAction { .. }
                 | Self::FileTree {
                     location: LocalOrRemotePath::Remote(_),
+                }
+                | Self::CommandPalette {
+                    location: LocalOrRemotePath::Remote(_),
+                }
+                | Self::ProjectRules {
+                    location: LocalOrRemotePath::Remote(_),
+                }
+                | Self::Skill {
+                    location: LocalOrRemotePath::Remote(_),
+                    ..
                 }
         )
     }

@@ -2,12 +2,10 @@
 #[cfg(feature = "v2")]
 mod v2;
 
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Deref,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::ops::Deref;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use smol_str::SmolStr;
@@ -16,18 +14,15 @@ use warp_command_signatures::IconType;
 use warp_core::command::ExitCode;
 use warp_util::path::{EscapeChar, ShellFamily, TEST_SESSION_HOME_DIR};
 
-use crate::{
-    completer::{
-        CommandOutput, CompletionContext, Description, EngineDirEntry, EngineFileType,
-        GeneratorContext, PathCompletionContext, Suggestion, TopLevelCommandCaseSensitivity,
-    },
-    signatures::{
-        testing::{TEST_ALIAS_COMMAND, TEST_GENERATOR_1_COMMAND, TEST_GENERATOR_2_COMMAND},
-        CommandRegistry,
-    },
-};
-
 use super::{CommandExitStatus, MatchedSuggestion, PathSeparators};
+use crate::completer::{
+    CommandOutput, CompletionContext, Description, EngineDirEntry, EngineFileType,
+    GeneratorContext, PathCompletionContext, Suggestion, TopLevelCommandCaseSensitivity,
+};
+use crate::signatures::testing::{
+    TEST_ALIAS_COMMAND, TEST_GENERATOR_1_COMMAND, TEST_GENERATOR_2_COMMAND,
+};
+use crate::signatures::CommandRegistry;
 
 impl EngineDirEntry {
     pub fn test_file(file_name: &str) -> Self {

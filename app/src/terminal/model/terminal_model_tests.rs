@@ -1,5 +1,15 @@
+use std::sync::Arc;
+
+use chrono::{DateTime, Local};
+use vec1::vec1;
+use warp_core::command::ExitCode;
+use warp_terminal::model::ansi::ClearMode;
+use warpui::r#async::executor::Background;
+use warpui::text::{str_to_byte_vec, SelectionType};
+
 use super::*;
 use crate::terminal::color;
+use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{Handler, Processor};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::bootstrap::BootstrapStage;
@@ -8,15 +18,7 @@ use crate::terminal::model::index::Side;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use crate::terminal::model::test_utils::block_size;
 use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::{event_listener::ChannelEventListener, shared_session::SharedSessionStatus};
-use chrono::{DateTime, Local};
-use std::sync::Arc;
-use vec1::vec1;
-use warp_core::command::ExitCode;
-use warp_terminal::model::ansi::ClearMode;
-use warpui::r#async::executor::Background;
-use warpui::text::str_to_byte_vec;
-use warpui::text::SelectionType;
+use crate::terminal::shared_session::SharedSessionStatus;
 
 /// Helper function to create a SerializedBlock with default values,
 /// including the new is_local field.
@@ -1003,4 +1005,37 @@ fn test_synchronized_output_sharing_session_split_batch() {
         panic!("Expected PtyBytesRead, got {:?}", events[3]);
     };
     assert_eq!(bytes.as_slice(), b"after");
+}
+
+#[test]
+fn cloud_mode_setup_phase_ended_emits_when_sharing() {
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+    terminal.set_shared_session_status(SharedSessionStatus::ActiveSharer);
+    let (tx, rx) = async_channel::unbounded();
+    terminal.set_ordered_terminal_events_for_shared_session_tx(tx);
+
+    terminal.send_cloud_mode_setup_phase_ended_for_shared_session();
+
+    rx.close();
+    let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0],
+        OrderedTerminalEventType::CloudModeSetupPhaseEnded
+    ));
+}
+
+#[test]
+fn cloud_mode_setup_phase_ended_does_not_emit_when_not_sharing() {
+    let mut terminal: TerminalModel = TerminalModel::mock(None, None);
+    // No `set_shared_session_status(ActiveSharer)` here — the helper must
+    // bail before reaching the channel.
+    let (tx, rx) = async_channel::unbounded();
+    terminal.set_ordered_terminal_events_for_shared_session_tx(tx);
+
+    terminal.send_cloud_mode_setup_phase_ended_for_shared_session();
+
+    rx.close();
+    let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(events.is_empty());
 }

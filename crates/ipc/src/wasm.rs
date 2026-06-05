@@ -6,9 +6,8 @@ use futures::{AsyncRead, AsyncWrite};
 use crate::ConnectionAddress;
 
 pub(crate) mod client {
-    use crate::client::{ClientError, InitializationError, Result};
-
     use super::*;
+    use crate::client::{ClientError, InitializationError, Result};
 
     pub async fn connect_client(
         _connection_address: ConnectionAddress,

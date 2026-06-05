@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
+use super::super::blocklist::block::secret_redaction::{
+    find_secrets_in_text, SECRET_REDACTION_REPLACEMENT_CHARACTER,
+};
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentAttachment, AIAgentContext, AIAgentInput, AnyFileContent,
     AskUserQuestionAnswerItem, AskUserQuestionResult, BlockContext, PassiveSuggestionResultType,
     PassiveSuggestionTrigger, RequestCommandOutputResult, TransferShellCommandControlToUserResult,
-};
-
-use super::super::blocklist::block::secret_redaction::{
-    find_secrets_in_text, SECRET_REDACTION_REPLACEMENT_CHARACTER,
 };
 
 /// Redact all detected secrets in-place within the given string.
@@ -349,6 +348,8 @@ fn redact_context(context: &mut [AIAgentContext]) {
             | AIAgentContext::Codebase { .. }
             | AIAgentContext::ProjectRules { .. }
             | AIAgentContext::Git { .. }
+            | AIAgentContext::Repository { .. }
+            | AIAgentContext::PullRequest { .. }
             | AIAgentContext::File(_)
             | AIAgentContext::Skills { .. } => {}
         }

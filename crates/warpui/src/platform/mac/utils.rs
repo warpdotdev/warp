@@ -1,32 +1,57 @@
+use std::slice;
+use std::str::Utf8Error;
+
 use core_foundation::base::TCFType;
 use core_graphics::base::CGFloat;
 use core_graphics::color::CGColor;
 use core_graphics::sys::CGColorRef;
 use objc::runtime::Object;
-use objc::{msg_send, sel, sel_impl};
-use pathfinder_color::ColorU;
-use std::os::raw::c_char;
-use std::slice;
-use std::str::Utf8Error;
-
-use cocoa::appkit::{
-    NSDeleteFunctionKey as DELETE_KEY, NSDownArrowFunctionKey as ARROW_DOWN_KEY,
-    NSEndFunctionKey as END_KEY, NSF10FunctionKey as F10_FUNCTION_KEY,
-    NSF11FunctionKey as F11_FUNCTION_KEY, NSF12FunctionKey as F12_FUNCTION_KEY,
-    NSF13FunctionKey as F13_FUNCTION_KEY, NSF14FunctionKey as F14_FUNCTION_KEY,
-    NSF15FunctionKey as F15_FUNCTION_KEY, NSF16FunctionKey as F16_FUNCTION_KEY,
-    NSF17FunctionKey as F17_FUNCTION_KEY, NSF18FunctionKey as F18_FUNCTION_KEY,
-    NSF19FunctionKey as F19_FUNCTION_KEY, NSF1FunctionKey as F1_FUNCTION_KEY,
-    NSF20FunctionKey as F20_FUNCTION_KEY, NSF2FunctionKey as F2_FUNCTION_KEY,
-    NSF3FunctionKey as F3_FUNCTION_KEY, NSF4FunctionKey as F4_FUNCTION_KEY,
-    NSF5FunctionKey as F5_FUNCTION_KEY, NSF6FunctionKey as F6_FUNCTION_KEY,
-    NSF7FunctionKey as F7_FUNCTION_KEY, NSF8FunctionKey as F8_FUNCTION_KEY,
-    NSF9FunctionKey as F9_FUNCTION_KEY, NSHelpFunctionKey as HELP_KEY,
-    NSHomeFunctionKey as HOME_KEY, NSInsertFunctionKey as INSERT_KEY,
-    NSLeftArrowFunctionKey as ARROW_LEFT_KEY, NSPageDownFunctionKey as PAGE_DOWN_KEY,
-    NSPageUpFunctionKey as PAGE_UP_KEY, NSRightArrowFunctionKey as ARROW_RIGHT_KEY,
-    NSUpArrowFunctionKey as ARROW_UP_KEY,
+use objc2_app_kit::{
+    NSDeleteFunctionKey, NSDownArrowFunctionKey, NSEndFunctionKey, NSF10FunctionKey,
+    NSF11FunctionKey, NSF12FunctionKey, NSF13FunctionKey, NSF14FunctionKey, NSF15FunctionKey,
+    NSF16FunctionKey, NSF17FunctionKey, NSF18FunctionKey, NSF19FunctionKey, NSF1FunctionKey,
+    NSF20FunctionKey, NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey, NSF5FunctionKey,
+    NSF6FunctionKey, NSF7FunctionKey, NSF8FunctionKey, NSF9FunctionKey, NSHelpFunctionKey,
+    NSHomeFunctionKey, NSInsertFunctionKey, NSLeftArrowFunctionKey, NSPageDownFunctionKey,
+    NSPageUpFunctionKey, NSRightArrowFunctionKey, NSUpArrowFunctionKey,
 };
+use objc2_foundation::{NSString, NSUTF8StringEncoding};
+use pathfinder_color::ColorU;
+
+// AppKit exposes the function-key Unicode values as `c_uint`, but the lookup
+// below compares them against a `u16` code unit. Narrow each one to `u16`;
+// every value lies in the 0xF700..=0xF8FF private-use range and fits losslessly.
+const ARROW_UP_KEY: u16 = NSUpArrowFunctionKey as u16;
+const ARROW_DOWN_KEY: u16 = NSDownArrowFunctionKey as u16;
+const ARROW_LEFT_KEY: u16 = NSLeftArrowFunctionKey as u16;
+const ARROW_RIGHT_KEY: u16 = NSRightArrowFunctionKey as u16;
+const HOME_KEY: u16 = NSHomeFunctionKey as u16;
+const END_KEY: u16 = NSEndFunctionKey as u16;
+const PAGE_UP_KEY: u16 = NSPageUpFunctionKey as u16;
+const PAGE_DOWN_KEY: u16 = NSPageDownFunctionKey as u16;
+const HELP_KEY: u16 = NSHelpFunctionKey as u16;
+const INSERT_KEY: u16 = NSInsertFunctionKey as u16;
+const DELETE_KEY: u16 = NSDeleteFunctionKey as u16;
+const F1_FUNCTION_KEY: u16 = NSF1FunctionKey as u16;
+const F2_FUNCTION_KEY: u16 = NSF2FunctionKey as u16;
+const F3_FUNCTION_KEY: u16 = NSF3FunctionKey as u16;
+const F4_FUNCTION_KEY: u16 = NSF4FunctionKey as u16;
+const F5_FUNCTION_KEY: u16 = NSF5FunctionKey as u16;
+const F6_FUNCTION_KEY: u16 = NSF6FunctionKey as u16;
+const F7_FUNCTION_KEY: u16 = NSF7FunctionKey as u16;
+const F8_FUNCTION_KEY: u16 = NSF8FunctionKey as u16;
+const F9_FUNCTION_KEY: u16 = NSF9FunctionKey as u16;
+const F10_FUNCTION_KEY: u16 = NSF10FunctionKey as u16;
+const F11_FUNCTION_KEY: u16 = NSF11FunctionKey as u16;
+const F12_FUNCTION_KEY: u16 = NSF12FunctionKey as u16;
+const F13_FUNCTION_KEY: u16 = NSF13FunctionKey as u16;
+const F14_FUNCTION_KEY: u16 = NSF14FunctionKey as u16;
+const F15_FUNCTION_KEY: u16 = NSF15FunctionKey as u16;
+const F16_FUNCTION_KEY: u16 = NSF16FunctionKey as u16;
+const F17_FUNCTION_KEY: u16 = NSF17FunctionKey as u16;
+const F18_FUNCTION_KEY: u16 = NSF18FunctionKey as u16;
+const F19_FUNCTION_KEY: u16 = NSF19FunctionKey as u16;
+const F20_FUNCTION_KEY: u16 = NSF20FunctionKey as u16;
 
 const BACKSPACE_KEY: u16 = 0x7f;
 const ENTER_KEY: u16 = 0x0d;
@@ -88,11 +113,12 @@ pub fn unicode_char_to_key(char: u16) -> Option<&'static str> {
 ///
 /// This code is only unsafe since it requires interfacing with platform code.
 pub unsafe fn nsstring_as_str<'a>(nsstring: *const Object) -> Result<&'a str, Utf8Error> {
-    const UTF8_ENCODING: usize = 4;
-
-    let cstr: *const c_char = msg_send![nsstring, UTF8String];
-    let len: usize = msg_send![nsstring, lengthOfBytesUsingEncoding: UTF8_ENCODING];
-    std::str::from_utf8(slice::from_raw_parts(cstr as *const u8, len))
+    // The caller guarantees `nsstring` points at a live Objective-C string, so
+    // reinterpret it as an `NSString` for typed access to its UTF-8 bytes.
+    let nsstring = &*nsstring.cast::<NSString>();
+    let cstr = nsstring.UTF8String();
+    let len = nsstring.lengthOfBytesUsingEncoding(NSUTF8StringEncoding);
+    std::str::from_utf8(slice::from_raw_parts(cstr.cast::<u8>(), len))
 }
 
 pub fn color_u_to_cg_color(color: ColorU) -> CGColor {

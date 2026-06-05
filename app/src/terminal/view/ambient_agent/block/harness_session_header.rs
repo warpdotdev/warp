@@ -1,20 +1,17 @@
 use warp_core::ui::appearance::Appearance;
 use warp_terminal::model::BlockId;
-use warpui::{
-    elements::{
-        ConstrainedBox, CrossAxisAlignment, Flex, Hoverable, MainAxisSize, ParentElement,
-        Shrinkable, Text,
-    },
-    platform::Cursor,
-    prelude::{Container, MouseStateHandle},
-    text_layout::ClipConfig,
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+use warpui::elements::{
+    ConstrainedBox, CrossAxisAlignment, Flex, Hoverable, MainAxisSize, ParentElement, Shrinkable,
+    Text,
 };
+use warpui::platform::Cursor;
+use warpui::prelude::{Container, MouseStateHandle};
+use warpui::text_layout::ClipConfig;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::{
-    terminal::{view::PADDING_LEFT, CLIAgent},
-    ui_components::icons::Icon,
-};
+use crate::terminal::view::PADDING_LEFT;
+use crate::terminal::CLIAgent;
+use crate::ui_components::icons::Icon;
 
 const CHEVRON_SIZE: f32 = 14.;
 const COLLAPSED_BOTTOM_PADDING: f32 = 8.;

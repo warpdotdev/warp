@@ -2,6 +2,32 @@
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
 //! TTY related functionality.
+use std::collections::HashMap;
+use std::ffi::{CStr, OsString};
+use std::fs::{DirBuilder, File};
+use std::mem::MaybeUninit;
+use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::path::{Path, PathBuf};
+use std::{io, ptr};
+
+use anyhow::{Context as _, Error, Result};
+use command::blocking::Command;
+use itertools::Itertools;
+use libc::{self, c_int, winsize, TIOCSCTTY};
+use mio::unix::SourceFd;
+use mio::Interest;
+use nix::pty::openpty;
+use nix::sys::termios::{self, InputFlags, SetArg};
+use serde::{Deserialize, Serialize};
+use signal_hook_mio::v1_0::Signals;
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warpui::{AppContext, SingletonEntity};
+
+use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
+use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
+use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::dev_container::{
@@ -15,43 +41,7 @@ use crate::terminal::local_tty::shell::{
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::ASSETS;
-use warp_core::features::FeatureFlag;
-
-use crate::report_if_error;
-use itertools::Itertools;
-
-use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
-use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
-use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
-use anyhow::{Context as _, Error, Result};
-use libc::{self, c_int, winsize, TIOCSCTTY};
-
-use mio::unix::SourceFd;
-use mio::Interest;
-use nix::{
-    pty::openpty,
-    sys::termios::{self, InputFlags, SetArg},
-};
-use serde::{Deserialize, Serialize};
-use signal_hook_mio::v1_0::Signals;
-
-use command::blocking::Command;
-use std::{
-    collections::HashMap,
-    ffi::{CStr, OsString},
-    fs::{DirBuilder, File},
-    io,
-    mem::MaybeUninit,
-    os::unix::{
-        fs::DirBuilderExt,
-        io::{AsRawFd, FromRawFd, RawFd},
-    },
-    path::{Path, PathBuf},
-    ptr,
-};
-use warp_core::channel::ChannelState;
-use warpui::{AppContext, SingletonEntity};
+use crate::{report_if_error, ASSETS};
 
 const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
@@ -1011,99 +1001,8 @@ fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn shell_starter(shell_type: ShellType, shell_path: &str) -> DirectShellStarter {
-        DirectShellStarter::new_for_test(shell_type, PathBuf::from(shell_path), Vec::new())
-    }
-
-    fn env_value(command: &Command, key: &str) -> Option<Option<String>> {
-        command
-            .get_envs()
-            .find(|(env_key, _)| *env_key == std::ffi::OsStr::new(key))
-            .map(|(_, value)| value.map(|value| value.to_string_lossy().into_owned()))
-    }
-
-    #[test]
-    fn host_bash_command_sets_history_size_sentinels() {
-        let command = build_host_shell_command(
-            shell_starter(ShellType::Bash, "/bin/bash"),
-            None,
-            HashMap::new(),
-            None,
-            false,
-            false,
-            false,
-        );
-
-        assert_eq!(
-            env_value(&command, "HISTFILESIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-        assert_eq!(
-            env_value(&command, "HISTSIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-        assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-        assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTSIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-    }
-
-    #[test]
-    fn host_non_bash_command_does_not_set_history_size_sentinels() {
-        let command = build_host_shell_command(
-            shell_starter(ShellType::Zsh, "/bin/zsh"),
-            None,
-            HashMap::new(),
-            None,
-            false,
-            false,
-            false,
-        );
-
-        assert_eq!(env_value(&command, "HISTFILESIZE"), None);
-        assert_eq!(env_value(&command, "HISTSIZE"), None);
-        assert_eq!(env_value(&command, "WARP_INITIAL_HISTFILESIZE"), None);
-        assert_eq!(env_value(&command, "WARP_INITIAL_HISTSIZE"), None);
-    }
-
-    #[test]
-    fn docker_sandbox_command_sets_history_size_sentinels() {
-        let docker_starter =
-            DockerSandboxShellStarter::new(shell_starter(ShellType::Bash, "sbx"), None);
-        let command = build_docker_sandbox_command(
-            &docker_starter,
-            None,
-            HashMap::new(),
-            false,
-            false,
-            false,
-        );
-
-        assert_eq!(
-            env_value(&command, "HISTFILESIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-        assert_eq!(
-            env_value(&command, "HISTSIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-        assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTFILESIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-        assert_eq!(
-            env_value(&command, "WARP_INITIAL_HISTSIZE"),
-            Some(Some(BASH_HISTORY_SIZE_SENTINEL.to_owned()))
-        );
-    }
-}
+#[path = "unix_tests.rs"]
+mod tests;
 
 /// A set of platform helper utilities copied directly from std::sys.
 ///

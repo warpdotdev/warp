@@ -3,25 +3,21 @@
 //! Uses the shared [`ChipConfigurator`] with `LeftRightZones` layout to let users
 //! drag/drop chips between left, right, and unused banks.
 
+use settings::Setting as _;
 use warpui::keymap::FixedBinding;
-
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
+use super::toolbar_item::AgentToolbarItemKind;
 use crate::chip_configurator::{
     render_chip_editor_modal, render_chip_editor_sections, ChipConfigurator,
     ChipConfiguratorAction, ChipConfiguratorLayout, ChipEditorModalConfig, ChipEditorMouseHandles,
     ChipEditorSectionsConfig,
 };
-use crate::report_if_error;
 use crate::terminal::session_settings::{
     AgentToolbarChipSelection, CLIAgentToolbarChipSelection, SessionSettings,
     SessionSettingsChangedEvent, ToolbarChipSelection,
 };
-use crate::Appearance;
-
-use settings::Setting as _;
-
-use super::toolbar_item::AgentToolbarItemKind;
+use crate::{report_if_error, Appearance};
 
 const AGENT_MODAL_TITLE: &str = "Edit agent toolbelt";
 const CLI_MODAL_TITLE: &str = "Edit CLI agent toolbelt";

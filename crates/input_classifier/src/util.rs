@@ -25,7 +25,7 @@ lazy_static! {
 
     /// A set of words that should trigger an AI classification if they are the entire input
     /// and the input is a follow-up to an agent response.
-    static ref AGENT_FOLLOW_UP_INPUTS: HashSet<&'static str> = HashSet::from(["yes", "continue", "do it"]);
+    static ref AGENT_FOLLOW_UP_INPUTS: HashSet<&'static str> = HashSet::from(["yes", "continue", "do it", "approve"]);
 }
 
 pub fn is_agent_follow_up_input(input: &str) -> bool {

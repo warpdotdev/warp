@@ -1,8 +1,5 @@
 //! This module contains the code for the ignore button shown inline next to autosuggestions.
 
-use crate::appearance::Appearance;
-use crate::ui_components::blended_colors;
-use crate::ui_components::icons::Icon;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
@@ -11,10 +8,12 @@ use warpui::elements::{
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
-use warpui::{Entity, TypedActionView, View};
-use warpui::{SingletonEntity, ViewContext};
+use warpui::{Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::EditorElement;
+use crate::appearance::Appearance;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 
 pub const AUTOSUGGESTION_IGNORE_MINIMUM_HEIGHT: f32 = 12.;
 

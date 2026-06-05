@@ -1,35 +1,26 @@
-use ai::index::{
-    full_source_code_embedding::{
-        manager::{CodebaseIndexManager, CodebaseIndexManagerEvent},
-        RetrievalID,
-    },
-    locations::CodeContextLocation,
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
+use ai::index::full_source_code_embedding::RetrievalID;
+use ai::index::locations::CodeContextLocation;
 use anyhow::anyhow;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
 use warp_core::features::FeatureFlag;
-
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::SearchCodebaseFailureReason;
-use crate::{
-    ai::{
-        agent::{AIAgentActionId, SearchCodebaseResult},
-        blocklist::SessionContext,
-        get_relevant_files::api::{FileContext as FileContextRequest, GetRelevantFiles},
-        outline::{OutlineStatus, RepoOutlines},
-    },
-    report_error, send_telemetry_from_ctx,
-    server::server_api::{AIApiError, ServerApiProvider},
-    TelemetryEvent,
-};
+use crate::ai::agent::{AIAgentActionId, SearchCodebaseResult};
+use crate::ai::blocklist::SessionContext;
+use crate::ai::get_relevant_files::api::{FileContext as FileContextRequest, GetRelevantFiles};
+use crate::ai::outline::{OutlineStatus, RepoOutlines};
+use crate::server::server_api::{AIApiError, ServerApiProvider};
+use crate::{report_error, send_telemetry_from_ctx, TelemetryEvent};
 #[cfg_attr(not(target_family = "wasm"), path = "remote_search/native.rs")]
 #[cfg_attr(target_family = "wasm", path = "remote_search/wasm.rs")]
 mod remote_search;
@@ -66,7 +57,7 @@ pub enum GetRelevantFilesRequestTarget {
     },
     Remote {
         session_context: SessionContext,
-        explicit_repo_path: Option<String>,
+        requested_codebase_path: Option<String>,
     },
 }
 #[derive(Debug, thiserror::Error)]
@@ -225,10 +216,10 @@ impl GetRelevantFilesController {
             }
             GetRelevantFilesRequestTarget::Remote {
                 session_context,
-                explicit_repo_path,
+                requested_codebase_path,
             } => self.send_remote_request(
                 session_context,
-                explicit_repo_path,
+                requested_codebase_path,
                 query,
                 partial_path_segments.cloned(),
                 action_id,
@@ -354,7 +345,7 @@ impl GetRelevantFilesController {
     fn send_remote_request(
         &mut self,
         session_context: SessionContext,
-        explicit_repo_path: Option<String>,
+        requested_codebase_path: Option<String>,
         query: String,
         partial_path_segments: Option<Vec<String>>,
         action_id: AIAgentActionId,
@@ -364,7 +355,7 @@ impl GetRelevantFilesController {
             query,
             partial_path_segments,
             session_context,
-            explicit_repo_path,
+            requested_codebase_path,
             action_id.clone(),
             ctx,
         ) {
@@ -443,10 +434,10 @@ impl GetRelevantFilesController {
     pub fn root_directory_for_remote_search(
         &self,
         session_context: &SessionContext,
-        explicit_repo_path: Option<&str>,
+        requested_codebase_path: Option<&str>,
         app: &AppContext,
     ) -> Option<PathBuf> {
-        remote_search::root_directory_for_search(session_context, explicit_repo_path, app)
+        remote_search::root_directory_for_search(session_context, requested_codebase_path, app)
     }
 
     pub fn cancel_request_for_action(

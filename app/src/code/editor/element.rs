@@ -1,47 +1,34 @@
 mod gutter_button;
+use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 pub use gutter_button::{AddAsContextButton, CommentButton, RevertHunkButton};
-
-use std::{
-    ops::Range,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
-
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warp_editor::editor::EditorView;
+use warp_editor::render::element::lens_element::RichTextElementLens;
+use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
+use warp_editor::render::model::{
+    gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, RenderState,
 };
-use warp_core::ui::{
-    appearance::Appearance,
-    theme::{color::internal_colors, Fill},
+use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
+use warpui::elements::{
+    Align, Axis, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Empty, F32Ext, Flex,
+    Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Point, Radius, ScrollData, Stack, Text, ZIndex,
 };
-use warp_editor::{
-    editor::EditorView,
-    render::{
-        element::{
-            lens_element::RichTextElementLens, RenderableBlock, RichTextElement,
-            VerticalExpansionBehavior,
-        },
-        model::{
-            gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, RenderState,
-        },
-    },
-};
+use warpui::event::DispatchedEvent;
+use warpui::fonts::FamilyId;
+use warpui::ui_components::components::UiComponent;
+use warpui::units::{IntoPixels, Pixels};
 use warpui::{
-    elements::{
-        new_scrollable::{NewScrollableElement, ScrollableAxis},
-        Align, Axis, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Empty, F32Ext,
-        Flex, MainAxisSize, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        Point, Radius, ScrollData, Stack, Text, ZIndex,
-    },
-    event::DispatchedEvent,
-    fonts::FamilyId,
-    ui_components::components::UiComponent,
-    units::{IntoPixels, Pixels},
     AfterLayoutContext, AppContext, ClipBounds, Element, Event, EventContext, LayoutContext,
     ModelHandle, PaintContext, SingletonEntity, SizeConstraint,
 };
@@ -49,15 +36,10 @@ use warpui::{
 use super::diff::{DiffHunkDisplay, DiffStatus};
 use super::model::DiffNavigationState;
 use crate::code::editor::element::gutter_button::GutterButton;
-use crate::{
-    code::editor::{
-        line::EditorLineLocation,
-        view::{CodeEditorViewAction, SavedComment},
-    },
-    view_components::action_button::{ActionButtonTheme, SecondaryTheme},
-};
-use warp_core::features::FeatureFlag;
-use warpui::elements::{Hoverable, MouseStateHandle};
+use crate::code::editor::line::EditorLineLocation;
+use crate::code::editor::view::{CodeEditorViewAction, SavedComment};
+use crate::settings::CodeEditorLineNumberMode;
+use crate::view_components::action_button::{ActionButtonTheme, SecondaryTheme};
 
 pub const GUTTER_WIDTH: f32 = 94.;
 const VERTICAL_DIFF_HUNK_INDICATOR_WIDTH: f32 = 3.;
@@ -367,6 +349,28 @@ pub struct LineNumberConfig {
     pub text_color: ColorU,
     pub highlight_text_color: ColorU,
     pub starting_line_number: Option<usize>,
+    pub mode: CodeEditorLineNumberMode,
+    pub active_line_number: Option<LineCount>,
+    pub active_cursor_is_visible: bool,
+}
+impl LineNumberConfig {
+    pub fn absolute_line_number(&self, line_count: LineCount) -> usize {
+        line_count.as_usize() + self.starting_line_number.unwrap_or(1)
+    }
+
+    pub fn display_line_number(&self, line_count: LineCount) -> usize {
+        if self.mode == CodeEditorLineNumberMode::Relative {
+            if let Some(active_line_number) = self.active_line_number {
+                if active_line_number != line_count {
+                    return active_line_number
+                        .as_usize()
+                        .abs_diff(line_count.as_usize());
+                }
+            }
+        }
+
+        self.absolute_line_number(line_count)
+    }
 }
 
 struct CommentBox {
@@ -567,6 +571,21 @@ impl<V: EditorView> EditorWrapper<V> {
             .cloned()
     }
 
+    fn should_display_relative_line_number(&self) -> bool {
+        let Some(line_number_config) = &self.line_number_config else {
+            return false;
+        };
+        if line_number_config.mode != CodeEditorLineNumberMode::Relative
+            || line_number_config.active_line_number.is_none()
+        {
+            return false;
+        }
+
+        // Relative numbers follow the cursor: only show them when a cursor is
+        // actually drawn (editor focused and editable).
+        line_number_config.active_cursor_is_visible
+    }
+
     /// Returning **no** gutter means the gutter shouldn't be rendered at all.
     /// Returning an **empty** gutter means the gutter should be rendered with no contents.
     fn gutter_elements(&self, app: &AppContext) -> Option<Vec<GutterElement>> {
@@ -602,8 +621,11 @@ impl<V: EditorView> EditorWrapper<V> {
             let diff_hunk = self.diff_status.diff_hunk(line_count, appearance);
             let is_removal = matches!(diff_hunk, Some(DiffHunkDisplay::Remove(_)));
 
-            let current_line =
-                line_count.as_usize() + line_number_config.starting_line_number.unwrap_or(1);
+            let current_line = if self.should_display_relative_line_number() {
+                line_number_config.display_line_number(line_count)
+            } else {
+                line_number_config.absolute_line_number(line_count)
+            };
 
             // If the block is temporary, don't render line number.
             // Currently, all temporary blocks are removal hunks, either from a deleted section,
@@ -1662,3 +1684,7 @@ impl<V: EditorView> NewScrollableElement for EditorWrapper<V> {
         ScrollableAxis::Both
     }
 }
+
+#[cfg(test)]
+#[path = "element_tests.rs"]
+mod tests;

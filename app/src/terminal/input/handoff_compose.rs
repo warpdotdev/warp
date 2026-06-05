@@ -1,8 +1,10 @@
 //! Tracks the `&` prefix mode drafting state in the local input while the user
 //! writes a cloud handoff prompt, before a cloud pane/model exists.
 
-use crate::server::ids::SyncId;
 use warpui::{Entity, ModelContext};
+
+use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
+use crate::server::ids::SyncId;
 
 #[derive(Clone)]
 pub enum HandoffComposeStateEvent {
@@ -17,6 +19,7 @@ pub struct HandoffComposeState {
     active: bool,
     selected_environment_id: Option<SyncId>,
     has_explicit_environment_selection: bool,
+    entry_point: HandoffEntryPoint,
 }
 
 impl HandoffComposeState {
@@ -24,10 +27,20 @@ impl HandoffComposeState {
         self.active
     }
 
-    pub(crate) fn activate(&mut self, ctx: &mut ModelContext<Self>) {
+    pub(crate) fn activate(
+        &mut self,
+        entry_point: HandoffEntryPoint,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.active = true;
         self.has_explicit_environment_selection = false;
+        self.entry_point = entry_point;
         ctx.emit(HandoffComposeStateEvent::ActiveChanged);
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub(crate) fn entry_point(&self) -> HandoffEntryPoint {
+        self.entry_point
     }
 
     pub(crate) fn exit(&mut self, ctx: &mut ModelContext<Self>) {

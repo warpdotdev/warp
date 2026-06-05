@@ -1,45 +1,33 @@
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
-use warp_core::{
-    features::FeatureFlag,
-    ui::{
-        external_product_icon::ExternalProductIcon,
-        icons::{Icon, ICON_DIMENSIONS},
-        theme::{color::internal_colors, AnsiColorIdentifier},
-    },
+use warp_core::features::FeatureFlag;
+use warp_core::ui::external_product_icon::ExternalProductIcon;
+use warp_core::ui::icons::{Icon, ICON_DIMENSIONS};
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::AnsiColorIdentifier;
+use warpui::accessibility::ActionAccessibilityContent;
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Fill, Flex,
+    FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseState, MouseStateHandle, Padding, ParentElement, Radius, Text, Wrap,
 };
-use warpui::{
-    accessibility::ActionAccessibilityContent,
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded, Fill, Flex,
-        FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseState, MouseStateHandle, Padding, ParentElement, Radius, Text, Wrap,
-    },
-    fonts::Weight,
-    platform::Cursor,
-    ui_components::{
-        button::ButtonVariant,
-        chip::Chip,
-        components::{Coords, UiComponent, UiComponentStyles},
-        switch::SwitchStateHandle,
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
+use warpui::fonts::Weight;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::chip::Chip;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
-use crate::{
-    ai::mcp::{
-        templatable::CloudTemplatableMCPServer, MCPServerState, TemplatableMCPServerManager,
-    },
-    appearance::Appearance,
-    cloud_object::CloudObject,
-    settings_view::mcp_servers::{style, ServerCardItemId},
-    ui_components::{
-        avatar::{Avatar, AvatarContent, StatusElementTypes},
-        blended_colors,
-        buttons::icon_button,
-        red_notification_dot::RedNotificationDot,
-    },
-};
+use crate::ai::mcp::templatable::CloudTemplatableMCPServer;
+use crate::ai::mcp::{MCPServerState, TemplatableMCPServerManager};
+use crate::appearance::Appearance;
+use crate::cloud_object::{CloudObject, CloudObjectUuidLookup as _};
+use crate::settings_view::mcp_servers::{style, ServerCardItemId};
+use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
+use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::red_notification_dot::RedNotificationDot;
 
 /// A chip displayed inline with the server card title, optionally with a leading icon.
 #[derive(Debug, Clone)]

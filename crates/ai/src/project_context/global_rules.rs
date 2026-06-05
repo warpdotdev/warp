@@ -1,15 +1,18 @@
-use super::model::{GlobalRulesDelta, ProjectContextModel, ProjectContextModelEvent, ProjectRule};
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+
 use async_channel::Sender;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{DirectoryWatcher, Repository, RepositoryUpdate};
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use warp_core::safe_warn;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{ModelContext, ModelHandle, SingletonEntity};
 use watcher::{HomeDirectoryWatcher, HomeDirectoryWatcherEvent};
+
+use super::model::{GlobalRulesDelta, ProjectContextModel, ProjectContextModelEvent, ProjectRule};
 
 /// A well-known location under `$HOME` that may contain a global rule file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
@@ -75,15 +78,15 @@ impl GlobalRules {
         self.rules.values().cloned()
     }
 
-    pub(crate) fn paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
-        self.rules.keys().cloned()
+    pub(crate) fn paths(&self) -> impl Iterator<Item = LocalOrRemotePath> + '_ {
+        self.rules.keys().cloned().map(LocalOrRemotePath::Local)
     }
 
-    pub(crate) fn first_rule_parent(&self) -> Option<PathBuf> {
+    pub(crate) fn first_rule_parent(&self) -> Option<LocalOrRemotePath> {
         self.rules
             .values()
             .next()
-            .and_then(|rule| rule.path.parent().map(|p| p.to_path_buf()))
+            .and_then(|rule| rule.path.parent())
     }
 
     /// Index all configured global rule sources (see [`GlobalRuleSource`]).
@@ -157,7 +160,8 @@ impl GlobalRules {
                     me.global_rules.rules.insert(
                         file_path.clone(),
                         ProjectRule {
-                            path: file_path.clone(),
+                            // Global rule sources are watched under the local home directory.
+                            path: LocalOrRemotePath::Local(file_path.clone()),
                             content,
                         },
                     );

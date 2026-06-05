@@ -1,16 +1,21 @@
-use std::{collections::HashMap, ffi::OsString, fs, path::Path, sync::Arc, time::Duration};
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
 use futures::channel::oneshot;
+use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use tempfile::TempDir;
 use warp_cli::agent::Harness;
+use warp_cli::skill::SkillSpec;
 use warp_cli::{
     OZ_CLI_ENV, OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV, SERVER_ROOT_URL_OVERRIDE_ENV,
     SESSION_SHARING_SERVER_URL_OVERRIDE_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
-
-use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
-use tempfile::TempDir;
-use warp_cli::skill::SkillSpec;
+use warp_managed_secrets::ManagedSecretValue;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, SingletonEntity as _};
 
@@ -19,17 +24,17 @@ use super::{
     LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
+use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    task::TaskId, AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
     AIAgentOutputMessage, ArtifactCreatedData, MessageId, UploadArtifactResult,
 };
+use crate::ai::agent_sdk::task_env_vars;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::cloud_environments::GithubRepo;
 use crate::ai::mcp::parsing::normalize_mcp_json;
-use crate::ai::{agent_sdk::task_env_vars, ambient_agents::AmbientAgentTaskId};
-use crate::{
-    ai::{cloud_environments::GithubRepo, skills::SkillManager},
-    test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view},
-};
-use warp_managed_secrets::ManagedSecretValue;
+use crate::ai::skills::SkillManager;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 #[test]
 fn test_normalize_single_cli_server() {
@@ -186,6 +191,53 @@ fn idle_timeout_sender_later_send_after_supersedes_earlier() {
 
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(rx.try_recv().unwrap(), Some(2));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_none_sends_immediately() {
+    // `complete_with_optional_idle(None, value)` routes to `end_run_now` and
+    // delivers `value` synchronously.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(None, 7);
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_defers_then_delivers() {
+    // `complete_with_optional_idle(Some(d), value)` routes to `end_run_after`
+    // and defers delivery by `d`.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+
+    // Not delivered yet.
+    assert_eq!(rx.try_recv().unwrap(), None);
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(rx.try_recv().unwrap(), Some(7));
+}
+
+#[test]
+fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_timer() {
+    // Cross-path cancellation: the Stage 2c skip-initial-turn driver path
+    // schedules a deferred `Success` via `complete_with_optional_idle(Some(_), _)`
+    // *before* the history subscription is wired up; a later
+    // `AppendedExchange` in that subscription closure invalidates the timer
+    // via `cancel_idle_timeout()`. The shared `Arc<AtomicUsize>` generation
+    // counter is what makes that work across the two logical code paths.
+    // This test exercises the same sequence in isolation: schedule via the
+    // helper, then cancel via the unrelated `cancel_idle_timeout` entry point,
+    // and verify the value is never delivered.
+    let (tx, mut rx) = oneshot::channel::<i32>();
+    let idle_timeout = IdleTimeoutSender::new(tx);
+    idle_timeout.complete_with_optional_idle(Some(Duration::from_millis(50)), 7);
+    idle_timeout.cancel_idle_timeout();
+
+    std::thread::sleep(Duration::from_millis(100));
+    // Sender was never consumed by the cancelled timer, so the channel is
+    // still open but empty.
+    assert_eq!(rx.try_recv().unwrap(), None);
 }
 
 #[test]

@@ -1,7 +1,7 @@
-use crate::terminal::model::image_map::ImagePlacementData;
+use warp_terminal::model::Point;
 
 use super::{AbsolutePoint, AbsoluteRectangle, GridHandler};
-use warp_terminal::model::Point;
+use crate::terminal::model::image_map::ImagePlacementData;
 
 impl GridHandler {
     pub fn get_image_ids_in_range(

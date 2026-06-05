@@ -3,7 +3,7 @@
 Service accounts can have a configured set of global skill specs that should be available in every Oz agent run. The client resolves those specs at agent-driver startup, clones any org-qualified source repos that are not already on disk, and loads skills before the first query runs.
 Global skills are intentionally not treated as permission to load every skill in their source repos. Repos that are part of the run's environment still use normal environment behavior and autodiscover all skills. Repos cloned only because they contain global skills load only the explicitly requested global skills.
 ## Problem
-Before this work, an `oz agent run` only saw skills that were already present on disk or explicitly requested with `--skill <SPEC>`. Service-account global skills exposed by `User.globalSkills` were not made available automatically, and a repo cloned only to satisfy one global skill could accidentally expose unrelated skills in that repo.
+Before this work, an `oz agent run` only saw skills that were already present on disk or explicitly requested with `--skill <SKILL>`. Service-account global skills exposed by `User.globalSkills` were not made available automatically, and a repo cloned only to satisfy one global skill could accidentally expose unrelated skills in that repo.
 ## Goals
 - For service-account-authenticated Oz agent runs, make every explicitly requested global skill available before the agent processes its first query.
 - Autodiscover all skills from repositories that are part of the configured environment.

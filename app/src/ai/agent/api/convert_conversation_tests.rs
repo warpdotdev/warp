@@ -1,3 +1,8 @@
+use std::collections::HashMap;
+
+use chrono::Utc;
+use warp_multi_agent_api as api;
+
 use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -8,9 +13,6 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::ids::ServerId;
-use chrono::Utc;
-use std::collections::HashMap;
-use warp_multi_agent_api as api;
 
 fn test_server_metadata(
     server_token: &str,
@@ -24,6 +26,7 @@ fn test_server_metadata(
             was_summarized: false,
             context_window_usage: 0.0,
             credits_spent: 0.0,
+            platform_credits_spent: 0.0,
             credits_spent_for_last_block: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
@@ -40,6 +43,7 @@ fn test_server_metadata(
             current_editor_uid: None,
         },
         permissions: ServerPermissions::mock_personal(),
+        creator: None,
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(server_token.to_string()),
         artifacts: vec![],

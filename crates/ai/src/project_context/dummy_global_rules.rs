@@ -1,8 +1,7 @@
-use super::model::ProjectRule;
-use std::path::PathBuf;
-use warpui::ModelContext;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui_core::ModelContext;
 
-use super::model::ProjectContextModel;
+use super::model::{ProjectContextModel, ProjectRule};
 
 /// No-op stand-in for non-`local_fs` builds. File-based global rules require
 /// filesystem watchers that don't exist on WASM, so callers see an empty
@@ -16,11 +15,11 @@ impl GlobalRules {
         std::iter::empty()
     }
 
-    pub(crate) fn paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
+    pub(crate) fn paths(&self) -> impl Iterator<Item = LocalOrRemotePath> + '_ {
         std::iter::empty()
     }
 
-    pub(crate) fn first_rule_parent(&self) -> Option<PathBuf> {
+    pub(crate) fn first_rule_parent(&self) -> Option<LocalOrRemotePath> {
         None
     }
 }

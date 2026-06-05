@@ -4,16 +4,12 @@ use markdown_parser::{compute_formatted_text_delta, parse_markdown};
 use serde_yaml::Value;
 use string_offset::CharOffset;
 use vec1::Vec1;
-use warpui::{App, ReadModel};
-
-use crate::content::{
-    buffer::{
-        Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior, tests::TestEmbeddedItem,
-    },
-    text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG},
-};
+use warpui_core::{App, ReadModel};
 
 use super::MarkdownStyle;
+use crate::content::buffer::tests::TestEmbeddedItem;
+use crate::content::buffer::{Buffer, BufferEditAction, EditOrigin, StyledBlockBoundaryBehavior};
+use crate::content::text::{IndentBehavior, TABLE_BLOCK_MARKDOWN_LANG};
 
 #[test]
 fn test_export_normalizes_code_languages() {

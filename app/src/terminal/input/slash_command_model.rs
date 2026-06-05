@@ -1,16 +1,18 @@
 use ai::skills::SkillReference;
 use input_classifier::InputType;
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::ai::blocklist::{BlocklistAIInputEvent, BlocklistAIInputModel};
+use crate::ai::blocklist::{
+    BlocklistAIInputEvent, BlocklistAIInputModel, InputTypeAutoDetectionSource,
+};
 use crate::ai::skills::SkillManager;
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::slash_commands::SlashCommandDataSource;
 use crate::terminal::model::session::active_session::ActiveSession;
-use settings::Setting as _;
 
 /// Event emitted by the slash command model when its entry state is updated.
 #[derive(Debug, Clone)]
@@ -193,7 +195,11 @@ impl SlashCommandModel {
             && !self.ai_input_model.as_ref(ctx).is_input_type_locked()
         {
             self.ai_input_model.update(ctx, |input_model, ctx| {
-                input_model.set_input_type(InputType::Shell, ctx);
+                input_model.set_input_type(
+                    InputType::Shell,
+                    Some(InputTypeAutoDetectionSource::SlashCommand),
+                    ctx,
+                );
             });
         }
 
@@ -242,11 +248,13 @@ impl SlashCommandModel {
 
         let skill_name = possible_command.strip_prefix('/')?;
 
-        let cwd = self.active_session.as_ref(ctx).current_working_directory();
-        let cwd_path = cwd.as_ref().map(std::path::Path::new);
+        let cwd_path = self
+            .active_session
+            .as_ref(ctx)
+            .current_working_directory_location(ctx);
         let skills = SkillManager::handle(ctx)
             .as_ref(ctx)
-            .get_skills_for_working_directory(cwd_path, ctx);
+            .get_skills_for_working_directory(cwd_path.as_ref(), ctx);
 
         let matched_skill = skills.into_iter().find(|skill| skill.name == skill_name)?;
 
@@ -332,7 +340,11 @@ impl SlashCommandModel {
                     // mode, either locked or unlocked; if the input were locked to shell mode then the
                     // state would be `DisabledUntilEmptyBuffer` and we would have shortcircuited above.
                     self.ai_input_model.update(ctx, |input_model, ctx| {
-                        input_model.set_input_type(InputType::AI, ctx);
+                        input_model.set_input_type(
+                            InputType::AI,
+                            Some(InputTypeAutoDetectionSource::SlashCommand),
+                            ctx,
+                        );
                     });
                 }
                 self.state = SlashCommandEntryState::SlashCommand(detected_command);
@@ -346,7 +358,11 @@ impl SlashCommandModel {
 
                 // Skill commands always require AI mode
                 self.ai_input_model.update(ctx, |input_model, ctx| {
-                    input_model.set_input_type(InputType::AI, ctx);
+                    input_model.set_input_type(
+                        InputType::AI,
+                        Some(InputTypeAutoDetectionSource::SlashCommand),
+                        ctx,
+                    );
                 });
                 self.state = SlashCommandEntryState::SkillCommand(detected_skill);
             }
@@ -373,7 +389,11 @@ impl SlashCommandModel {
                     // handled appropriately. I am just making this change to preserve the existing
                     // product behavior (agent icon in NLD toggle becomes yellow).
                     self.ai_input_model.update(ctx, |input_model, ctx| {
-                        input_model.set_input_type(InputType::AI, ctx);
+                        input_model.set_input_type(
+                            InputType::AI,
+                            Some(InputTypeAutoDetectionSource::SlashCommand),
+                            ctx,
+                        );
                     });
                 }
 

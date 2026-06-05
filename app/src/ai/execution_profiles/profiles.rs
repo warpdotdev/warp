@@ -9,26 +9,21 @@ use warp_core::channel::ChannelState;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use crate::ai::llms::LLMId;
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
-use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
-use crate::{send_telemetry_from_ctx, LaunchMode, TelemetryEvent};
-
-use crate::ai::mcp::TemplatableMCPServerManager;
-use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType};
-use crate::drive::CloudObjectTypeAndId;
-use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::SyncId;
-use crate::settings::AgentModeCommandExecutionPredicate;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::CloudModel;
-use crate::{
-    cloud_object::model::generic_string_model::GenericStringObjectId, server::ids::ClientId,
-};
-
 use super::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
+use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
+use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
+use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType};
+use crate::drive::CloudObjectTypeAndId;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::{ClientId, SyncId};
+use crate::settings::AgentModeCommandExecutionPredicate;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{send_telemetry_from_ctx, CloudModel, LaunchMode, TelemetryEvent};
 
 /// ExecutionProfileId is the identifier that users of the AIExecutionProfilesModel use
 /// to refer back to a specific profile. These are unique across the lifespan of the app.
@@ -171,7 +166,7 @@ impl AIExecutionProfilesModel {
                         }
                         None => DefaultProfileState::Unsynced {
                             id: ClientProfileId::new(),
-                            profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                            profile: super::create_default_from_legacy_settings(ctx),
                         },
                     },
                     // When running as a CLI, we ignore the GUI default and use a more permissive default.
@@ -187,7 +182,7 @@ impl AIExecutionProfilesModel {
                     // exhaustively.
                     LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => DefaultProfileState::Unsynced {
                         id: ClientProfileId::new(),
-                        profile: AIExecutionProfile::create_default_from_legacy_settings(ctx),
+                        profile: super::create_default_from_legacy_settings(ctx),
                     },
                 };
             }
@@ -626,9 +621,25 @@ impl AIExecutionProfilesModel {
             ctx,
         );
 
-        if changed {
+        // Gate on the limit being non-empty. The limit is cleared during
+        // reconciliation, which runs inside an `LLMPreferences` update where the
+        // `LLMPreferences::as_ref` read below would panic.
+        if changed && limit.is_some() {
+            let Some(profile) = self.get_profile_by_id(profile_id, ctx) else {
+                return;
+            };
+            let llm_preferences = LLMPreferences::as_ref(ctx);
+            let model_info = profile
+                .data()
+                .base_model
+                .as_ref()
+                .and_then(|id| llm_preferences.get_llm_info(id))
+                .unwrap_or_else(|| llm_preferences.get_default_base_model());
             send_telemetry_from_ctx!(
-                TelemetryEvent::AIExecutionProfileContextWindowSelected { tokens: limit },
+                TelemetryEvent::AIExecutionProfileContextWindowSelected {
+                    tokens: limit,
+                    model_id: model_info.id.to_string(),
+                },
                 ctx
             );
         }
@@ -833,6 +844,39 @@ impl AIExecutionProfilesModel {
             send_telemetry_from_ctx!(
                 TelemetryEvent::AIExecutionProfileSettingUpdated {
                     setting_type: "ask_user_question".to_string(),
+                    setting_value: format!("{permission:?}"),
+                },
+                ctx
+            );
+        }
+    }
+
+    pub fn set_run_agents(
+        &mut self,
+        profile_id: ClientProfileId,
+        permission: super::RunAgentsPermission,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let current_value = self
+            .get_profile_by_id(profile_id, ctx)
+            .map(|p| p.data().run_agents);
+
+        self.edit_profile_internal(
+            profile_id,
+            |profile| {
+                if profile.run_agents != permission {
+                    profile.run_agents = permission;
+                    return true;
+                }
+                false
+            },
+            ctx,
+        );
+
+        if current_value != Some(permission) {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::AIExecutionProfileSettingUpdated {
+                    setting_type: "run_agents".to_string(),
                     setting_value: format!("{permission:?}"),
                 },
                 ctx

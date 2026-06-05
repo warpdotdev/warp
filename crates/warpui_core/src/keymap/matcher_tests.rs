@@ -1,6 +1,5 @@
-use crate::keymap::macros::*;
-
 use super::*;
+use crate::keymap::macros::*;
 
 #[test]
 fn test_matcher() -> anyhow::Result<()> {

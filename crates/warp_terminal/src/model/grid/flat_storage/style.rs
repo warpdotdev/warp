@@ -10,9 +10,9 @@
 
 use get_size::GetSize;
 
-use crate::model::{ansi, grid::cell};
-
 use super::attribute_map::AttributeMap;
+use crate::model::ansi;
+use crate::model::grid::cell;
 
 /// A map that holds foreground color information.
 pub type FgColorMap = AttributeMap<ansi::Color>;

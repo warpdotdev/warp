@@ -1,38 +1,39 @@
-use std::{path::Path, sync::Arc};
+use std::path::Path;
+use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use string_offset::CharOffset;
-
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
-use repo_metadata::{repositories::DetectedRepositories, watcher::DirectoryWatcher};
+use string_offset::CharOffset;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
+use warp_editor::render::model::BlockItem;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warpui::{platform::WindowStyle, App, SingletonEntity, View};
+use warpui::platform::WindowStyle;
+use warpui::{App, SingletonEntity, View};
 
+use super::{FileNotebookView, FileState, MarkdownDisplayMode, SourceFile};
+use crate::auth::auth_manager::AuthManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::notebooks::context_menu::MenuSource;
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::notebooks::file::is_markdown_file;
+use crate::search::files::model::FileSearchModel;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::keys::TerminalKeybindings;
-use crate::{
-    auth::{auth_manager::AuthManager, AuthStateProvider},
-    cloud_object::model::persistence::CloudModel,
-    notebooks::{editor::keys::NotebookKeybindings, file::is_markdown_file},
-    search::files::model::FileSearchModel,
-    server::server_api::ServerApiProvider,
-    settings_view::keybindings::KeybindingChangedNotifier,
-    terminal::model::session::Session,
-    test_util::settings::initialize_settings_for_tests,
-    workspace::ActiveSession,
-    workspaces::user_workspaces::UserWorkspaces,
-    GlobalResourceHandles, GlobalResourceHandlesProvider,
-};
-
-use super::{FileNotebookView, FileState, MarkdownDisplayMode};
-use crate::notebooks::context_menu::MenuSource;
-use warp_editor::render::model::BlockItem;
+use crate::terminal::model::session::Session;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::workspace::ActiveSession;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 fn init_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -125,10 +126,10 @@ fn test_load_before_session() {
             .update(&mut app, |file_notebook, ctx| {
                 file_notebook.open_local("../README.md", None, ctx);
                 match &file_notebook.file_state {
-                    FileState::Loading(source) => {
-                        assert_eq!(source.local_path(), Some(Path::new("../README.md")))
+                    FileState::Loading(SourceFile::FileBased { path, .. }) => {
+                        assert_eq!(path.to_local_path(), Some(Path::new("../README.md")))
                     }
-                    other => panic!("Expected FileState::Loading, got {other:?}"),
+                    other => panic!("Expected FileState::Loading(FileBased), got {other:?}"),
                 }
 
                 let file_id = file_notebook
@@ -150,10 +151,10 @@ fn test_load_before_session() {
             assert!(view.location.is_none());
 
             match &view.file_state {
-                FileState::Loaded(source) => {
-                    assert_eq!(source.local_path(), Some(expected_path.as_path()));
+                FileState::Loaded(SourceFile::FileBased { path, .. }) => {
+                    assert_eq!(path.to_local_path(), Some(expected_path.as_path()));
                 }
-                other => panic!("Expected FileState::Loaded, got {other:?}"),
+                other => panic!("Expected FileState::Loaded(FileBased), got {other:?}"),
             };
         });
 

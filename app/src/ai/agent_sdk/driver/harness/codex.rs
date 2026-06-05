@@ -12,17 +12,8 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::mcp::JSONTransportType;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
-use crate::server::server_api::ServerApi;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 use warp_managed_secrets::ManagedSecretValue;
+use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
@@ -35,6 +26,18 @@ use super::json_utils::read_json_file_or_default;
 use super::{
     write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
 };
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
+use crate::ai::ambient_agents::task::HarnessModelConfig;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::mcp::JSONTransportType;
+use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
+use crate::server::server_api::ServerApi;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::model::block::BlockId;
+use crate::terminal::CLIAgent;
 
 pub(crate) struct CodexHarness;
 
@@ -56,6 +59,30 @@ impl ThirdPartyHarness for CodexHarness {
 
     fn install_docs_url(&self) -> Option<&'static str> {
         Some("https://developers.openai.com/codex/cli")
+    }
+
+    fn auth_check_command(&self) -> Option<String> {
+        let cli = self.cli_agent().command_prefix();
+        Some(format!("{cli} login status"))
+    }
+
+    fn runtime_error_patterns(&self) -> &'static [&'static str] {
+        &[
+            // Quota / billing.
+            "Quota exceeded. Check your plan and billing details.",
+            "You've hit your usage limit",
+            // Upstream HTTP failures Codex surfaces verbatim. The 401 form
+            // matches invalid-API-key and wrong-endpoint variants.
+            "unexpected status 401",
+            "Incorrect API key provided",
+            "invalid API key",
+            // Region/endpoint block (Anthropic-style global vs US-only
+            // routing surfaced through Codex's upstream client).
+            "Access blocked by Cloudflare",
+            // OAuth refresh failures — all five Codex variants share this
+            // substring (see upstream session/token messages).
+            "could not be refreshed",
+        ]
     }
 
     /// Fetch the codex transcript for the current task's conversation and wrap it into a
@@ -90,7 +117,7 @@ impl ThirdPartyHarness for CodexHarness {
         resolved_env_vars: &HashMap<OsString, OsString>,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
-        third_party_harness_model_id: Option<&str>,
+        third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
         prepare_codex_environment_config(
@@ -99,7 +126,7 @@ impl ThirdPartyHarness for CodexHarness {
             resolved_env_vars,
             resolved_secrets,
             resolved_mcp_servers,
-            third_party_harness_model_id,
+            third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
             harness: self.cli_agent().command_prefix().to_owned(),
@@ -168,6 +195,7 @@ enum CodexRunnerState {
 
 struct CodexHarnessRunner {
     command: String,
+    cli_name: String,
     /// Held so the temp file is cleaned up when the runner is dropped.
     _temp_prompt_file: NamedTempFile,
     client: Arc<dyn HarnessSupportClient>,
@@ -232,6 +260,7 @@ impl CodexHarnessRunner {
 
         Ok(Self {
             command,
+            cli_name: cli_command.to_string(),
             _temp_prompt_file: temp_file,
             client,
             terminal_driver,
@@ -264,9 +293,14 @@ impl CodexHarnessRunner {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessRunner for CodexHarnessRunner {
+    fn harness_name(&self) -> &str {
+        &self.cli_name
+    }
+
     async fn start(
         &self,
         foreground: &ModelSpawner<AgentDriver>,
+        setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // Resume runs reuse the prior server conversation id; fresh runs mint a new one.
         let conversation_id = match self.preexisting_conversation_id {
@@ -275,14 +309,17 @@ impl HarnessRunner for CodexHarnessRunner {
                 id
             }
             None => {
-                let id = self
-                    .client
-                    .create_external_conversation(CODEX_CLI_FORMAT)
-                    .await
-                    .map_err(|e| {
-                        log::error!("Failed to create external conversation: {e}");
-                        AgentDriverError::ConfigBuildFailed(e)
-                    })?;
+                let id = setup_events
+                    .record_result(SetupStep::ThirdPartyHarnessExternalConversation, async {
+                        self.client
+                            .create_external_conversation(CODEX_CLI_FORMAT)
+                            .await
+                            .map_err(|e| {
+                                log::error!("Failed to create external conversation: {e}");
+                                AgentDriverError::ConfigBuildFailed(e)
+                            })
+                    })
+                    .await?;
                 log::info!("Created external conversation {id}");
                 id
             }
@@ -301,6 +338,10 @@ impl HarnessRunner for CodexHarnessRunner {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }
@@ -413,7 +454,9 @@ async fn upload_transcript(
     };
     let Some(transcript_path) = transcript_path else {
         if is_final {
-            log::warn!("No codex rollout file found at final save for session {session_id}; transcript was never uploaded");
+            log::warn!(
+                "No codex rollout file found at final save for session {session_id}; transcript was never uploaded"
+            );
         } else {
             log::debug!("No codex rollout file yet for session {session_id}");
         }
@@ -439,6 +482,7 @@ async fn upload_transcript(
 }
 
 const CODEX_CONFIG_DIR: &str = ".codex";
+const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const CODEX_AGENTS_OVERRIDE_FILE_NAME: &str = "AGENTS.override.md";
 const CODEX_AUTH_FILE_NAME: &str = "auth.json";
 const CODEX_CONFIG_TOML_FILE_NAME: &str = "config.toml";
@@ -452,6 +496,7 @@ const CODEX_TRUST_LEVEL_TRUSTED: &str = "trusted";
 const CODEX_OPENAI_BASE_URL_KEY: &str = "openai_base_url";
 const CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY: &str = "check_for_update_on_startup";
 const CODEX_MODEL_KEY: &str = "model";
+const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// Target model for the `[notice.model_migrations]` table that suppresses Codex's
 /// "choose a newer model" upgrade prompt at session launch. We stamp this for any
 /// pinned model id (even when it already matches the target) so the unattended
@@ -466,11 +511,9 @@ fn prepare_codex_environment_config(
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
     resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
-    third_party_harness_model_id: Option<&str>,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
 ) -> Result<()> {
-    let home_dir =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
-    let codex_dir = home_dir.join(CODEX_CONFIG_DIR);
+    let codex_dir = codex_config_dir()?;
 
     if let Some(prompt) = system_prompt {
         write_codex_agents_override(&codex_dir, prompt)?;
@@ -490,10 +533,21 @@ fn prepare_codex_environment_config(
         &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
         working_dir,
         resolved_mcp_servers,
-        third_party_harness_model_id,
+        third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
     Ok(())
+}
+
+fn codex_config_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var(CODEX_HOME_ENV) {
+        if !dir.is_empty() {
+            return Ok(PathBuf::from(dir));
+        }
+    }
+    dirs::home_dir()
+        .map(|home| home.join(CODEX_CONFIG_DIR))
+        .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
 }
 
 fn write_codex_agents_override(codex_dir: &Path, system_prompt: &str) -> Result<()> {
@@ -553,8 +607,7 @@ fn write_codex_auth_json(path: &Path, auth: &CodexAuthDotJson) -> Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write as _;
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -634,14 +687,14 @@ fn resolve_openai_base_url_from_secret(
 ///   field), write it to config.toml. When absent, skip the key entirely so
 ///   Codex uses the provider's default global endpoint.
 /// - update checks: disable Codex's startup update prompt for unattended runs.
-/// - model override: when a non-default `third_party_harness_model_id` is
+/// - model override: when a non-default harness model config is
 ///   supplied, write the top-level `model` key so Codex pins the chosen model
 ///   for new sessions.
 fn prepare_codex_config_toml(
     config_toml_path: &Path,
     working_dir: &Path,
     resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
-    third_party_harness_model_id: Option<&str>,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
     openai_base_url: Option<&str>,
 ) -> Result<()> {
     let existing = match fs::read_to_string(config_toml_path) {
@@ -666,7 +719,8 @@ fn prepare_codex_config_toml(
         set_codex_openai_base_url(&mut doc, url);
     }
     set_codex_check_for_update_on_startup(&mut doc, false);
-    set_codex_model(&mut doc, third_party_harness_model_id);
+    set_codex_model(&mut doc, third_party_harness_model_config);
+    set_codex_model_reasoning_effort(&mut doc, third_party_harness_model_config);
 
     let canonical = working_dir.canonicalize().with_context(|| {
         format!(
@@ -709,9 +763,27 @@ fn set_codex_check_for_update_on_startup(doc: &mut toml_edit::DocumentMut, enabl
     doc[CODEX_CHECK_FOR_UPDATE_ON_STARTUP_KEY] = toml_edit::value(enabled);
 }
 
-fn set_codex_model(doc: &mut toml_edit::DocumentMut, third_party_harness_model_id: Option<&str>) {
-    let Some(model_id) =
-        third_party_harness_model_id.filter(|id| !id.is_empty() && *id != "default")
+fn set_codex_model_reasoning_effort(
+    doc: &mut toml_edit::DocumentMut,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
+) {
+    let Some(reasoning_level) = third_party_harness_model_config
+        .and_then(|config| config.reasoning_level.as_deref())
+        .filter(|level| !level.is_empty())
+    else {
+        doc.remove(CODEX_MODEL_REASONING_EFFORT_KEY);
+        return;
+    };
+    doc[CODEX_MODEL_REASONING_EFFORT_KEY] = toml_edit::value(reasoning_level);
+}
+
+fn set_codex_model(
+    doc: &mut toml_edit::DocumentMut,
+    third_party_harness_model_config: Option<&HarnessModelConfig>,
+) {
+    let Some(model_id) = third_party_harness_model_config
+        .map(|config| config.model_id.as_str())
+        .filter(|id| !id.is_empty() && *id != "default")
     else {
         // No model specified or "default" selected — remove any pre-existing
         // key so Codex uses its own default.

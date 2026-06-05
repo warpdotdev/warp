@@ -1,10 +1,11 @@
 use std::slice;
 
+use ai::diff_validation::{DiffDelta, DiffType};
+
 use super::{
     changed_lines_intersect_terminal_range, has_malformed_terminal_correction_signal,
     proposed_terminal_line_range,
 };
-use ai::diff_validation::{DiffDelta, DiffType};
 
 #[test]
 fn terminal_range_accounts_for_prior_insertions() {

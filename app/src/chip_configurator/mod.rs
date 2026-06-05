@@ -9,7 +9,6 @@ pub(crate) use modal_shell::{
     render_chip_editor_modal, render_chip_editor_sections, ChipEditorModalConfig,
     ChipEditorMouseHandles, ChipEditorSectionsConfig,
 };
-
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
@@ -27,8 +26,7 @@ use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::appearance::Appearance;
 use crate::context_chips::display_chip::{chip_container, udi_font_size};
 use crate::context_chips::renderer::{ChipDragState, Renderer as ContextChipRenderer};
-use crate::context_chips::spacing;
-use crate::context_chips::{ChipAvailability, ContextChipKind};
+use crate::context_chips::{spacing, ChipAvailability, ContextChipKind};
 use crate::ui_components::icons;
 
 const USED_CHIPS_POSITION_ID: &str = "chip_cfg_used";
@@ -329,7 +327,7 @@ pub struct CurrentDraggingState {
     pub current_location: ChipLocation,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ChipConfiguratorAction {
     StartDraggingChip { location: ChipLocation },
     DragChip { current_position: RectF },

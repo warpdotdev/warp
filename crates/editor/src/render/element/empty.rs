@@ -1,17 +1,11 @@
-use crate::{
-    content::text::BufferBlockStyle,
-    extract_block,
-    render::{
-        element::paint::CursorData,
-        model::{BlockItem, RenderState, viewport::ViewportItem},
-    },
-};
-
-use super::{
-    RenderContext, RenderableBlock,
-    paragraph::paragraph_placeholder_text,
-    placeholder::{self, BlockPlaceholder},
-};
+use super::paragraph::paragraph_placeholder_text;
+use super::placeholder::{self, BlockPlaceholder};
+use super::{RenderContext, RenderableBlock};
+use crate::content::text::BufferBlockStyle;
+use crate::extract_block;
+use crate::render::element::paint::CursorData;
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState};
 
 /// Renderable representation of invisible rich-text items. This is used for the trailing newline
 /// marker.
@@ -37,8 +31,8 @@ impl RenderableBlock for Empty {
     fn layout(
         &mut self,
         model: &RenderState,
-        ctx: &mut warpui::LayoutContext,
-        app: &warpui::AppContext,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &warpui_core::AppContext,
     ) {
         self.placeholder
             .layout(&self.viewport_item, model, ctx, app, |_| {
@@ -49,7 +43,12 @@ impl RenderableBlock for Empty {
             });
     }
 
-    fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, _app: &warpui::AppContext) {
+    fn paint(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut RenderContext,
+        _app: &warpui_core::AppContext,
+    ) {
         let content = model.content();
         let cursor = extract_block!(self.viewport_item, content, (block, BlockItem::TrailingNewLine(cursor)) => block.trailing_newline(cursor));
         if self.placeholder.paint(cursor.content_origin(), model, ctx) {

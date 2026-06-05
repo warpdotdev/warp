@@ -2,35 +2,26 @@ use pathfinder_geometry::rect::RectF;
 use regex::Regex;
 use settings::Setting as _;
 use warp_util::path::user_friendly_path;
-use warpui::{
-    async_assert, async_assert_eq,
-    integration::{AssertionCallback, AssertionOutcome},
-    units::Lines,
-    windowing::WindowManager,
-    App, SingletonEntity, ViewHandle, WindowId,
-};
-
-use crate::{
-    ai::blocklist::agent_view::AgentViewState,
-    integration_testing::view_getters::{
-        single_input_view_for_tab, single_terminal_view, single_terminal_view_for_tab,
-        terminal_view,
-    },
-    settings::InputModeSettings,
-    terminal::{
-        block_list_viewport::InputMode,
-        block_list_viewport::ScrollPosition,
-        model::block::BlockState,
-        model::bootstrap::BootstrapStage,
-        model::grid::grid_handler::TermMode,
-        model::{blocks::BlockFilter, terminal_model::BlockIndex},
-        view::TerminalViewState,
-        History,
-    },
-    workspace::{ActiveSession, Workspace},
-};
+use warpui::integration::{AssertionCallback, AssertionOutcome};
+use warpui::units::Lines;
+use warpui::windowing::WindowManager;
+use warpui::{async_assert, async_assert_eq, App, SingletonEntity, ViewHandle, WindowId};
 
 use super::util::ExpectedOutput;
+use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::integration_testing::view_getters::{
+    single_input_view_for_tab, single_terminal_view, single_terminal_view_for_tab, terminal_view,
+};
+use crate::settings::InputModeSettings;
+use crate::terminal::block_list_viewport::{InputMode, ScrollPosition};
+use crate::terminal::model::block::BlockState;
+use crate::terminal::model::blocks::BlockFilter;
+use crate::terminal::model::bootstrap::BootstrapStage;
+use crate::terminal::model::grid::grid_handler::TermMode;
+use crate::terminal::model::terminal_model::BlockIndex;
+use crate::terminal::view::TerminalViewState;
+use crate::terminal::History;
+use crate::workspace::{ActiveSession, Workspace};
 
 lazy_static::lazy_static! {
     /// When a python interpreter is ready for user input,

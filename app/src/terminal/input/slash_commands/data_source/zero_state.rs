@@ -108,11 +108,10 @@ impl SyncDataSource for ZeroStateDataSource {
             let cwd = slash_command_data_source
                 .active_session_for_v2_zero_state()
                 .as_ref(app)
-                .current_working_directory();
-            let cwd_path = cwd.as_ref().map(std::path::Path::new);
+                .current_working_directory_location(app);
             let skill_manager_handle = SkillManager::handle(app);
             let skill_manager = skill_manager_handle.as_ref(app);
-            let skills = skill_manager.get_skills_for_working_directory(cwd_path, app);
+            let skills = skill_manager.get_skills_for_working_directory(cwd.as_ref(), app);
 
             for mut skill in skills
                 .into_iter()

@@ -16,12 +16,14 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use async_channel::Receiver;
-use warpui::r#async::executor;
+use serde::Serialize;
+use warpui_core::r#async::executor;
 
+#[cfg(not(target_family = "wasm"))]
+use crate::client::RemoteServerLog;
 use crate::client::{ClientEvent, RemoteServerClient};
 use crate::manager::RemoteServerExitStatus;
 use crate::setup::{PreinstallCheckResult, RemotePlatform};
-use serde::Serialize;
 
 /// How the remote server binary was installed. Used for telemetry to
 /// distinguish direct remote downloads from client-side SCP uploads.
@@ -156,6 +158,10 @@ pub struct Connection {
     /// `event_rx` so the failure sender on the client doesn't keep the
     /// lifecycle event channel alive.
     pub failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
+    /// Receiver for host-scoped responses whose `request_id` was not in
+    /// this client's `pending_requests`. The manager drains this to match
+    /// against its `pending_host_requests`.
+    pub host_response_rx: async_channel::Receiver<crate::proto::ServerMessage>,
     /// The subprocess whose stdio backs the client (e.g.
     /// `ssh … remote-server-proxy`). Spawned with `kill_on_drop(true)`
     /// by the transport, so dropping this `Child` sends SIGKILL to the
@@ -175,6 +181,10 @@ pub struct Connection {
     /// See [`crate::ssh::stop_control_master`] for the exact command.
     #[cfg(not(target_family = "wasm"))]
     pub control_path: Option<PathBuf>,
+    /// Tail buffer of the last N stderr lines from the SSH subprocess.
+    /// Drained on connection failure and attached to telemetry.
+    #[cfg(not(target_family = "wasm"))]
+    pub stderr_tail: RemoteServerLog,
 }
 
 /// Transport abstraction for remote server connections.

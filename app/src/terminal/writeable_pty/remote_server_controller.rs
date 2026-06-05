@@ -1,29 +1,27 @@
-use crate::auth::auth_state::AuthStateProvider;
-use crate::remote_server::auth_context::server_api_auth_context;
-use instant::Instant;
-use remote_server::auth::RemoteServerAuthContext;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use instant::Instant;
+use remote_server::auth::RemoteServerAuthContext;
+use remote_server::setup::{
+    PreinstallCheckResult, PreinstallStatus, RemoteLibc, RemotePlatform, UnsupportedReason,
+};
+use remote_server::transport::Error;
+use settings::Setting;
 use warp_core::SessionId;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
-use settings::Setting;
-
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
-
+use super::pty_controller::{EventLoopSender, PtyController};
+use crate::auth::auth_state::AuthStateProvider;
+use crate::remote_server::auth_context::server_api_auth_context;
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::remote_server::ssh_transport::SshTransport;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
 use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
-use remote_server::setup::{
-    PreinstallCheckResult, PreinstallStatus, RemoteLibc, RemotePlatform, UnsupportedReason,
-};
-use remote_server::transport::Error;
-
-use super::pty_controller::{EventLoopSender, PtyController};
 
 /// Per-SSH-init state machine. Encoding the state as an enum makes invalid
 /// transitions unrepresentable and ensures the `SessionInfo` stash cannot be
@@ -146,6 +144,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }
+            | RemoteServerManagerEvent::CodebaseIndexMutationFailed { .. }
             | RemoteServerManagerEvent::SetupStateChanged { .. }
             | RemoteServerManagerEvent::ClientRequestFailed { .. }
             | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
@@ -262,12 +261,18 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(true) => {
                 let socket_path = transport.socket_path().clone();
+                let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
                     setup_start,
                 };
-                self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                self.connect_session_for_current_identity(
+                    session_id,
+                    socket_path,
+                    connection_label,
+                    ctx,
+                );
             }
             Ok(false) if has_old_binary => {
                 // Auto-update: a prior install exists, so skip the modal
@@ -489,12 +494,18 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(()) => {
                 let socket_path = transport.socket_path().clone();
+                let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
                     session_info,
                     setup_start,
                 };
-                self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                self.connect_session_for_current_identity(
+                    session_id,
+                    socket_path,
+                    connection_label,
+                    ctx,
+                );
             }
             Err(err) => {
                 log::warn!(
@@ -526,16 +537,60 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         &mut self,
         session_id: SessionId,
         socket_path: PathBuf,
+        connection_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_context = self.build_auth_context(ctx);
         let transport = SshTransport::new(socket_path, auth_context.clone());
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.connect_session(session_id, transport, auth_context, ctx);
+            mgr.connect_session(
+                session_id,
+                transport,
+                auth_context,
+                Some(connection_label),
+                ctx,
+            );
         });
     }
 }
 
+fn connection_label_for_session_info(session_info: &SessionInfo) -> String {
+    let ssh_host = session_info
+        .subshell_info
+        .as_ref()
+        .and_then(|info| info.ssh_connection_info.as_ref())
+        .and_then(|ssh| ssh.host.as_deref());
+
+    connection_label_from_session_hosts(&session_info.user, &session_info.hostname, ssh_host)
+}
+
+fn connection_label_from_session_hosts(
+    user: &str,
+    hostname: &str,
+    ssh_host: Option<&str>,
+) -> String {
+    let host = ssh_host
+        .filter(|host| !host.is_empty())
+        .map(connection_label_from_ssh_host)
+        .or_else(|| (!hostname.is_empty()).then(|| hostname.to_string()));
+
+    connection_label_from_user_and_host(user, host.as_deref())
+}
+
+fn connection_label_from_user_and_host(user: &str, host: Option<&str>) -> String {
+    match (user.is_empty(), host.filter(|host| !host.is_empty())) {
+        (false, Some(host)) => format!("{user}@{host}"),
+        (false, None) => user.to_string(),
+        (true, Some(host)) => host.to_string(),
+        (true, None) => "Remote host".to_string(),
+    }
+}
+
+fn connection_label_from_ssh_host(host: &str) -> String {
+    host.rsplit_once('@')
+        .map_or(host, |(_user, host)| host)
+        .to_string()
+}
 /// Describes a [`RemoteLibc`] as a short string for telemetry.
 fn describe_libc(libc: &RemoteLibc) -> String {
     match libc {
@@ -572,3 +627,7 @@ fn send_unsupported_telemetry<T: EventLoopSender>(
         ctx
     );
 }
+
+#[cfg(test)]
+#[path = "remote_server_controller_tests.rs"]
+mod tests;

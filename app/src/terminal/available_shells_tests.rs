@@ -1,10 +1,12 @@
-use super::*;
-use crate::terminal::shell::ShellType;
-use crate::test_util::{Stub, VirtualFS};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
 use warp_core::features::FeatureFlag;
+
+use super::*;
+use crate::terminal::shell::ShellType;
+use crate::test_util::{Stub, VirtualFS};
 
 fn make_available_shells(shells: Vec<AvailableShell>) -> AvailableShells {
     AvailableShells {

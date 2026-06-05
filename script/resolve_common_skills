@@ -2,36 +2,13 @@
 
 set -eo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 COMMON_SKILLS_REPO="warpdotdev/common-skills"
 COMMON_SKILLS_REF="${WARP_COMMON_SKILLS_REF:-main}"
 RAW_BASE_URL="${WARP_COMMON_SKILLS_RAW_BASE_URL:-https://raw.githubusercontent.com/${COMMON_SKILLS_REPO}/${COMMON_SKILLS_REF}/scripts}"
-SCRIPT_NAME=""
+RESOLVER_NAME="resolve_common_skills"
 
-usage() {
-  cat <<EOF
-Usage: ./script/resolve_common_skills <script-name> [-- <script-args...>]
-
-Execute a script from warpdotdev/common-skills/scripts.
-
-Resolution order:
-  1. WARP_COMMON_SKILLS_SCRIPTS_DIR
-  2. The raw script from ${COMMON_SKILLS_REPO}
-
-Environment:
-  WARP_COMMON_SKILLS_SCRIPTS_DIR=/path/to/common-skills/scripts
-      Override where common-skills management scripts are loaded from.
-  WARP_COMMON_SKILLS_REF=<git-ref>
-      Override the remote common-skills ref used for the raw script.
-  WARP_COMMON_SKILLS_RAW_BASE_URL=https://...
-      Override the remote base URL used for raw script fallback.
-EOF
-}
-
-execute_from_dir() {
-  local scripts_dir="$1"
-  local script_path="${scripts_dir}/${SCRIPT_NAME}"
-  shift
+execute_resolver_from_dir() {
+  local script_path="${WARP_COMMON_SKILLS_SCRIPTS_DIR%/}/${RESOLVER_NAME}"
 
   if [[ -x "${script_path}" ]]; then
     exec "${script_path}" "$@"
@@ -41,12 +18,12 @@ execute_from_dir() {
     exec bash "${script_path}" "$@"
   fi
 
-  return 1
+  echo "error: could not execute ${RESOLVER_NAME} from WARP_COMMON_SKILLS_SCRIPTS_DIR=${WARP_COMMON_SKILLS_SCRIPTS_DIR}" >&2
+  exit 1
 }
 
-
-execute_from_remote() {
-  local raw_url="${RAW_BASE_URL%/}/${SCRIPT_NAME}"
+execute_resolver_from_remote() {
+  local raw_url="${RAW_BASE_URL%/}/${RESOLVER_NAME}"
   local temp_script=""
   local status=0
 
@@ -54,7 +31,8 @@ execute_from_remote() {
     echo "error: curl is required to fetch ${raw_url}" >&2
     return 1
   fi
-  temp_script="$(mktemp "${TMPDIR:-/tmp}/common-skills-script.XXXXXX")"
+
+  temp_script="$(mktemp "${TMPDIR:-/tmp}/common-skills-resolver.XXXXXX")"
   if curl -fsSL "${raw_url}" -o "${temp_script}"; then
     :
   else
@@ -62,6 +40,7 @@ execute_from_remote() {
     rm -f "${temp_script}"
     return "${status}"
   fi
+
   if bash "${temp_script}" "$@"; then
     status=0
   else
@@ -71,44 +50,8 @@ execute_from_remote() {
   return "${status}"
 }
 
-if [[ $# -lt 1 ]]; then
-  usage >&2
-  exit 1
-fi
-
-case "$1" in
-  -h|--help)
-    usage
-    exit 0
-    ;;
-  */*|.|..|"")
-    echo "error: invalid common-skills script name: $1" >&2
-    usage >&2
-    exit 1
-    ;;
-  *)
-    SCRIPT_NAME="$1"
-    case "${SCRIPT_NAME}" in
-      *[!A-Za-z0-9_-]*)
-        echo "error: invalid common-skills script name: ${SCRIPT_NAME}" >&2
-        usage >&2
-        exit 1
-        ;;
-    esac
-    shift
-    ;;
-esac
-if [[ "${1:-}" = "--" ]]; then
-  shift
-fi
-
 if [[ -n "${WARP_COMMON_SKILLS_SCRIPTS_DIR:-}" ]]; then
-  if execute_from_dir "${WARP_COMMON_SKILLS_SCRIPTS_DIR}" "$@"; then
-    exit 0
-  fi
-
-  echo "error: could not execute ${SCRIPT_NAME} from WARP_COMMON_SKILLS_SCRIPTS_DIR=${WARP_COMMON_SKILLS_SCRIPTS_DIR}" >&2
-  exit 1
+  execute_resolver_from_dir "$@"
 fi
 
-execute_from_remote "$@"
+execute_resolver_from_remote "$@"

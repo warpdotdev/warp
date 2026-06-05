@@ -1,25 +1,17 @@
-use chrono::{Duration, Utc};
-use warp_cli::agent::Harness;
+use chrono::Utc;
 
-use crate::ai::ambient_agents::task::{
-    AgentConfigSnapshot, HarnessConfig, RequestUsage, TaskPrincipalInfo, TaskStatusErrorCode,
-    TaskStatusMessage,
-};
+use super::TombstoneDisplayData;
+use crate::ai::ambient_agents::task::{RequestUsage, TaskPrincipalInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::format_credits;
-use crate::util::time_format::human_readable_precise_duration;
 
-use super::TombstoneDisplayData;
-
-const RUN_DURATION_SECONDS: i64 = 90;
 const INFERENCE_COST: f64 = 1.5;
 const COMPUTE_COST: f64 = 3.0;
 const PLATFORM_COST: f64 = 2.5;
 
 fn task_with_run_time_and_credits() -> AmbientAgentTask {
     let started_at = Utc::now();
-    let updated_at = started_at + Duration::seconds(RUN_DURATION_SECONDS);
     AmbientAgentTask {
         task_id: "550e8400-e29b-41d4-a716-000000005000".parse().unwrap(),
         parent_run_id: None,
@@ -28,7 +20,8 @@ fn task_with_run_time_and_credits() -> AmbientAgentTask {
         prompt: "test".to_string(),
         created_at: started_at,
         started_at: Some(started_at),
-        updated_at,
+        updated_at: started_at,
+        run_time: Some("PT42S".parse().unwrap()),
         status_message: None,
         source: None,
         session_id: None,
@@ -56,6 +49,7 @@ fn task_with_run_time_and_credits() -> AmbientAgentTask {
 fn task_without_run_time_or_credits() -> AmbientAgentTask {
     let mut task = task_with_run_time_and_credits();
     task.started_at = None;
+    task.run_time = None;
     task.request_usage = None;
     task
 }
@@ -88,21 +82,6 @@ fn task_failure_status_message_overrides_conversation_error() {
     assert_eq!(data.error_message.as_deref(), Some("task failed"));
 }
 
-#[test]
-fn environment_setup_failure_hides_continue_actions() {
-    let mut task = task_with_run_time_and_credits();
-    task.state = AmbientAgentTaskState::Failed;
-    task.status_message = Some(TaskStatusMessage {
-        message: "Environment setup failed: Failed to run setup command: hi".to_string(),
-        error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
-    });
-    let mut data = TombstoneDisplayData::default();
-
-    data.enrich_from_task(task);
-
-    assert!(data.hide_continue_actions);
-}
-
 fn pr_artifact(branch: &str) -> Artifact {
     Artifact::PullRequest {
         url: format!("https://github.com/example/repo/pull/{branch}"),
@@ -119,10 +98,8 @@ fn task_overrides_run_time_and_credits_when_present() {
 
     data.enrich_from_task(task);
 
-    let expected_run_time =
-        human_readable_precise_duration(Duration::seconds(RUN_DURATION_SECONDS));
     let expected_credits = format_credits((INFERENCE_COST + COMPUTE_COST + PLATFORM_COST) as f32);
-    assert_eq!(data.run_time, Some(expected_run_time));
+    assert_eq!(data.run_time.as_deref(), Some("42.0 sec"));
     assert_eq!(data.credits, Some(expected_credits));
 }
 
@@ -144,10 +121,8 @@ fn empty_defaults_populated_from_task_for_non_oz() {
 
     data.enrich_from_task(task);
 
-    let expected_run_time =
-        human_readable_precise_duration(Duration::seconds(RUN_DURATION_SECONDS));
     let expected_credits = format_credits((INFERENCE_COST + COMPUTE_COST + PLATFORM_COST) as f32);
-    assert_eq!(data.run_time, Some(expected_run_time));
+    assert_eq!(data.run_time.as_deref(), Some("42.0 sec"));
     assert_eq!(data.credits, Some(expected_credits));
 }
 
@@ -191,47 +166,4 @@ fn empty_task_artifacts_preserve_conversation_artifacts() {
     data.enrich_from_task(task);
 
     assert_eq!(data.artifacts, conversation_artifacts);
-}
-
-#[test]
-fn task_without_snapshot_leaves_harness_unset() {
-    let task = task_with_run_time_and_credits();
-    assert!(task.agent_config_snapshot.is_none());
-    let mut data = TombstoneDisplayData::default();
-
-    data.enrich_from_task(task);
-
-    assert_eq!(data.harness, None);
-}
-
-#[test]
-fn snapshot_without_explicit_harness_defaults_to_oz() {
-    let mut task = task_with_run_time_and_credits();
-    task.agent_config_snapshot = Some(AgentConfigSnapshot::default());
-    let mut data = TombstoneDisplayData::default();
-
-    data.enrich_from_task(task);
-
-    assert_eq!(data.harness, Some(Harness::Oz));
-}
-
-#[test]
-fn snapshot_with_explicit_harness_propagates() {
-    for harness in [
-        Harness::Oz,
-        Harness::Claude,
-        Harness::Gemini,
-        Harness::Unknown,
-    ] {
-        let mut task = task_with_run_time_and_credits();
-        task.agent_config_snapshot = Some(AgentConfigSnapshot {
-            harness: Some(HarnessConfig::from_harness_type(harness)),
-            ..Default::default()
-        });
-        let mut data = TombstoneDisplayData::default();
-
-        data.enrich_from_task(task);
-
-        assert_eq!(data.harness, Some(harness), "harness {harness:?}");
-    }
 }

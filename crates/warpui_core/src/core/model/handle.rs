@@ -1,14 +1,13 @@
-use std::{
-    any::{type_name, TypeId},
-    fmt::{self, Debug},
-    hash::{Hash, Hasher},
-    marker::PhantomData,
-    sync::{Arc, Weak},
-};
+use std::any::{type_name, TypeId};
+use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
-use crate::{core::RefCounts, AppContext, Entity, EntityId, EntityLocation, Handle, ModelContext};
+use crate::core::RefCounts;
+use crate::{AppContext, Entity, EntityId, EntityLocation, Handle, ModelContext};
 
 /// A strong reference to a particular [`Entity`] instance within the application.
 ///
@@ -219,7 +218,9 @@ impl<T: Entity> WeakModelHandle<T> {
     }
 
     pub fn upgrade(&self, app: &AppContext) -> Option<ModelHandle<T>> {
-        if app.models.contains_key(&self.model_id) {
+        if app.models.contains_key(&self.model_id)
+            && !app.ref_counts.lock().is_model_dropped(self.model_id)
+        {
             Some(ModelHandle::new(self.model_id, &app.ref_counts))
         } else {
             None

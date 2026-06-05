@@ -120,9 +120,13 @@ maybe_install_common_skills() {
     fi
     if [[ "${COMMON_SKILLS_TARGET}" = "project" || "${COMMON_SKILLS_TARGET}" = "global" ]]; then
       target_args=("--${COMMON_SKILLS_TARGET}")
-      ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "${target_args[@]}" --if-needed
+      if ! ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" "${target_args[@]}" --if-needed; then
+        echo "error: unable to install common skills; continuing without them." >&2
+      fi
     else
-      ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" --if-needed --prompt-for-target
+      if ! ./script/resolve_common_skills install_common_skills -- --repo-root "${REPO_ROOT}" --if-needed --prompt-for-target; then
+        echo "error: unable to install common skills; continuing without them." >&2
+      fi
     fi
   fi
 }

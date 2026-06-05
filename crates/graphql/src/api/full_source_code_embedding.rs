@@ -13,6 +13,8 @@ pub enum EmbeddingConfig {
     Voyage35512,
     #[cynic(rename = "VOYAGE_3_5_LITE_512")]
     Voyage35Lite512,
+    #[cynic(rename = "VOYAGE_4_512")]
+    Voyage4512,
 }
 
 #[derive(cynic::Scalar, Debug, Clone)]

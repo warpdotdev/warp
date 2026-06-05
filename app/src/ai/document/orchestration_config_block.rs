@@ -2,30 +2,68 @@
 //! an active `OrchestrationConfigSnapshot`. Shows a "Use orchestration"
 //! toggle, Cloud/Local picker, and run-wide config dropdowns.
 
+use std::collections::HashMap;
+
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_color::ColorU;
-use std::collections::HashMap;
+use pathfinder_geometry::vector::vec2f;
+use warp_cli::agent::Harness;
+use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::theme::WarpTheme;
 use warpui::elements::{
-    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+};
 
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::inline_action::create_environment_modal::{
+    CreateEnvironmentModal, CreateEnvironmentModalEvent,
+};
+use crate::ai::blocklist::inline_action::host_picker::{HostPicker, HostPickerEvent};
 use crate::ai::blocklist::inline_action::orchestration_controls::{
-    self as oc, OrchestrationControlAction, OrchestrationEditState, OrchestrationPickerHandles,
+    self as oc, AuthSecretSelection, OrchestrationControlAction, OrchestrationEditState,
+    OrchestrationPickerHandles,
+};
+use crate::ai::blocklist::telemetry::{
+    AgentProposedConfigEvent, BlocklistOrchestrationTelemetryEvent, OrchestrationApprovalStatus,
+    OrchestrationExecutionModeKind, OrchestrationHarnessKind, PlanConfigApprovalToggledEvent,
 };
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::ai::connected_self_hosted_workers::{
+    ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
+};
 use crate::ai::document::ai_document_model::AIDocumentModel;
-use crate::ai::harness_availability::{HarnessAvailabilityEvent, HarnessAvailabilityModel};
+use crate::ai::harness_availability::{
+    AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
+};
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
+use crate::workspace::WorkspaceAction;
 use crate::BlocklistAIHistoryModel;
-use warp_core::ui::theme::WarpTheme;
+
+/// True when the mode is remote and `environment_id` is non-empty.
+fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
+    matches!(
+        execution_mode,
+        RunAgentsExecutionMode::Remote { environment_id, .. } if !environment_id.is_empty()
+    )
+}
+
+/// True when the mode is remote and `worker_host` is non-empty.
+fn host_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
+    matches!(
+        execution_mode,
+        RunAgentsExecutionMode::Remote { worker_host, .. } if !worker_host.is_empty()
+    )
+}
 
 /// Renders a pill-shaped toggle switch (36×18) matching the Figma mock.
 fn render_pill_toggle(is_on: bool, theme: &WarpTheme) -> Box<dyn Element> {
@@ -74,16 +112,31 @@ const BASE_MODEL_HELPER: &str = "The primary model all agents will use.";
 
 // ── Action type ─────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OrchestrationConfigBlockAction {
     ToggleApproval,
     ToggleDetails,
-    ExecutionModeToggled { is_remote: bool },
-    ModelChanged { model_id: String },
-    HarnessChanged { harness_type: String },
-    EnvironmentChanged { environment_id: String },
-    WorkerHostChanged { worker_host: String },
-    AuthSecretChanged { auth_secret_name: Option<String> },
+    ExecutionModeToggled {
+        is_remote: bool,
+    },
+    ModelChanged {
+        model_id: String,
+    },
+    HarnessChanged {
+        harness_type: String,
+    },
+    EnvironmentChanged {
+        environment_id: String,
+    },
+    CreateEnvironmentRequested,
+    WorkerHostChanged {
+        worker_host: String,
+    },
+    AuthSecretChanged {
+        auth_secret_name: Option<String>,
+    },
+    /// User picked the "New API key…" item; opens the workspace create modal.
+    CreateNewAuthSecretRequested,
 }
 
 impl OrchestrationControlAction for OrchestrationConfigBlockAction {
@@ -99,11 +152,14 @@ impl OrchestrationControlAction for OrchestrationConfigBlockAction {
     fn environment_changed(environment_id: String) -> Self {
         Self::EnvironmentChanged { environment_id }
     }
-    fn worker_host_changed(worker_host: String) -> Self {
-        Self::WorkerHostChanged { worker_host }
+    fn create_environment_requested() -> Self {
+        Self::CreateEnvironmentRequested
     }
     fn auth_secret_changed(auth_secret_name: Option<String>) -> Self {
         Self::AuthSecretChanged { auth_secret_name }
+    }
+    fn create_new_auth_secret_requested() -> Self {
+        Self::CreateNewAuthSecretRequested
     }
 }
 
@@ -114,6 +170,7 @@ pub struct OrchestrationConfigBlockView {
     plan_id: String,
     edit_state: OrchestrationEditState,
     pickers: OrchestrationPickerHandles<OrchestrationConfigBlockAction>,
+    create_environment_modal: ViewHandle<CreateEnvironmentModal>,
     is_approved: bool,
     details_expanded: bool,
     pickers_initialized: bool,
@@ -126,6 +183,15 @@ pub struct OrchestrationConfigBlockView {
     /// saves the config and the resulting event re-enters
     /// `refresh_from_model`.
     suppress_refresh: bool,
+    /// One-shot guard: cancelling the auto-popped modal must not re-pop.
+    /// Reset on harness / execution-mode change.
+    has_auto_opened_create_modal: bool,
+    /// Required before any auto-pop fires. The plan card is
+    /// reconstructed on session restore with `is_approved=true`; gating
+    /// on explicit interaction (toggle approval, change harness, switch
+    /// mode) suppresses the modal on restore while still firing for
+    /// live-session enablement.
+    user_has_interacted: bool,
 }
 
 impl OrchestrationConfigBlockView {
@@ -135,6 +201,10 @@ impl OrchestrationConfigBlockView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let history = BlocklistAIHistoryModel::as_ref(ctx);
+        let snapshot_loaded = history
+            .conversation(&conversation_id)
+            .and_then(|conv| conv.orchestration_config_for_plan(&plan_id))
+            .is_some();
         let (edit_state, is_approved) = history
             .conversation(&conversation_id)
             .and_then(|conv| {
@@ -162,6 +232,7 @@ impl OrchestrationConfigBlockView {
             move |me, _, event, ctx| {
                 if let BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
                     conversation_id: cid,
+                    ..
                 } = event
                 {
                     if *cid == me.conversation_id {
@@ -196,27 +267,64 @@ impl OrchestrationConfigBlockView {
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
+                HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
+                    if me.pickers_initialized {
+                        oc::apply_created_auth_secret_if_matches(
+                            &mut me.edit_state,
+                            *harness,
+                            name,
+                            ctx,
+                        );
+                        oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
+                    }
+                    ctx.notify();
+                }
                 HarnessAvailabilityEvent::Changed
                 | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretCreated { .. }
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {
-                    // Repopulate on fetch failure too, otherwise the picker
-                    // would stay on the "Loading…" placeholder we wrote
-                    // when the fetch started.
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
+                    // Repopulate even on fetch failure to replace "Loading…".
+                    // The Deleted event also triggers a refresh so any
+                    // already-mounted picker drops the deleted entry from
+                    // its menu.
+                    if me.pickers_initialized {
+                        oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
+                    }
+                    me.maybe_auto_open_create_modal(ctx);
+                    ctx.notify();
+                }
+                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
+            },
+        );
+
+        let create_environment_modal = ctx.add_typed_action_view(CreateEnvironmentModal::new);
+        ctx.subscribe_to_view(&create_environment_modal, |me, _, event, ctx| match event {
+            CreateEnvironmentModalEvent::Created { environment_id } => {
+                me.select_created_environment(environment_id.clone(), ctx);
+            }
+            CreateEnvironmentModalEvent::Cancelled => {
+                ctx.notify();
+            }
+        });
+
+        ctx.subscribe_to_model(
+            &ConnectedSelfHostedWorkersModel::handle(ctx),
+            |me, _, event, ctx| match event {
+                ConnectedSelfHostedWorkersEvent::Changed => {
                     if me.pickers_initialized {
                         oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
                     }
                     ctx.notify();
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
             },
         );
-
         let mut view = Self {
             conversation_id,
             plan_id,
             edit_state,
             pickers: OrchestrationPickerHandles::default(),
+            create_environment_modal,
             is_approved,
             details_expanded: false,
             pickers_initialized: false,
@@ -224,11 +332,76 @@ impl OrchestrationConfigBlockView {
             details_mouse_state: MouseStateHandle::default(),
             saved_model_per_harness: HashMap::new(),
             suppress_refresh: false,
+            has_auto_opened_create_modal: false,
+            user_has_interacted: false,
         };
         if view.is_approved {
             view.ensure_pickers(ctx);
+            // Skip auto-open here: construction is also the restore code
+            // path. The first user interaction (or `arm_for_fresh_dispatch`
+            // from a live config update) arms the auto-open instead.
+        }
+        // Capture the agent's config proposal once per view instance.
+        // Gated on `snapshot_loaded` so we don't fire when the view is
+        // constructed with placeholder defaults (no real snapshot yet).
+        if snapshot_loaded {
+            view.emit_agent_proposed_config(ctx);
         }
         view
+    }
+
+    /// Marks this view as eligible for auto-pop. Called by
+    /// `AIDocumentView`'s lazy-creation path when the agent dispatches a
+    /// live config update. Restoration goes through eager construction
+    /// and never calls this.
+    pub fn arm_for_fresh_dispatch(&mut self, ctx: &mut ViewContext<Self>) {
+        self.user_has_interacted = true;
+        self.maybe_auto_open_create_modal(ctx);
+    }
+
+    /// Auto-pops the create-key modal once per view per harness/mode
+    /// change when the harness has no loaded secrets. Also auto-expands
+    /// the details panel so the modal opens with context visible behind it.
+    fn maybe_auto_open_create_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.has_auto_opened_create_modal {
+            return;
+        }
+        // Suppress on session restoration — see `user_has_interacted` doc.
+        if !self.user_has_interacted {
+            return;
+        }
+        if !self.is_approved || !self.pickers_initialized {
+            return;
+        }
+        if !oc::should_show_auth_secret_picker(&self.edit_state) {
+            return;
+        }
+        if !matches!(
+            self.edit_state.auth_secret_selection,
+            AuthSecretSelection::Unset
+        ) {
+            return;
+        }
+        let Some(harness) = Harness::parse_orchestration_harness(&self.edit_state.harness_type)
+        else {
+            return;
+        };
+        // Only auto-open on `Loaded([])`. Other fetch states are
+        // ambiguous; the `AuthSecretsLoaded` subscription will retry.
+        let has_zero_loaded = matches!(
+            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness),
+            AuthSecretFetchState::Loaded(secrets) if secrets.is_empty()
+        );
+        if !has_zero_loaded {
+            return;
+        }
+        self.has_auto_opened_create_modal = true;
+        // Show the picker / validation behind the modal.
+        if !self.details_expanded {
+            self.details_expanded = true;
+        }
+        ctx.dispatch_typed_action(&WorkspaceAction::OpenCreateAuthSecretModal { harness });
+        ctx.notify();
     }
 
     fn refresh_from_model(&mut self, ctx: &mut ViewContext<Self>) {
@@ -269,7 +442,7 @@ impl OrchestrationConfigBlockView {
             self.edit_state.model_id.clone()
         };
         let is_local = !self.edit_state.execution_mode.is_remote();
-        let model_handle = oc::new_standard_picker_dropdown(&colors, ctx);
+        let model_handle = oc::new_standard_filterable_picker_dropdown(&styles, ctx);
         model_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
         oc::populate_model_picker_for_harness(
             &model_handle,
@@ -304,8 +477,13 @@ impl OrchestrationConfigBlockView {
         };
         let mut filled_defaults = false;
         if needs_host {
-            self.edit_state
-                .set_worker_host(oc::ORCHESTRATION_WARP_WORKER_HOST.to_string());
+            // Prefer the workspace default (or the dev env-var override)
+            // over the bare "warp" fallback so self-hosted teams see
+            // their default pre-selected. Mirrors the Oz webapp's
+            // `HostSelector` initial-selection behavior.
+            let default_host = oc::resolve_default_host_slug(ctx)
+                .unwrap_or_else(|| oc::ORCHESTRATION_WARP_WORKER_HOST.to_string());
+            self.edit_state.set_worker_host(default_host);
             filled_defaults = true;
         }
         if needs_env {
@@ -329,22 +507,44 @@ impl OrchestrationConfigBlockView {
             RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
             RunAgentsExecutionMode::Local => oc::ORCHESTRATION_WARP_WORKER_HOST,
         };
-        let host_handle = oc::new_standard_picker_dropdown(&colors, ctx);
-        host_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
+        let host_handle = ctx.add_typed_action_view(HostPicker::new);
+        // Paint the open menu in the overlay layer so it doesn't get covered
+        // by sibling pickers, matching the other pickers in this view.
+        host_handle.update(ctx, |picker, picker_ctx| {
+            picker.set_use_overlay_layer(true, picker_ctx);
+        });
         oc::populate_host_picker(&host_handle, initial_host, ctx);
+        ctx.subscribe_to_view(&host_handle, |_me, _, event, ctx| match event {
+            HostPickerEvent::Opened => {
+                ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.refresh(ctx);
+                });
+            }
+            HostPickerEvent::HostChanged { slug } => {
+                ctx.dispatch_typed_action(&OrchestrationConfigBlockAction::WorkerHostChanged {
+                    worker_host: slug.clone(),
+                });
+            }
+            HostPickerEvent::Closed => {}
+        });
         self.pickers.host_picker = Some(host_handle);
 
         // Seed the auth secret from persisted per-harness settings before
         // building the picker so the dropdown shows the last selection.
-        if self.edit_state.auth_secret_name.is_none() {
-            self.edit_state.auth_secret_name =
-                oc::resolve_default_auth_secret_for_harness(&self.edit_state.harness_type, ctx);
+        // The full selection resolver honors an explicit `Inherit` choice
+        // (which isn't carried on the OrchestrationConfig wire payload).
+        if matches!(
+            self.edit_state.auth_secret_selection,
+            AuthSecretSelection::Unset
+        ) {
+            self.edit_state.auth_secret_selection =
+                oc::resolve_auth_secret_selection_for_harness(&self.edit_state.harness_type, ctx);
         }
         let auth_secret_handle = oc::new_standard_picker_dropdown(&colors, ctx);
         auth_secret_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
         oc::populate_auth_secret_picker_for_harness(
             &auth_secret_handle,
-            self.edit_state.auth_secret_name.as_deref(),
+            &self.edit_state.auth_secret_selection,
             &self.edit_state.harness_type,
             ctx,
         );
@@ -352,6 +552,25 @@ impl OrchestrationConfigBlockView {
 
         self.pickers_initialized = true;
         oc::sync_picker_selections(&self.edit_state, &self.pickers, ctx);
+    }
+
+    fn open_create_environment_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(environment_picker) = &self.pickers.environment_picker {
+            environment_picker.update(ctx, |dropdown, ctx| dropdown.close(ctx));
+        }
+        self.create_environment_modal.update(ctx, |modal, ctx| {
+            modal.show(ctx);
+        });
+        ctx.notify();
+    }
+
+    fn select_created_environment(&mut self, environment_id: String, ctx: &mut ViewContext<Self>) {
+        self.edit_state.set_environment_id(environment_id.clone());
+        if let Some(environment_picker) = &self.pickers.environment_picker {
+            oc::populate_environment_picker(environment_picker, &environment_id, ctx);
+        }
+        self.apply_field_change(ctx);
+        ctx.notify();
     }
 
     fn apply_field_change(&mut self, ctx: &mut ViewContext<Self>) {
@@ -512,7 +731,7 @@ impl View for OrchestrationConfigBlockView {
                 column.add_child(Container::new(helper).with_margin_top(4.).finish());
 
                 // Validation
-                if let Some(reason) = self.edit_state.accept_disabled_reason() {
+                if let Some(reason) = oc::accept_disabled_reason_with_auth(&self.edit_state, app) {
                     column.add_child(oc::render_validation_error(
                         reason,
                         theme.ui_error_color(),
@@ -531,12 +750,26 @@ impl View for OrchestrationConfigBlockView {
         }
 
         // Outer container with accent styling per Figma
-        Container::new(column.finish())
+        let card = Container::new(column.finish())
             .with_uniform_padding(12.)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
             .with_background(warp_core::ui::theme::color::internal_colors::accent_overlay_1(theme))
             .with_border(warpui::elements::Border::all(1.).with_border_fill(theme.accent()))
-            .finish()
+            .finish();
+
+        let mut stack = Stack::new().with_child(card);
+        if self.create_environment_modal.as_ref(app).is_visible() {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.create_environment_modal).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 0.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::Center,
+                    ChildAnchor::Center,
+                ),
+            );
+        }
+        stack.finish()
     }
 }
 
@@ -550,7 +783,18 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 if self.is_approved && !self.pickers_initialized {
                     self.ensure_pickers(ctx);
                 }
+                let status = if self.is_approved {
+                    OrchestrationApprovalStatus::Approved
+                } else {
+                    OrchestrationApprovalStatus::Disapproved
+                };
+                self.emit_plan_config_approval_toggled(status, ctx);
                 self.apply_field_change(ctx);
+                // First moment the picker exists — arm and evaluate.
+                if self.is_approved {
+                    self.user_has_interacted = true;
+                    self.maybe_auto_open_create_modal(ctx);
+                }
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::ToggleDetails => {
@@ -575,6 +819,10 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     ctx,
                 );
                 self.apply_field_change(ctx);
+                // Local → Cloud can newly reveal the auth picker.
+                self.user_has_interacted = true;
+                self.has_auto_opened_create_modal = false;
+                self.maybe_auto_open_create_modal(ctx);
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::ModelChanged { model_id } => {
@@ -598,6 +846,10 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     ctx,
                 );
                 self.apply_field_change(ctx);
+                // Per-harness state reset — re-arm for the new harness.
+                self.user_has_interacted = true;
+                self.has_auto_opened_create_modal = false;
+                self.maybe_auto_open_create_modal(ctx);
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::EnvironmentChanged { environment_id } => {
@@ -606,19 +858,18 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 self.apply_field_change(ctx);
                 ctx.notify();
             }
+            OrchestrationConfigBlockAction::CreateEnvironmentRequested => {
+                self.open_create_environment_modal(ctx);
+            }
             OrchestrationConfigBlockAction::WorkerHostChanged { worker_host } => {
                 self.edit_state.set_worker_host(worker_host.clone());
+                oc::persist_host_selection(worker_host, ctx);
                 self.apply_field_change(ctx);
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::AuthSecretChanged { auth_secret_name } => {
-                // No `apply_field_change` here: managed secrets are user-scoped
-                // (not plan-scoped), so they are persisted side-channel via
-                // `CloudAgentSettings.last_selected_auth_secret` instead of
-                // being baked into `OrchestrationConfig`. Consequence: changing
-                // the picker doesn't surface a "config modified" signal, and
-                // two users on the same approved plan can have different secret
-                // selections without conflicting.
+                // No `apply_field_change`: secrets are user-scoped and
+                // persisted side-channel, not baked into `OrchestrationConfig`.
                 oc::apply_auth_secret_change(
                     &mut self.edit_state,
                     &self.pickers,
@@ -627,6 +878,61 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 );
                 ctx.notify();
             }
+            OrchestrationConfigBlockAction::CreateNewAuthSecretRequested => {
+                oc::apply_create_new_auth_secret_requested(&mut self.edit_state, ctx);
+                if let Some(harness) =
+                    Harness::parse_orchestration_harness(&self.edit_state.harness_type)
+                {
+                    ctx.dispatch_typed_action(&WorkspaceAction::OpenCreateAuthSecretModal {
+                        harness,
+                    });
+                }
+                ctx.notify();
+            }
         }
+    }
+}
+
+impl OrchestrationConfigBlockView {
+    fn emit_plan_config_approval_toggled(
+        &self,
+        status: OrchestrationApprovalStatus,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        send_telemetry_from_ctx!(
+            BlocklistOrchestrationTelemetryEvent::PlanConfigApprovalToggled(
+                PlanConfigApprovalToggledEvent {
+                    conversation_id: self.conversation_id,
+                    plan_id: (!self.plan_id.is_empty()).then(|| self.plan_id.clone()),
+                    status,
+                    execution_mode: OrchestrationExecutionModeKind::from_run_agents(
+                        &self.edit_state.execution_mode,
+                    ),
+                    harness: OrchestrationHarnessKind::from_str(&self.edit_state.harness_type),
+                    has_model: !self.edit_state.model_id.trim().is_empty(),
+                    has_environment: env_presence(&self.edit_state.execution_mode),
+                    has_worker_host: host_presence(&self.edit_state.execution_mode),
+                    has_auth_secret: self.edit_state.auth_secret_name().is_some(),
+                }
+            ),
+            ctx
+        );
+    }
+
+    fn emit_agent_proposed_config(&self, ctx: &mut ViewContext<Self>) {
+        send_telemetry_from_ctx!(
+            BlocklistOrchestrationTelemetryEvent::AgentProposedConfig(AgentProposedConfigEvent {
+                conversation_id: self.conversation_id,
+                plan_id: (!self.plan_id.is_empty()).then(|| self.plan_id.clone()),
+                harness: OrchestrationHarnessKind::from_str(&self.edit_state.harness_type),
+                execution_mode: OrchestrationExecutionModeKind::from_run_agents(
+                    &self.edit_state.execution_mode,
+                ),
+                has_model: !self.edit_state.model_id.trim().is_empty(),
+                has_environment: env_presence(&self.edit_state.execution_mode),
+                has_worker_host: host_presence(&self.edit_state.execution_mode),
+            }),
+            ctx
+        );
     }
 }

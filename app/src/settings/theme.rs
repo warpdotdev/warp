@@ -1,9 +1,9 @@
-use warpui::{platform::SystemTheme, AppContext};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
+use warpui::platform::SystemTheme;
+use warpui::AppContext;
 
 use crate::themes::theme::{RespectSystemTheme, SelectedSystemThemes, ThemeKind};
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
 
 // Settings group for themes related settings.
 // Note that we store just the information needed to derive the current
@@ -49,9 +49,15 @@ define_settings_group!(ThemeSettings, settings: [
 
 impl Theme {
     fn current_value_is_syncable(&self) -> bool {
-        let current_value = self.value();
-        // Don't sync custom themes because they reference local files that aren't synced to the cloud.
-        !matches!(current_value, ThemeKind::Custom(_))
+        self.value().is_custom_theme_reference_syncable()
+    }
+}
+
+impl SystemThemes {
+    fn current_value_is_syncable(&self) -> bool {
+        let selected = self.value();
+        selected.light.is_custom_theme_reference_syncable()
+            && selected.dark.is_custom_theme_reference_syncable()
     }
 }
 
@@ -81,3 +87,7 @@ pub fn derived_theme_kind(theme_settings: &ThemeSettings, system_theme: SystemTh
 pub fn active_theme_kind(theme_settings: &ThemeSettings, app: &AppContext) -> ThemeKind {
     derived_theme_kind(theme_settings, app.system_theme())
 }
+
+#[cfg(test)]
+#[path = "theme_tests.rs"]
+mod tests;

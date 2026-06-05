@@ -1,17 +1,16 @@
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use warpui::keymap::{BindingId, DescriptionContext};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use crate::search::action::search_item::MatchedBinding;
+use crate::search::binding_source::BindingSource;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
-
 use crate::util::bindings::CommandBinding;
-
-use crate::search::binding_source::BindingSource;
-use warpui::keymap::{BindingId, DescriptionContext};
 
 /// Data source for [`CommandBinding`]s. Produces a list of in-app actions a user can currently
 /// perform.
@@ -104,9 +103,7 @@ impl SyncDataSource for CommandBindingDataSource {
         self.searcher
             .search(&query.text.trim().to_lowercase())
             .map_err(|err| {
-                let search_error = DataSourceSearchError {
-                    message: err.to_string(),
-                };
+                let search_error = DataSourceSearchError::new(err.to_string());
                 Box::new(search_error) as DataSourceRunErrorWrapper
             })
     }
@@ -183,20 +180,20 @@ impl ActionSearcher for FuzzyActionSearcher {
 
 #[cfg(not(target_family = "wasm"))]
 mod full_text_searcher {
-    use crate::define_search_schema;
-    use crate::search::action::{
-        data_source::{is_excluded_binding, ActionSearcher, SearcherAction},
-        search_item::MatchedBinding,
-    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use fuzzy_match::FuzzyMatchResult;
+    use warp_search_core::define_search_schema;
+    use warpui::keymap::{BindingId, DescriptionContext};
+
+    use crate::search::action::data_source::{is_excluded_binding, ActionSearcher, SearcherAction};
+    use crate::search::action::search_item::MatchedBinding;
     use crate::search::data_source::QueryResult;
     use crate::search::searcher::{
         SimpleFullTextSearcher, DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR,
     };
     use crate::util::bindings::CommandBinding;
-    use fuzzy_match::FuzzyMatchResult;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use warpui::keymap::{BindingId, DescriptionContext};
 
     define_search_schema!(
         schema_name: ACTION_SEARCH_SCHEMA,

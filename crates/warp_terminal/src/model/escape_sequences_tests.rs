@@ -1,13 +1,10 @@
-use warpui::keymap::Keystroke;
-use warpui::platform::OperatingSystem;
-
-use crate::model::{
-    indexing::Point,
-    mouse::{MouseAction, MouseButton, MouseState},
-    TermMode,
-};
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::OperatingSystem;
 
 use super::*;
+use crate::model::indexing::Point;
+use crate::model::mouse::{MouseAction, MouseButton, MouseState};
+use crate::model::TermMode;
 
 fn validate_keystroke_test_cases<T: ModeProvider>(
     test_cases: &[(Keystroke, Vec<u8>)],

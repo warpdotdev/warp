@@ -11,15 +11,12 @@ use warpui::{
     ViewHandle,
 };
 
-use crate::report_if_error;
-use crate::Appearance;
-
+use super::inline_action_icons::icon_size;
+use crate::ai::blocklist::view_util::error_color;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, PrimaryTheme};
-
-use super::inline_action_icons::icon_size;
-use crate::ai::blocklist::view_util::error_color;
+use crate::{report_if_error, Appearance};
 
 #[derive(Clone, Debug)]
 pub enum AwsBedrockCredentialsErrorAction {

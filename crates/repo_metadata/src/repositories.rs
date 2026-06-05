@@ -1,6 +1,8 @@
-use std::path::Path;
-use std::{collections::HashSet, future::Future, path::PathBuf};
+use std::collections::HashSet;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 
+use futures::future::{ready, Either};
 #[cfg(test)]
 use virtual_fs::{Stub, VirtualFS};
 use warp_util::host_id::HostId;
@@ -8,13 +10,10 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(test)]
-use warpui::r#async::FutureId;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+use warpui_core::r#async::FutureId;
+use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use crate::DirectoryWatcher;
-use crate::Repository;
-use futures::future::{ready, Either};
-use warpui::SingletonEntity;
+use crate::{DirectoryWatcher, Repository};
 
 /// Indicates why a repository detection event was emitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,9 +114,15 @@ impl DetectedRepositories {
                                 repository: repository.clone(),
                                 source,
                             });
+                            // Watcher is alive — use the cached result.
+                            return Either::Right(ready(path.to_local_path()));
                         }
+                        // Watcher was cleaned up (e.g. diff state model dropped
+                        // and recreated). Fall through to the full scan which
+                        // will re-register the watcher.
+                    } else {
+                        return Either::Right(ready(path.to_local_path()));
                     }
-                    return Either::Right(ready(path.to_local_path()));
                 }
             }
 

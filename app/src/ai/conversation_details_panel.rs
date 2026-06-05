@@ -1,6 +1,8 @@
 //! A reusable side panel component for displaying conversation metadata.
 
-use std::{collections::HashMap, str::FromStr, sync::Arc};
+use std::collections::HashMap;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Local};
 use instant::Instant;
@@ -10,19 +12,19 @@ use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
 use warp_core::channel::ChannelState;
 use warp_core::ui::color::coloru_with_opacity;
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
+use warpui::elements::{
+    resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
+    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::FixedBinding;
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    clipboard::ClipboardContent,
-    elements::{
-        new_scrollable::{NewScrollable, SingleAxisConfig},
-        resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox,
-        Container, CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable,
-        ResizableStateHandle, SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
-    },
-    fonts::{Properties, Weight},
-    keymap::FixedBinding,
-    platform::Cursor,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
@@ -31,7 +33,9 @@ use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
 use crate::ai::agent_conversations_model::entry::PrincipalType;
-use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentRunDisplayStatus};
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentRunDisplayStatus, TaskFetchError,
+};
 use crate::ai::agent_management::details_action_buttons::{
     ActionButtonsConfig, AgentDetailsButtonEvent, ConversationActionButtonsRow,
 };
@@ -45,6 +49,7 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
+use crate::cloud_object::CloudObjectLookup as _;
 use crate::notebooks::NotebookId;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
@@ -65,7 +70,7 @@ use crate::view_components::copyable_text_field::{
 };
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
-use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
@@ -74,6 +79,9 @@ const HARNESS_CIRCLE_SIZE: f32 = 16.0;
 const HARNESS_ICON_IN_CIRCLE: f32 = 9.0;
 const LABEL_VALUE_GAP: f32 = 4.0;
 const SECTION_HEADER_GAP: f32 = 8.0;
+const RUN_METADATA_ACCESS_DENIED_TITLE: &str = "Run metadata is not available";
+const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str =
+    "You can view this shared session, but run metadata is only visible to users with access to this run.";
 
 /// Panel rendering mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +132,7 @@ struct PanelMouseStates {
     copy_run_id: MouseStateHandle,
     copy_environment_id: MouseStateHandle,
     copy_docker_image: MouseStateHandle,
+    copy_fetch_error: MouseStateHandle,
     copy_error: MouseStateHandle,
     copy_setup_commands: MouseStateHandle,
     skill_link: MouseStateHandle,
@@ -139,6 +148,7 @@ enum CopyButtonKind {
     RunId,
     EnvironmentId,
     DockerImage,
+    FetchError,
     Error,
     SetupCommands,
 }
@@ -171,6 +181,24 @@ impl PrincipalInfo {
     fn from_uid_fallback(uid: &str) -> Self {
         let first_char = uid.chars().next().unwrap_or('?').to_uppercase().to_string();
         Self::new(first_char, None)
+    }
+
+    fn from_user_profile(profile: &UserProfileWithUID) -> Self {
+        let display_name = profile
+            .display_name
+            .as_ref()
+            .filter(|name| !name.is_empty())
+            .or_else(|| (!profile.email.is_empty()).then_some(&profile.email))
+            .cloned()
+            .unwrap_or_else(|| profile.firebase_uid.to_string());
+        let photo_url = Some(profile.photo_url.clone()).filter(|url| !url.is_empty());
+
+        Self {
+            display_name,
+            photo_url,
+            uid: Some(profile.firebase_uid.to_string()),
+            is_service_account: false,
+        }
     }
 }
 
@@ -214,6 +242,8 @@ pub struct ConversationDetailsData {
     skill_spec: Option<SkillSpec>,
     /// Execution harness for this conversation/task.
     harness: Option<Harness>,
+    /// Error details displayed when the API call to fetch run data failed.
+    fetch_error: Option<TaskFetchError>,
 }
 
 impl ConversationDetailsData {
@@ -249,7 +279,9 @@ impl ConversationDetailsData {
         // Server metadata (creator, timestamps)
         let mut creator = None;
         if let Some(server_metadata) = conversation.server_metadata() {
-            if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
+            if let Some(creator_profile) = &server_metadata.creator {
+                creator = Some(PrincipalInfo::from_user_profile(creator_profile));
+            } else if let Some(creator_uid_str) = &server_metadata.metadata.creator_uid {
                 let creator_uid = UserUid::new(creator_uid_str);
                 let user_profiles = UserProfiles::handle(app).as_ref(app);
 
@@ -323,6 +355,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 
@@ -368,6 +401,8 @@ impl ConversationDetailsData {
                 environment_id,
                 conversation_id: task.conversation_id().map(str::to_string),
             },
+            // Intentionally uses task.title; revisit when product decides
+            // whether to also show the short orchestrator label here.
             title: task.title.clone(),
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
@@ -384,6 +419,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec,
             harness,
+            fetch_error: None,
         }
     }
 
@@ -455,6 +491,7 @@ impl ConversationDetailsData {
                 copy_link_url,
                 skill_spec,
                 harness,
+                fetch_error: None,
             };
         }
 
@@ -481,12 +518,16 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 
     /// Minimal details data for when we only know the task id (e.g. shared sessions)
     /// but have not loaded the full `AmbientAgentTask` yet.
-    pub fn from_task_id(task_id: AmbientAgentTaskId) -> Self {
+    pub(crate) fn from_task_id(
+        task_id: AmbientAgentTaskId,
+        fetch_error: Option<TaskFetchError>,
+    ) -> Self {
         ConversationDetailsData {
             mode: PanelMode::Task {
                 task_id: Some(task_id),
@@ -508,6 +549,7 @@ impl ConversationDetailsData {
             copy_link_url: None,
             skill_spec: None,
             harness: None,
+            fetch_error,
         }
     }
 
@@ -549,6 +591,7 @@ impl ConversationDetailsData {
             copy_link_url,
             skill_spec: None,
             harness,
+            fetch_error: None,
         }
     }
 }
@@ -569,6 +612,7 @@ pub enum ConversationDetailsPanelAction {
     CopyRunId,
     CopyEnvironmentId,
     CopyDockerImage,
+    CopyFetchError,
     CopyError,
     CopySetupCommands(String),
     Focus,
@@ -1102,6 +1146,97 @@ impl ConversationDetailsPanel {
         )
     }
 
+    fn render_fetch_error_notice(
+        &self,
+        fetch_error: &TaskFetchError,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let ui_font_size = appearance.ui_font_size();
+        if fetch_error.is_access_denied() {
+            let icon_color = blended_colors::text_sub(theme, theme.surface_1());
+            let notice_icon =
+                ConstrainedBox::new(Icon::Info.to_warpui_icon(icon_color.into()).finish())
+                    .with_width(STATUS_ICON_SIZE)
+                    .with_height(STATUS_ICON_SIZE)
+                    .finish();
+
+            let title = Text::new(
+                RUN_METADATA_ACCESS_DENIED_TITLE,
+                appearance.ui_font_family(),
+                ui_font_size,
+            )
+            .with_color(blended_colors::text_main(theme, theme.surface_1()))
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .with_selectable(true)
+            .finish();
+            let description = Text::new(
+                RUN_METADATA_ACCESS_DENIED_DESCRIPTION,
+                appearance.ui_font_family(),
+                ui_font_size - 1.,
+            )
+            .with_color(icon_color)
+            .with_selectable(true)
+            .soft_wrap(true)
+            .finish();
+
+            let notice_text = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(title)
+                .with_child(
+                    Container::new(description)
+                        .with_margin_top(LABEL_VALUE_GAP)
+                        .finish(),
+                )
+                .finish();
+            let notice_row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(Container::new(notice_icon).with_margin_right(8.).finish())
+                .with_child(Expanded::new(1., notice_text).finish())
+                .finish();
+
+            return Container::new(notice_row)
+                .with_uniform_padding(10.)
+                .with_background(coloru_with_opacity(blended_colors::neutral_2(theme), 70))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .finish();
+        }
+
+        let error_icon = ConstrainedBox::new(
+            Icon::Triangle
+                .to_warpui_icon(theme.ansi_fg_red().into())
+                .finish(),
+        )
+        .with_width(STATUS_ICON_SIZE)
+        .with_height(STATUS_ICON_SIZE)
+        .finish();
+        let error_text = render_copyable_text_field(
+            CopyableTextFieldConfig::new(fetch_error.message().to_string())
+                .with_font_size(ui_font_size)
+                .with_text_color(theme.ansi_fg_red())
+                .with_wrap_text(true)
+                .with_icon_size(16.)
+                .with_mouse_state(self.mouse_state_for_copy_button(CopyButtonKind::FetchError))
+                .with_last_copied_at(self.copy_feedback_times.get(&CopyButtonKind::FetchError))
+                .with_cross_axis_alignment(CrossAxisAlignment::Start),
+            |ctx| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::CopyFetchError);
+            },
+            app,
+        );
+        let error_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(Container::new(error_icon).with_margin_right(4.).finish())
+            .with_child(Expanded::new(1., error_text).finish())
+            .finish();
+        Container::new(error_row)
+            .with_uniform_padding(8.)
+            .with_background(coloru_with_opacity(theme.ansi_fg_red(), 10))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .finish()
+    }
+
     fn render_status_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
@@ -1256,7 +1391,7 @@ impl ConversationDetailsPanel {
 
         let oz_root_url = ChannelState::oz_root_url();
         let encoded_skill_name = urlencoding::encode(&skill_name);
-        let skill_url = format!("{oz_root_url}/agents/{encoded_skill_name}");
+        let skill_url = format!("{oz_root_url}/skills/{encoded_skill_name}");
 
         let oz_link = appearance
             .ui_builder()
@@ -1587,6 +1722,7 @@ impl ConversationDetailsPanel {
             CopyButtonKind::RunId => self.mouse_states.copy_run_id.clone(),
             CopyButtonKind::EnvironmentId => self.mouse_states.copy_environment_id.clone(),
             CopyButtonKind::DockerImage => self.mouse_states.copy_docker_image.clone(),
+            CopyButtonKind::FetchError => self.mouse_states.copy_fetch_error.clone(),
             CopyButtonKind::Error => self.mouse_states.copy_error.clone(),
             CopyButtonKind::SetupCommands => self.mouse_states.copy_setup_commands.clone(),
         }
@@ -1749,6 +1885,15 @@ impl View for ConversationDetailsPanel {
             .with_margin_bottom(FIELD_SPACING)
             .finish(),
         );
+
+        // Fetch error banner (shown when the API call to load run data failed)
+        if let Some(fetch_error) = &self.data.fetch_error {
+            content.add_child(
+                Container::new(self.render_fetch_error_notice(fetch_error, appearance, app))
+                    .with_margin_bottom(FIELD_SPACING)
+                    .finish(),
+            );
+        }
 
         // Status section
         if let Some(status_section) = self.render_status_section(appearance) {
@@ -2050,6 +2195,13 @@ impl TypedActionView for ConversationDetailsPanel {
                             self.record_copy(CopyButtonKind::DockerImage, ctx);
                         }
                     }
+                }
+            }
+            ConversationDetailsPanelAction::CopyFetchError => {
+                if let Some(error) = &self.data.fetch_error {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(error.message().to_string()));
+                    self.record_copy(CopyButtonKind::FetchError, ctx);
                 }
             }
             ConversationDetailsPanelAction::CopyError => {

@@ -1,14 +1,23 @@
-use crate::terminal::shell::ShellType;
-use remote_server::proto::OpenBufferSuccess;
-use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use ::ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerEvent,
+    FragmentMetadataLookupError as LocalFragmentMetadataLookupError,
+};
+use ::ai::index::full_source_code_embedding::{
+    ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
+};
+use remote_server::proto::OpenBufferSuccess;
+use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
+use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use warp_core::channel::ChannelState;
-use warp_core::safe_error;
-use warp_core::SessionId;
+use warp_core::{safe_error, SessionId};
+use warp_files::{FileModel, FileModelEvent};
+use warp_util::content_version::ContentVersion;
+use warp_util::file::FileId;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
@@ -17,45 +26,37 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use super::codebase_index_status::{
     codebase_index_status_to_proto, disabled_codebase_index_status,
     not_enabled_codebase_index_status, queued_codebase_index_status,
+    unavailable_codebase_index_status,
 };
-use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
-use ::ai::index::full_source_code_embedding::manager::{
-    CodebaseIndexManager, CodebaseIndexManagerEvent,
-    FragmentMetadataLookupError as LocalFragmentMetadataLookupError,
-};
-use ::ai::index::full_source_code_embedding::{
-    ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
-};
-use warp_files::{FileModel, FileModelEvent};
-use warp_util::content_version::ContentVersion;
-use warp_util::file::FileId;
-
 use super::diff_state_proto;
 use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
 };
 use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, resolve_conflict_response, run_command_response,
-    save_buffer_response, server_message, write_file_response, Abort, Authenticate, BranchInfo,
-    BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexStatusState,
-    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, DeleteFile, DeleteFileResponse,
-    DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse, DiscardFilesSuccess,
-    DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
-    FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    get_fragment_metadata_from_hash_response, host_scoped_request, notification,
+    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
+    session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
+    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
+    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
+    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
+    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
     GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize, InitializeResponse,
     MissingFragmentMetadata, NavigatedToDirectory, NavigatedToDirectoryResponse, OpenBuffer,
     OpenBufferResponse, ReadFileContextResponse, ResolveConflict, ResolveConflictResponse,
-    ResolveConflictSuccess, RunCommandError, RunCommandErrorCode, RunCommandRequest,
-    RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess,
-    ServerMessage, SessionBootstrapped, TextEdit, WriteFile, WriteFileResponse, WriteFileSuccess,
+    ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
+    RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
+    SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, UploadHandoffSnapshot,
+    WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
-
+use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
 use crate::code_review::diff_state::{DiffMode, FileStatusInfo};
+use crate::terminal::shell::ShellType;
 
 /// How long the daemon waits with no connections before exiting.
 pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -69,9 +70,11 @@ const MAX_BRANCH_COUNT_CAP: usize = 500;
 pub type ConnectionId = uuid::Uuid;
 use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
+use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
 use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::features::FeatureFlag;
+use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::session::command_executor::{
     ExecuteCommandOptions, LocalCommandExecutor,
 };
@@ -97,6 +100,23 @@ enum HandlerOutcome {
     /// are tracked by `FileId` in `pending_file_ops` rather than by
     /// `RequestId` in `in_progress`).
     Async(Option<SpawnedFutureHandle>),
+}
+
+struct CodebaseIndexRequest {
+    repo_path: PathBuf,
+}
+struct CodebaseIndexRequestParams<'a> {
+    operation_name: &'a str,
+    repo_path: String,
+    auth_token: String,
+    auth_operation: &'a str,
+    path_kind: CodebaseIndexRequestPathKind,
+}
+
+#[derive(Clone, Copy)]
+enum CodebaseIndexRequestPathKind {
+    Canonicalized,
+    Requested,
 }
 
 /// Tracks an in-flight file write or delete so the async completion
@@ -210,6 +230,9 @@ pub struct ServerModel {
     buffers: ServerBufferTracker,
     /// Manages per-(repo, mode) diff state models and per-connection subscriptions.
     diff_states: ModelHandle<RemoteDiffStateManager>,
+    /// In-flight host-scoped requests whose response may be delivered on
+    /// a different connection if the originating connection disconnects.
+    host_scoped_requests: HashMap<RequestId, ConnectionId>,
 }
 
 impl Entity for ServerModel {
@@ -237,6 +260,7 @@ impl ServerModel {
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
             buffers: ServerBufferTracker::new(),
             diff_states: ctx.add_model(|_| RemoteDiffStateManager::new()),
+            host_scoped_requests: HashMap::new(),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -312,6 +336,10 @@ impl ServerModel {
                         let entries = super::repo_metadata_proto::file_tree_entry_to_snapshot_proto(
                             &state.entry,
                         );
+                        let standing_results = repo_model
+                            .as_ref(ctx)
+                            .standing_query_results(&id, ctx)
+                            .map(|results| (&results.as_snapshot_delta()).into());
                         me.send_server_message(
                             None,
                             None,
@@ -320,6 +348,7 @@ impl ServerModel {
                                     repo_path: path.to_string(),
                                     entries,
                                     sync_complete: true,
+                                    standing_results,
                                 },
                             ),
                         );
@@ -333,6 +362,7 @@ impl ServerModel {
                 RepoMetadataEvent::RepositoryRemoved { .. }
                 | RepoMetadataEvent::FileTreeUpdated { .. }
                 | RepoMetadataEvent::FileTreeEntryUpdated { .. }
+                | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
                 | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                 | RepoMetadataEvent::RepositoryUpdated {
                     id: RepositoryIdentifier::Remote(_),
@@ -412,7 +442,10 @@ impl ServerModel {
                         })
                         .collect();
 
-                    for &conn_id in conns {
+                    // Collect to break the immutable borrow on `me.buffers`
+                    // before calling `me.send_server_message(&mut self)`.
+                    let conns: Vec<_> = conns.iter().copied().collect();
+                    for conn_id in conns {
                         if excluded.contains(&conn_id) {
                             continue;
                         }
@@ -524,8 +557,11 @@ impl ServerModel {
                     // to connected clients so they can show a resolution banner.
                     if !success {
                         if let Some(conns) = me.buffers.connections_for_buffer(file_id) {
+                            // Collect to break the immutable borrow on `me.buffers`
+                            // before calling `me.send_server_message(&mut self)`.
+                            let conns: Vec<_> = conns.iter().copied().collect();
                             let path = me.buffers.path_for_file_id(*file_id).unwrap_or_default();
-                            for &conn_id in conns {
+                            for conn_id in conns {
                                 me.send_server_message(
                                     Some(conn_id),
                                     None,
@@ -594,6 +630,25 @@ impl ServerModel {
             return;
         }
 
+        // Host-scoped in-flight requests that were sent through the dead
+        // connection are NOT eagerly reassigned here. Instead,
+        // `send_server_message` handles failover at delivery time: when it
+        // finds the target connection is gone, it picks any other open
+        // connection. If no connections remain at delivery time, the
+        // response is dropped (logged). If no connections remain NOW and
+        // there are in-progress handlers, abort them so they don't run
+        // to completion pointlessly.
+        if self.connection_senders.is_empty() {
+            let orphaned: Vec<RequestId> = self.host_scoped_requests.keys().cloned().collect();
+            for rid in orphaned {
+                self.host_scoped_requests.remove(&rid);
+                if let Some(handle) = self.in_progress.remove(&rid) {
+                    log::warn!("Daemon: no connections remain, aborting host-scoped request {rid}");
+                    handle.abort();
+                }
+            }
+        }
+
         // Remove this connection from all buffer connection sets.
         // Orphaned buffers (no connections left) are deallocated automatically.
         self.buffers.remove_connection(conn_id, ctx);
@@ -648,93 +703,144 @@ impl ServerModel {
     ) {
         let request_id = RequestId::from(msg.request_id);
 
-        let outcome = match msg.message {
-            Some(client_message::Message::Initialize(msg)) => {
-                self.handle_initialize(msg, &request_id, ctx)
+        let (outcome, is_host_scoped) = match msg.message {
+            // ── Host-scoped requests (daemon owns failover delivery) ───
+            Some(client_message::Message::HostScoped(wrapper)) => {
+                let outcome = match wrapper.message {
+                    Some(host_scoped_request::Message::WriteFile(m)) => {
+                        self.handle_write_file(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DeleteFile(m)) => {
+                        self.handle_delete_file(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ReadFileContext(m)) => {
+                        self.handle_read_file_context(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::SaveBuffer(m)) => {
+                        self.handle_save_buffer(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ResolveConflict(m)) => {
+                        self.handle_resolve_conflict(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DiscardFiles(m)) => {
+                        self.handle_discard_files(m, &request_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::IndexCodebase(m)) => {
+                        self.handle_index_codebase(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::DropCodebaseIndex(m)) => {
+                        self.handle_drop_codebase_index(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetFragmentMetadataFromHash(m)) => {
+                        self.handle_get_fragment_metadata_from_hash(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetBranches(m)) => {
+                        self.handle_get_branches(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::ResyncCodebase(m)) => {
+                        self.handle_resync_codebase(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::UploadHandoffSnapshot(m)) => {
+                        self.handle_upload_handoff_snapshot(m, &request_id, conn_id, ctx)
+                    }
+                    None => {
+                        log::warn!(
+                            "HostScopedRequest with no inner message (request_id={request_id})"
+                        );
+                        HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message: "HostScopedRequest had no message variant set".to_string(),
+                        }))
+                    }
+                };
+                (outcome, true)
             }
-            Some(client_message::Message::Authenticate(msg)) => {
-                self.handle_authenticate(msg);
-                return;
+            // ── Session-scoped requests (response tied to originating connection) ───
+            Some(client_message::Message::SessionScoped(wrapper)) => {
+                let outcome = match wrapper.message {
+                    Some(session_scoped_request::Message::Initialize(m)) => {
+                        self.handle_initialize(m, &request_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::NavigatedToDirectory(m)) => {
+                        self.handle_navigated_to_directory(m, &request_id, conn_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::LoadRepoMetadataDirectory(m)) => {
+                        self.handle_load_repo_metadata_directory(m, &request_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::RunCommand(m)) => {
+                        self.handle_run_command(m, &request_id, conn_id, ctx)
+                    }
+                    // Subscription-establishing ops: their per-connection
+                    // subscription state is bound to this connection, so the
+                    // response (and later pushes) must stay on it — never
+                    // failed over to a sibling.
+                    Some(session_scoped_request::Message::OpenBuffer(m)) => {
+                        self.handle_open_buffer(m, &request_id, conn_id, ctx)
+                    }
+                    Some(session_scoped_request::Message::GetDiffState(m)) => {
+                        self.handle_get_diff_state(m, &request_id, conn_id, ctx)
+                    }
+                    None => {
+                        log::warn!(
+                            "SessionScopedRequest with no inner message (request_id={request_id})"
+                        );
+                        HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                            code: ErrorCode::InvalidRequest.into(),
+                            message: "SessionScopedRequest had no message variant set".to_string(),
+                        }))
+                    }
+                };
+                (outcome, false)
             }
-            Some(client_message::Message::UpdatePreferences(msg)) => {
-                self.handle_update_preferences(msg, ctx);
-                return;
-            }
-            Some(client_message::Message::SessionBootstrapped(msg)) => {
-                self.handle_session_bootstrapped(msg);
-                return;
-            }
-            Some(client_message::Message::Abort(abort)) => {
-                self.handle_abort(abort, &request_id, ctx);
-                return;
-            }
-            Some(client_message::Message::RunCommand(req)) => {
-                self.handle_run_command(req, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::NavigatedToDirectory(msg)) => {
-                self.handle_navigated_to_directory(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::LoadRepoMetadataDirectory(msg)) => {
-                self.handle_load_repo_metadata_directory(msg, &request_id, ctx)
-            }
-            Some(client_message::Message::WriteFile(msg)) => {
-                self.handle_write_file(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DeleteFile(msg)) => {
-                self.handle_delete_file(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ReadFileContext(msg)) => {
-                self.handle_read_file_context(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::OpenBuffer(msg)) => {
-                self.handle_open_buffer(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::BufferEdit(msg)) => {
-                self.handle_buffer_edit(msg, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::CloseBuffer(msg)) => {
-                self.handle_close_buffer(msg, conn_id, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::SaveBuffer(msg)) => {
-                self.handle_save_buffer(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::ResolveConflict(msg)) => {
-                self.handle_resolve_conflict(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::GetDiffState(msg)) => {
-                self.handle_get_diff_state(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::UnsubscribeDiffState(msg)) => {
-                self.handle_unsubscribe_diff_state(msg, conn_id, ctx);
-                return; // fire-and-forget notification
-            }
-            Some(client_message::Message::GetBranches(msg)) => {
-                self.handle_get_branches(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DiscardFiles(msg)) => {
-                self.handle_discard_files(msg, &request_id, ctx)
-            }
-            Some(client_message::Message::IndexCodebase(msg)) => {
-                self.handle_index_codebase(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::DropCodebaseIndex(msg)) => {
-                self.handle_drop_codebase_index(msg, &request_id, conn_id, ctx)
-            }
-            Some(client_message::Message::GetFragmentMetadataFromHash(msg)) => {
-                self.handle_get_fragment_metadata_from_hash(msg, &request_id, conn_id, ctx)
+            // ── Notifications (fire-and-forget) ───
+            Some(client_message::Message::Notification(wrapper)) => {
+                match wrapper.message {
+                    Some(notification::Message::Abort(m)) => {
+                        self.handle_abort(m, &request_id, ctx);
+                    }
+                    Some(notification::Message::Authenticate(m)) => {
+                        self.handle_authenticate(m);
+                    }
+                    Some(notification::Message::UpdatePreferences(m)) => {
+                        self.handle_update_preferences(m, ctx);
+                    }
+                    Some(notification::Message::SessionBootstrapped(m)) => {
+                        self.handle_session_bootstrapped(m);
+                    }
+                    Some(notification::Message::BufferEdit(m)) => {
+                        self.handle_buffer_edit(m, ctx);
+                    }
+                    Some(notification::Message::CloseBuffer(m)) => {
+                        self.handle_close_buffer(m, conn_id, ctx);
+                    }
+                    Some(notification::Message::UnsubscribeDiffState(m)) => {
+                        self.handle_unsubscribe_diff_state(m, conn_id, ctx);
+                    }
+                    None => {
+                        log::warn!("Notification with no inner message (request_id={request_id})");
+                    }
+                }
+                return; // Notifications never produce a response.
             }
             None => {
                 log::warn!(
                     "Received ClientMessage with no message variant (request_id={request_id})"
                 );
-                HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: "ClientMessage had no message variant set".to_string(),
-                }))
+                (
+                    HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::InvalidRequest.into(),
+                        message: "ClientMessage had no message variant set".to_string(),
+                    })),
+                    false,
+                )
             }
         };
+
+        // Track host-scoped requests for failover delivery.
+        if is_host_scoped && !request_id.is_empty() {
+            self.host_scoped_requests
+                .insert(request_id.clone(), conn_id);
+        }
 
         match outcome {
             HandlerOutcome::Sync(server_message::Message::InitializeResponse(response)) => {
@@ -768,52 +874,41 @@ impl ServerModel {
         }
 
         match event {
-            CodebaseIndexManagerEvent::SyncStateUpdated
-            | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. }
-            | CodebaseIndexManagerEvent::NewIndexCreated => {
-                self.push_all_codebase_index_statuses(ctx);
+            CodebaseIndexManagerEvent::SyncStateUpdated { root_path }
+            | CodebaseIndexManagerEvent::NewIndexCreated { root_path } => {
+                self.push_codebase_index_status(root_path, ctx);
             }
             CodebaseIndexManagerEvent::RemoveExpiredIndexMetadata { expired_metadata } => {
                 for repo_path in expired_metadata.iter() {
-                    self.send_server_message(
-                        None,
-                        None,
-                        server_message::Message::CodebaseIndexStatusUpdated(
-                            CodebaseIndexStatusUpdated {
-                                status: Some(disabled_codebase_index_status(
-                                    repo_path.to_string_lossy().to_string(),
-                                )),
-                            },
-                        ),
-                    );
+                    self.push_codebase_index_status_update(disabled_codebase_index_status(
+                        repo_path.to_string_lossy().to_string(),
+                    ));
                 }
             }
             CodebaseIndexManagerEvent::RetrievalRequestCompleted { .. }
-            | CodebaseIndexManagerEvent::RetrievalRequestFailed { .. } => {}
+            | CodebaseIndexManagerEvent::RetrievalRequestFailed { .. }
+            | CodebaseIndexManagerEvent::IndexMetadataUpdated { .. } => {}
         }
     }
+    fn push_codebase_index_status(&mut self, repo_path: &Path, ctx: &mut ModelContext<Self>) {
+        let Some(status) = self.codebase_index_status(repo_path, ctx) else {
+            return;
+        };
+        self.push_codebase_index_status_update(status);
+    }
 
-    fn push_all_codebase_index_statuses(&self, ctx: &mut ModelContext<Self>) {
-        let snapshot = self.codebase_index_statuses_snapshot(ctx);
-        for status in snapshot.statuses {
-            log::info!(
-                "[Remote codebase indexing] Daemon pushing codebase index status update: repo_path={} state={:?}",
-                status.repo_path,
-                CodebaseIndexStatusState::try_from(status.state)
-                    .unwrap_or(CodebaseIndexStatusState::Unspecified),
-            );
-            self.send_server_message(
-                None,
-                None,
-                server_message::Message::CodebaseIndexStatusUpdated(CodebaseIndexStatusUpdated {
-                    status: Some(status),
-                }),
-            );
-        }
+    fn push_codebase_index_status_update(&mut self, status: CodebaseIndexStatus) {
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::CodebaseIndexStatusUpdated(CodebaseIndexStatusUpdated {
+                status: Some(status),
+            }),
+        );
     }
 
     fn push_codebase_index_statuses_snapshot(
-        &self,
+        &mut self,
         conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -825,7 +920,7 @@ impl ServerModel {
         }
         let snapshot = self.codebase_index_statuses_snapshot(ctx);
         let status_count = snapshot.statuses.len();
-        log::info!(
+        log::debug!(
             "[Remote codebase indexing] Daemon pushing bootstrap codebase index statuses snapshot: conn_id={conn_id} bootstrap_status_count={status_count}"
         );
         self.send_server_message(
@@ -847,6 +942,18 @@ impl ServerModel {
         CodebaseIndexStatusesSnapshot { statuses }
     }
 
+    fn codebase_index_status(
+        &self,
+        repo_path: &Path,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<CodebaseIndexStatus> {
+        let index_manager = CodebaseIndexManager::handle(ctx);
+        index_manager
+            .as_ref(ctx)
+            .get_codebase_index_status_for_path(repo_path, ctx)
+            .map(|status| codebase_index_status_to_proto(repo_path, &status))
+    }
+
     fn handle_index_codebase(
         &mut self,
         msg: IndexCodebase,
@@ -858,55 +965,62 @@ impl ServerModel {
             repo_path,
             auth_token,
         } = msg;
-        let repo_path_for_log = repo_path.clone();
-        if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
-            log::info!(
-                "[Remote codebase indexing] Daemon rejecting IndexCodebase because remote indexing is disabled: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
-            );
-            return HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
-                CodebaseIndexStatusUpdated {
-                    status: Some(not_enabled_codebase_index_status(repo_path)),
-                },
-            ));
-        }
-
-        let repo_path = match canonicalize_index_repo_path(&repo_path) {
-            Ok(repo_path) => repo_path,
-            Err(error) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: error,
-                }));
-            }
+        let request = match self.prepare_codebase_index_request(
+            CodebaseIndexRequestParams {
+                operation_name: "IndexCodebase",
+                repo_path,
+                auth_token,
+                auth_operation: "remote codebase indexing",
+                path_kind: CodebaseIndexRequestPathKind::Canonicalized,
+            },
+            request_id,
+            conn_id,
+        ) {
+            Ok(request) => request,
+            Err(outcome) => return *outcome,
         };
-        if let Err(error) =
-            self.validate_remote_codebase_index_auth(&auth_token, "remote codebase indexing")
-        {
-            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                code: ErrorCode::InvalidRequest.into(),
-                message: error,
-            }));
-        }
-        log::info!(
-            "[Remote codebase indexing] Daemon handling IndexCodebase: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
-        );
+        let repo_path = request.repo_path;
         let status = CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
-            if let Some(indexed_repo_path) = manager.root_path_for_codebase(&repo_path) {
-                manager.try_manual_resync_codebase(&repo_path, ctx);
-                manager
-                    .get_codebase_index_status_for_path(indexed_repo_path.as_path(), ctx)
-                    .map(|status| {
-                        codebase_index_status_to_proto(indexed_repo_path.as_path(), &status)
-                    })
-                    .unwrap_or_else(|| {
-                        queued_codebase_index_status(
-                            indexed_repo_path.to_string_lossy().to_string(),
+            manager.with_indexed_codebase(
+                &repo_path,
+                |manager, indexed_repo_path, ctx| {
+                    Self::current_codebase_index_status_or_queued(manager, indexed_repo_path, ctx)
+                },
+                |manager, repo_path, ctx| {
+                    if !manager.is_indexing_enabled() {
+                        log::info!(
+                            "[Remote codebase indexing] Daemon cannot start IndexCodebase because indexing is disabled: repo_path={}",
+                            repo_path.display()
+                        );
+                        not_enabled_codebase_index_status(repo_path.to_string_lossy().to_string())
+                    } else if !manager.can_create_new_indices() {
+                        let failure_message = "Cannot index remote codebase because the maximum number of codebase indexes has been reached.".to_string();
+                        log::warn!(
+                            "[Remote codebase indexing] Daemon cannot start IndexCodebase: repo_path={} reason={failure_message}",
+                            repo_path.display()
+                        );
+                        unavailable_codebase_index_status(
+                            repo_path.to_string_lossy().to_string(),
+                            failure_message,
                         )
-                    })
-            } else {
-                manager.index_directory(repo_path.clone(), ctx);
-                queued_codebase_index_status(repo_path.to_string_lossy().to_string())
-            }
+                    } else if manager.index_directory(repo_path.to_path_buf(), ctx) {
+                        Self::current_codebase_index_status_or_queued(manager, repo_path, ctx)
+                    } else {
+                        let failure_message =
+                            "Cannot index remote codebase because indexing did not start."
+                                .to_string();
+                        log::warn!(
+                            "[Remote codebase indexing] Daemon cannot start IndexCodebase: repo_path={} reason={failure_message}",
+                            repo_path.display()
+                        );
+                        unavailable_codebase_index_status(
+                            repo_path.to_string_lossy().to_string(),
+                            failure_message,
+                        )
+                    }
+                },
+                ctx,
+            )
         });
 
         HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
@@ -914,6 +1028,91 @@ impl ServerModel {
                 status: Some(status),
             },
         ))
+    }
+
+    fn handle_resync_codebase(
+        &mut self,
+        msg: ResyncCodebase,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let ResyncCodebase {
+            repo_path,
+            auth_token,
+            mode,
+        } = msg;
+        let mode = match CodebaseResyncMode::try_from(mode) {
+            Ok(mode) => mode,
+            Err(_) => {
+                return invalid_request_response(format!("Invalid ResyncCodebase mode: {mode}"));
+            }
+        };
+        let request = match self.prepare_codebase_index_request(
+            CodebaseIndexRequestParams {
+                operation_name: "ResyncCodebase",
+                repo_path,
+                auth_token,
+                auth_operation: "remote codebase resync",
+                path_kind: CodebaseIndexRequestPathKind::Canonicalized,
+            },
+            request_id,
+            conn_id,
+        ) {
+            Ok(request) => request,
+            Err(outcome) => return *outcome,
+        };
+        let repo_path = request.repo_path;
+        let status = CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.with_indexed_codebase(
+                &repo_path,
+                |manager, indexed_repo_path, ctx| {
+                    match mode {
+                        CodebaseResyncMode::Full => {
+                            manager.try_manual_resync_codebase(indexed_repo_path, ctx);
+                        }
+                        CodebaseResyncMode::Incremental => {
+                            if let Err(error) =
+                                manager.trigger_incremental_sync_for_path(indexed_repo_path, ctx)
+                            {
+                                log::warn!(
+                                    "Failed to trigger remote codebase incremental sync: repo_path={} error={error}",
+                                    indexed_repo_path.display()
+                                );
+                            }
+                        }
+                    }
+                    Self::current_codebase_index_status_or_queued(manager, indexed_repo_path, ctx)
+                },
+                |_, repo_path, _| {
+                    unavailable_codebase_index_status(
+                        repo_path.to_string_lossy().to_string(),
+                        "Cannot resync remote codebase because it has not been indexed."
+                            .to_string(),
+                    )
+                },
+                ctx,
+            )
+        });
+
+        HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
+            CodebaseIndexStatusUpdated {
+                status: Some(status),
+            },
+        ))
+    }
+
+    fn current_codebase_index_status_or_queued(
+        manager: &CodebaseIndexManager,
+        indexed_repo_path: &Path,
+        ctx: &mut ModelContext<CodebaseIndexManager>,
+    ) -> CodebaseIndexStatus {
+        manager
+            .get_codebase_index_status_for_path(indexed_repo_path, ctx)
+            .map(|status| codebase_index_status_to_proto(indexed_repo_path, &status))
+            .unwrap_or_else(|| {
+                queued_codebase_index_status(indexed_repo_path.to_string_lossy().to_string())
+            })
     }
 
     fn handle_drop_codebase_index(
@@ -927,49 +1126,27 @@ impl ServerModel {
             repo_path,
             auth_token,
         } = msg;
-        let repo_path_for_log = repo_path.clone();
-        if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
-            log::info!(
-                "[Remote codebase indexing] Daemon rejecting DropCodebaseIndex because remote indexing is disabled: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
-            );
-            return HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
-                CodebaseIndexStatusUpdated {
-                    status: Some(not_enabled_codebase_index_status(repo_path)),
-                },
-            ));
-        }
-
-        let repo_path = match requested_repo_path(&repo_path) {
-            Ok(repo_path) => repo_path,
-            Err(error) => {
-                return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                    code: ErrorCode::InvalidRequest.into(),
-                    message: error,
-                }));
-            }
+        let request = match self.prepare_codebase_index_request(
+            CodebaseIndexRequestParams {
+                operation_name: "DropCodebaseIndex",
+                repo_path,
+                auth_token,
+                auth_operation: "remote codebase index removal",
+                path_kind: CodebaseIndexRequestPathKind::Requested,
+            },
+            request_id,
+            conn_id,
+        ) {
+            Ok(request) => request,
+            Err(outcome) => return *outcome,
         };
-        if let Err(error) =
-            self.validate_remote_codebase_index_auth(&auth_token, "remote codebase index removal")
-        {
-            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
-                code: ErrorCode::InvalidRequest.into(),
-                message: error,
-            }));
-        }
-        log::info!(
-            "[Remote codebase indexing] Daemon handling DropCodebaseIndex: request_id={request_id} conn_id={conn_id} repo_path={}",
-            repo_path.display()
-        );
+        let CodebaseIndexRequest { repo_path } = request;
         CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.drop_index(repo_path.clone(), ctx);
         });
 
-        HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
-            CodebaseIndexStatusUpdated {
-                status: Some(disabled_codebase_index_status(
-                    repo_path.to_string_lossy().to_string(),
-                )),
-            },
+        codebase_index_status_response(disabled_codebase_index_status(
+            repo_path.to_string_lossy().to_string(),
         ))
     }
 
@@ -1111,21 +1288,46 @@ impl ServerModel {
     ///   the request (used for all request/response pairs).
     /// - `conn_id = None` — broadcasts to every connected proxy (used for
     ///   server-initiated push notifications such as repo metadata updates).
+    ///
+    /// For host-scoped requests: if the target connection is gone, the
+    /// response is delivered through any other open connection. This
+    /// handles the case where a session disconnects while a host-scoped
+    /// request is still in flight.
     fn send_server_message(
-        &self,
+        &mut self,
         conn_id: Option<ConnectionId>,
         request_id: Option<&RequestId>,
         message: server_message::Message,
     ) {
+        // Sending a response is the terminal step of a host-scoped request,
+        // so we drop its failover-tracking entry here. We snapshot whether
+        // the request was tracked *before* removing it, because that decides
+        // whether the message is eligible for failover delivery below (and
+        // the removal would otherwise erase that signal). Push notifications
+        // (empty/absent request_id) are never tracked, so this is a no-op for
+        // them.
+        let is_host_scoped_response = request_id
+            .is_some_and(|rid| !rid.is_empty() && self.host_scoped_requests.contains_key(rid));
+        if let Some(rid) = request_id {
+            self.host_scoped_requests.remove(rid);
+        }
+
         let msg = ServerMessage {
             request_id: request_id.map(|id| id.clone().into()).unwrap_or_default(),
             message: Some(message),
         };
         if let Some(target) = conn_id {
             if let Some(conn_tx) = self.connection_senders.get(&target) {
-                if let Err(e) = conn_tx.try_send(msg) {
+                if let Err(e) = conn_tx.try_send(msg.clone()) {
                     log::warn!("Daemon: failed to send to conn {target}: {e}");
+                    if is_host_scoped_response {
+                        self.send_host_scoped_response_via_alternate_connection(target, msg);
+                    }
                 }
+            } else if is_host_scoped_response {
+                // Target connection is gone. Deliver the host-scoped
+                // response through any other open connection.
+                self.send_host_scoped_response_via_alternate_connection(target, msg);
             } else {
                 log::debug!("Daemon: no sender for conn {target} (already disconnected)");
             }
@@ -1137,6 +1339,36 @@ impl ServerModel {
                 }
             }
         }
+    }
+
+    /// Delivers a host-scoped response through a connected proxy other than
+    /// `target`. Used when the original connection has disappeared or its
+    /// outbound channel rejects the response.
+    fn send_host_scoped_response_via_alternate_connection(
+        &self,
+        target: ConnectionId,
+        msg: ServerMessage,
+    ) {
+        for (&alt_id, alt_tx) in &self.connection_senders {
+            if alt_id == target {
+                continue;
+            }
+            log::info!(
+                "Daemon: failover delivery for request_id={} from conn {target} to conn {alt_id}",
+                msg.request_id
+            );
+            match alt_tx.try_send(msg.clone()) {
+                Ok(()) => return,
+                Err(e) => {
+                    log::warn!("Daemon: failover delivery failed to conn {alt_id}: {e}");
+                }
+            }
+        }
+        log::warn!(
+            "Daemon: cannot deliver host-scoped response for request_id={}, \
+             no alternate connections available",
+            msg.request_id
+        );
     }
 
     /// Spawns an abortable future tied to `request_id` and wires up automatic
@@ -1185,6 +1417,7 @@ impl ServerModel {
     ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
         self.apply_initialize_auth(&msg);
+        Self::apply_codebase_index_limits(msg.codebase_index_limits.as_ref(), ctx);
 
         // Update crash reporting based on client-supplied preferences.
         #[cfg(feature = "crash_reporting")]
@@ -1215,6 +1448,31 @@ impl ServerModel {
         );
     }
 
+    fn apply_codebase_index_limits(
+        limits: Option<&CodebaseIndexLimits>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(limits) = limits else {
+            return;
+        };
+        let max_indices_allowed = limits.max_indices_allowed.map(|limit| limit as usize);
+        let max_files_per_repo = usize::try_from(limits.max_files_per_repo).unwrap_or(usize::MAX);
+        let embedding_generation_batch_size =
+            usize::try_from(limits.embedding_generation_batch_size).unwrap_or(usize::MAX);
+
+        log::info!(
+            "[Remote codebase indexing] Daemon applying codebase index limits: max_indices_allowed={max_indices_allowed:?} max_files_per_repo={max_files_per_repo} embedding_generation_batch_size={embedding_generation_batch_size}"
+        );
+        CodebaseIndexManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.update_max_limits(
+                max_indices_allowed,
+                max_files_per_repo,
+                embedding_generation_batch_size,
+                ctx,
+            );
+        });
+    }
+
     /// Sets the Sentry user identity from the stored `AuthState`.
     /// Called both during `Initialize` and when re-enabling crash reporting
     /// via `UpdatePreferences`.
@@ -1236,6 +1494,7 @@ impl ServerModel {
             "Handling UpdatePreferences: crash_reporting_enabled={}",
             msg.crash_reporting_enabled
         );
+        Self::apply_codebase_index_limits(msg.codebase_index_limits.as_ref(), ctx);
         #[cfg(feature = "crash_reporting")]
         {
             if msg.crash_reporting_enabled {
@@ -1282,12 +1541,57 @@ impl ServerModel {
         }
     }
 
+    fn prepare_codebase_index_request(
+        &self,
+        params: CodebaseIndexRequestParams<'_>,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+    ) -> Result<CodebaseIndexRequest, Box<HandlerOutcome>> {
+        let CodebaseIndexRequestParams {
+            operation_name,
+            repo_path,
+            auth_token,
+            auth_operation,
+            path_kind,
+        } = params;
+        let repo_path_for_log = repo_path.clone();
+        if !FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
+            log::info!(
+                "[Remote codebase indexing] Daemon rejecting {operation_name} because remote indexing is disabled: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
+            );
+            return Err(Box::new(codebase_index_status_response(
+                not_enabled_codebase_index_status(repo_path),
+            )));
+        }
+
+        let repo_path = match path_kind {
+            CodebaseIndexRequestPathKind::Canonicalized => canonicalize_index_repo_path(&repo_path),
+            CodebaseIndexRequestPathKind::Requested => requested_repo_path(&repo_path),
+        }
+        .map_err(|error| Box::new(invalid_request_response(error)))?;
+
+        if let Err(error) = self.validate_remote_codebase_index_auth(&auth_token, auth_operation) {
+            return Err(Box::new(invalid_request_response(error)));
+        }
+
+        log::info!(
+            "[Remote codebase indexing] Daemon handling {operation_name}: request_id={request_id} conn_id={conn_id} repo_path={repo_path_for_log}"
+        );
+        Ok(CodebaseIndexRequest { repo_path })
+    }
+
     /// Handles `Abort` by cancelling the in-progress request it targets.
     /// Checks `ServerModel`'s own in-progress map first, then delegates to
-    /// the diff state manager for content reload requests.
+    /// the diff state manager for content reload requests, and finally checks
+    /// queued pending responses.
     /// This is a notification — no response is sent.
     fn handle_abort(&mut self, abort: Abort, request_id: &RequestId, ctx: &mut ModelContext<Self>) {
         let target_id = RequestId::from(abort.request_id_to_abort);
+        // Drop any failover-tracking entry for the aborted request so it
+        // doesn't leak in `host_scoped_requests` until all connections drop.
+        // (A manager-side timeout sends `Abort` while sibling connections may
+        // still be alive, so `deregister_connection` won't clean it up.)
+        self.host_scoped_requests.remove(&target_id);
         if let Some(handle) = self.in_progress.remove(&target_id) {
             log::info!(
                 "Aborting in-progress request (request_id={target_id}, \
@@ -1299,10 +1603,17 @@ impl ServerModel {
                 .diff_states
                 .update(ctx, |mgr, _| mgr.abort_request(&target_id));
             if !found {
-                log::info!(
-                    "Abort for unknown/completed request (request_id={target_id}, \
-                     abort_request_id={request_id})"
-                );
+                // Check if the target is a queued pending response
+                // (not an in-flight reload).
+                let found_pending = self
+                    .diff_states
+                    .update(ctx, |mgr, _| mgr.abort_pending_response(&target_id));
+                if !found_pending {
+                    log::info!(
+                        "Abort for unknown/completed request (request_id={target_id}, \
+                         abort_request_id={request_id})"
+                    );
+                }
             }
         }
     }
@@ -1564,6 +1875,10 @@ impl ServerModel {
                         let entries = super::repo_metadata_proto::file_tree_entry_to_snapshot_proto(
                             &state.entry,
                         );
+                        let standing_results = repo_model
+                            .as_ref(ctx)
+                            .standing_query_results(&id, ctx)
+                            .map(|results| (&results.as_snapshot_delta()).into());
                         // Git snapshots target the requesting connection;
                         // non-git snapshots broadcast to all.
                         let target = if is_git {
@@ -1579,6 +1894,7 @@ impl ServerModel {
                                     repo_path: indexed_path,
                                     entries,
                                     sync_complete: true,
+                                    standing_results,
                                 },
                             ),
                         );
@@ -2190,7 +2506,7 @@ impl ServerModel {
 
     /// Converts a domain-level diff state dispatch to proto messages
     /// and sends them to the appropriate connections.
-    fn handle_diff_state_update(&self, update: &DiffStateUpdate) {
+    fn handle_diff_state_update(&mut self, update: &DiffStateUpdate) {
         match update {
             DiffStateUpdate::Snapshot {
                 repo_path,
@@ -2270,6 +2586,62 @@ impl ServerModel {
                 }
             }
         }
+    }
+
+    /// Handles `UploadHandoffSnapshot` by gathering the workspace snapshot
+    /// from the daemon's local filesystem and uploading it to GCS.
+    ///
+    /// Extracts the `AIClient` and HTTP client from `ServerApiProvider`, then
+    /// spawns the async gather+upload pipeline. Returns an
+    /// `UploadHandoffSnapshotResponse` with the token on success.
+    fn handle_upload_handoff_snapshot(
+        &mut self,
+        msg: UploadHandoffSnapshot,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling UploadHandoffSnapshot ({} paths, request_id={request_id})",
+            msg.paths.len(),
+        );
+
+        let server_api = ServerApiProvider::handle(ctx);
+        let ai_client = server_api.as_ref(ctx).get_ai_client();
+        let http = server_api.as_ref(ctx).get_http_client();
+
+        // Convert proto strings → StandardizedPath at the boundary; invalid
+        // entries are logged and dropped.
+        let paths: Vec<StandardizedPath> = msg
+            .paths
+            .into_iter()
+            .filter_map(|raw| match StandardizedPath::try_new(&raw) {
+                Ok(sp) => Some(sp),
+                Err(e) => {
+                    log::warn!("UploadHandoffSnapshot: skipping invalid path: {e}");
+                    None
+                }
+            })
+            .collect();
+        let request_id_for_response = request_id.clone();
+
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                super::handoff_snapshot::gather_and_upload_handoff_snapshot(paths, ai_client, &http)
+                    .await
+            },
+            move |me, result, _ctx| {
+                let response = upload_result_to_proto(result);
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::UploadHandoffSnapshotResponse(response),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
     }
 
     /// Handles `GetBranches` — request/response.
@@ -2453,6 +2825,20 @@ impl ServerModel {
     }
 }
 
+fn invalid_request_response(message: String) -> HandlerOutcome {
+    HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+        code: ErrorCode::InvalidRequest.into(),
+        message,
+    }))
+}
+
+fn codebase_index_status_response(status: CodebaseIndexStatus) -> HandlerOutcome {
+    HandlerOutcome::Sync(server_message::Message::CodebaseIndexStatusUpdated(
+        CodebaseIndexStatusUpdated {
+            status: Some(status),
+        },
+    ))
+}
 fn requested_repo_path(repo_path: &str) -> Result<PathBuf, String> {
     if repo_path.is_empty() {
         return Err("repo_path is required".to_string());

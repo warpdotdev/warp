@@ -27,7 +27,6 @@ mod context_chips;
 mod crash_recovery;
 #[cfg(feature = "crash_reporting")]
 mod crash_reporting;
-mod debounce;
 mod debug_dump;
 mod default_terminal;
 mod download_method;
@@ -129,85 +128,130 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::aws_credentials::AwsCredentialRefresher as _;
-use crate::ai::mcp::FileBasedMCPManager;
-use crate::ai::mcp::FileMCPWatcher;
-use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
-use ::ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+use ::ai::index::full_source_code_embedding::manager::{
+    CodebaseIndexManager, CodebaseIndexManagerConfig,
+};
+#[cfg(feature = "local_fs")]
+use ::ai::index::full_source_code_embedding::SnapshotStorage;
 use ::ai::index::full_source_code_embedding::SyncTask;
 use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
 use ::ai::project_context::model::ProjectContextModel;
-pub use ai::agent::{todos::AIAgentTodoList, AIAgentActionResultType, FileEdit, TodoOperation};
+pub use ai::agent::todos::AIAgentTodoList;
+pub use ai::agent::{AIAgentActionResultType, FileEdit, TodoOperation};
 use ai::agent_conversations_model::AgentConversationsModel;
 use ai::agent_management::AgentNotificationsModel;
 use ai::ambient_agents::scheduled::ScheduledAgentManager;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
-use auth::auth_state::AuthStateProvider;
-use auth::{auth_manager::AuthManager, auth_state::AuthState};
+use auth::auth_manager::AuthManager;
+use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
 use code_review::GlobalCodeReviewModel;
 use quit_warning::UnsavedStateSummary;
+#[cfg(feature = "local_fs")]
+use repo_metadata::{
+    repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
+};
 use server::network_log_pane_manager::NetworkLogPaneManager;
 use server::network_logging::NetworkLogModel;
 use server::telemetry::context_provider::AppTelemetryContextProvider;
 use server::voice_transcriber::ServerVoiceTranscriber;
 #[cfg(feature = "local_fs")]
 use settings::import::model::ImportedConfigModel;
-use voice::transcriber::VoiceTranscriber;
-use warp_cli::GlobalOptions;
-use warp_cli::{agent::AgentCommand, CliCommand};
-
-#[cfg(feature = "local_fs")]
-use repo_metadata::{
-    repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
-};
-#[cfg(feature = "local_fs")]
-use watcher::HomeDirectoryWatcher;
-
 use settings_view::pane_manager::SettingsPaneManager;
 use terminal::general_settings::GeneralSettings;
 use terminal::keys_settings::KeysSettings;
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use terminal::local_shell::LocalShellState;
 pub use util::bindings::cmd_or_ctrl_shift;
+use voice::transcriber::VoiceTranscriber;
+use warp_cli::agent::AgentCommand;
+use warp_cli::{CliCommand, GlobalOptions};
+#[cfg(feature = "local_fs")]
+use watcher::HomeDirectoryWatcher;
+
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::aws_credentials::AwsCredentialRefresher as _;
+use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
+use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 pub mod workflows;
 pub mod workspace;
 
-#[cfg(feature = "integration_tests")]
-pub use persistence::testing as sqlite_testing;
+use std::borrow::Cow;
+use std::collections::HashSet;
+use std::ops::Deref;
+#[cfg(feature = "local_fs")]
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use ::settings::{Setting, ToggleableSetting};
-pub use warp_core::errors::{report_error, report_if_error};
-
+#[cfg(feature = "local_tty")]
+use anyhow::Context;
+use anyhow::{anyhow, Result};
+use appearance::{Appearance, AppearanceManager};
+use channel::ChannelState;
+use interval_timer::IntervalTimer;
+use itertools::Itertools;
+#[cfg(feature = "integration_tests")]
+pub use persistence::testing as sqlite_testing;
 #[cfg(feature = "plugin_host")]
 pub use plugin::{run_plugin_host, PLUGIN_HOST_FLAG};
+use referral_theme_status::ReferralThemeStatus;
+use server::server_api::ServerApiProvider;
+use settings::{ExtraMetaKeys, PrivacySettings};
+#[cfg(feature = "local_fs")]
+use shellexpand::tilde;
+use terminal::input;
+use terminal::session_settings::SessionSettings;
+use url::Url;
+pub use warp_core::errors::{report_error, report_if_error};
+use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
+// Re-export the debounce function to simplify imports.
+pub use warp_core::r#async::debounce;
+// Re-export the send_telemetry_from_ctx macro at the crate root level
+pub use warp_core::send_telemetry_from_app_ctx;
+pub use warp_core::send_telemetry_from_ctx;
 use warp_core::user_preferences::GetUserPreferences as _;
+// Re-export the safe logging macros at the crate root level for backwards compatibility
+pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
+#[cfg(feature = "local_fs")]
+use warp_files::FileModel;
+use warp_logging::LogDestination;
+use warp_managed_secrets::ManagedSecretManager;
+use warpui::integration::TestDriver;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
 use warpui::platform::app::ApproveTerminateResult;
+use warpui::platform::TerminationMode;
+use warpui::windowing::state::ApplicationStage;
+use warpui::{App, AppContext, Event, SingletonEntity, WindowId};
 use window_settings::WindowSettings;
 use workflows::manager::WorkflowManager;
+use workspace::sync_inputs::SyncedInputState;
 
+use self::features::FeatureFlag;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
+use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::LLMPreferences;
-use crate::ai::mcp::MCPGalleryManager;
-use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::ai::mcp::{MCPGalleryManager, TemplatableMCPServerManager};
 use crate::ai::outline::RepoOutlines;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
 use crate::ai::AIRequestUsageModel;
+use crate::antivirus::AntivirusInfo;
+use crate::app_state::AppState;
 use crate::autoupdate::{AutoupdateState, RelaunchModel};
 use crate::changelog_model::ChangelogModel;
-use crate::cloud_object::model::actions::ObjectActions;
+use crate::cloud_object::model::actions::{ObjectAction, ObjectActions};
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::code::global_buffer_model::GlobalBufferModel;
 #[cfg(feature = "local_fs")]
@@ -215,23 +259,36 @@ use crate::code::language_server_shutdown_manager::LanguageServerShutdownManager
 use crate::context_chips::prompt::Prompt;
 use crate::default_terminal::DefaultTerminal;
 use crate::drive::export::ExportManager;
+use crate::drive::CloudObjectTypeAndId;
 use crate::env_vars::manager::EnvVarCollectionManager;
+use crate::experiments::ImprovedPaletteSearch;
+pub use crate::global_resource_handles::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 use crate::gpu_state::GPUState;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::manager::NotebookManager;
 use crate::notebooks::CloudNotebook;
+use crate::notification::NotificationContext;
 use crate::palette::PaletteMode;
 use crate::persistence::model::AgentConversationData;
 use crate::persistence::PersistenceWriter;
 use crate::projects::ProjectManagementModel;
-use crate::server::cloud_objects::{listener::Listener, update_manager::UpdateManager};
+use crate::root_view::{
+    quake_mode_window_id, quake_mode_window_is_open, OpenFromRestoredArg, OpenPath,
+};
+use crate::server::cloud_objects::listener::Listener;
+use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
+use crate::server::iap::IapManager;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
+pub use crate::server::telemetry::{
+    AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
+};
+use crate::server::telemetry::{AppStartupInfo, CloseTarget, PaletteSource, TelemetryCollector};
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::cloud_preferences_syncer::initialize_cloud_preferences_syncer;
 use crate::settings::manager::SettingsManager;
-use crate::settings::{AccessibilitySettings, ScrollSettings, SelectionSettings};
+use crate::settings::{AISettings, AccessibilitySettings, ScrollSettings, SelectionSettings};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::DisplayCount;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -240,90 +297,24 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
-use crate::terminal::{AudibleBell, History};
+use crate::terminal::{AudibleBell, CustomSecretRegexUpdater, History};
 use crate::undo_close::UndoCloseStack;
 use crate::user_config::WarpConfig;
+use crate::util::bindings::is_binding_cross_platform;
 use crate::vim_registers::VimRegisters;
 use crate::warp_managed_paths_watcher::{ensure_warp_watch_roots_exist, WarpManagedPathsWatcher};
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workflows::local_workflows::LocalWorkflows;
-use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack};
+use crate::workspace::{
+    ActiveSession, OneTimeModalModel, PaneViewLocator, ToastStack, Workspace, WorkspaceAction,
+};
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_profiles::UserProfiles;
-#[cfg(feature = "local_tty")]
-use anyhow::Context;
-use anyhow::{anyhow, Result};
-use appearance::{Appearance, AppearanceManager};
-use channel::ChannelState;
-use interval_timer::IntervalTimer;
-use itertools::Itertools;
-use referral_theme_status::ReferralThemeStatus;
-use rust_embed::RustEmbed;
-use server::server_api::ServerApiProvider;
-use settings::{ExtraMetaKeys, PrivacySettings};
-use std::borrow::Cow;
-use std::collections::HashSet;
-use std::ops::Deref;
-use std::sync::Arc;
-use terminal::input;
-use terminal::session_settings::SessionSettings;
-use url::Url;
-use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
-use warp_managed_secrets::ManagedSecretManager;
-use workspace::sync_inputs::SyncedInputState;
-
-use warpui::{integration::TestDriver, App, AssetProvider, Event};
-
-use self::features::FeatureFlag;
-use crate::app_state::AppState;
-use crate::cloud_object::model::actions::ObjectAction;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::drive::CloudObjectTypeAndId;
-use crate::experiments::ImprovedPaletteSearch;
-pub use crate::global_resource_handles::{GlobalResourceHandles, GlobalResourceHandlesProvider};
-use crate::notification::NotificationContext;
-use crate::root_view::{
-    quake_mode_window_id, quake_mode_window_is_open, OpenFromRestoredArg, OpenPath,
-};
-pub use crate::server::telemetry::{
-    AgentModeEntrypoint, AgentModeEntrypointSelectionType, TelemetryEvent,
-};
-use crate::server::telemetry::{AppStartupInfo, CloseTarget, PaletteSource, TelemetryCollector};
-use crate::terminal::CustomSecretRegexUpdater;
-use crate::util::bindings::is_binding_cross_platform;
-use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction};
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_logging::LogDestination;
+use crate::workspaces::user_profiles::UserProfiles;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
-// Re-export the send_telemetry_from_ctx macro at the crate root level
-pub use warp_core::send_telemetry_from_app_ctx;
-pub use warp_core::send_telemetry_from_ctx;
-
-// Re-export the safe logging macros at the crate root level for backwards compatibility
-pub use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
-
-use crate::antivirus::AntivirusInfo;
-#[cfg(feature = "local_fs")]
-use warp_files::FileModel;
-use warpui::platform::TerminationMode;
-use warpui::windowing::state::ApplicationStage;
-use warpui::{AppContext, SingletonEntity, WindowId};
-
-#[derive(Clone, Copy, RustEmbed)]
-#[folder = "assets"]
-#[include = "bundled/**"] // Should be kept in sync with BUNDLED_ASSETS_DIR.
-#[include = "async/**"] // Should be kept in sync with ASYNC_ASSETS_DIR.
-#[cfg_attr(target_family = "wasm", exclude = "async/**")]
-// Excludes take precedence.
-// Standalone CLI builds (the `oz` tarball) are headless and never render the
-// onboarding/theme imagery in `async/`, so we exclude those bytes from the
-// embedded asset set to keep the CLI binary small — mirroring the carve-out
-// already applied for the WASM target above.
-#[cfg_attr(feature = "standalone", exclude = "async/**")]
-pub struct Assets;
-
-pub static ASSETS: Assets = Assets;
+/// Our embedded application assets.
+pub static ASSETS: warp_assets::Assets = warp_assets::Assets;
 
 fn determine_agent_source(
     launch_mode: &LaunchMode,
@@ -342,6 +333,23 @@ fn determine_agent_source(
         // RemoteServerProxy and RemoteServerDaemon are headless server
         // processes that don't use the agent subsystem.
         LaunchMode::RemoteServerProxy | LaunchMode::RemoteServerDaemon { .. } => None,
+    }
+}
+
+#[cfg(feature = "local_fs")]
+fn daemon_codebase_index_snapshot_storage(launch_mode: &LaunchMode) -> Option<SnapshotStorage> {
+    match launch_mode {
+        LaunchMode::RemoteServerDaemon { identity_key } => {
+            let data_dir = remote_server::setup::remote_server_daemon_data_dir(identity_key);
+            let snapshot_dir = PathBuf::from(tilde(&data_dir).into_owned())
+                .join("cache")
+                .join("codebase_index_snapshots");
+            SnapshotStorage::from_dir(snapshot_dir)
+        }
+        LaunchMode::App { .. }
+        | LaunchMode::CommandLine { .. }
+        | LaunchMode::RemoteServerProxy
+        | LaunchMode::Test { .. } => None,
     }
 }
 
@@ -537,14 +545,6 @@ impl LaunchMode {
     }
 }
 
-impl AssetProvider for Assets {
-    fn get(&self, path: &str) -> Result<Cow<'_, [u8]>> {
-        <Assets as RustEmbed>::get(path)
-            .map(|f| f.data)
-            .ok_or_else(|| anyhow!("no asset exists at path {}", path))
-    }
-}
-
 /// If the given event is a key down event containing alt modifiers, and those
 /// alt modifiers should be treated as meta keys, then remove the alts and
 /// prefix the keys with an escape. See WAR-472.
@@ -584,7 +584,7 @@ pub fn run() -> Result<()> {
     platform::init();
 
     // Ensure feature flags are initialized before parsing command-line arguments.
-    init_feature_flags();
+    features::init_feature_flags();
 
     // Parse command-line arguments.
     let args = warp_cli::Args::from_env();
@@ -654,6 +654,7 @@ pub fn run() -> Result<()> {
                 warp_logging::init(warp_logging::LogConfig {
                     is_cli: true,
                     log_destination: launch_mode.log_destination(),
+                    ..Default::default()
                 })?;
                 return crate::remote_server::run_proxy(args.identity_key.clone());
             }
@@ -771,7 +772,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     // The `run` function already initializes feature flags, but ensure they're initialized here
     // for other entrypoints.
-    init_feature_flags();
+    features::init_feature_flags();
 
     #[cfg(feature = "crash_reporting")]
     if launch_mode.needs_crash_reporting() {
@@ -794,10 +795,18 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             if crash_recovery::is_crash_recovery_process(launch_mode.args().as_ref()) {
                 warp_logging::init_for_crash_recovery_process()?;
             } else {
-                warp_logging::init(warp_logging::LogConfig { is_cli, log_destination })?;
+                warp_logging::init(warp_logging::LogConfig {
+                    is_cli,
+                    log_destination,
+                    ..Default::default()
+                })?;
             }
         } else {
-            warp_logging::init(warp_logging::LogConfig { is_cli, log_destination })?;
+            warp_logging::init(warp_logging::LogConfig {
+                is_cli,
+                log_destination,
+                ..Default::default()
+            })?;
         }
     }
 
@@ -942,6 +951,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         use warpui::platform::mac::AppExt;
+        use warpui::AssetProvider as _;
 
         let activate_on_launch = !launch_mode.is_integration_test()
             || std::env::var("WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS").is_ok();
@@ -956,8 +966,9 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        use crate::settings::ForceX11;
         use warpui::platform::linux::{self, AppBuilderExt};
+
+        use crate::settings::ForceX11;
 
         app_builder.set_window_class(ChannelState::app_id().to_string());
 
@@ -1125,8 +1136,21 @@ pub(crate) fn initialize_app(
     // captured by the HTTP client hooks.
     ctx.add_singleton_model(|_ctx| NetworkLogModel::default());
 
-    let server_api_provider = ctx
-        .add_singleton_model(|ctx| ServerApiProvider::new(auth_state.clone(), agent_source, ctx));
+    // Create a shared IAP state for staging builds. The same `Arc<IapState>`
+    // is handed to both `ServerApi` (for sync reads on the request path) and
+    // `IapManager` (which owns refresh logic on the main thread).
+    #[cfg(not(target_family = "wasm"))]
+    let iap_state =
+        ChannelState::iap_config().map(|cfg| Arc::new(crate::server::iap::IapState::new(&cfg)));
+    #[cfg(target_family = "wasm")]
+    let iap_state: Option<Arc<crate::server::iap::IapState>> = None;
+
+    let server_api_provider = ctx.add_singleton_model({
+        let auth_state = auth_state.clone();
+        let iap_state = iap_state.clone();
+        move |ctx| ServerApiProvider::new(auth_state, agent_source, iap_state, ctx)
+    });
+
     let server_api = server_api_provider.as_ref(ctx).get();
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
 
@@ -1194,24 +1218,24 @@ pub(crate) fn initialize_app(
     });
 
     let (
-        cloud_objects,
-        cached_workspaces,
-        current_workspace_uid,
-        app_state,
-        command_history,
-        restored_user_profiles,
-        time_of_next_force_object_refresh,
-        object_actions,
-        experiments,
-        ai_queries,
+        mut cloud_objects,
+        mut cached_workspaces,
+        mut current_workspace_uid,
+        mut app_state,
+        mut command_history,
+        mut restored_user_profiles,
+        mut time_of_next_force_object_refresh,
+        mut object_actions,
+        mut experiments,
+        mut ai_queries,
         persisted_workspaces,
-        workspace_language_servers,
-        multi_agent_conversations,
-        persisted_projects,
-        persisted_project_rules,
-        persisted_ignored_suggestions,
-        persisted_mcp_server_installations,
-        mcp_servers_to_restore,
+        mut workspace_language_servers,
+        mut multi_agent_conversations,
+        mut persisted_projects,
+        mut persisted_project_rules,
+        mut persisted_ignored_suggestions,
+        mut persisted_mcp_server_installations,
+        mut mcp_servers_to_restore,
     ) = sqlite_data
         .map(|sqlite_data| {
             (
@@ -1257,6 +1281,30 @@ pub(crate) fn initialize_app(
                 Default::default(),
             )
         });
+
+    if matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. }) {
+        let codebase_index_count = persisted_workspaces.len();
+        log::debug!(
+            "[Remote codebase indexing] Restored daemon codebase index metadata: metadata_count={codebase_index_count}"
+        );
+        cloud_objects = Default::default();
+        cached_workspaces = Default::default();
+        current_workspace_uid = None;
+        app_state = None;
+        command_history = Default::default();
+        restored_user_profiles = Default::default();
+        time_of_next_force_object_refresh = None;
+        object_actions = Default::default();
+        experiments = Default::default();
+        ai_queries = Default::default();
+        workspace_language_servers = Default::default();
+        multi_agent_conversations = Default::default();
+        persisted_projects = Default::default();
+        persisted_project_rules = Default::default();
+        persisted_ignored_suggestions = Default::default();
+        persisted_mcp_server_installations = Default::default();
+        mcp_servers_to_restore = Default::default();
+    }
 
     // Initialize a global model to track server-side experiment state.
     // This depends on the [`GlobalResourceHandlesProvider`] and so it must
@@ -1461,6 +1509,18 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     {
         ctx.add_singleton_model(DirectoryWatcher::new);
+        // Register the skill provider directories as force-included paths so
+        // the gitignore-pruning watch descend filter still watches gitignored
+        // skill directories (e.g. `.agents/skills`) for `Repository`
+        // subscribers (LSP, MCP). Registered before any repository begins
+        // watching so it gates descent on the very first registration.
+        DirectoryWatcher::handle(ctx).update(ctx, |watcher, _| {
+            watcher.register_force_included_paths(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+            );
+        });
         ctx.add_singleton_model(|_| DetectedRepositories::default());
         if let Some(home_dir) = dirs::home_dir() {
             ctx.add_singleton_model(|ctx| HomeDirectoryWatcher::new(home_dir, ctx));
@@ -1486,6 +1546,18 @@ pub(crate) fn initialize_app(
             } else {
                 RepoMetadataModel::new(ctx)
             };
+            model.register_force_included_paths(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+                ctx,
+            );
+            model.set_project_skill_provider_paths(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+                ctx,
+            );
 
             // Subscribe to RemoteServerManager push events so that remote repo
             // metadata snapshots and incremental updates populate the remote
@@ -1592,6 +1664,7 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| GitHubAuthNotifier::new());
     ctx.add_singleton_model(|_| NetworkStatus::new());
     ctx.add_singleton_model(|_| SystemStats::new());
+    workspace::auto_handoff::init(ctx);
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);
@@ -1687,6 +1760,9 @@ pub(crate) fn initialize_app(
         let conversations = &multi_agent_conversations;
         ctx.add_singleton_model(move |_| BlocklistAIHistoryModel::new(ai_queries, conversations));
     }
+    // Per-conversation queued prompts. Registered after the history model
+    // since it subscribes to history events for cleanup.
+    ctx.add_singleton_model(ai::blocklist::QueuedQueryModel::new);
     // Cross-pane UI state for the orchestration pill bar. Registered
     // after the history model since it subscribes to history events.
     ctx.add_singleton_model(move |ctx| {
@@ -1702,12 +1778,12 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(AgentNotificationsModel::new);
     ctx.add_singleton_model(BlocklistAIPermissions::new);
     ctx.add_singleton_model(ai::blocklist::orchestration_events::OrchestrationEventService::new);
-    ctx.add_singleton_model(ai::blocklist::task_status_sync_model::TaskStatusSyncModel::new);
-    if warp_core::features::FeatureFlag::OrchestrationV2.is_enabled() {
-        ctx.add_singleton_model(
-            ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
-        );
-    }
+    ctx.add_singleton_model(
+        ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
+    );
+    ctx.add_singleton_model(
+        ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
+    );
 
     if launch_mode.supports_indexing() {
         ctx.add_singleton_model(RepoOutlines::new);
@@ -1819,6 +1895,17 @@ pub(crate) fn initialize_app(
         ctx.add_singleton_model(system::SystemInfo::new);
     }
 
+    // `IapManager` drives gcloud-based IAP token refresh for staging builds.
+    // Register it after `LocalShellState`: the Manager needs to know where the gcloud
+    // cli lives & thus needs PATH config set by ~/.zshrc et al.
+    //
+    // Registered on all targets (including wasm) so consumers such as the
+    // shared-session viewer network — which compiles and runs on wasm — can
+    // read the singleton without panicking. On wasm `iap_state` is always
+    // `None`, making this an inert no-op: `IapManager::new` early-returns from
+    // its refresh loop and `iap_state()` yields no proxy-auth header.
+    ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
+
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);
 
@@ -1845,10 +1932,40 @@ pub(crate) fn initialize_app(
 
     ctx.add_singleton_model(LLMPreferences::new);
     ctx.add_singleton_model(HarnessAvailabilityModel::new);
+    ctx.add_singleton_model(ConnectedSelfHostedWorkersModel::new);
 
-    ctx.add_singleton_model(|ctx| {
+    let tip_model_handle = ctx.add_singleton_model(|ctx| {
         ai::agent_tips::AITipModel::<ai::AgentTip>::new_for_agent_tips(ctx)
     });
+    {
+        // Rebuild the tip pool when AI settings change so tips whose applicability
+        // depends on AI settings appear/disappear without waiting for the next cooldown cycle.
+        let tip_model_handle_for_ai = tip_model_handle.clone();
+        ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, ctx| {
+            tip_model_handle_for_ai.update(ctx, |model, ctx| {
+                model.revalidate_tips(ctx);
+            });
+        });
+        // Also revalidate when workspace/team data changes (e.g. voice toggled at
+        // the org level). Billing metadata — including `warp_ai_policy.is_voice_enabled`
+        // — lives inside the team data, so `TeamsChanged` covers all policy updates.
+        let tip_model_handle_for_teams = tip_model_handle.clone();
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, ctx| {
+            if matches!(event, UserWorkspacesEvent::TeamsChanged) {
+                tip_model_handle_for_teams.update(ctx, |model, ctx| {
+                    model.revalidate_tips(ctx);
+                });
+            }
+        });
+        // Revalidate when any keybinding changes so tips with `<keybinding>`
+        // placeholders are hidden/shown when the referenced binding is cleared
+        // or reassigned.
+        ctx.subscribe_to_model(&KeybindingChangedNotifier::handle(ctx), move |_, _, ctx| {
+            tip_model_handle.update(ctx, |model, ctx| {
+                model.revalidate_tips(ctx);
+            });
+        });
+    }
 
     timer.mark_interval_end("SINGLETON_MODELS_REGISTERED");
 
@@ -1870,29 +1987,42 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(DefaultTerminal::new);
 
     ctx.add_singleton_model(|ctx| {
-        let indices_to_restore = if UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx)
-            && launch_mode.supports_indexing()
-        {
+        let should_restore_indices = launch_mode.supports_indexing()
+            && (matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. })
+                || UserWorkspaces::as_ref(ctx).is_codebase_context_enabled(ctx));
+        let indices_to_restore = if should_restore_indices {
             persisted_workspaces.clone()
         } else {
             vec![]
         };
 
         let codebase_limits = AIRequestUsageModel::as_ref(ctx).codebase_context_limits();
-
-        CodebaseIndexManager::new(
+        let codebase_index_config = CodebaseIndexManagerConfig::new(
             indices_to_restore,
             codebase_limits.max_indices_allowed,
             codebase_limits.max_files_per_repo,
             codebase_limits.embedding_generation_batch_size,
             server_api_provider.as_ref(ctx).get(),
             launch_mode.supports_indexing(),
-            ctx,
-        )
+        );
+        #[cfg(feature = "local_fs")]
+        if let Some(snapshot_storage) = daemon_codebase_index_snapshot_storage(launch_mode) {
+            return CodebaseIndexManager::new_with_snapshot_storage(
+                codebase_index_config,
+                Some(snapshot_storage),
+                ctx,
+            );
+        }
+
+        CodebaseIndexManager::new_with_config(codebase_index_config, ctx)
     });
 
     ctx.add_singleton_model(|ctx| {
-        ProjectContextModel::new_from_persisted(persisted_project_rules, ctx)
+        ProjectContextModel::new_from_persisted(
+            persisted_project_rules,
+            read_project_rule_contents,
+            ctx,
+        )
     });
 
     // Index global rules (e.g. ~/.agents/AGENTS.md) on a background task so
@@ -2366,6 +2496,14 @@ fn on_close_window_cancelled(
     }
 }
 
+fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {
+    url.scheme() == ChannelState::url_scheme()
+        && url.host_str() == Some("action")
+        && url.path() == "/new_cloud_agent_conversation"
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "source" && value == "web_home")
+}
 fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode: LaunchMode) {
     IntervalTimer::handle(ctx).update(ctx, |timer, _ctx| {
         timer.mark_interval_end("APP_LAUNCHED");
@@ -2383,6 +2521,12 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
 
     match launch_mode {
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {
+            let should_skip_restore = launch_mode
+                .args()
+                .urls
+                .iter()
+                .any(is_cloud_agent_web_home_launch_url);
+            let app_state = if should_skip_restore { None } else { app_state };
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };
             ctx.dispatch_global_action("root_view:open_from_restored", &arg);
@@ -2470,481 +2614,4 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
 fn init_logging_for_unit_tests_glue() {
     // Initialize terminal-friendly logging for tests from the shared logger crate.
     warp_logging::init_logging_for_unit_tests();
-}
-
-/// Mark all features which should be enabled on the current channel as enabled.
-/// This sets global feature flag state and should never be called in a unit test.
-pub fn init_feature_flags() {
-    for flag in enabled_features() {
-        flag.set_enabled(true);
-    }
-    features::mark_initialized();
-}
-
-/// Returns all feature flags which should be enabled in the current channel.
-pub fn enabled_features() -> HashSet<FeatureFlag> {
-    // Enable features overridden for the given channel.
-    let mut flags = ChannelState::additional_features();
-
-    // Enable flags for release builds, if appropriate.
-    if ChannelState::is_release_bundle() {
-        flags.extend(features::RELEASE_FLAGS);
-    }
-
-    flags.extend([
-        #[cfg(feature = "autoupdate")]
-        FeatureFlag::Autoupdate,
-        #[cfg(feature = "changelog")]
-        FeatureFlag::Changelog,
-        #[cfg(feature = "cocoa_sentry")]
-        FeatureFlag::CocoaSentry,
-        #[cfg(feature = "crash_reporting")]
-        FeatureFlag::CrashReporting,
-        #[cfg(feature = "log_expensive_frames_in_sentry")]
-        FeatureFlag::LogExpensiveFramesInSentry,
-        #[cfg(feature = "record_app_active_events")]
-        FeatureFlag::RecordAppActiveEvents,
-        #[cfg(feature = "runtime_feature_flags")]
-        FeatureFlag::RuntimeFeatureFlags,
-        #[cfg(feature = "sequential_storage")]
-        FeatureFlag::SequentialStorage,
-        #[cfg(feature = "in_band_generators_ssh")]
-        FeatureFlag::InBandGeneratorsForSSH,
-        #[cfg(feature = "run_generators_with_cmd_exe")]
-        FeatureFlag::RunGeneratorsWithCmdExe,
-        #[cfg(feature = "ligatures")]
-        FeatureFlag::Ligatures,
-        #[cfg(feature = "selectable_prompt")]
-        FeatureFlag::SelectablePrompt,
-        #[cfg(feature = "viewing_shared_sessions")]
-        FeatureFlag::ViewingSharedSessions,
-        #[cfg(feature = "creating_shared_sessions")]
-        FeatureFlag::CreatingSharedSessions,
-        #[cfg(feature = "agent_mode")]
-        FeatureFlag::AgentMode,
-        #[cfg(feature = "shared_session_long_running_commands")]
-        FeatureFlag::SharedSessionWriteToLongRunningCommands,
-        #[cfg(feature = "resize_fix")]
-        FeatureFlag::ResizeFix,
-        #[cfg(feature = "richtext_multiselect")]
-        FeatureFlag::RichTextMultiselect,
-        #[cfg(feature = "default_waterfall_mode")]
-        FeatureFlag::DefaultWaterfallMode,
-        #[cfg(feature = "settings_file")]
-        FeatureFlag::SettingsFile,
-        #[cfg(feature = "rect_selection")]
-        FeatureFlag::RectSelection,
-        #[cfg(feature = "alacritty_settings_import")]
-        FeatureFlag::AlacrittySettingsImport,
-        #[cfg(feature = "dynamic_workflow_enums")]
-        FeatureFlag::DynamicWorkflowEnums,
-        #[cfg(feature = "shared_with_me")]
-        FeatureFlag::SharedWithMe,
-        #[cfg(feature = "am_workflows")]
-        FeatureFlag::AgentModeWorkflows,
-        #[cfg(feature = "ai_rules")]
-        FeatureFlag::AIRules,
-        #[cfg(feature = "ssh_tmux_wrapper")]
-        FeatureFlag::SSHTmuxWrapper,
-        #[cfg(feature = "shell_selector")]
-        FeatureFlag::ShellSelector,
-        #[cfg(feature = "integration_command")]
-        FeatureFlag::IntegrationCommand,
-        #[cfg(feature = "artifact_command")]
-        FeatureFlag::ArtifactCommand,
-        #[cfg(feature = "cloud_environments")]
-        FeatureFlag::CloudEnvironments,
-        #[cfg(all(feature = "simulate_github_unauthed", debug_assertions))]
-        FeatureFlag::SimulateGithubUnauthed,
-        #[cfg(feature = "session_sharing_acls")]
-        FeatureFlag::SessionSharingAcls,
-        #[cfg(feature = "full_screen_zen_mode")]
-        FeatureFlag::FullScreenZenMode,
-        #[cfg(feature = "minimalist_ui")]
-        FeatureFlag::MinimalistUI,
-        #[cfg(feature = "avatar_in_tab_bar")]
-        FeatureFlag::AvatarInTabBar,
-        #[cfg(feature = "workflow_aliases")]
-        FeatureFlag::WorkflowAliases,
-        #[cfg(feature = "ssh_drag_and_drop")]
-        FeatureFlag::SshDragAndDrop,
-        #[cfg(feature = "drag_tabs_to_windows")]
-        FeatureFlag::DragTabsToWindows,
-        #[cfg(feature = "cycle_next_command_suggestion")]
-        FeatureFlag::CycleNextCommandSuggestion,
-        #[cfg(feature = "multi_workspace")]
-        FeatureFlag::MultiWorkspace,
-        #[cfg(feature = "ime_marked_text")]
-        FeatureFlag::ImeMarkedText,
-        #[cfg(feature = "partial_next_command_suggestions")]
-        FeatureFlag::PartialNextCommandSuggestions,
-        #[cfg(feature = "iterm_images")]
-        FeatureFlag::ITermImages,
-        #[cfg(feature = "validate_autosuggestions")]
-        FeatureFlag::ValidateAutosuggestions,
-        #[cfg(feature = "prompt_suggestions_via_maa")]
-        FeatureFlag::PromptSuggestionsViaMAA,
-        #[cfg(feature = "clear_autosuggestion_on_escape")]
-        FeatureFlag::ClearAutosuggestionOnEscape,
-        #[cfg(feature = "autoupdate_ui_revamp")]
-        FeatureFlag::AutoupdateUIRevamp,
-        #[cfg(all(not(windows), feature = "kitty_images"))]
-        FeatureFlag::KittyImages,
-        #[cfg(feature = "warp_packs")]
-        FeatureFlag::WarpPacks,
-        #[cfg(feature = "global_ai_analytics_banner")]
-        FeatureFlag::GlobalAIAnalyticsBanner,
-        #[cfg(feature = "global_ai_analytics_collection")]
-        FeatureFlag::GlobalAIAnalyticsCollection,
-        #[cfg(feature = "default_adeberry_theme")]
-        FeatureFlag::DefaultAdeberryTheme,
-        #[cfg(feature = "agent_mode_primary_xml")]
-        FeatureFlag::AgentModePrimaryXML,
-        #[cfg(feature = "agent_mode_pre_plan_xml")]
-        FeatureFlag::AgentModePrePlanXML,
-        #[cfg(feature = "agent_onboarding")]
-        FeatureFlag::AgentOnboarding,
-        #[cfg(feature = "agent_shared_sessions")]
-        FeatureFlag::AgentSharedSessions,
-        #[cfg(feature = "suggested_rules")]
-        FeatureFlag::SuggestedRules,
-        #[cfg(feature = "suggested_agent_mode_workflows")]
-        FeatureFlag::SuggestedAgentModeWorkflows,
-        #[cfg(feature = "command_correction_key")]
-        FeatureFlag::CommandCorrectionKey,
-        #[cfg(feature = "predict_am_queries")]
-        FeatureFlag::PredictAMQueries,
-        #[cfg(feature = "full_source_code_embedding")]
-        FeatureFlag::FullSourceCodeEmbedding,
-        #[cfg(feature = "remote_codebase_indexing")]
-        FeatureFlag::RemoteCodebaseIndexing,
-        #[cfg(feature = "use_tantivy_search")]
-        FeatureFlag::UseTantivySearch,
-        #[cfg(feature = "grep_tool")]
-        FeatureFlag::GrepTool,
-        #[cfg(feature = "mcp_server")]
-        FeatureFlag::McpServer,
-        #[cfg(feature = "mcp_debugging_ids")]
-        FeatureFlag::McpDebuggingIds,
-        #[cfg(feature = "markdown_tables")]
-        FeatureFlag::MarkdownTables,
-        #[cfg(feature = "blocklist_markdown_table_rendering")]
-        FeatureFlag::BlocklistMarkdownTableRendering,
-        #[cfg(feature = "blocklist_markdown_images")]
-        FeatureFlag::BlocklistMarkdownImages,
-        #[cfg(feature = "markdown_mermaid")]
-        FeatureFlag::MarkdownMermaid,
-        #[cfg(feature = "editable_markdown_mermaid")]
-        FeatureFlag::EditableMarkdownMermaid,
-        #[cfg(feature = "image_as_context")]
-        FeatureFlag::ImageAsContext,
-        #[cfg(feature = "msys2_shells")]
-        FeatureFlag::MSYS2Shells,
-        #[cfg(feature = "file_retrieval_tools")]
-        FeatureFlag::FileRetrievalTools,
-        #[cfg(feature = "reload_stale_conversation_files")]
-        FeatureFlag::ReloadStaleConversationFiles,
-        #[cfg(feature = "shared_block_title_generation")]
-        FeatureFlag::SharedBlockTitleGeneration,
-        #[cfg(feature = "retry_truncated_code_responses")]
-        FeatureFlag::RetryTruncatedCodeResponses,
-        #[cfg(feature = "read_image_files")]
-        FeatureFlag::ReadImageFiles,
-        #[cfg(feature = "usage_based_pricing")]
-        FeatureFlag::UsageBasedPricing,
-        #[cfg(feature = "cross_repo_context")]
-        FeatureFlag::CrossRepoContext,
-        #[cfg(feature = "codebase_index_persistence")]
-        FeatureFlag::CodebaseIndexPersistence,
-        #[cfg(feature = "ai_context_menu")]
-        FeatureFlag::AIContextMenuEnabled,
-        #[cfg(feature = "at_menu_outside_of_ai_mode")]
-        FeatureFlag::AtMenuOutsideOfAIMode,
-        #[cfg(feature = "ai_resume_button")]
-        FeatureFlag::AIResumeButton,
-        #[cfg(feature = "figma_detection")]
-        FeatureFlag::FigmaDetection,
-        #[cfg(feature = "agent_decides_command_execution")]
-        FeatureFlag::AgentDecidesCommandExecution,
-        #[cfg(feature = "codebase_index_speedbump")]
-        FeatureFlag::CodebaseIndexSpeedbump,
-        #[cfg(feature = "context_line_review_comments")]
-        FeatureFlag::ContextLineReviewComments,
-        #[cfg(feature = "fast_forward_autoexecute_button")]
-        FeatureFlag::FastForwardAutoexecuteButton,
-        #[cfg(feature = "code_find_replace")]
-        FeatureFlag::CodeFindReplace,
-        #[cfg(feature = "command_palette_file_search")]
-        FeatureFlag::CommandPaletteFileSearch,
-        #[cfg(feature = "ai_context_menu_commands")]
-        FeatureFlag::AIContextMenuCommands,
-        #[cfg(feature = "ai_context_menu_code")]
-        FeatureFlag::AIContextMenuCode,
-        #[cfg(feature = "expand_edit_to_pane")]
-        FeatureFlag::ExpandEditToPane,
-        #[cfg(feature = "fallback_model_load_output_messaging")]
-        FeatureFlag::FallbackModelLoadOutputMessaging,
-        #[cfg(feature = "tab_close_button_on_left")]
-        FeatureFlag::TabCloseButtonOnLeft,
-        #[cfg(feature = "profiles_design_revamp")]
-        FeatureFlag::ProfilesDesignRevamp,
-        #[cfg(feature = "search_codebase_ui")]
-        FeatureFlag::SearchCodebaseUI,
-        #[cfg(feature = "changed_lines_only_apply_diff_result")]
-        FeatureFlag::ChangedLinesOnlyApplyDiffResult,
-        #[cfg(feature = "linked_code_blocks")]
-        FeatureFlag::LinkedCodeBlocks,
-        #[cfg(feature = "tabbed_editor_view")]
-        FeatureFlag::TabbedEditorView,
-        #[cfg(feature = "send_telemetry_to_file")]
-        FeatureFlag::SendTelemetryToFile,
-        #[cfg(feature = "undo_closed_panes")]
-        FeatureFlag::UndoClosedPanes,
-        #[cfg(feature = "multi_profile")]
-        FeatureFlag::MultiProfile,
-        #[cfg(feature = "conversation_artifacts")]
-        FeatureFlag::ConversationArtifacts,
-        #[cfg(feature = "sync_ambient_plans")]
-        FeatureFlag::SyncAmbientPlans,
-        #[cfg(feature = "get_started_tab")]
-        FeatureFlag::GetStartedTab,
-        #[cfg(feature = "welcome_tab")]
-        FeatureFlag::WelcomeTab,
-        #[cfg(feature = "projects")]
-        FeatureFlag::Projects,
-        #[cfg(feature = "drive_objects_as_context")]
-        FeatureFlag::DriveObjectsAsContext,
-        #[cfg(feature = "pr_comments_slash_command")]
-        FeatureFlag::PRCommentsSlashCommand,
-        #[cfg(feature = "pr_comments_v2")]
-        FeatureFlag::PRCommentsV2,
-        #[cfg(feature = "pr_comments_skill")]
-        FeatureFlag::PRCommentsSkill,
-        #[cfg(feature = "selection_as_context")]
-        FeatureFlag::SelectionAsContext,
-        #[cfg(feature = "code_mode_chip")]
-        FeatureFlag::CodeModeChip,
-        #[cfg(feature = "github_pr_prompt_chip")]
-        FeatureFlag::GithubPrPromptChip,
-        #[cfg(feature = "create_project_flow")]
-        FeatureFlag::CreateProjectFlow,
-        #[cfg(feature = "vim_code_editor")]
-        FeatureFlag::VimCodeEditor,
-        #[cfg(feature = "allow_opening_file_links_using_editor_env")]
-        FeatureFlag::AllowOpeningFileLinksUsingEditorEnv,
-        #[cfg(feature = "revert_diff_hunk")]
-        FeatureFlag::RevertDiffHunk,
-        #[cfg(feature = "code_review_save_changes")]
-        FeatureFlag::CodeReviewSaveChanges,
-        #[cfg(feature = "file_tree")]
-        FeatureFlag::FileTree,
-        #[cfg(feature = "allow_ignoring_input_suggestions")]
-        FeatureFlag::AllowIgnoringInputSuggestions,
-        #[cfg(feature = "ambient_agents_command_line")]
-        FeatureFlag::AmbientAgentsCommandLine,
-        #[cfg(feature = "ambient_agents_image_upload")]
-        FeatureFlag::AmbientAgentsImageUpload,
-        #[cfg(feature = "scheduled_ambient_agents")]
-        FeatureFlag::ScheduledAmbientAgents,
-        #[cfg(feature = "code_launch_modal")]
-        FeatureFlag::CodeLaunchModal,
-        #[cfg(feature = "api_key_authentication")]
-        FeatureFlag::APIKeyAuthentication,
-        #[cfg(feature = "api_key_management")]
-        FeatureFlag::APIKeyManagement,
-        #[cfg(feature = "mcp_oauth")]
-        FeatureFlag::McpOauth,
-        #[cfg(feature = "file_based_mcp")]
-        FeatureFlag::FileBasedMcp,
-        #[cfg(feature = "diff_set_as_context")]
-        FeatureFlag::DiffSetAsContext,
-        #[cfg(feature = "discard_per_file_and_all_changes")]
-        FeatureFlag::DiscardPerFileAndAllChanges,
-        #[cfg(feature = "summarization_cancellation_confirmation")]
-        FeatureFlag::SummarizationCancellationConfirmation,
-        #[cfg(feature = "code_review_find")]
-        FeatureFlag::CodeReviewFind,
-        #[cfg(feature = "ui_zoom")]
-        FeatureFlag::UIZoom,
-        #[cfg(feature = "auto_open_code_review_pane")]
-        FeatureFlag::AutoOpenCodeReviewPane,
-        #[cfg(feature = "inline_code_review")]
-        FeatureFlag::InlineCodeReview,
-        #[cfg(feature = "create_environment_slash_command")]
-        FeatureFlag::CreateEnvironmentSlashCommand,
-        #[cfg(feature = "summarize_conversation_command")]
-        FeatureFlag::SummarizationConversationCommand,
-        #[cfg(feature = "mcp_grouped_server_context")]
-        FeatureFlag::MCPGroupedServerContext,
-        #[cfg(feature = "web_search_ui")]
-        FeatureFlag::WebSearchUI,
-        #[cfg(feature = "web_fetch_ui")]
-        FeatureFlag::WebFetchUI,
-        #[cfg(feature = "fork_from_command")]
-        FeatureFlag::ForkFromCommand,
-        #[cfg(feature = "context_window_usage_v2")]
-        FeatureFlag::ContextWindowUsageV2,
-        #[cfg(feature = "global_search")]
-        FeatureFlag::GlobalSearch,
-        #[cfg(feature = "embedded_code_review_comments")]
-        FeatureFlag::EmbeddedCodeReviewComments,
-        #[cfg(feature = "file_and_diff_set_comments")]
-        FeatureFlag::FileAndDiffSetComments,
-        #[cfg(feature = "revert_to_checkpoints")]
-        FeatureFlag::RevertToCheckpoints,
-        #[cfg(feature = "rewind_slash_command")]
-        FeatureFlag::RewindSlashCommand,
-        #[cfg(feature = "agent_management_view")]
-        FeatureFlag::AgentManagementView,
-        #[cfg(feature = "agent_management_details_view")]
-        FeatureFlag::AgentManagementDetailsView,
-        #[cfg(feature = "agent_view")]
-        FeatureFlag::AgentView,
-        #[cfg(feature = "agent_view_block_context")]
-        FeatureFlag::AgentViewBlockContext,
-        #[cfg(feature = "warp_managed_secrets")]
-        FeatureFlag::WarpManagedSecrets,
-        #[cfg(feature = "v4a_file_diffs")]
-        FeatureFlag::V4AFileDiffs,
-        #[cfg(feature = "interactive_conversation_management_view")]
-        FeatureFlag::InteractiveConversationManagementView,
-        #[cfg(feature = "agent_tips")]
-        FeatureFlag::AgentTips,
-        #[cfg(feature = "agent_mode_computer_use")]
-        FeatureFlag::AgentModeComputerUse,
-        #[cfg(feature = "local_computer_use")]
-        FeatureFlag::LocalComputerUse,
-        #[cfg(feature = "local_claude_codex_child_harnesses")]
-        FeatureFlag::LocalClaudeCodexChildHarnesses,
-        #[cfg(feature = "team_api_keys")]
-        FeatureFlag::TeamApiKeys,
-        #[cfg(feature = "cloud_conversations")]
-        FeatureFlag::CloudConversations,
-        #[cfg(feature = "agent_toolbar_editor")]
-        FeatureFlag::AgentToolbarEditor,
-        #[cfg(feature = "configurable_toolbar")]
-        FeatureFlag::ConfigurableToolbar,
-        #[cfg(feature = "agent_view_prompt_chip")]
-        FeatureFlag::AgentViewPromptChip,
-        #[cfg(feature = "ambient_agents_rtc")]
-        FeatureFlag::AmbientAgentsRTC,
-        #[cfg(feature = "classic_completions")]
-        FeatureFlag::ClassicCompletions,
-        #[cfg(feature = "force_classic_completions")]
-        FeatureFlag::ForceClassicCompletions,
-        #[cfg(feature = "agent_view_conversation_list_view")]
-        FeatureFlag::AgentViewConversationListView,
-        #[cfg(feature = "inline_history_menu")]
-        FeatureFlag::InlineHistoryMenu,
-        #[cfg(feature = "inline_repo_menu")]
-        FeatureFlag::InlineRepoMenu,
-        #[cfg(feature = "cloud_mode")]
-        FeatureFlag::CloudMode,
-        #[cfg(feature = "cloud_mode_from_local_session")]
-        FeatureFlag::CloudModeFromLocalSession,
-        #[cfg(feature = "cloud_mode_image_context")]
-        FeatureFlag::CloudModeImageContext,
-        #[cfg(feature = "summarization_via_message_replacement")]
-        FeatureFlag::SummarizationViaMessageReplacement,
-        #[cfg(feature = "pluggable_notifications")]
-        FeatureFlag::PluggableNotifications,
-        #[cfg(feature = "list_skills")]
-        FeatureFlag::ListSkills,
-        #[cfg(feature = "ask_user_question")]
-        FeatureFlag::AskUserQuestion,
-        #[cfg(feature = "lsp_as_a_tool")]
-        FeatureFlag::LSPAsATool,
-        #[cfg(feature = "inline_profile_selector")]
-        FeatureFlag::InlineProfileSelector,
-        #[cfg(feature = "oz_platform_skills")]
-        FeatureFlag::OzPlatformSkills,
-        #[cfg(feature = "oz_identity_federation")]
-        FeatureFlag::OzIdentityFederation,
-        #[cfg(feature = "oz_changelog_updates")]
-        FeatureFlag::OzChangelogUpdates,
-        #[cfg(feature = "bundled_skills")]
-        FeatureFlag::BundledSkills,
-        #[cfg(feature = "oz_launch_modal")]
-        FeatureFlag::OzLaunchModal,
-        #[cfg(feature = "open_warp_launch_modal")]
-        FeatureFlag::OpenWarpLaunchModal,
-        #[cfg(feature = "new_tab_styling")]
-        FeatureFlag::NewTabStyling,
-        #[cfg(feature = "skill_arguments")]
-        FeatureFlag::SkillArguments,
-        #[cfg(feature = "active_conversation_requires_interaction")]
-        FeatureFlag::ActiveConversationRequiresInteraction,
-        #[cfg(feature = "conversations_as_context")]
-        FeatureFlag::ConversationsAsContext,
-        #[cfg(feature = "incremental_auto_reload")]
-        FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "orchestration")]
-        FeatureFlag::Orchestration,
-        #[cfg(feature = "orchestration_v2")]
-        FeatureFlag::OrchestrationV2,
-        #[cfg(feature = "orchestration_pill_bar")]
-        FeatureFlag::OrchestrationPillBar,
-        #[cfg(feature = "pending_user_query_indicator")]
-        FeatureFlag::PendingUserQueryIndicator,
-        #[cfg(feature = "queue_slash_command")]
-        FeatureFlag::QueueSlashCommand,
-        #[cfg(feature = "kitty_keyboard_protocol")]
-        FeatureFlag::KittyKeyboardProtocol,
-        #[cfg(feature = "inline_menu_headers")]
-        FeatureFlag::InlineMenuHeaders,
-        #[cfg(feature = "directory_tab_colors")]
-        FeatureFlag::DirectoryTabColors,
-        #[cfg(feature = "open_warp_new_settings_modes")]
-        FeatureFlag::OpenWarpNewSettingsModes,
-        #[cfg(feature = "hoa_code_review")]
-        FeatureFlag::HoaCodeReview,
-        #[cfg(feature = "vertical_tabs")]
-        FeatureFlag::VerticalTabs,
-        #[cfg(feature = "vertical_tabs_summary_mode")]
-        FeatureFlag::VerticalTabsSummaryMode,
-        #[cfg(feature = "tab_configs")]
-        FeatureFlag::TabConfigs,
-        #[cfg(feature = "agent_harness")]
-        FeatureFlag::AgentHarness,
-        #[cfg(feature = "oz_handoff")]
-        FeatureFlag::OzHandoff,
-        #[cfg(feature = "handoff_local_cloud")]
-        FeatureFlag::HandoffLocalCloud,
-        #[cfg(feature = "hoa_notifications")]
-        FeatureFlag::HOANotifications,
-        #[cfg(feature = "open_code_notifications")]
-        FeatureFlag::OpenCodeNotifications,
-        #[cfg(feature = "cli_agent_rich_input")]
-        FeatureFlag::CLIAgentRichInput,
-        #[cfg(feature = "transfer_control_tool")]
-        FeatureFlag::TransferControlTool,
-        #[cfg(feature = "warpify_footer")]
-        FeatureFlag::WarpifyFooter,
-        #[cfg(feature = "solo_user_byok")]
-        FeatureFlag::SoloUserByok,
-        #[cfg(feature = "skip_firebase_anonymous_user")]
-        FeatureFlag::SkipFirebaseAnonymousUser,
-        #[cfg(feature = "hoa_onboarding_flow")]
-        FeatureFlag::HOAOnboardingFlow,
-        #[cfg(feature = "git_operations_in_code_review")]
-        FeatureFlag::GitOperationsInCodeReview,
-        #[cfg(feature = "hoa_remote_control")]
-        FeatureFlag::HOARemoteControl,
-        #[cfg(feature = "codex_notifications")]
-        FeatureFlag::CodexNotifications,
-        #[cfg(feature = "trim_trailing_blank_lines")]
-        FeatureFlag::TrimTrailingBlankLines,
-        #[cfg(feature = "cloud_mode_setup_v2")]
-        FeatureFlag::CloudModeSetupV2,
-        #[cfg(feature = "cloud_mode_input_v2")]
-        FeatureFlag::CloudModeInputV2,
-        #[cfg(feature = "configurable_context_window")]
-        FeatureFlag::ConfigurableContextWindow,
-        #[cfg(feature = "handoff_cloud_cloud")]
-        FeatureFlag::HandoffCloudCloud,
-        #[cfg(feature = "git_credential_refresh")]
-        FeatureFlag::GitCredentialRefresh,
-    ]);
-
-    flags
 }

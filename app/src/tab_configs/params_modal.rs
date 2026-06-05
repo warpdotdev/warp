@@ -1,38 +1,36 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warp_editor::editor::NavigationKey;
+use warpui::elements::{
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
+    ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::keymap::macros::*;
+use warpui::keymap::{FixedBinding, Keystroke};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
-    elements::{
-        Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-        CornerRadius, CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
-        MouseStateHandle, Padding, ParentElement, Radius, SavePosition, ScrollTarget,
-        ScrollToPositionMode, ScrollbarWidth, Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    keymap::{macros::*, FixedBinding, Keystroke},
-    platform::Cursor,
-    ui_components::components::UiComponent,
     AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
-use crate::{
-    appearance::Appearance,
-    editor::{
-        EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
-        TextOptions,
-    },
-    modal::ModalAction,
-    tab_configs::{
-        branch_picker::BranchPicker,
-        repo_picker::{RepoPicker, RepoPickerEvent},
-        PickerStyle, TabConfig, TabConfigParam, TabConfigParamType,
-    },
-    view_components::action_button::{
-        ActionButton, DisabledTheme, KeystrokeSource, NakedTheme, PrimaryTheme,
-    },
+use crate::appearance::Appearance;
+use crate::editor::{
+    EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
+    TextOptions,
+};
+use crate::modal::ModalAction;
+use crate::tab_configs::branch_picker::BranchPicker;
+use crate::tab_configs::repo_picker::{RepoPicker, RepoPickerEvent};
+use crate::tab_configs::{PickerStyle, TabConfig, TabConfigParam, TabConfigParamType};
+use crate::view_components::action_button::{
+    ActionButton, DisabledTheme, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 
 pub fn init(app: &mut AppContext) {
@@ -42,18 +40,14 @@ pub fn init(app: &mut AppContext) {
             TabConfigParamsModalAction::Escape,
             id!("TabConfigParamsModal"),
         ),
-        // Enter and Space only fire when no EditorView descendant is focused.
-        // When a text field or picker filter editor has focus, the editor
-        // consumes these keys and the modal handles them via event
-        // subscriptions instead (see handle_editor_event).
+        // Enter only fires when no EditorView descendant is focused. When a
+        // text field or picker filter editor has focus, the editor consumes
+        // it and the modal handles submit via event subscriptions instead
+        // (see handle_editor_event). Space is owned by FilterableDropdown
+        // itself when a picker is focused, so the modal no longer binds it.
         FixedBinding::new(
             "enter",
             TabConfigParamsModalAction::Submit,
-            id!("TabConfigParamsModal") & !id!("EditorView"),
-        ),
-        FixedBinding::new(
-            "space",
-            TabConfigParamsModalAction::ToggleDropdown,
             id!("TabConfigParamsModal") & !id!("EditorView"),
         ),
     ]);
@@ -149,7 +143,6 @@ pub enum TabConfigParamsModalAction {
     Cancel,
     Submit,
     Escape,
-    ToggleDropdown,
 }
 
 impl TabConfigParamsModal {
@@ -324,10 +317,9 @@ impl TabConfigParamsModal {
 
         self.pending_config = Some(config);
 
-        // When the only fields are dropdowns, focus the modal itself so
-        // Enter (submit) and Space (toggle dropdown) fixed bindings fire.
-        // When there are text fields, focus the first one so the user can
-        // start typing immediately.
+        // When the only fields are dropdowns, focus the modal itself so the
+        // Enter (submit) fixed binding fires. When there are text fields,
+        // focus the first one so the user can start typing immediately.
         if self.has_text_fields() {
             self.focus_field(0, ctx);
         } else {
@@ -405,35 +397,6 @@ impl TabConfigParamsModal {
             .any(|(_, _, field)| matches!(field, ParamField::Text(_)))
     }
 
-    fn dropdown_count(&self) -> usize {
-        self.param_fields
-            .iter()
-            .filter(|(_, _, field)| !matches!(field, ParamField::Text(_)))
-            .count()
-    }
-
-    fn toggle_single_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let mut opened = false;
-        for (_, _, field) in &self.param_fields {
-            match field {
-                ParamField::Branch { picker, .. } => {
-                    opened = picker.update(ctx, |p, ctx| p.toggle_dropdown(ctx));
-                    break;
-                }
-                ParamField::Repo { picker, .. } => {
-                    opened = picker.update(ctx, |p, ctx| p.toggle_dropdown(ctx));
-                    break;
-                }
-                ParamField::Text(_) => {}
-            }
-        }
-        // When the dropdown just closed, reclaim focus so Enter/Space
-        // fixed bindings continue to work.
-        if !opened && !self.has_text_fields() {
-            ctx.focus_self();
-        }
-    }
-
     fn focus_field(&self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some((_, _, field)) = self.param_fields.get(index) {
             match field {
@@ -505,8 +468,8 @@ impl View for TabConfigParamsModal {
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
         // When focus arrives directly at this view (not at a child), keep
-        // self-focus so the Enter/Space fixed bindings fire. This happens
-        // on initial open (via focus_self in on_open) and when the Modal
+        // self-focus so the Enter fixed binding fires. This happens on
+        // initial open (via focus_self in on_open) and when the Modal
         // wrapper re-focuses the body after a child (like a dropdown)
         // releases focus.
         if focus_ctx.is_self_focused() && !self.has_text_fields() {
@@ -729,11 +692,6 @@ impl TypedActionView for TabConfigParamsModal {
                 ctx.emit(TabConfigParamsModalEvent::Close);
             }
             TabConfigParamsModalAction::Submit => self.try_submit(ctx),
-            TabConfigParamsModalAction::ToggleDropdown => {
-                if self.dropdown_count() <= 1 {
-                    self.toggle_single_dropdown(ctx);
-                }
-            }
         }
     }
 }

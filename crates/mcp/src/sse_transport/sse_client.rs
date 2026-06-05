@@ -5,18 +5,15 @@
 //
 // Reference: <https://html.spec.whatwg.org/multipage/server-sent-events.html>
 
-use std::{
-    pin::Pin,
-    sync::{Arc, RwLock},
-};
+use std::pin::Pin;
+use std::sync::{Arc, RwLock};
 
-use futures::{future::BoxFuture, StreamExt};
+use futures::future::BoxFuture;
+use futures::StreamExt;
 use http::Uri;
-use rmcp::{
-    model::{ClientJsonRpcMessage, ServerJsonRpcMessage},
-    transport::Transport,
-    RoleClient,
-};
+use rmcp::model::{ClientJsonRpcMessage, ServerJsonRpcMessage};
+use rmcp::transport::Transport;
+use rmcp::RoleClient;
 use sse_stream::{Error as SseError, Sse};
 use thiserror::Error;
 

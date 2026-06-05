@@ -1,3 +1,11 @@
+use std::time::Duration;
+
+use mockall::Sequence;
+use settings::{PrivatePreferences, PublicPreferences};
+use warpui::{AddSingletonModel, App};
+use warpui_extras::user_preferences;
+
+use super::*;
 use crate::ai::llms::LLMModelHost;
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -21,14 +29,6 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
     Workspace,
 };
-
-use mockall::Sequence;
-use settings::{PrivatePreferences, PublicPreferences};
-use std::time::Duration;
-use warpui::{AddSingletonModel, App};
-use warpui_extras::user_preferences;
-
-use super::*;
 
 #[derive(Default)]
 struct CachedResources {
@@ -105,6 +105,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,
@@ -383,6 +384,7 @@ fn workspace_for_test(team: &Team) -> Workspace {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,
@@ -556,6 +558,7 @@ fn test_joining_team_moves_objects() {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,
@@ -741,6 +744,7 @@ fn test_leaving_team_moves_objects() {
         teams: vec![team.clone()],
         billing_metadata: Default::default(),
         bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
         invite_code: None,

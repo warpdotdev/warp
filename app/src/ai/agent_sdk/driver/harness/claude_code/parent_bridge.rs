@@ -25,12 +25,11 @@ use warpui::ModelSpawner;
 
 use crate::ai::agent_events::{
     run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
-    AgentEventDriverConfig, MessageHydrator, ServerApiAgentEventSource,
+    AgentEventDriverConfig, AgentMessageEventMetadata, MessageHydrator, ServerApiAgentEventSource,
 };
 use crate::ai::agent_sdk::driver::{AgentDriver, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::AIClient;
-use crate::server::server_api::ai::AgentRunEvent;
+use crate::server::server_api::ai::{AIClient, AgentRunEvent};
 use crate::server::server_api::ServerApi;
 
 const LEGACY_MESSAGE_LISTENER_STATE_ROOT_ENV: &str = "OZ_PARENT_STATE_ROOT";
@@ -41,9 +40,10 @@ const PARENT_BRIDGE_HOOK_OUTPUT_FILE_NAME: &str = "pending-hook-output.json";
 const PARENT_BRIDGE_HOOK_OUTPUT_ACK_FILE_NAME: &str = "pending-hook-output.ack";
 const PARENT_BRIDGE_MAX_CONTEXT_CHARS_ENV: &str = "OZ_PARENT_MAX_CONTEXT_CHARS";
 const PARENT_BRIDGE_DEFAULT_MAX_CONTEXT_CHARS: usize = 6000;
-pub(super) const MESSAGE_BRIDGE_CONTEXT_PREAMBLE: &str = "Lead-agent updates arrived from Oz. Treat the latest lead-agent instructions below as authoritative.\n";
+pub(super) const MESSAGE_BRIDGE_CONTEXT_PREAMBLE: &str =
+    "Oz mailbox update for this child run.\nSource: lead agent\nContext type: user-level coordination messages\n";
 const PARENT_BRIDGE_REMAINING_MESSAGES_NOTE: &str =
-    "\n\nMore lead-agent messages are still staged and will be surfaced on a later turn.";
+    "\n\nAdditional lead agent mailbox messages remain queued and may be surfaced later.";
 
 pub(super) struct MessageBridge {
     run_id: String,
@@ -342,6 +342,56 @@ pub(super) fn stage_parent_bridge_message(
     Ok(())
 }
 
+pub(super) async fn prime_parent_bridge_staged_for_self_managed_wake(
+    hydrator: &MessageHydrator,
+    state_dir: &Path,
+    wake_message: Option<&AgentMessageEventMetadata>,
+) -> Result<()> {
+    remove_file_if_exists(&parent_bridge_hook_output_file(state_dir))?;
+    remove_file_if_exists(&parent_bridge_hook_output_ack_file(state_dir))?;
+    move_parent_bridge_surfaced_messages_to_staged(state_dir)?;
+
+    let Some(wake_message) = wake_message else {
+        return Ok(());
+    };
+
+    let record = hydrate_parent_bridge_message_record(
+        hydrator,
+        &MessageBridgeMessageRecord {
+            sequence: wake_message.sequence,
+            message_id: wake_message.message_id.clone(),
+            sender_run_id: String::new(),
+            subject: String::new(),
+            body: String::new(),
+            occurred_at: wake_message.occurred_at.clone(),
+        },
+    )
+    .await?;
+    stage_parent_bridge_message(state_dir, &record)?;
+    write_parent_bridge_event_cursor(state_dir, wake_message.sequence)
+}
+
+fn move_parent_bridge_surfaced_messages_to_staged(state_dir: &Path) -> Result<()> {
+    let surfaced_records = parent_bridge_message_records(&parent_bridge_surfaced_dir(state_dir))?;
+    for (path, record) in surfaced_records {
+        let target =
+            parent_bridge_staged_message_path(state_dir, record.sequence, &record.message_id);
+        if target.exists() {
+            write_parent_bridge_json_atomically(&target, &record)?;
+            remove_file_if_exists(&path)?;
+        } else {
+            fs::rename(&path, &target).with_context(|| {
+                format!(
+                    "Failed to move message bridge record {} back to {}",
+                    path.display(),
+                    target.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn parent_bridge_max_context_chars() -> usize {
     std::env::var(PARENT_BRIDGE_MAX_CONTEXT_CHARS_ENV)
         .ok()
@@ -392,7 +442,7 @@ pub(super) fn render_parent_bridge_message_block(record: &MessageBridgeMessageRe
         record.subject.as_str()
     };
 
-    let mut block = String::from("---\nLead-agent message");
+    let mut block = String::from("---\nLead agent mailbox message");
     if record.sequence != 0 {
         let _ = write!(block, " #{}", record.sequence);
     }
@@ -638,7 +688,8 @@ async fn run_parent_bridge_forever(
     // The shared driver keeps `since_sequence` in memory across its own retry
     // loop and we also persist it inside the session state dir so dormant runs
     // can resume without replaying already handled events.
-    let config = AgentEventDriverConfig::retry_forever(vec![run_id.clone()], since_sequence);
+    let config =
+        AgentEventDriverConfig::retry_forever_run_ids(vec![run_id.clone()], since_sequence);
     let source = ServerApiAgentEventSource::new(server_api.clone());
     let mut consumer = MessageBridgeEventConsumer {
         run_id,

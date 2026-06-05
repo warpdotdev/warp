@@ -1,11 +1,9 @@
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::{io, process};
+
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
-use std::{
-    ffi::OsString,
-    io,
-    path::{Path, PathBuf},
-    process,
-};
 use typed_path::UnixPathBuf;
 use warp_core::channel::{Channel, ChannelState};
 use warp_util::path::{canonicalize_git_bash_path, is_msys2_path, warp_shell_path};

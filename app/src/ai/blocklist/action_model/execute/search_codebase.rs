@@ -1,35 +1,29 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use futures::{channel::oneshot, future::BoxFuture, FutureExt};
+use futures::channel::oneshot;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 use itertools::Itertools;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
-
-use crate::{
-    ai::{
-        agent::{
-            AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-            SearchCodebaseFailureReason, SearchCodebaseRequest, SearchCodebaseResult,
-        },
-        blocklist::SessionContext,
-        blocklist::{action_model::execute::get_server_output_id, BlocklistAIPermissions},
-        get_relevant_files::controller::{
-            GetRelevantFilesController, GetRelevantFilesControllerEvent,
-            GetRelevantFilesControllerResult, GetRelevantFilesError, GetRelevantFilesRequestTarget,
-        },
-    },
-    features::FeatureFlag,
-    send_telemetry_from_ctx,
-    terminal::model::session::active_session::ActiveSession,
-    TelemetryEvent,
-};
 
 use super::{
     read_local_file_context, ActionExecution, AnyActionExecution, ExecuteActionInput,
     PreprocessActionInput,
 };
+use crate::ai::agent::{
+    AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
+    SearchCodebaseFailureReason, SearchCodebaseRequest, SearchCodebaseResult,
+};
+use crate::ai::blocklist::action_model::execute::get_server_output_id;
+use crate::ai::blocklist::{BlocklistAIPermissions, SessionContext};
+use crate::ai::get_relevant_files::controller::{
+    GetRelevantFilesController, GetRelevantFilesControllerEvent, GetRelevantFilesControllerResult,
+    GetRelevantFilesError, GetRelevantFilesRequestTarget,
+};
+use crate::features::FeatureFlag;
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 pub struct SearchCodebaseExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -207,7 +201,7 @@ impl SearchCodebaseExecutor {
 
         let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
         if session_context.is_remote() {
-            let explicit_repo_path = codebase_path
+            let requested_codebase_path = codebase_path
                 .as_deref()
                 .filter(|path| !path.is_empty() && *path != ".")
                 .map(ToOwned::to_owned);
@@ -216,7 +210,7 @@ impl SearchCodebaseExecutor {
                 TelemetryEvent::SearchCodebaseRequested {
                     action_id: id.clone(),
                     server_output_id,
-                    is_cross_repo: explicit_repo_path.is_some(),
+                    is_cross_repo: requested_codebase_path.is_some(),
                 },
                 ctx
             );
@@ -226,7 +220,7 @@ impl SearchCodebaseExecutor {
                     .as_ref(ctx)
                     .root_directory_for_remote_search(
                         &session_context,
-                        explicit_repo_path.as_deref(),
+                        requested_codebase_path.as_deref(),
                         ctx,
                     )
             });
@@ -257,7 +251,7 @@ impl SearchCodebaseExecutor {
                     controller.send_request(
                         GetRelevantFilesRequestTarget::Remote {
                             session_context,
-                            explicit_repo_path,
+                            requested_codebase_path,
                         },
                         query.clone(),
                         partial_paths.as_ref(),
@@ -440,13 +434,13 @@ impl SearchCodebaseExecutor {
         let SearchCodebaseRequest { codebase_path, .. } = request;
         let session_context = SessionContext::from_session(self.active_session.as_ref(app), app);
         if session_context.is_remote() {
-            let explicit_repo_path = codebase_path
+            let requested_codebase_path = codebase_path
                 .as_deref()
                 .filter(|path| !path.is_empty() && *path != ".");
             return self
                 .get_relevant_files_controller
                 .as_ref(app)
-                .root_directory_for_remote_search(&session_context, explicit_repo_path, app);
+                .root_directory_for_remote_search(&session_context, requested_codebase_path, app);
         }
 
         let codebase_path = codebase_path.as_deref().map(PathBuf::from);

@@ -1,4 +1,5 @@
-use settings::{macros::define_settings_group, Setting, SupportedPlatforms, SyncToCloud};
+use settings::macros::define_settings_group;
+use settings::{Setting, SupportedPlatforms, SyncToCloud};
 
 // Debug mode settings.
 //

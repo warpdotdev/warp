@@ -1,13 +1,14 @@
-use crate::elements::Point;
-use crate::event::DispatchedEvent;
-use crate::{AppContext, Element, EventContext, LayoutContext, PaintContext, SizeConstraint};
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use ordered_float::OrderedFloat;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use std::any::Any;
-use std::fmt::Debug;
 
-use std::sync::Arc;
+use crate::elements::Point;
+use crate::event::DispatchedEvent;
+use crate::{AppContext, Element, EventContext, LayoutContext, PaintContext, SizeConstraint};
 
 /// Trait to identify data that is passed to a [`crate::elements::Draggable`] when dropped on
 /// a [`DropTarget`].

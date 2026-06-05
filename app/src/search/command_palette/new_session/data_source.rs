@@ -1,19 +1,19 @@
-use super::new_session_option::{Direction, NewSessionConfig};
-use super::new_session_option::{NewSessionOption, NewSessionOptionId};
-use super::search_item::SearchItem;
-use crate::search::data_source::DataSourceSearchError;
-use crate::search::{
-    binding_source::BindingSource,
-    command_palette::mixer::CommandPaletteItemAction,
-    data_source::{Query, QueryResult},
-    mixer::{DataSourceRunErrorWrapper, SyncDataSource},
-};
-use crate::terminal::available_shells::AvailableShells;
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+
+use super::new_session_option::{
+    Direction, NewSessionConfig, NewSessionOption, NewSessionOptionId,
+};
+use super::search_item::SearchItem;
+use crate::search::binding_source::BindingSource;
+use crate::search::command_palette::mixer::CommandPaletteItemAction;
+use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
+use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
+use crate::terminal::available_shells::AvailableShells;
 
 /// Controls which kinds of new sessions the data source should surface.
 #[derive(Copy, Clone, Debug)]
@@ -189,9 +189,7 @@ impl SyncDataSource for NewSessionDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let search_term = query.text.as_str();
         self.searcher.search(search_term).map_err(|err| {
-            let search_error = DataSourceSearchError {
-                message: err.to_string(),
-            };
+            let search_error = DataSourceSearchError::new(err.to_string());
             Box::new(search_error) as DataSourceRunErrorWrapper
         })
     }
@@ -301,7 +299,13 @@ impl NewSessionSearcher for FuzzyNewSessionSearcher {
 
 #[cfg(not(target_family = "wasm"))]
 mod full_text_searcher {
-    use crate::define_search_schema;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use fuzzy_match::FuzzyMatchResult;
+    use warp_search_core::define_search_schema;
+    use warpui::r#async::executor::Background;
+
     use crate::search::command_palette::new_session::data_source::{
         NewSessionSearcher, SearcherAction, SEARCHER_BASE_STRINGS,
     };
@@ -311,10 +315,6 @@ mod full_text_searcher {
     use crate::search::searcher::{
         AsyncSearcher, DEFAULT_MEMORY_BUDGET, MIN_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR,
     };
-    use fuzzy_match::FuzzyMatchResult;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use warpui::r#async::executor::Background;
 
     define_search_schema!(
         schema_name: NEW_SESSION_SEARCH_SCHEMA,

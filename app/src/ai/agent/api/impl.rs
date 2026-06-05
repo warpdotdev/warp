@@ -1,13 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::{ai::agent::redaction, terminal::model::session::SessionType};
 use futures_util::StreamExt;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
+use super::convert_to::convert_input;
+use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
+use crate::ai::agent::redaction;
 use crate::server::server_api::ServerApi;
-
-use super::{convert_to::convert_input, ConvertToAPITypeError, RequestParams, ResponseStream};
+use crate::terminal::model::session::SessionType;
 
 pub async fn generate_multi_agent_output(
     server_api: Arc<ServerApi>,
@@ -66,13 +68,7 @@ pub async fn generate_multi_agent_output(
                 base: params.model.into(),
                 cli_agent: params.cli_agent_model.into(),
                 computer_use_agent: params.computer_use_model.into(),
-                base_model_context_window_limit: if FeatureFlag::ConfigurableContextWindow
-                    .is_enabled()
-                {
-                    params.context_window_limit.unwrap_or(0)
-                } else {
-                    0
-                },
+                base_model_context_window_limit: params.context_window_limit.unwrap_or(0),
                 ..Default::default()
             }),
             rules_enabled: params.is_memory_enabled,
@@ -104,7 +100,7 @@ pub async fn generate_multi_agent_output(
                 FeatureFlag::SummarizationViaMessageReplacement.is_enabled(),
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
-            supports_orchestration_v2: FeatureFlag::OrchestrationV2.is_enabled(),
+            supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
             custom_model_providers: params.custom_model_providers,
         }),
         metadata: Some(api::request::Metadata {
@@ -167,6 +163,10 @@ fn api_keys_with_warp_credit_fallback_setting(
         None => None,
     }
 }
+
+fn supports_orchestration_v2(orchestration_enabled: bool) -> bool {
+    orchestration_enabled
+}
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     let mut supported_tools = vec![
         api::ToolType::Grep,
@@ -209,9 +209,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
             // after a successful connection handshake, so its presence is a
             // sufficient proxy for client availability.
             supported_tools.extend(&[api::ToolType::ReadFiles, api::ToolType::ApplyFileDiffs]);
-            if FeatureFlag::RemoteCodebaseIndexing.is_enabled()
-                && params.remote_codebase_search_available
-            {
+            if FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
                 supported_tools.push(api::ToolType::SearchCodebase);
             }
         }
@@ -234,18 +232,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     }
 
     if params.orchestration_enabled {
-        // Always advertise the legacy start-agent tool so the server
-        // can fall back to it when its own orchestrate flag is off.
-        // When RunAgents is also enabled, advertise it alongside.
-        supported_tools.push(if FeatureFlag::OrchestrationV2.is_enabled() {
-            api::ToolType::StartAgentV2
-        } else {
-            api::ToolType::StartAgent
-        });
-        if FeatureFlag::RunAgentsTool.is_enabled() && FeatureFlag::OrchestrationV2.is_enabled() {
-            supported_tools.push(api::ToolType::RunAgents);
-        }
-        supported_tools.push(api::ToolType::SendMessageToAgent);
+        supported_tools.extend([api::ToolType::RunAgents, api::ToolType::SendMessageToAgent]);
     }
 
     if FeatureFlag::AskUserQuestion.is_enabled() && params.ask_user_question_enabled {
@@ -275,9 +262,7 @@ fn get_supported_cli_agent_tools(params: &RequestParams) -> Vec<api::ToolType> {
         }
         Some(SessionType::WarpifiedRemote { host_id: Some(_) }) => {
             supported_cli_agent_tools.push(api::ToolType::ReadFiles);
-            if FeatureFlag::RemoteCodebaseIndexing.is_enabled()
-                && params.remote_codebase_search_available
-            {
+            if FeatureFlag::RemoteCodebaseIndexing.is_enabled() {
                 supported_cli_agent_tools.push(api::ToolType::SearchCodebase);
             }
         }

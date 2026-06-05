@@ -1,9 +1,8 @@
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 
-use crate::{presenter::PositionCache, SizeConstraint};
+use crate::presenter::PositionCache;
+use crate::SizeConstraint;
 
 /// Defines the positioning for an element in a stack on both X and Y axes relative to the parent of
 /// the stack or another child element within the stack. The child element is anchored to

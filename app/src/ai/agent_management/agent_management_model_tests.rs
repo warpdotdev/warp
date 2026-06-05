@@ -1,14 +1,19 @@
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
-use warpui::{App, EntityId, ModelHandle};
-
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::BlocklistAIHistoryEvent;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::BlocklistAIHistoryModel;
+use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 
 use super::AgentNotificationsModel;
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_management::notifications::{
+    NotificationCategory, NotificationFilter, NotificationOrigin, NotificationSourceAgent,
+};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::BlocklistAIHistoryEvent;
+use crate::settings::AISettings;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::{report_if_error, BlocklistAIHistoryModel};
 
 fn setup_app(
     app: &mut App,
@@ -16,6 +21,7 @@ fn setup_app(
     ModelHandle<BlocklistAIHistoryModel>,
     ModelHandle<AgentNotificationsModel>,
 ) {
+    initialize_settings_for_tests(app);
     let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
@@ -94,6 +100,46 @@ fn multiple_artifacts_accumulated_across_turns() {
             assert_eq!(pending.len(), 2);
             assert!(matches!(&pending[0], Artifact::Plan { title: Some(t), .. } if t == "My Plan"));
             assert!(matches!(&pending[1], Artifact::PullRequest { .. }));
+        });
+    });
+}
+
+#[test]
+fn add_notification_tracks_unread_activity_when_in_app_notifications_are_hidden() {
+    App::test((), |mut app| async move {
+        let _guard = FeatureFlag::HOANotifications.override_enabled(true);
+        let (_history, notifications) = setup_app(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            report_if_error!(settings.show_agent_notifications.set_value(false, ctx));
+        });
+
+        let conversation_id = AIConversationId::new();
+        let terminal_view_id = EntityId::new();
+        notifications.update(&mut app, |model, ctx| {
+            model.add_notification(
+                "Agent task".to_owned(),
+                "Task completed.".to_owned(),
+                NotificationCategory::Complete,
+                NotificationSourceAgent::Oz { is_ambient: false },
+                NotificationOrigin::Conversation(conversation_id),
+                terminal_view_id,
+                vec![],
+                None,
+                ctx,
+            );
+        });
+
+        notifications.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .notifications()
+                    .filtered_count(NotificationFilter::All),
+                1
+            );
+            assert!(model
+                .notifications()
+                .has_unread_for_terminal_view(terminal_view_id));
         });
     });
 }

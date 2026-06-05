@@ -8,11 +8,10 @@ use futures::StreamExt as _;
 use winit::event_loop::EventLoopProxy;
 use zbus::{proxy, zvariant};
 
-use crate::{
-    platform::SystemTheme,
-    r#async::{block_on, executor::Background, FutureExt as _},
-    windowing::winit::app::CustomEvent,
-};
+use crate::platform::SystemTheme;
+use crate::r#async::executor::Background;
+use crate::r#async::{block_on, FutureExt as _};
+use crate::windowing::winit::app::CustomEvent;
 
 const COLOR_SCHEME_SETTINGS_NAMESPACE: &str = "org.freedesktop.appearance";
 const COLOR_SCHEME_SETTINGS_KEY: &str = "color-scheme";

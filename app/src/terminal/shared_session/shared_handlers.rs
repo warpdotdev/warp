@@ -16,8 +16,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::CLIAgent;
-use crate::terminal::TerminalView;
+use crate::terminal::{CLIAgent, TerminalView};
 
 /// Handles updating the local LLM preferences when a selected agent model update is received.
 /// This function is shared between the viewer and sharer to ensure consistent behavior.
@@ -389,6 +388,7 @@ pub(crate) fn apply_cli_agent_state_update(
                             remote_host: None,
                             draft_text: None,
                             custom_command_prefix: None,
+                            received_rich_notification: false,
                             // Viewer input is managed by the sync protocol,
                             // not local status-change auto-toggle.
                             should_auto_toggle_input: false,
@@ -426,6 +426,10 @@ pub(crate) fn apply_cli_agent_state_update(
                     }
                 });
             }
+
+            view.update(ctx, |view, ctx| {
+                view.sync_agent_view_for_shared_third_party_viewer(ctx);
+            });
         }
         CLIAgentSessionState::Inactive => {
             // Session cleanup is handled by BlockCompleted events on the

@@ -12,5 +12,5 @@ setopt hist_ignore_space
  _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER)
  _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\", \"is_subshell\": true, \"wsl_name\": \"$WSL_DISTRO_NAME\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n")
  WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@
- if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]; then printf '\e]9278;d;%s\x07' "$_msg"; else printf '\e\x50\x24\x64%s\x9c' "$_msg"; fi
+ if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]; then printf '\e]9278;d;%s\x07' "$_msg"; else printf '\x1b\x50\x24\x64%s\x1b\x5c' "$_msg"; fi
  unset _hostname _user _msg

@@ -1,13 +1,16 @@
+use std::fmt::Display;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
+use uuid::{NonNilUuid, Uuid};
+
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::{
     AIAgentOutputStatus, CancellationReason, FinishedAIAgentOutput, RenderableAIError,
 };
-use serde::{Deserialize, Serialize};
-use std::fmt::Display;
-use std::str::FromStr;
-use uuid::{NonNilUuid, Uuid};
 
 pub mod github_auth_notifier;
+pub mod github_auth_url;
 pub mod scheduled;
 pub mod spawn;
 pub mod task;
@@ -15,7 +18,7 @@ pub mod telemetry;
 
 pub use task::{
     cancel_task_silently, cancel_task_with_toast, AgentConfigSnapshot, AgentSource,
-    AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
+    AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskState, TaskStatusMessage,
 };
 pub const OUT_OF_CREDITS_TASK_FAILURE_MESSAGE: &str =
     "Out of credits. Upgrade your Warp plan to continue running cloud agents.";

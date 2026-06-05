@@ -1,9 +1,10 @@
-pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_multi_agent_api as api;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
+
+pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
 
@@ -84,10 +85,11 @@ pub enum AwsCredentialsRefreshStrategy {
     LocalChain,
     /// Credentials are managed externally via OIDC/STS.
     /// The task ID is used to scope the STS AssumeRoleWithWebIdentity session.
-    /// The role ARN is the IAM role to assume via STS.
+    /// The role ARN + region are the info used to assume the IAM role via STS.
     OidcManaged {
         task_id: Option<String>,
         role_arn: String,
+        region: String,
     },
 }
 

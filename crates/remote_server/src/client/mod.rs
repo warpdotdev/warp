@@ -4,33 +4,33 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use dashmap::DashMap;
+use futures::channel::oneshot;
+use futures::io::{AsyncRead, AsyncWrite};
+use warpui_core::r#async::{executor, FutureExt as _};
+
 use crate::codebase_index_proto::{
     proto_to_codebase_index_status_updated, proto_to_codebase_index_statuses_snapshot,
     RemoteCodebaseIndexStatus,
 };
-use dashmap::DashMap;
-use futures::channel::oneshot;
-use futures::io::{AsyncRead, AsyncWrite};
-use warpui::r#async::{executor, FutureExt as _};
-
 use crate::proto::{
-    client_message, get_branches_response, get_fragment_metadata_from_hash_response,
-    server_message, Abort, Authenticate, BranchInfo, BufferEdit, ClientMessage, CloseBuffer,
-    DeleteFile, DiffMode, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
-    DiscardFilesRequest, DropCodebaseIndex, ErrorCode, FileStatusInfo,
-    FragmentMetadataLookupErrorCode, GetBranches, GetDiffState, GetDiffStateResponse,
-    GetFragmentMetadataFromHash, GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize,
-    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse,
-    OpenBuffer, OpenBufferResponse, ReadFileContextRequest, ReadFileContextResponse,
-    RunCommandRequest, RunCommandResponse, SaveBuffer, ServerMessage, SessionBootstrapped,
-    TextEdit, UnsubscribeDiffState, WriteFile,
+    notification, server_message, session_scoped_request, Abort, Authenticate, BufferEdit,
+    ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode, DiffStateFileDelta,
+    DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, Initialize, InitializeResponse,
+    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, RunCommandRequest,
+    RunCommandResponse, ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
-use crate::protocol::{self, ProtocolError, RequestId};
+#[cfg(not(target_family = "wasm"))]
+mod remote_server_log;
+#[cfg(not(target_family = "wasm"))]
+pub use remote_server_log::RemoteServerLog;
 use warp_core::{safe_error, safe_warn, SessionId};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::TransportStream;
+use warpui_core::r#async::TransportStream;
+
+use crate::protocol::{self, ProtocolError, RequestId};
 
 /// Default request timeout (2 minutes).
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -55,18 +55,6 @@ pub enum ClientError {
 
     #[error("Request timed out after {0:?}")]
     Timeout(Duration),
-
-    #[error("File operation failed: {0}")]
-    FileOperationFailed(String),
-
-    #[error("Fragment metadata lookup failed ({code:?}): {message}")]
-    FragmentMetadataLookup {
-        code: FragmentMetadataLookupErrorCode,
-        message: String,
-    },
-
-    #[error("Discard files failed: {0}")]
-    DiscardFailed(String),
 }
 
 /// Events received from the remote server, delivered through the event
@@ -95,6 +83,19 @@ pub enum ClientEvent {
     CodebaseIndexStatusUpdated { status: RemoteCodebaseIndexStatus },
     /// A server message could not be decoded and had no parseable request_id.
     MessageDecodingError,
+    /// The writer task failed while writing a host-scoped request before it
+    /// could be handed off to the daemon. The manager owns host-scoped
+    /// lifecycle tracking, so it handles retrying this request through another
+    /// connected session for the same host (or failing the request if none
+    /// exists).
+    HostScopedWriteFailed { request_id: RequestId },
+    /// A server response carried a parseable `request_id` but could not be
+    /// decoded, and the id did not match a session-scoped pending request (so
+    /// it belongs to a host-scoped request the manager is tracking). The
+    /// manager fails that pending request immediately instead of letting it
+    /// hang until the request timeout. The daemon already produced a reply, so
+    /// this is terminal — not retried.
+    HostScopedDecodeFailed { request_id: RequestId },
     /// A buffer was updated on the server (file changed on disk).
     BufferUpdated {
         path: String,
@@ -132,6 +133,7 @@ pub struct InitializeParams {
     pub user_id: String,
     pub user_email: String,
     pub crash_reporting_enabled: bool,
+    pub codebase_index_limits: Option<CodebaseIndexLimits>,
 }
 
 /// A request-failure notification emitted by [`RemoteServerClient::send_request`].
@@ -169,6 +171,8 @@ pub struct RemoteServerClient {
     outbound_tx: async_channel::Sender<ClientMessage>,
 
     /// Maps `request_id` → oneshot sender for the correlated response from the remote server.
+    /// Only used for session-scoped requests. Host-scoped requests bypass this
+    /// map entirely (see `send_host_scoped`).
     pending_requests: Arc<DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>>,
 
     /// Set to `true` by the reader task when the connection is lost. Checked by
@@ -181,6 +185,20 @@ pub struct RemoteServerClient {
     /// lifecycle stream alive (which would prevent `spawn_stream_local`'s
     /// completion callback from firing `mark_session_disconnected`).
     failure_tx: async_channel::Sender<RequestFailedEvent>,
+
+    /// Channel for responses whose `request_id` is not in `pending_requests`.
+    /// These are host-scoped responses — either the normal path (the request
+    /// was sent via `send_host_scoped` on this connection) or daemon failover
+    /// (the daemon re-routed a response from a dead connection to this one).
+    /// The `RemoteServerManager` drains this channel to match against its
+    /// `pending_host_requests`.
+    ///
+    /// Never read directly: the `reader_task` holds its own clone and is the
+    /// only writer, so this copy exists only to keep a sender for the channel
+    /// reachable from the client itself. `expect` (rather than `allow`) so we
+    /// get nudged to drop the attribute if the field ever starts being read.
+    #[expect(dead_code)]
+    host_response_tx: async_channel::Sender<ServerMessage>,
 }
 
 impl fmt::Debug for RemoteServerClient {
@@ -216,9 +234,12 @@ impl RemoteServerClient {
         Self,
         async_channel::Receiver<ClientEvent>,
         async_channel::Receiver<RequestFailedEvent>,
+        async_channel::Receiver<ServerMessage>,
+        RemoteServerLog,
     ) {
-        spawn_stderr_forwarder(stderr, executor);
-        Self::new(stdout, stdin, executor)
+        let stderr_tail = spawn_stderr_forwarder(stderr, executor);
+        let (client, event_rx, failure_rx, host_response_rx) = Self::new(stdout, stdin, executor);
+        (client, event_rx, failure_rx, host_response_rx, stderr_tail)
     }
 }
 
@@ -236,6 +257,7 @@ impl RemoteServerClient {
         Self,
         async_channel::Receiver<ClientEvent>,
         async_channel::Receiver<RequestFailedEvent>,
+        async_channel::Receiver<ServerMessage>,
     ) {
         let pending_requests: Arc<
             DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>,
@@ -243,6 +265,7 @@ impl RemoteServerClient {
         let (outbound_tx, outbound_rx) = async_channel::unbounded::<ClientMessage>();
         let (event_tx, event_rx) = async_channel::unbounded::<ClientEvent>();
         let (failure_tx, failure_rx) = async_channel::unbounded::<RequestFailedEvent>();
+        let (host_response_tx, host_response_rx) = async_channel::unbounded::<ServerMessage>();
         let disconnected = Arc::new(AtomicBool::new(false));
 
         executor
@@ -250,6 +273,7 @@ impl RemoteServerClient {
                 writer,
                 outbound_rx,
                 Arc::clone(&pending_requests),
+                event_tx.clone(),
             ))
             .detach();
         executor
@@ -258,6 +282,7 @@ impl RemoteServerClient {
                 Arc::clone(&pending_requests),
                 event_tx,
                 Arc::clone(&disconnected),
+                host_response_tx.clone(),
             ))
             .detach();
 
@@ -267,10 +292,26 @@ impl RemoteServerClient {
                 pending_requests,
                 disconnected,
                 failure_tx,
+                host_response_tx,
             },
             event_rx,
             failure_rx,
+            host_response_rx,
         )
+    }
+
+    /// Returns `true` once the reader task has detected that the underlying
+    /// connection is gone (EOF or fatal error). The flag is one-way: a
+    /// client never transitions back to connected, since reconnection
+    /// produces a brand-new client instance.
+    ///
+    /// Callers can use this as a cheap, non-blocking gate to skip work
+    /// that would otherwise fail with [`ClientError::Disconnected`] and
+    /// fire a `RequestFailed` telemetry event. Returning `false` does
+    /// not guarantee the next request will succeed — it just means the
+    /// reader task has not yet observed a disconnect.
+    pub fn is_disconnected(&self) -> bool {
+        self.disconnected.load(Ordering::Acquire)
     }
 
     /// Sends an `Initialize` request and awaits the `InitializeResponse`.
@@ -280,15 +321,16 @@ impl RemoteServerClient {
         params: InitializeParams,
     ) -> Result<InitializeResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::Initialize(Initialize {
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::Initialize(Initialize {
                 auth_token: auth_token.unwrap_or_default().to_owned(),
                 user_id: params.user_id,
                 user_email: params.user_email,
                 crash_reporting_enabled: params.crash_reporting_enabled,
-            })),
-        };
+                codebase_index_limits: params.codebase_index_limits,
+            }),
+        );
 
         let response = self.send_request_internal(request_id, msg).await?;
 
@@ -304,180 +346,28 @@ impl RemoteServerClient {
         }
     }
 
-    /// Sends an `IndexCodebase` request and awaits the initial status update.
-    pub async fn index_codebase(
-        &self,
-        repo_path: String,
-        auth_token: String,
-    ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
-        let request_id = RequestId::new();
-        let repo_path_for_log = repo_path.clone();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::IndexCodebase(IndexCodebase {
-                repo_path,
-                auth_token,
-            })),
-        };
-        log::info!(
-            "[Remote codebase indexing] Client sending IndexCodebase: request_id={request_id} \
-             repo_path={repo_path_for_log}"
-        );
-
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::IndexCodebase,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::CodebaseIndexStatusUpdated(update)) => {
-                let status =
-                    crate::codebase_index_proto::proto_to_codebase_index_status_updated(&update)
-                        .ok_or(ClientError::UnexpectedResponse)?;
-                log::info!(
-                    "[Remote codebase indexing] Client received IndexCodebase response: \
-                     repo_path={} state={:?}",
-                    status.repo_path,
-                    status.state
-                );
-                Ok(status)
-            }
-            other => {
-                log::error!("Unexpected response variant for IndexCodebase: {other:?}");
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
-    /// Sends a `DropCodebaseIndex` request and awaits the resulting status update.
-    pub async fn drop_codebase_index(
-        &self,
-        repo_path: String,
-        auth_token: String,
-    ) -> Result<RemoteCodebaseIndexStatus, ClientError> {
-        let request_id = RequestId::new();
-        let repo_path_for_log = repo_path.clone();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::DropCodebaseIndex(
-                DropCodebaseIndex {
-                    repo_path,
-                    auth_token,
-                },
-            )),
-        };
-        log::info!(
-            "[Remote codebase indexing] Client sending DropCodebaseIndex: request_id={request_id} \
-             repo_path={repo_path_for_log}"
-        );
-
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::DropCodebaseIndex,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::CodebaseIndexStatusUpdated(update)) => {
-                let status =
-                    crate::codebase_index_proto::proto_to_codebase_index_status_updated(&update)
-                        .ok_or(ClientError::UnexpectedResponse)?;
-                log::info!(
-                    "[Remote codebase indexing] Client received DropCodebaseIndex response: \
-                     repo_path={} state={:?}",
-                    status.repo_path,
-                    status.state
-                );
-                Ok(status)
-            }
-            other => {
-                log::error!("Unexpected response variant for DropCodebaseIndex: {other:?}");
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
-    /// Maps backend content hashes to server-local fragment metadata for a synced repo snapshot.
-    pub async fn get_fragment_metadata_from_hash(
-        &self,
-        repo_path: String,
-        root_hash: String,
-        content_hashes: Vec<String>,
-    ) -> Result<GetFragmentMetadataFromHashSuccess, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::GetFragmentMetadataFromHash(
-                GetFragmentMetadataFromHash {
-                    repo_path,
-                    root_hash,
-                    content_hashes,
-                },
-            )),
-        };
-
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::GetFragmentMetadataFromHash,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::GetFragmentMetadataFromHashResponse(resp)) => {
-                match resp.result {
-                    Some(get_fragment_metadata_from_hash_response::Result::Success(success)) => {
-                        Ok(success)
-                    }
-                    Some(get_fragment_metadata_from_hash_response::Result::Error(error)) => {
-                        let code = FragmentMetadataLookupErrorCode::try_from(error.code)
-                            .unwrap_or(FragmentMetadataLookupErrorCode::Unspecified);
-                        Err(ClientError::FragmentMetadataLookup {
-                            code,
-                            message: error.message,
-                        })
-                    }
-                    None => Err(ClientError::UnexpectedResponse),
-                }
-            }
-            other => {
-                log::error!(
-                    "Unexpected response variant for GetFragmentMetadataFromHash: {other:?}"
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
     /// Sends an `Authenticate` notification to rotate the daemon-wide
     /// credential after initialization.
     pub fn authenticate(&self, auth_token: &str) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::Authenticate(Authenticate {
-                auth_token: auth_token.to_owned(),
-            })),
-        };
+        let msg = ClientMessage::notification(notification::Message::Authenticate(Authenticate {
+            auth_token: auth_token.to_owned(),
+        }));
         self.send_notification(msg);
     }
 
     /// Sends an `UpdatePreferences` notification when the user's privacy
     /// settings change (e.g. toggling crash reporting).
-    pub fn update_preferences(&self, crash_reporting_enabled: bool) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::UpdatePreferences(
-                crate::proto::UpdatePreferences {
-                    crash_reporting_enabled,
-                },
-            )),
-        };
+    pub fn update_preferences(
+        &self,
+        crash_reporting_enabled: bool,
+        codebase_index_limits: Option<CodebaseIndexLimits>,
+    ) {
+        let msg = ClientMessage::notification(notification::Message::UpdatePreferences(
+            crate::proto::UpdatePreferences {
+                crash_reporting_enabled,
+                codebase_index_limits,
+            },
+        ));
         self.send_notification(msg);
     }
 
@@ -489,16 +379,13 @@ impl RemoteServerClient {
         shell_type: &str,
         shell_path: Option<&str>,
     ) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::SessionBootstrapped(
-                SessionBootstrapped {
-                    session_id: session_id.as_u64(),
-                    shell_type: shell_type.to_owned(),
-                    shell_path: shell_path.map(ToOwned::to_owned),
-                },
-            )),
-        };
+        let msg = ClientMessage::notification(notification::Message::SessionBootstrapped(
+            SessionBootstrapped {
+                session_id: session_id.as_u64(),
+                shell_type: shell_type.to_owned(),
+                shell_path: shell_path.map(ToOwned::to_owned),
+            },
+        ));
         self.send_notification(msg);
     }
 
@@ -508,12 +395,12 @@ impl RemoteServerClient {
         path: String,
     ) -> Result<NavigatedToDirectoryResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::NavigatedToDirectory(
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::NavigatedToDirectory(
                 crate::proto::NavigatedToDirectory { path },
-            )),
-        };
+            ),
+        );
 
         let response = self
             .send_request(
@@ -542,15 +429,15 @@ impl RemoteServerClient {
         dir_path: String,
     ) -> Result<LoadRepoMetadataDirectoryResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::LoadRepoMetadataDirectory(
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::LoadRepoMetadataDirectory(
                 crate::proto::LoadRepoMetadataDirectory {
                     repo_path,
                     dir_path,
                 },
-            )),
-        };
+            ),
+        );
 
         let response = self
             .send_request(
@@ -572,103 +459,71 @@ impl RemoteServerClient {
         }
     }
 
-    /// Writes content to a file on the remote host.
-    /// Creates parent directories if they don't exist.
-    pub async fn write_file(&self, path: String, content: String) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::WriteFile(WriteFile {
-                path,
-                content,
-            })),
-        };
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::WriteFile,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::WriteFileResponse(resp)) => match resp.result {
-                Some(crate::proto::write_file_response::Result::Success(_)) | None => Ok(()),
-                Some(crate::proto::write_file_response::Result::Error(e)) => {
-                    Err(ClientError::FileOperationFailed(e.message))
-                }
-            },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for WriteFile"),
-                    full: ("Remote server unexpected response for WriteFile: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
-    /// Batch-reads one or more files from the remote host with full context
-    /// (line ranges, binary/image support, metadata, size limits).
+    /// Sends a session-scoped `GetDiffState` request and awaits the response.
     ///
-    /// Per-file failures are reported in `ReadFileContextResponse::failed_files`
-    /// rather than as a top-level error. The method only returns `Err` for
-    /// transport-level failures (disconnect, timeout, etc.).
-    pub async fn read_file_context(
+    /// Session-scoped (not host-scoped): the daemon registers a per-connection
+    /// diff-state subscription, so the response — and every subsequent diff
+    /// push — must travel on this connection. If the connection drops, the
+    /// pending request resolves promptly with a transport error via
+    /// `pending_requests` cleanup, instead of hanging until the timeout.
+    pub async fn get_diff_state(
         &self,
-        request: ReadFileContextRequest,
-    ) -> Result<ReadFileContextResponse, ClientError> {
+        repo_path: String,
+        mode: DiffMode,
+    ) -> Result<crate::proto::GetDiffStateResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::ReadFileContext(request)),
-        };
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::ReadFileContext,
-            )
-            .await?;
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::GetDiffState(crate::proto::GetDiffState {
+                repo_path,
+                mode: Some(mode),
+            }),
+        );
+
+        let response = self.send_request_internal(request_id, msg).await?;
+
         match response.message {
-            Some(server_message::Message::ReadFileContextResponse(resp)) => Ok(resp),
+            Some(server_message::Message::GetDiffStateResponse(resp)) => Ok(resp),
             other => {
                 safe_error!(
-                    safe: ("Remote server unexpected response for ReadFileContext"),
-                    full: ("Remote server unexpected response for ReadFileContext: response={other:?}")
+                    safe: ("Remote server unexpected response for GetDiffState"),
+                    full: ("Remote server unexpected response for GetDiffState: response={other:?}")
                 );
                 Err(ClientError::UnexpectedResponse)
             }
         }
     }
 
-    /// Opens a buffer on the remote host for bidirectional syncing.
+    /// Sends a session-scoped `OpenBuffer` request and awaits the response.
     ///
-    /// When `force_reload` is true, the server discards any in-memory buffer
-    /// state and re-reads the file from disk. Used to resolve conflicts.
+    /// Session-scoped for the same reason as [`Self::get_diff_state`]: the
+    /// daemon registers a per-connection buffer subscription, so the buffer's
+    /// content response and subsequent `BufferUpdatedPush`es must stay on this
+    /// connection. When `force_reload` is true the server re-reads the file
+    /// from disk, discarding in-memory buffer state.
     pub async fn open_buffer(
         &self,
         path: String,
         force_reload: bool,
-    ) -> Result<OpenBufferResponse, ClientError> {
+    ) -> Result<crate::proto::OpenBufferResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::OpenBuffer(OpenBuffer {
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::OpenBuffer(crate::proto::OpenBuffer {
                 path,
                 force_reload,
-            })),
-        };
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::OpenBuffer,
-            )
-            .await?;
+            }),
+        );
+
+        let response = self.send_request_internal(request_id, msg).await?;
+
         match response.message {
             Some(server_message::Message::OpenBufferResponse(resp)) => Ok(resp),
             other => {
-                log::error!("Unexpected response variant for OpenBuffer: {other:?}");
+                safe_error!(
+                    safe: ("Remote server unexpected response for OpenBuffer"),
+                    full: ("Remote server unexpected response for OpenBuffer: response={other:?}")
+                );
                 Err(ClientError::UnexpectedResponse)
             }
         }
@@ -682,84 +537,20 @@ impl RemoteServerClient {
         new_client_version: u64,
         edits: Vec<TextEdit>,
     ) {
-        let msg = ClientMessage {
-            request_id: String::new(), // notification — no response expected
-            message: Some(client_message::Message::BufferEdit(BufferEdit {
-                path,
-                expected_server_version,
-                new_client_version,
-                edits,
-            })),
-        };
+        let msg = ClientMessage::notification(notification::Message::BufferEdit(BufferEdit {
+            path,
+            expected_server_version,
+            new_client_version,
+            edits,
+        }));
         self.send_notification(msg);
-    }
-
-    /// Saves a buffer on the remote host to disk.
-    pub async fn save_buffer(&self, path: String) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::SaveBuffer(SaveBuffer { path })),
-        };
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::SaveBuffer,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::SaveBufferResponse(resp)) => match resp.result {
-                Some(crate::proto::save_buffer_response::Result::Success(_)) | None => Ok(()),
-                Some(crate::proto::save_buffer_response::Result::Error(e)) => {
-                    Err(ClientError::FileOperationFailed(e.message))
-                }
-            },
-            other => {
-                log::error!("Unexpected response variant for SaveBuffer: {other:?}");
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
     }
 
     /// Tells the remote host to close a buffer (stop watching).
     pub fn close_buffer(&self, path: String) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::CloseBuffer(CloseBuffer { path })),
-        };
+        let msg =
+            ClientMessage::notification(notification::Message::CloseBuffer(CloseBuffer { path }));
         self.send_notification(msg);
-    }
-
-    /// Deletes a file on the remote host.
-    pub async fn delete_file(&self, path: String) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::DeleteFile(DeleteFile { path })),
-        };
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::DeleteFile,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::DeleteFileResponse(resp)) => match resp.result {
-                Some(crate::proto::delete_file_response::Result::Success(_)) | None => Ok(()),
-                Some(crate::proto::delete_file_response::Result::Error(e)) => {
-                    Err(ClientError::FileOperationFailed(e.message))
-                }
-            },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for DeleteFile"),
-                    full: ("Remote server unexpected response for DeleteFile: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
     }
 
     /// Converts a server push message (empty request_id) into a domain event.
@@ -800,9 +591,11 @@ impl RemoteServerClient {
                 let status = proto_to_codebase_index_status_updated(&update)?;
                 log::info!(
                     "[Remote codebase indexing] Client received codebase index status push: \
-                     repo_path={} state={:?}",
+                     repo_path={} state={:?} root_hash_present={} failure_message={:?}",
                     status.repo_path,
-                    status.state
+                    status.state,
+                    status.root_hash.is_some(),
+                    status.failure_message,
                 );
                 Some(ClientEvent::CodebaseIndexStatusUpdated { status })
             }
@@ -885,154 +678,15 @@ impl RemoteServerClient {
         }
     }
 
-    /// Sends a `GetDiffState` request and awaits the response.
-    pub async fn get_diff_state(
-        &self,
-        repo_path: &StandardizedPath,
-        mode: DiffMode,
-    ) -> Result<GetDiffStateResponse, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::GetDiffState(GetDiffState {
-                repo_path: repo_path.to_string(),
-                mode: Some(mode),
-            })),
-        };
-
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::GetDiffState,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::GetDiffStateResponse(resp)) => Ok(resp),
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for GetDiffState"),
-                    full: ("Remote server unexpected response for GetDiffState: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
     /// Sends an `UnsubscribeDiffState` notification (fire-and-forget).
     pub fn unsubscribe_diff_state(&self, repo_path: &StandardizedPath, mode: DiffMode) {
-        let msg = ClientMessage {
-            request_id: String::new(),
-            message: Some(client_message::Message::UnsubscribeDiffState(
-                UnsubscribeDiffState {
-                    repo_path: repo_path.to_string(),
-                    mode: Some(mode),
-                },
-            )),
-        };
-        self.send_notification(msg);
-    }
-
-    /// Sends a `GetBranches` request and awaits the response.
-    pub async fn get_branches(
-        &self,
-        repo_path: &StandardizedPath,
-        max_branch_count: Option<u32>,
-        include_remotes: bool,
-    ) -> Result<Vec<BranchInfo>, ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::GetBranches(GetBranches {
+        let msg = ClientMessage::notification(notification::Message::UnsubscribeDiffState(
+            UnsubscribeDiffState {
                 repo_path: repo_path.to_string(),
-                max_branch_count,
-                include_remotes,
-            })),
-        };
-
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::GetBranches,
-            )
-            .await?;
-
-        match response.message {
-            Some(server_message::Message::GetBranchesResponse(resp)) => match resp.result {
-                Some(get_branches_response::Result::Success(success)) => Ok(success.branches),
-                Some(get_branches_response::Result::Error(e)) => Err(ClientError::ServerError {
-                    code: ErrorCode::Internal,
-                    message: e.message,
-                }),
-                None => {
-                    safe_error!(
-                        safe: ("Remote server empty result for GetBranches"),
-                        full: ("Remote server empty result for GetBranches")
-                    );
-                    Err(ClientError::UnexpectedResponse)
-                }
-            },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for GetBranches"),
-                    full: ("Remote server unexpected response for GetBranches: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
-    }
-
-    /// Sends a `DiscardFiles` request and awaits the response.
-    pub async fn discard_files(
-        &self,
-        repo_path: &StandardizedPath,
-        files: Vec<FileStatusInfo>,
-        should_stash: bool,
-        branch_name: Option<String>,
-        mode: DiffMode,
-    ) -> Result<(), ClientError> {
-        let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::DiscardFiles(DiscardFilesRequest {
-                repo_path: repo_path.to_string(),
-                files,
-                should_stash,
-                branch_name,
                 mode: Some(mode),
-            })),
-        };
-        let response = self
-            .send_request(
-                request_id,
-                msg,
-                crate::manager::RemoteServerOperation::DiscardFiles,
-            )
-            .await?;
-        match response.message {
-            Some(server_message::Message::DiscardFilesResponse(resp)) => match resp.result {
-                Some(crate::proto::discard_files_response::Result::Success(_)) => Ok(()),
-                Some(crate::proto::discard_files_response::Result::Error(e)) => {
-                    Err(ClientError::DiscardFailed(e.message))
-                }
-                None => {
-                    safe_error!(
-                        safe: ("Remote server empty result for DiscardFiles"),
-                        full: ("Remote server empty result for DiscardFiles")
-                    );
-                    Err(ClientError::UnexpectedResponse)
-                }
             },
-            other => {
-                safe_error!(
-                    safe: ("Remote server unexpected response for DiscardFiles"),
-                    full: ("Remote server unexpected response for DiscardFiles: response={other:?}")
-                );
-                Err(ClientError::UnexpectedResponse)
-            }
-        }
+        ));
+        self.send_notification(msg);
     }
 
     /// Sends a `RunCommand` request
@@ -1044,15 +698,15 @@ impl RemoteServerClient {
         environment_variables: HashMap<String, String>,
     ) -> Result<RunCommandResponse, ClientError> {
         let request_id = RequestId::new();
-        let msg = ClientMessage {
-            request_id: request_id.to_string(),
-            message: Some(client_message::Message::RunCommand(RunCommandRequest {
+        let msg = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::RunCommand(RunCommandRequest {
                 command,
                 working_directory,
                 environment_variables,
                 session_id: session_id.as_u64(),
-            })),
-        };
+            }),
+        );
 
         let response = self
             .send_request(
@@ -1150,13 +804,20 @@ impl RemoteServerClient {
 
     /// Sends an `Abort` notification for the given request ID.
     fn send_abort(&self, request_id_to_abort: &RequestId) {
-        let msg = ClientMessage {
-            request_id: RequestId::new().to_string(),
-            message: Some(client_message::Message::Abort(Abort {
-                request_id_to_abort: request_id_to_abort.to_string(),
-            })),
-        };
+        let msg = ClientMessage::notification(notification::Message::Abort(Abort {
+            request_id_to_abort: request_id_to_abort.to_string(),
+        }));
         self.send_notification(msg);
+    }
+
+    /// Sends an `Abort` notification for a host-scoped request.
+    ///
+    /// Used by the `RemoteServerManager` when a host-scoped request times out:
+    /// the manager owns the lifecycle of host-scoped requests, so it (not the
+    /// client) decides when to abort one. Fire-and-forget, like all
+    /// notifications.
+    pub fn abort_request(&self, request_id_to_abort: &RequestId) {
+        self.send_abort(request_id_to_abort);
     }
 
     /// Sends a message without registering a pending request (fire-and-forget).
@@ -1168,6 +829,25 @@ impl RemoteServerClient {
         }
     }
 
+    /// Sends a host-scoped request without registering it in `pending_requests`.
+    ///
+    /// The response lifecycle for host-scoped requests is owned by the
+    /// `RemoteServerManager`, not this client. The daemon may deliver the
+    /// response on a different connection if this one disconnects. The
+    /// `reader_task` forwards unmatched responses to `host_response_tx`
+    /// so the manager can match them.
+    ///
+    /// Returns `Err(ClientError::Disconnected)` if the outbound channel is
+    /// closed (the writer task has exited after a fatal connection error).
+    /// The manager relies on this to fail the caller and avoid leaking a
+    /// pending request that could never be matched. Logging is left to the
+    /// manager, which has the host and request-id context.
+    pub fn send_host_scoped(&self, msg: ClientMessage) -> Result<(), ClientError> {
+        self.outbound_tx
+            .try_send(msg)
+            .map_err(|_| ClientError::Disconnected)
+    }
+
     /// Background task that writes `ClientMessage`s to the underlying stream.
     async fn writer_task(
         writer: impl AsyncWrite + TransportStream,
@@ -1175,11 +855,27 @@ impl RemoteServerClient {
         pending_requests: Arc<
             DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>,
         >,
+        event_tx: async_channel::Sender<ClientEvent>,
     ) {
         let mut writer = futures::io::BufWriter::new(writer);
         while let Ok(msg) = outbound_rx.recv().await {
+            let request_id = RequestId::from(msg.request_id.clone());
+            let is_host_scoped = matches!(
+                &msg.message,
+                Some(crate::proto::client_message::Message::HostScoped(_))
+            );
             if let Err(e) = protocol::write_client_message(&mut writer, &msg).await {
-                let request_id = RequestId::from(msg.request_id);
+                if is_host_scoped
+                    && event_tx
+                        .try_send(ClientEvent::HostScopedWriteFailed {
+                            request_id: request_id.clone(),
+                        })
+                        .is_err()
+                {
+                    log::warn!(
+                        "Failed to notify manager about host-scoped write failure: request_id={request_id}"
+                    );
+                }
                 if !e.is_write_recoverable() {
                     log::error!("Writer task fatal error: request_id={request_id} error={e}");
                     pending_requests.clear();
@@ -1204,6 +900,7 @@ impl RemoteServerClient {
         >,
         event_tx: async_channel::Sender<ClientEvent>,
         disconnected: Arc<AtomicBool>,
+        host_response_tx: async_channel::Sender<ServerMessage>,
     ) {
         let mut reader = futures::io::BufReader::new(reader);
         loop {
@@ -1218,10 +915,17 @@ impl RemoteServerClient {
                             }
                         }
                     } else if let Some((_, tx)) = pending_requests.remove(&request_id) {
-                        // Ignore send failure — the caller may have dropped the receiver.
+                        // Session-scoped response — resolve the caller's oneshot.
                         let _ = tx.send(Ok(msg));
                     } else {
-                        log::warn!("Received unexpected response with request_id={request_id}");
+                        // Host-scoped response (either normal path or daemon
+                        // failover). Forward to the manager for matching.
+                        if host_response_tx.try_send(msg).is_err() {
+                            log::warn!(
+                                "Host response channel closed, dropping response \
+                                 with request_id={request_id}"
+                            );
+                        }
                     }
                 }
                 Err(ProtocolError::Decode(ref err, Some(ref request_id))) => {
@@ -1235,10 +939,19 @@ impl RemoteServerClient {
                             Some(request_id.clone()),
                         ))));
                     } else {
+                        // Not a session-scoped pending request — this is a
+                        // host-scoped response the manager is tracking. Tell
+                        // it so the caller fails fast rather than waiting for
+                        // the request timeout.
                         log::warn!(
-                            "Reader task: malformed response for \
-                             unknown request (request_id={request_id}): {err}"
+                            "Reader task: malformed host-scoped response \
+                             (request_id={request_id}): {err}"
                         );
+                        let _ = event_tx
+                            .send(ClientEvent::HostScopedDecodeFailed {
+                                request_id: request_id.clone(),
+                            })
+                            .await;
                     }
                 }
                 Err(ProtocolError::Decode(ref err, None)) => {
@@ -1277,15 +990,19 @@ impl RemoteServerClient {
     }
 }
 
-/// Spawns a background task that reads lines from the server's stderr and
-/// forwards them to the client's logging.
+/// Spawns a background task that reads lines from the server's stderr,
+/// forwards them to the client's logging, and retains the last few lines
+/// in a shared buffer for telemetry.
 #[cfg(not(target_family = "wasm"))]
 pub fn spawn_stderr_forwarder(
     stderr: impl AsyncRead + TransportStream,
     executor: &executor::Background,
-) {
+) -> RemoteServerLog {
     use futures::io::AsyncBufReadExt;
     use futures::StreamExt;
+
+    let tail = RemoteServerLog::new();
+    let tail_writer = tail.clone();
 
     executor
         .spawn(async move {
@@ -1293,9 +1010,12 @@ pub fn spawn_stderr_forwarder(
             let mut lines = reader.lines();
             while let Some(Ok(line)) = lines.next().await {
                 log::info!("[remote_server] {line}");
+                tail_writer.push(line);
             }
         })
         .detach();
+
+    tail
 }
 
 #[cfg(test)]

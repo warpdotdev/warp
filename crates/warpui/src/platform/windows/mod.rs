@@ -1,5 +1,6 @@
-use itertools::Itertools as _;
 use std::os::windows::ffi::OsStrExt as _;
+
+use itertools::Itertools as _;
 
 // Re-export a couple winit types and modules as the concrete implementations
 // for Windows.

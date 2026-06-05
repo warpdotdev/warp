@@ -1,23 +1,19 @@
 use anyhow::Context;
 use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle};
 
-use crate::{
-    app_state::{EnvVarCollectionPaneSnapshot, LeafContents},
-    drive::items::WarpDriveItemId,
-    env_vars::{
-        manager::{EnvVarCollectionManager, EnvVarCollectionSource},
-        view::env_var_collection::{EnvVarCollectionEvent, EnvVarCollectionView},
-        EnvVarCollectionType,
-    },
-    pane_group::focus_state::PaneFocusHandle,
-    server::ids::SyncId,
-    workspaces::user_workspaces::UserWorkspaces,
-};
-
+use super::view::PaneView;
 use super::{
-    view::PaneView, DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
+    DetachType, PaneConfiguration, PaneContent, PaneGroup, PaneId, ShareableLink,
     ShareableLinkError,
 };
+use crate::app_state::{EnvVarCollectionPaneSnapshot, LeafContents};
+use crate::drive::items::WarpDriveItemId;
+use crate::env_vars::manager::{EnvVarCollectionManager, EnvVarCollectionSource};
+use crate::env_vars::view::env_var_collection::{EnvVarCollectionEvent, EnvVarCollectionView};
+use crate::env_vars::EnvVarCollectionType;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::server::ids::SyncId;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub struct EnvVarCollectionPane {
     view: ViewHandle<PaneView<EnvVarCollectionView>>,

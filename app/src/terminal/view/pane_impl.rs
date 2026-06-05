@@ -1,41 +1,5 @@
 //! This module contains the implementation of `BackingView` for `TerminalView`, as well as
 //! business logic for integrating the terminal view with the pane infra (`crate::pane_group`).
-use super::ambient_agent::is_cloud_agent_pre_first_exchange;
-use super::shared_session::adapter::Kind as SharedSessionKind;
-use super::{Event, PaneConfiguration, TerminalAction, TerminalViewState, Viewer};
-use crate::ai::agent::conversation::{
-    AIConversation, ConversationStatus, ServerAIConversationMetadata,
-};
-use crate::ai::blocklist::agent_view::agent_view_bg_fill;
-use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_navigation_card;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::appearance::Appearance;
-use crate::drive::sharing::ShareableObject;
-use crate::features::FeatureFlag;
-use crate::menu::{MenuItem, MenuItemFields};
-use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent, PaneGroupFocusState};
-use crate::pane_group::pane::view::header::components::{
-    header_edge_min_width, render_pane_header_buttons, render_pane_header_title_text,
-    render_three_column_header, CenteredHeaderEdgeWidth,
-};
-use crate::pane_group::pane::view::header::{render_pane_header_draggable, PANE_HEADER_HEIGHT};
-use crate::pane_group::pane::PaneStack;
-use crate::pane_group::{pane::view, pane::view::PaneHeaderAction, BackingView, SplitPaneState};
-use crate::settings::app_installation_detection::{
-    UserAppInstallDetectionSettings, UserAppInstallStatus,
-};
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
-use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
-use crate::terminal::shared_session::render_util::shared_session_indicator_color;
-use crate::terminal::shared_session::SharedSessionActionSource;
-use crate::terminal::TerminalManager;
-use crate::terminal::TerminalView;
-use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
-use crate::ui_components::blended_colors;
-use crate::ui_components::buttons::icon_button_with_color;
-use crate::ui_components::icon_with_status::render_icon_with_status;
-use crate::ui_components::icons;
-use crate::workspace::tab_settings::TabSettings;
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warpui::elements::{
@@ -47,8 +11,47 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 #[cfg(not(target_arch = "wasm32"))]
 use warpui::ui_components::components::UiComponentStyles;
-use warpui::WeakModelHandle;
-use warpui::{AppContext, Element, ModelHandle, SingletonEntity, TypedActionView, ViewContext};
+use warpui::{
+    AppContext, Element, ModelHandle, SingletonEntity, TypedActionView, ViewContext,
+    WeakModelHandle,
+};
+
+use super::ambient_agent::is_cloud_agent_pre_first_exchange;
+use super::shared_session::adapter::Kind as SharedSessionKind;
+use super::{Event, PaneConfiguration, TerminalAction, TerminalViewState, Viewer};
+use crate::ai::agent::conversation::{
+    AIConversation, ConversationStatus, ServerAIConversationMetadata,
+};
+use crate::ai::blocklist::agent_view::agent_view_bg_fill;
+use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_navigation_card;
+use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::appearance::Appearance;
+use crate::drive::sharing::ShareableObject;
+use crate::features::FeatureFlag;
+use crate::menu::{MenuItem, MenuItemFields};
+use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent, PaneGroupFocusState};
+use crate::pane_group::pane::view::header::components::{
+    header_edge_min_width, render_pane_header_buttons, render_pane_header_title_text,
+    render_three_column_header, CenteredHeaderEdgeWidth,
+};
+use crate::pane_group::pane::view::header::{render_pane_header_draggable, PANE_HEADER_HEIGHT};
+use crate::pane_group::pane::view::PaneHeaderAction;
+use crate::pane_group::pane::{view, PaneStack};
+use crate::pane_group::{BackingView, SplitPaneState};
+use crate::settings::app_installation_detection::{
+    UserAppInstallDetectionSettings, UserAppInstallStatus,
+};
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
+use crate::terminal::shared_session::render_util::shared_session_indicator_color;
+use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::{TerminalManager, TerminalView};
+use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
+use crate::ui_components::buttons::icon_button_with_color;
+use crate::ui_components::icon_with_status::render_icon_with_status;
+use crate::ui_components::{blended_colors, icons};
+use crate::workspace::tab_settings::TabSettings;
 
 /// Total size of the agent icon-with-status component rendered in the pane header.
 /// Sub-components (circle, badge, cloud) are derived inside `render_icon_with_status`.
@@ -254,19 +257,10 @@ impl TerminalView {
         let is_fullscreen_agent_view = self.agent_view_controller.as_ref(app).is_fullscreen();
 
         if in_nav_stack || (is_fullscreen_agent_view && has_parent_terminal) {
-            if FeatureFlag::Orchestration.is_enabled() {
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(ChildView::new(&self.agent_view_back_button).finish())
-                    .finish()
-            } else {
-                Flex::column()
-                    .with_main_axis_alignment(MainAxisAlignment::Center)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(ChildView::new(&self.agent_view_back_button).finish())
-                    .finish()
-            }
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(ChildView::new(&self.agent_view_back_button).finish())
+                .finish()
         } else {
             Flex::row().finish()
         }
@@ -473,8 +467,7 @@ impl TerminalView {
     }
 
     fn render_parent_conversation_header_card(&self, app: &AppContext) -> Option<Box<dyn Element>> {
-        if !(FeatureFlag::Orchestration.is_enabled()
-            && FeatureFlag::AgentView.is_enabled()
+        if !(FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(app).is_fullscreen())
         {
             return None;
@@ -549,10 +542,6 @@ impl TerminalView {
                 .with_child(pinned_header)
                 .with_child(secondary_row)
                 .finish();
-        }
-
-        if !FeatureFlag::Orchestration.is_enabled() {
-            return header;
         }
 
         if let Some(parent_card) = parent_conversation_header_card {
@@ -989,7 +978,9 @@ impl TerminalView {
 
     /// Selected conversation status for chrome, or [`ConversationStatus::InProgress`] while the
     /// active block is long-running (terminal-derived; not mirrored in history events) or while
-    /// a cloud-mode ambient agent is still in its environment-setup phase.
+    /// a cloud-mode ambient agent is still in its environment-setup phase. For orchestrator
+    /// conversations, returns the aggregated child status so tab/header badges keep reflecting
+    /// active descendants after its turn finishes.
     pub fn selected_conversation_status(&self, ctx: &AppContext) -> Option<ConversationStatus> {
         let long_running = self.is_long_running();
         let cloud_setup = self.is_in_cloud_agent_setup_phase(ctx);
@@ -1012,7 +1003,10 @@ impl TerminalView {
             return None;
         }
 
-        Some(conversation.status().clone())
+        Some(orchestration_aware_conversation_status(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            conversation,
+        ))
     }
 
     pub fn selected_conversation_is_empty(&self, ctx: &AppContext) -> bool {

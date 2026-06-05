@@ -3,43 +3,38 @@ mod convert_from;
 mod convert_to;
 mod r#impl;
 
+use std::path::Path;
+use std::pin::Pin;
+use std::sync::Arc;
+
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
 pub use convert_from::{
     user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
     MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
 };
-
-pub use r#impl::generate_multi_agent_output;
-
 use futures_lite::Stream;
+use mcp::TemplatableMCPServerInfo;
+pub use r#impl::generate_multi_agent_output;
 use serde::Serialize;
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
 use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::{
-    ai::{blocklist::SessionContext, llms::LLMId},
-    server::server_api::AIApiError,
-};
+use warp_core::user_preferences::GetUserPreferences;
+use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
-use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput};
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
+use crate::ai::execution_profiles::AIExecutionProfileAppExt;
+use crate::ai::llms::LLMId;
 use crate::ai::mcp::TemplatableMCPServerManager;
-#[cfg(not(target_family = "wasm"))]
-use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
+use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_core::user_preferences::GetUserPreferences;
-use warpui::{AppContext, EntityId, SingletonEntity as _};
 
 /// Unique, server-generated conversation-scoped token to be roundtripped to the API when sending
 /// requests that follow-up within a given conversation.
@@ -128,7 +123,6 @@ pub struct RequestParams {
     pub web_search_enabled: bool,
     pub computer_use_enabled: bool,
     pub ask_user_question_enabled: bool,
-    pub remote_codebase_search_available: bool,
     pub research_agent_enabled: bool,
     pub orchestration_enabled: bool,
     pub supported_tools_override: Option<Vec<warp_multi_agent_api::ToolType>>,
@@ -288,15 +282,11 @@ impl RequestParams {
         let ask_user_question_enabled = BlocklistAIPermissions::as_ref(app)
             .get_ask_user_question_setting(app, terminal_view_id)
             != crate::ai::execution_profiles::AskUserQuestionPermission::Never;
-        #[cfg(not(target_family = "wasm"))]
-        let remote_codebase_search_available = FeatureFlag::RemoteCodebaseIndexing.is_enabled()
-            && RemoteCodebaseIndexModel::as_ref(app)
-                .active_repo_availability(&session_context, None)
-                .is_ready();
-        #[cfg(target_family = "wasm")]
-        let remote_codebase_search_available = false;
 
         let orchestration_enabled = ai_settings.is_orchestration_enabled(app)
+            && BlocklistAIPermissions::as_ref(app)
+                .get_run_agents_setting(app, terminal_view_id)
+                .is_enabled()
             && session_context
                 .session_type()
                 .as_ref()
@@ -308,19 +298,10 @@ impl RequestParams {
         // server-side, drop the override; otherwise clamp it to the model's
         // current `[min, max]` range. This closes the window between an
         // in-flight model metadata refresh and the next request.
-        let context_window_limit = {
-            let profile_data = AIExecutionProfilesModel::as_ref(app)
-                .active_profile(terminal_view_id, app)
-                .data()
-                .clone();
-            profile_data
-                .configurable_context_window(app)
-                .and_then(|cw| {
-                    profile_data
-                        .context_window_limit
-                        .map(|v| v.clamp(cw.min, cw.max))
-                })
-        };
+        let context_window_limit = AIExecutionProfilesModel::as_ref(app)
+            .active_profile(terminal_view_id, app)
+            .data()
+            .context_window_limit_for_request(app);
 
         Self {
             input: request_input.all_inputs().cloned().collect(),
@@ -349,7 +330,6 @@ impl RequestParams {
             web_search_enabled,
             computer_use_enabled,
             ask_user_question_enabled,
-            remote_codebase_search_available,
             research_agent_enabled,
             orchestration_enabled,
             supported_tools_override: request_input.supported_tools_override.clone(),
