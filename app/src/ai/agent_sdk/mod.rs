@@ -831,8 +831,9 @@ impl AgentDriverRunner {
             return Ok(());
         }
 
-        if let Ok(task_id) = task_id_str.parse() {
-            Self::set_ambient_agent_task_id(foreground, Some(task_id)).await?;
+        if task_id_str.parse::<AmbientAgentTaskId>().is_err() {
+            log::debug!("Skipping git credentials bootstrap: could not parse task ID '{task_id_str}'");
+            return Ok(());
         }
 
         let (ai_client, task_id_str) = foreground
