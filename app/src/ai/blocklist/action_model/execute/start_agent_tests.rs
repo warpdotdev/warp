@@ -1,4 +1,5 @@
 use ai::agent::action_result::StartAgentVersion;
+use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use super::*;
@@ -64,7 +65,6 @@ fn legacy_local_codex_command_prompt_normalizes_to_local_harness() {
 #[test]
 fn execute_normalizes_legacy_local_codex_command_before_validation() {
     App::test((), |mut app| async move {
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
@@ -612,7 +612,6 @@ fn execute_rejects_disabled_local_codex_before_other_local_harness_validation() 
 #[test]
 fn execute_allows_local_codex_when_flag_is_enabled() {
     App::test((), |mut app| async move {
-        let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
