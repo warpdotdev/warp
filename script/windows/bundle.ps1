@@ -115,12 +115,12 @@ if ("$CHANNEL" -eq 'local') {
     $FEATURES = 'release_bundle,gui'
 }
 
-if (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
-    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
-} elseif ("$CHANNEL" -eq 'preview') {
-    $FEATURES = "$FEATURES,nld_classifier_v2,nld_heuristic_v2"
-} else {
+# The OSS channel stays on the v1 classifier/heuristic; all other channels
+# (local, dev, preview, stable) ship the v3 classifier and v2 heuristic.
+if ("$CHANNEL" -eq 'oss') {
     $FEATURES = "$FEATURES,nld_classifier_v1,nld_heuristic_v1"
+} else {
+    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
 }
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
