@@ -1116,7 +1116,7 @@ pub fn init(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("ctrl-]"),
         EditableBinding::new(
             CYCLE_PREVIOUS_ORCHESTRATION_CHILD_AGENT_KEYBINDING,
-            "Cycle to previous orchestration subagent",
+            "Cycle to previous orchestration session",
             TerminalAction::CyclePreviousOrchestrationChildAgent,
         )
         .with_group(bindings::BindingGroup::WarpAi.as_str())
