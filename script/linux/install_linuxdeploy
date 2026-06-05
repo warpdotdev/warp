@@ -24,7 +24,7 @@ download_appimage() {
   VERSION="$2"
   DOWNLOAD_URL_BASE="$3"
 
-  APPIMAGE_PATH="$LOCAL_BIN/$BINARY_NAME-$VERSION.AppImage"
+  APPIMAGE_PATH="$LOCAL_BIN/$BINARY_NAME-$VERSION-$(uname -m).AppImage"
 
   if [ ! -f "$APPIMAGE_PATH" ]; then
     APPIMAGE_RELEASE_URL="$DOWNLOAD_URL_BASE/$BINARY_NAME-$(uname -m).AppImage"
