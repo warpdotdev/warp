@@ -521,9 +521,9 @@ objc = { git = "https://github.com/warpdotdev/rust-objc.git", rev = "5b656827fa9
 pathfinder_simd = { git = "https://github.com/warpdotdev/pathfinder.git", rev = "34128a129ca6aee168fbc5060a4f21b4f7e486a9" }
 yaml-rust = { git = "https://github.com/warpdotdev/yaml-rust.git", rev = "51684719d0102ca85ff4b21cec39877a0c669e19" }
 
-tink-core = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
-tink-proto = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
-tink-hybrid = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
+tink-core = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/v0.3.0-eecf54c" }
+tink-proto = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/v0.3.0-eecf54c" }
+tink-hybrid = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/v0.3.0-eecf54c" }
 
 tikv-jemallocator = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
 tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
