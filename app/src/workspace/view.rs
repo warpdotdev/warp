@@ -21845,10 +21845,10 @@ impl Workspace {
         }
 
         match ai_settings.orchestration_message_display_mode {
-            crate::settings::OrchestrationMessageDisplayMode::CurrentBehavior => {
+            crate::settings::OrchestrationMessageDisplayMode::ShowAndCollapse => {
                 context
                     .set
-                    .insert(flags::ORCHESTRATION_MESSAGE_DISPLAY_CURRENT_BEHAVIOR);
+                    .insert(flags::ORCHESTRATION_MESSAGE_DISPLAY_SHOW_AND_COLLAPSE);
             }
             crate::settings::OrchestrationMessageDisplayMode::AlwaysShow => {
                 context

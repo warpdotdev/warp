@@ -342,8 +342,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         let mode_bindings: Vec<FixedBinding> = OrchestrationMessageDisplayMode::iter()
             .map(|mode| {
                 let context_flag = match mode {
-                    OrchestrationMessageDisplayMode::CurrentBehavior => {
-                        flags::ORCHESTRATION_MESSAGE_DISPLAY_CURRENT_BEHAVIOR
+                    OrchestrationMessageDisplayMode::ShowAndCollapse => {
+                        flags::ORCHESTRATION_MESSAGE_DISPLAY_SHOW_AND_COLLAPSE
                     }
                     OrchestrationMessageDisplayMode::AlwaysShow => {
                         flags::ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_SHOW
@@ -6547,8 +6547,8 @@ impl SettingsWidget for OtherAIWidget {
 
         column.add_child(render_dropdown_item(
             appearance,
-            "Orchestration message display",
-            Some("Controls whether child-agent prompts and messages start expanded."),
+            "Child-agent message display",
+            Some("Controls whether messages to and from child agents stay expanded."),
             None,
             LocalOnlyIconState::for_setting(
                 OrchestrationMessageDisplayMode::storage_key(),

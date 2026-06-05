@@ -395,7 +395,7 @@ impl ThinkingDisplayMode {
     }
 }
 
-/// Controls how orchestration message bodies are expanded by default.
+/// Controls how child-agent message bodies are displayed.
 #[derive(
     Default,
     Debug,
@@ -409,16 +409,16 @@ impl ThinkingDisplayMode {
     settings_value::SettingsValue,
 )]
 #[schemars(
-    description = "Controls how orchestration messages are expanded by default.",
+    description = "Controls how child-agent messages are displayed.",
     rename_all = "snake_case"
 )]
 pub enum OrchestrationMessageDisplayMode {
-    /// Preserve the existing behavior: start-agent prompts expand, messages collapse.
-    #[default]
-    CurrentBehavior,
-    /// Start all orchestration message bodies expanded.
+    /// Show child-agent messages while streaming, then collapse them.
+    ShowAndCollapse,
+    /// Keep child-agent message bodies expanded.
     AlwaysShow,
-    /// Start all orchestration message bodies collapsed.
+    /// Keep child-agent message bodies collapsed.
+    #[default]
     AlwaysCollapse,
 }
 
@@ -429,43 +429,45 @@ settings::macros::implement_setting_for_enum!(
     SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "agents.warp_agent.other.orchestration_message_display_mode",
-    description: "Controls how orchestration message bodies are expanded by default.",
+    description: "Controls how child-agent messages are displayed.",
 );
 
 impl OrchestrationMessageDisplayMode {
     /// Display name for the settings dropdown.
     pub fn display_name(&self) -> &'static str {
         match self {
-            OrchestrationMessageDisplayMode::CurrentBehavior => "Current behavior",
-            OrchestrationMessageDisplayMode::AlwaysShow => "Always expand",
+            OrchestrationMessageDisplayMode::ShowAndCollapse => "Show & collapse",
+            OrchestrationMessageDisplayMode::AlwaysShow => "Always show",
             OrchestrationMessageDisplayMode::AlwaysCollapse => "Always collapse",
         }
     }
 
     pub fn command_palette_description(&self) -> &'static str {
         match self {
-            OrchestrationMessageDisplayMode::CurrentBehavior => {
-                "Set orchestration message display: current behavior"
+            OrchestrationMessageDisplayMode::ShowAndCollapse => {
+                "Set child-agent message display: show & collapse"
             }
             OrchestrationMessageDisplayMode::AlwaysShow => {
-                "Set orchestration message display: always expand"
+                "Set child-agent message display: always show"
             }
             OrchestrationMessageDisplayMode::AlwaysCollapse => {
-                "Set orchestration message display: always collapse"
+                "Set child-agent message display: always collapse"
             }
         }
     }
 
-    pub fn should_expand_start_agent_prompt(&self) -> bool {
+    /// Whether child-agent message bodies should expand while streaming.
+    pub fn should_expand_agent_message_body(&self) -> bool {
         matches!(
             self,
-            OrchestrationMessageDisplayMode::CurrentBehavior
+            OrchestrationMessageDisplayMode::ShowAndCollapse
                 | OrchestrationMessageDisplayMode::AlwaysShow
         )
     }
 
-    pub fn should_expand_agent_message_body(&self) -> bool {
-        matches!(self, OrchestrationMessageDisplayMode::AlwaysShow)
+    /// Whether child-agent message bodies should collapse after streaming.
+    pub fn should_collapse_agent_message_body_on_finish(&self) -> bool {
+        matches!(self, OrchestrationMessageDisplayMode::ShowAndCollapse)
     }
 }
 
