@@ -6484,6 +6484,88 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
     })
 }
 
+/// Regression test for child-agent input placeholder text.
+#[test]
+fn child_agent_input_placeholder_mentions_child_agent_name() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let child_conversation_id = terminal.update(&mut app, |view, ctx| {
+            let parent_conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.start_new_conversation(view.view_id, false, false, false, ctx)
+                });
+            let child_conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.start_new_child_conversation(
+                        view.view_id,
+                        "Planner".to_string(),
+                        parent_conversation_id,
+                        None,
+                        ctx,
+                    )
+                });
+
+            view.enter_agent_view(
+                None,
+                Some(child_conversation_id),
+                AgentViewEntryOrigin::ChildAgent,
+                ctx,
+            );
+            view.input.update(ctx, |input, ctx| {
+                input.ai_input_model().update(ctx, |ai_input, ctx| {
+                    ai_input.set_input_config(
+                        InputConfig {
+                            input_type: InputType::AI,
+                            is_locked: true,
+                        },
+                        true,
+                        None,
+                        ctx,
+                    );
+                });
+                input.set_zero_state_hint_text(ctx);
+            });
+
+            child_conversation_id
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let placeholder_text = view
+                .input
+                .as_ref(ctx)
+                .editor()
+                .as_ref(ctx)
+                .placeholder_text("");
+            assert_eq!(placeholder_text, Some("Steer the Planner agent"));
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                let conversation = history
+                    .conversation_mut(&child_conversation_id)
+                    .expect("child conversation should exist");
+                conversation.update_status(ConversationStatus::Success, view.view_id, ctx);
+            });
+            view.input
+                .update(ctx, |input, ctx| input.set_zero_state_hint_text(ctx));
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let placeholder_text = view
+                .input
+                .as_ref(ctx)
+                .editor()
+                .as_ref(ctx)
+                .placeholder_text("");
+            assert_eq!(placeholder_text, Some("Ask the Planner agent a follow up"));
+        });
+    })
+}
+
 #[test]
 fn manual_dismiss_disables_auto_toggle_for_session() {
     App::test((), |mut app| async move {
