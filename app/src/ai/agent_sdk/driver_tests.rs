@@ -734,7 +734,7 @@ fn split_loading_env_loads_all_global_loads_subset() {
         // with cwd=None returns all registered skills.
         let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
             manager
-                .get_skills_for_working_directory(None, SkillPathScope::Unrestricted, ctx)
+                .get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
                 .into_iter()
                 .map(|s| s.name.clone())
                 .collect::<Vec<_>>()
@@ -853,7 +853,7 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
 
         let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
             manager
-                .get_skills_for_working_directory(None, ctx)
+                .get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
                 .into_iter()
                 .map(|s| s.name.clone())
                 .collect::<Vec<_>>()

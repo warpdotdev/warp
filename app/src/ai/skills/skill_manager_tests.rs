@@ -349,7 +349,7 @@ fn cloud_environment_skills_always_included() {
         let skills = skill_manager_handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(
                 Some(&LocalOrRemotePath::Local(repo_a.clone())),
-                SkillPathScope::Unrestricted,
+                SkillPathScope::Local,
                 ctx,
             )
         });
@@ -365,7 +365,7 @@ fn cloud_environment_skills_always_included() {
 
         // With no working directory, all skills are still included.
         let skills_none = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(None, SkillPathScope::Unrestricted, ctx)
+            manager.get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
         });
         let names_none: Vec<&str> = skills_none.iter().map(|s| s.name.as_str()).collect();
         assert!(
@@ -660,22 +660,16 @@ fn get_skills_for_working_directory_respects_path_scope() {
         handle.update(&mut app, |manager, _| {
             manager.is_cloud_environment = true;
         });
-        let unrestricted_skills = handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(None, SkillPathScope::Unrestricted, ctx)
+        let cloud_skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
         });
-        let unrestricted_names: HashSet<_> = unrestricted_skills
+        let cloud_names: HashSet<_> = cloud_skills
             .iter()
             .map(|skill| skill.name.as_str())
             .collect();
         assert_eq!(
-            unrestricted_names,
-            HashSet::from([
-                "local-home",
-                "local-project",
-                "same-host-project",
-                "other-host-project",
-                "bundled",
-            ])
+            cloud_names,
+            HashSet::from(["local-home", "local-project", "bundled"])
         );
     });
 }

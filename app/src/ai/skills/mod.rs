@@ -22,8 +22,6 @@ pub enum SkillPathScope {
     Local,
     /// Skills on the connected remote host, or no path-based skills while disconnected.
     Remote { host_id: Option<HostId> },
-    /// Skills from any filesystem location.
-    Unrestricted,
 }
 
 impl SkillPathScope {
@@ -36,7 +34,7 @@ impl SkillPathScope {
 
     pub(super) fn includes(&self, path: &LocalOrRemotePath) -> bool {
         match (self, path) {
-            (Self::Local, LocalOrRemotePath::Local(_)) | (Self::Unrestricted, _) => true,
+            (Self::Local, LocalOrRemotePath::Local(_)) => true,
             (
                 Self::Remote {
                     host_id: Some(host_id),
