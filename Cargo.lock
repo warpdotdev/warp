@@ -14783,6 +14783,7 @@ dependencies = [
  "warp_logging",
  "warp_managed_secrets",
  "warp_multi_agent_api",
+ "warp_multi_agent_client",
  "warp_ripgrep",
  "warp_search_core",
  "warp_server_auth",
@@ -15191,6 +15192,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_multi_agent_client"
+version = "0.1.0"
+dependencies = [
+ "aha-reqwest-eventsource",
+ "anyhow",
+ "base64 0.22.1",
+ "cfg-if",
+ "futures",
+ "prost",
+ "thiserror 2.0.17",
+ "tracing",
+ "tracing-futures",
+ "warp_core",
+ "warp_multi_agent_api",
+ "warp_server_client",
+]
+
+[[package]]
 name = "warp_ripgrep"
 version = "0.1.0"
 dependencies = [
@@ -15294,6 +15313,7 @@ dependencies = [
  "oauth2",
  "parking_lot",
  "pathfinder_geometry",
+ "rand 0.8.6",
  "reqwest",
  "schemars",
  "serde",
