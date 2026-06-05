@@ -50,6 +50,23 @@ impl secure_storage::SecureStorage for InMemorySecureStorage {
     }
 }
 
+struct UnavailableSecureStorage;
+
+impl secure_storage::SecureStorage for UnavailableSecureStorage {
+    fn write_value(&self, _key: &str, _value: &str) -> Result<(), secure_storage::Error> {
+        Err(secure_storage::Error::Unknown(anyhow::anyhow!(
+            "secure storage unavailable"
+        )))
+    }
+
+    fn read_value(&self, _key: &str) -> Result<String, secure_storage::Error> {
+        Err(secure_storage::Error::NotFound)
+    }
+
+    fn remove_value(&self, _key: &str) -> Result<(), secure_storage::Error> {
+        Err(secure_storage::Error::NotFound)
+    }
+}
 fn default_settings() -> LocalControlSettings {
     LocalControlSettings {
         local_control_mode: LocalControlModeSetting::new(None),
@@ -109,6 +126,47 @@ fn mode_is_persisted_to_secure_storage() {
                 .read_value(LocalControlModeSetting::storage_key())
                 .expect("private preferences should be readable");
             assert!(private_value.is_none());
+        });
+    });
+}
+
+#[test]
+fn migration_preserves_private_fallback_when_secure_storage_is_unavailable() {
+    warpui::App::test((), |mut app| async move {
+        app.update(|ctx| {
+            ctx.add_singleton_model(|_| {
+                PublicPreferences::new(
+                    Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+                )
+            });
+            ctx.add_singleton_model(|_| {
+                PrivatePreferences::new(
+                    Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+                )
+            });
+            ctx.add_singleton_model(|_| SettingsManager::default());
+            ctx.add_singleton_model(|_| -> secure_storage::Model {
+                Box::new(UnavailableSecureStorage)
+            });
+            LocalControlModeSetting::preferences_for_setting(ctx)
+                .write_value(
+                    LocalControlModeSetting::storage_key(),
+                    serde_json::to_string(&LocalControlMode::EnabledEverywhere)
+                        .expect("mode serializes"),
+                )
+                .expect("private fallback is writable");
+            LocalControlSettings::register(ctx);
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                LocalControlSettings::as_ref(ctx).mode(),
+                LocalControlMode::EnabledEverywhere
+            );
+            let fallback = LocalControlModeSetting::preferences_for_setting(ctx)
+                .read_value(LocalControlModeSetting::storage_key())
+                .expect("private fallback is readable");
+            assert!(fallback.is_some());
         });
     });
 }

@@ -175,11 +175,25 @@ impl CredentialGrant {
         }
     }
 
-    pub fn verify_for_action(&self, action: ActionKind) -> Result<(), ControlError> {
-        if Utc::now() >= self.expires_at {
+    pub fn is_expired(&self) -> bool {
+        Utc::now() >= self.expires_at
+    }
+
+    pub fn verify_for_action(
+        &self,
+        instance_id: &InstanceId,
+        action: ActionKind,
+    ) -> Result<(), ControlError> {
+        if self.is_expired() {
             return Err(ControlError::new(
                 ErrorCode::UnauthorizedLocalClient,
                 "local-control credential has expired",
+            ));
+        }
+        if &self.instance_id != instance_id {
+            return Err(ControlError::new(
+                ErrorCode::UnauthorizedLocalClient,
+                "local-control credential belongs to a different Warp instance",
             ));
         }
         if self.action != action {

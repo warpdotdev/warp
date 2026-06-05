@@ -213,6 +213,8 @@ fn run_inner(args: ControlArgs) -> Result<(), local_control::protocol::ControlEr
 }
 
 #[cfg(test)]
+pub(crate) use commands::render_human_readable_for_test;
+#[cfg(test)]
 pub(crate) use completions::generate_completion_string;
 #[cfg(test)]
 pub(crate) use output::ErrorSummary;

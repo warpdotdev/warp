@@ -1,18 +1,23 @@
+use std::collections::HashMap;
+
+use ::local_control::auth::CredentialGrant;
 use ::local_control::protocol::ActionKind;
 use ::local_control::protocol::{
     Action, PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector,
     WindowTarget,
 };
-use ::local_control::{ErrorCode, InvocationContext};
+use ::local_control::{ErrorCode, InstanceId, InvocationContext};
 use axum::http::header::{HOST, ORIGIN};
 use axum::http::{HeaderMap, HeaderValue};
+use chrono::Duration;
 use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 
 use super::{
     capabilities, ensure_feature_enabled, ensure_protocol_version, ensure_settings_allow_action,
-    outside_warp_control_enabled_for_settings, require_active_window_id, validate_action_params,
-    validate_loopback_headers, validate_tab_create_target,
+    insert_credential, outside_warp_control_enabled_for_settings, require_active_window_id,
+    validate_action_params, validate_loopback_headers, validate_request_authority,
+    validate_tab_create_target, MAX_ACTIVE_CREDENTIALS,
 };
 use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 
@@ -236,4 +241,77 @@ fn tab_create_rejects_malformed_params() {
         params: serde_json::json!({}),
     })
     .expect("empty tab.create params are accepted");
+}
+
+#[test]
+fn metadata_actions_reject_malformed_params() {
+    let err = validate_action_params(&Action {
+        kind: ActionKind::AppPing,
+        params: serde_json::json!({ "unexpected": true }),
+    })
+    .expect_err("app.ping params must be empty");
+    assert_eq!(err.code, ErrorCode::InvalidParams);
+}
+
+#[test]
+fn bridge_checks_grant_before_action_params() {
+    let instance_id = InstanceId("inst_test".to_owned());
+    let grant = CredentialGrant::new(
+        instance_id.clone(),
+        ActionKind::AppPing,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    let err = validate_request_authority(
+        &instance_id,
+        &Action {
+            kind: ActionKind::AppVersion,
+            params: serde_json::json!({ "unexpected": true }),
+        },
+        &grant,
+    )
+    .expect_err("wrong-action grant is rejected before params");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn credential_insertion_prunes_expired_and_caps_active_grants() {
+    let mut credentials = HashMap::new();
+    let instance_id = InstanceId("inst_test".to_owned());
+    insert_credential(
+        &mut credentials,
+        "expired".to_owned(),
+        CredentialGrant::new(
+            instance_id.clone(),
+            ActionKind::TabCreate,
+            InvocationContext::OutsideWarp,
+            Duration::minutes(-1),
+        ),
+    );
+    insert_credential(
+        &mut credentials,
+        "active".to_owned(),
+        CredentialGrant::new(
+            instance_id.clone(),
+            ActionKind::TabCreate,
+            InvocationContext::OutsideWarp,
+            Duration::minutes(5),
+        ),
+    );
+    assert!(!credentials.contains_key("expired"));
+
+    for index in 0..MAX_ACTIVE_CREDENTIALS {
+        insert_credential(
+            &mut credentials,
+            format!("active-{index}"),
+            CredentialGrant::new(
+                instance_id.clone(),
+                ActionKind::TabCreate,
+                InvocationContext::OutsideWarp,
+                Duration::minutes(5),
+            ),
+        );
+    }
+    assert_eq!(credentials.len(), MAX_ACTIVE_CREDENTIALS);
+    assert!(credentials.contains_key(&format!("active-{}", MAX_ACTIVE_CREDENTIALS - 1)));
 }

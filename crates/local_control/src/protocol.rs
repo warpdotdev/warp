@@ -26,7 +26,9 @@ pub enum DriveObjectType {
     Prompt,
     Folder,
     AiFact,
+    AiRule,
     McpServer,
+    McpServerCollection,
     Space,
     Trash,
 }

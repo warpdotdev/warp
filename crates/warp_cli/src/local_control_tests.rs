@@ -115,6 +115,42 @@ fn structured_error_output_uses_stable_error_code() {
 }
 
 #[test]
+fn renders_human_readable_tab_create_output() {
+    let rendered = render_human_readable_for_test(
+        local_control::protocol::ActionKind::TabCreate,
+        &json!({
+            "tab": {
+                "id": "tab_123",
+                "active_index": 2,
+                "count": 3
+            },
+            "window": {
+                "id": "window_123"
+            }
+        }),
+    );
+    assert_eq!(
+        rendered,
+        "Created tab tab_123 in window window_123 (active index 2, tab count 3)"
+    );
+}
+
+#[test]
+#[serial]
+fn instance_list_without_discovery_records_succeeds() {
+    let dir = std::env::temp_dir().join(format!(
+        "warpctrl-empty-discovery-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp discovery dir is created");
+    let previous = set_discovery_dir(&dir);
+    let args = ControlArgs::try_parse_from(["warpctrl", "instance", "list"])
+        .expect("instance list parses");
+    let result = run_inner(args);
+    restore_discovery_dir(previous);
+    result.expect("empty instance list succeeds");
+}
+#[test]
 #[serial]
 fn tab_create_without_discovery_records_reports_no_instance() {
     let dir = std::env::temp_dir().join(format!(

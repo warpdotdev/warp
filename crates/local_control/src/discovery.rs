@@ -1,5 +1,7 @@
 //! Filesystem discovery records for running local Warp instances.
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -99,6 +101,25 @@ impl InstanceRecord {
             actions,
         }
     }
+
+    pub fn validate_local_control_authority(&self) -> Result<(), ControlError> {
+        match (
+            self.outside_warp_control_enabled,
+            &self.endpoint,
+            &self.credential_broker,
+        ) {
+            (false, None, None) => Ok(()),
+            (true, Some(endpoint), Some(credential_broker))
+                if endpoint.host == "127.0.0.1" && credential_broker.endpoint == *endpoint =>
+            {
+                Ok(())
+            }
+            _ => Err(ControlError::new(
+                ErrorCode::UnauthorizedLocalClient,
+                "local-control discovery record contains unsafe or inconsistent endpoint authority",
+            )),
+        }
+    }
 }
 
 /// RAII registration that publishes and removes one discovery record.
@@ -117,7 +138,7 @@ impl RegisteredInstance {
                 err.to_string(),
             )
         })?;
-        set_private_dir_permissions(&dir);
+        set_private_dir_permissions(&dir)?;
         let path = record_path(&dir, &record.instance_id);
         write_record(&path, &record)?;
         Ok(Self { record, path })
@@ -157,7 +178,7 @@ fn write_record(path: &Path, record: &InstanceRecord) -> Result<(), ControlError
             err.to_string(),
         )
     })?;
-    set_private_permissions(path);
+    set_private_permissions(path)?;
     Ok(())
 }
 
@@ -185,6 +206,9 @@ pub fn discovery_dir() -> PathBuf {
 
 pub fn list_instances() -> Vec<InstanceRecord> {
     list_instances_from_dir(&discovery_dir())
+        .into_iter()
+        .filter(|record| crate::client::probe_instance(record).is_ok())
+        .collect()
 }
 
 pub fn list_instances_from_dir(dir: &Path) -> Vec<InstanceRecord> {
@@ -203,6 +227,9 @@ pub fn list_instances_from_dir(dir: &Path) -> Vec<InstanceRecord> {
             Err(_) => continue,
         };
         if record.protocol_version != PROTOCOL_VERSION {
+            continue;
+        }
+        if record.validate_local_control_authority().is_err() {
             continue;
         }
         if !is_pid_alive(record.pid) {
@@ -234,32 +261,48 @@ fn record_path(dir: &Path, instance_id: &InstanceId) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn set_private_dir_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    if let Ok(metadata) = fs::metadata(path) {
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o700);
-        let _ = fs::set_permissions(path, permissions);
-    }
+fn set_private_dir_permissions(path: &Path) -> Result<(), ControlError> {
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| permissions_error("read local-control discovery directory", err))?
+        .permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| permissions_error("protect local-control discovery directory", err))
 }
 
 #[cfg(not(unix))]
-fn set_private_dir_permissions(_path: &Path) {}
+fn set_private_dir_permissions(_path: &Path) -> Result<(), ControlError> {
+    Err(ControlError::new(
+        ErrorCode::LocalControlDisabled,
+        "local-control discovery publication is disabled until this platform enforces record ACLs",
+    ))
+}
 
 #[cfg(unix)]
-fn set_private_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    if let Ok(metadata) = fs::metadata(path) {
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o600);
-        let _ = fs::set_permissions(path, permissions);
-    }
+fn set_private_permissions(path: &Path) -> Result<(), ControlError> {
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| permissions_error("read local-control discovery record", err))?
+        .permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| permissions_error("protect local-control discovery record", err))
 }
 
 #[cfg(not(unix))]
-fn set_private_permissions(_path: &Path) {}
+fn set_private_permissions(_path: &Path) -> Result<(), ControlError> {
+    Err(ControlError::new(
+        ErrorCode::LocalControlDisabled,
+        "local-control discovery publication is disabled until this platform enforces record ACLs",
+    ))
+}
+
+fn permissions_error(operation: &str, error: std::io::Error) -> ControlError {
+    ControlError::with_details(
+        ErrorCode::Internal,
+        format!("failed to {operation}"),
+        error.to_string(),
+    )
+}
 
 #[cfg(test)]
 #[path = "discovery_tests.rs"]

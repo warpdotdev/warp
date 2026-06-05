@@ -69,7 +69,3 @@ __pycache__/
 
 # Project notes
 .note/
-
-# Generated local publishing artifacts
-.warp/pr-walkthrough/
-.wrangler/

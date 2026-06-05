@@ -2,14 +2,15 @@
 use crate::auth::{CredentialRequest, ScopedCredential};
 use crate::discovery::InstanceRecord;
 use crate::protocol::{
-    ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, InvocationContext,
-    RequestEnvelope, ResponseEnvelope,
+    Action, ActionKind, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope,
+    InvocationContext, RequestEnvelope, ResponseEnvelope,
 };
 
 pub fn send_request(
     instance: &InstanceRecord,
     request: &RequestEnvelope,
 ) -> Result<ResponseEnvelope, ControlError> {
+    instance.validate_local_control_authority()?;
     let credential = request_credential(
         instance,
         request.action.kind,
@@ -63,6 +64,7 @@ pub fn request_credential(
     action: crate::protocol::ActionKind,
     invocation_context: InvocationContext,
 ) -> Result<ScopedCredential, ControlError> {
+    instance.validate_local_control_authority()?;
     let credential_broker = instance.credential_broker.as_ref().ok_or_else(|| {
         ControlError::new(
             ErrorCode::LocalControlDisabled,
@@ -102,3 +104,36 @@ pub fn request_credential(
         text,
     ))
 }
+
+pub fn probe_instance(instance: &InstanceRecord) -> Result<(), ControlError> {
+    let response = send_request(
+        instance,
+        &RequestEnvelope::new(Action::new(ActionKind::AppPing)),
+    )?;
+    validate_probe_response(instance, response)
+}
+
+fn validate_probe_response(
+    instance: &InstanceRecord,
+    response: ResponseEnvelope,
+) -> Result<(), ControlError> {
+    let ControlResponse::Ok { data } = response.response else {
+        return Err(ControlError::new(
+            ErrorCode::TransportUnavailable,
+            "local-control health probe returned an error response",
+        ));
+    };
+    if data.get("instance_id").and_then(serde_json::Value::as_str)
+        != Some(instance.instance_id.0.as_str())
+    {
+        return Err(ControlError::new(
+            ErrorCode::TransportUnavailable,
+            "local-control health probe returned a different instance identity",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

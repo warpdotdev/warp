@@ -40,7 +40,7 @@ pub(crate) fn validate_tab_create_target(target: &TargetSelector) -> Result<(), 
 /// slices add their own params and expand this validation alongside the
 /// corresponding action handlers.
 pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result<(), ControlError> {
-    if action.kind != ActionKind::TabCreate {
+    if !action.kind.is_implemented() {
         return Ok(());
     }
     if action
@@ -52,7 +52,10 @@ pub(crate) fn validate_action_params(action: &::local_control::Action) -> Result
     }
     Err(ControlError::new(
         ErrorCode::InvalidParams,
-        "tab.create does not accept parameters in the first implementation slice",
+        format!(
+            "{} does not accept parameters in the first implementation slice",
+            action.kind.as_str()
+        ),
     ))
 }
 

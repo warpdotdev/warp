@@ -88,10 +88,14 @@ impl LocalControlModeSetting {
         }
     }
 
+    /// Preserves the weaker private-preferences value when protected storage is
+    /// unavailable so platforms without a working secure provider do not lose
+    /// an existing user choice during migration.
     fn migrate_from_private_preferences(ctx: &AppContext) -> Option<LocalControlMode> {
         let value = Self::read_from_preferences(Self::preferences_for_setting(ctx))?;
         if let Err(err) = Self::write_value_to_secure_storage(&value, ctx) {
             log::error!("Failed to migrate local-control mode to secure storage: {err:#}");
+            return Some(value);
         }
         if let Err(err) = Self::clear_from_preferences(Self::preferences_for_setting(ctx)) {
             log::warn!(

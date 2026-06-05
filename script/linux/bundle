@@ -22,6 +22,7 @@ trap cleanup EXIT
 # By default we build dev bundles.
 RELEASE_CHANNEL="dev"
 FEATURES="release_bundle,crash_reporting"
+EXTRA_FEATURES=""
 PACKAGES=( appimage )
 BUILD="true"
 BUILD_ARCH="$(uname -m)"
@@ -74,6 +75,15 @@ while (( "$#" )); do
     --packages)
       PACKAGES=( $(IFS=, ; echo $2) )
       shift 2
+      ;;
+    --features)
+      if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        EXTRA_FEATURES="$2"
+        shift 2
+      else
+        echo "Error: Argument for $1 is missing" >&2
+        exit 1
+      fi
       ;;
     --artifact)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
@@ -197,6 +207,9 @@ fi
 # Artifact-specific configuration
 if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
   FEATURES="$FEATURES,standalone"
+  if [[ "$ARTIFACT" == "warpctrl" ]]; then
+    FEATURES="$FEATURES,warp_control_cli"
+  fi
 elif [[ "$ARTIFACT" == "app" ]]; then
   FEATURES="$FEATURES,gui"
   if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" || "$RELEASE_CHANNEL" == "preview" ]]; then
@@ -204,6 +217,9 @@ elif [[ "$ARTIFACT" == "app" ]]; then
   else
     FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
   fi
+fi
+if [[ -n "$EXTRA_FEATURES" ]]; then
+  FEATURES="$FEATURES,$EXTRA_FEATURES"
 fi
 
 BUNDLE_ID="dev.warp.$APP_NAME"

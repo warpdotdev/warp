@@ -24,6 +24,7 @@ struct TargetWindowResponse {
 
 #[derive(Serialize)]
 struct TabCountsResponse {
+    id: String,
     previous_count: usize,
     count: usize,
     active_index: usize,
@@ -45,7 +46,7 @@ pub(crate) fn create_terminal_tab(
                 "tab.create requires a workspace in the target window",
             )
         })?;
-    let (previous_tab_count, tab_count, active_tab_index) =
+    let (tab_id, previous_tab_count, tab_count, active_tab_index) =
         workspace.update(ctx, |workspace, ctx| {
             let previous_tab_count = workspace.tab_count();
             workspace.handle_action(
@@ -54,12 +55,22 @@ pub(crate) fn create_terminal_tab(
                 },
                 ctx,
             );
-            (
+            let tab_id = workspace
+                .get_pane_group_view(workspace.active_tab_index())
+                .map(|tab| tab.id().to_string())
+                .ok_or_else(|| {
+                    ControlError::new(
+                        ErrorCode::Internal,
+                        "tab.create did not produce an active tab identifier",
+                    )
+                })?;
+            Ok((
+                tab_id,
                 previous_tab_count,
                 workspace.tab_count(),
                 workspace.active_tab_index(),
-            )
-        });
+            ))
+        })?;
     serde_json::to_value(TabCreateResponse {
         action: ActionKind::TabCreate.as_str(),
         created: true,
@@ -69,6 +80,7 @@ pub(crate) fn create_terminal_tab(
             id: window_id.to_string(),
         },
         tab: TabCountsResponse {
+            id: tab_id,
             previous_count: previous_tab_count,
             count: tab_count,
             active_index: active_tab_index,

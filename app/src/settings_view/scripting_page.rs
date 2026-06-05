@@ -167,7 +167,10 @@ impl SettingsWidget for LocalControlModeWidget {
             ToggleState::Enabled,
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
-            None,
+            Some(
+                "Enabling scripting allows for programmatic and agentic control of Warp. Please refer to the docs for more info."
+                    .to_owned(),
+            ),
         )
     }
 }

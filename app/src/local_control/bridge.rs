@@ -4,7 +4,7 @@
 //! before routing each supported action to an app-side handler.
 use ::local_control::auth::CredentialGrant;
 use ::local_control::{
-    ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
+    Action, ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
 };
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -46,23 +46,17 @@ impl LocalControlBridge {
         if let Err(error) = ensure_protocol_version(request.protocol_version) {
             return ResponseEnvelope::error(request.request_id, error);
         }
-        if let Err(error) = validate_action_params(&request.action) {
-            return ResponseEnvelope::error(request.request_id, error);
-        }
-        if let Err(error) = grant.verify_for_action(request.action.kind) {
-            return ResponseEnvelope::error(request.request_id, error);
-        }
-        if !request.action.kind.is_implemented() {
+        let Some(instance_id) = &self.instance_id else {
             return ResponseEnvelope::error(
                 request.request_id,
                 ControlError::new(
-                    ErrorCode::UnsupportedAction,
-                    format!(
-                        "{} is not implemented by this local-control bridge",
-                        request.action.kind.as_str()
-                    ),
+                    ErrorCode::BridgeUnavailable,
+                    "local-control bridge has no active instance identity",
                 ),
             );
+        };
+        if let Err(error) = validate_request_authority(instance_id, &request.action, &grant) {
+            return ResponseEnvelope::error(request.request_id, error);
         }
         if let Err(error) =
             ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
@@ -100,4 +94,22 @@ impl LocalControlBridge {
             ),
         }
     }
+}
+
+pub(crate) fn validate_request_authority(
+    instance_id: &InstanceId,
+    action: &Action,
+    grant: &CredentialGrant,
+) -> Result<(), ControlError> {
+    grant.verify_for_action(instance_id, action.kind)?;
+    if !action.kind.is_implemented() {
+        return Err(ControlError::new(
+            ErrorCode::UnsupportedAction,
+            format!(
+                "{} is not implemented by this local-control bridge",
+                action.kind.as_str()
+            ),
+        ));
+    }
+    validate_action_params(action)
 }

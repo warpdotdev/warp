@@ -49,6 +49,38 @@ fn disabled_outside_warp_record_does_not_expose_actionable_authority() {
     assert!(record.credential_broker.is_none());
 }
 
+#[test]
+fn rejects_unsafe_or_divergent_discovery_authority() {
+    let mut record = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "local",
+        "dev.warp.WarpLocal",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    record
+        .validate_local_control_authority()
+        .expect("matching 127.0.0.1 endpoints are accepted");
+
+    record.endpoint.as_mut().expect("endpoint").host = "localhost".to_owned();
+    let err = record
+        .validate_local_control_authority()
+        .expect_err("localhost alias is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+
+    record.endpoint = Some(ControlEndpoint::localhost(4000));
+    record
+        .credential_broker
+        .as_mut()
+        .expect("credential broker")
+        .endpoint
+        .port = 4001;
+    let err = record
+        .validate_local_control_authority()
+        .expect_err("divergent broker endpoint is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+}
+
 #[cfg(unix)]
 #[test]
 fn discovery_directory_is_owner_only_on_unix() {
@@ -72,13 +104,35 @@ fn discovery_directory_is_owner_only_on_unix() {
     assert_eq!(mode, 0o700);
 }
 
+#[cfg(unix)]
+#[test]
+fn discovery_record_is_owner_only_on_unix() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let record = InstanceRecord::for_current_process(
+        Some(ControlEndpoint::localhost(4000)),
+        "local",
+        "dev.warp.WarpLocal",
+        Some("test".to_owned()),
+        crate::protocol::ActionKind::implemented_metadata(),
+    );
+    let registered =
+        RegisteredInstance::register_in_dir_for_test(record, dir.path()).expect("registered");
+    let mode = fs::metadata(&registered.path)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
 impl RegisteredInstance {
     fn register_in_dir_for_test(record: InstanceRecord, dir: &Path) -> Result<Self, ControlError> {
         fs::create_dir_all(dir).expect("create dir");
-        set_private_dir_permissions(dir);
+        set_private_dir_permissions(dir)?;
         let path = record_path(dir, &record.instance_id);
-        let bytes = serde_json::to_vec_pretty(&record).expect("serialize");
-        fs::write(&path, bytes).expect("write");
+        write_record(&path, &record)?;
         Ok(Self { record, path })
     }
 }

@@ -49,6 +49,7 @@ use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 pub use bridge::LocalControlBridge;
 use permissions::{ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version};
+const MAX_ACTIVE_CREDENTIALS: usize = 128;
 
 /// Shared state made available to Axum handlers for one localhost server
 /// running inside Warp.
@@ -98,6 +99,10 @@ impl LocalControlServer {
             self.stop();
             return Ok(());
         }
+        if !outside_warp_publication_supported() {
+            self.stop();
+            return Ok(());
+        }
         let outside_warp_control_enabled =
             crate::settings::LocalControlSettings::as_ref(ctx).outside_warp_control_enabled();
         if !outside_warp_control_enabled {
@@ -119,6 +124,12 @@ impl LocalControlServer {
 
     fn start(ctx: &mut ModelContext<Self>) -> Result<Self, ControlError> {
         ensure_feature_enabled()?;
+        if !outside_warp_publication_supported() {
+            return Err(ControlError::new(
+                ErrorCode::LocalControlDisabled,
+                "outside-Warp local control is disabled until this platform enforces discovery-record ACLs",
+            ));
+        }
         if !crate::settings::LocalControlSettings::as_ref(ctx).outside_warp_control_enabled() {
             return Ok(Self {
                 _runtime: None,
@@ -343,7 +354,11 @@ async fn handle_credential_request(
                 .into_response();
         }
     };
-    credentials.insert(auth_token.secret().to_owned(), grant.clone());
+    insert_credential(
+        &mut credentials,
+        auth_token.secret().to_owned(),
+        grant.clone(),
+    );
     Json(ScopedCredential {
         bearer_token: auth_token.secret().to_owned(),
         grant,
@@ -442,6 +457,28 @@ async fn handle_control_request(
     (status, Json(response)).into_response()
 }
 
+fn insert_credential(
+    credentials: &mut HashMap<String, CredentialGrant>,
+    secret: String,
+    grant: CredentialGrant,
+) {
+    credentials.retain(|_, grant| !grant.is_expired());
+    if credentials.len() >= MAX_ACTIVE_CREDENTIALS {
+        let oldest_secret = credentials
+            .iter()
+            .min_by_key(|(_, grant)| grant.issued_at)
+            .map(|(secret, _)| secret.clone());
+        if let Some(oldest_secret) = oldest_secret {
+            credentials.remove(&oldest_secret);
+        }
+    }
+    credentials.insert(secret, grant);
+}
+
+fn outside_warp_publication_supported() -> bool {
+    cfg!(not(target_os = "windows"))
+}
+
 /// Performs browser-origin hardening for local-control endpoints.
 ///
 /// These checks intentionally reject browser-style `Origin` requests and stale
@@ -476,6 +513,8 @@ pub(crate) fn validate_loopback_headers(
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) use bridge::validate_request_authority;
 #[cfg(test)]
 pub(crate) use permissions::{
     capabilities, ensure_settings_allow_action, outside_warp_control_enabled_for_settings,

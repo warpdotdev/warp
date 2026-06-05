@@ -119,13 +119,13 @@ Recommended decode-level error response shape for malformed requests that cannot
 {
   "protocol_version": 1,
   "error": {
-    "code": "invalid_params",
+    "code": "invalid_request",
     "message": "Request body could not be decoded",
     "details": null
   }
 }
 ```
-Error payloads should include stable codes defined in `SECURITY.md`, including `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, `execution_context_not_allowed`, `ambiguous_instance`, `ambiguous_target`, `stale_target`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, `missing_target`, and `no_instance`.
+Error payloads should include stable codes defined in `SECURITY.md`, including `local_control_disabled`, `unauthorized_local_client`, `insufficient_permissions`, `authenticated_user_required`, `authenticated_user_unavailable`, `execution_context_not_allowed`, `ambiguous_instance`, `ambiguous_target`, `stale_target`, `invalid_request`, `invalid_selector`, `unsupported_action`, `not_allowlisted`, `invalid_params`, `target_state_conflict`, `missing_target`, and `no_instance`. Decode-level malformed JSON uses `invalid_request`; decoded actions with invalid action-specific parameters use `invalid_params`.
 ### 2. Per-process discovery instead of fixed-port-only routing
 Keep the existing fixed-port HTTP behavior intact for installation detection/profiling compatibility. Add a separate local-control listener that follows the same native Axum/Tokio pattern but supports multiple local Warp app processes.
 Recommended design:
@@ -139,7 +139,7 @@ Recommended design:
   - protocol version
   - start timestamp
   - credential metadata or secure-storage references only when the selected mode allows the relevant inside-Warp or outside-Warp context
-- The CLI loads discovery records, removes or ignores stale records after health checks, and chooses an instance using the product selector rules.
+- The CLI loads discovery records, rejects records unless the control and credential-broker endpoints are equal and exactly `127.0.0.1`, removes or ignores stale records after health and instance-identity checks, and chooses an instance using the product selector rules.
 - `warpctrl instance list` is a CLI-first projection of this discovery registry plus health responses.
 When outside-Warp control is disabled, discovery must follow `SECURITY.md`: either publish no actionable local-control record for external clients or publish only a minimal disabled-status record with no endpoint authority or credential reference.
 This design preserves the current `9277` behavior while avoiding cross-process port contention for the new control API.
@@ -329,7 +329,7 @@ The first `warpctrl` implementation slice should land the minimum cross-cutting 
 - `FeatureFlag::WarpControlCli` and Cargo feature `warp_control_cli`, with app-side runtime gating for settings, discovery, bridge registration, and local-control endpoints.
 - New top-level Settings > Scripting page rendered only while `FeatureFlag::WarpControlCli` is enabled. The current foundation exposes one local-control mode with disabled as the default, enabled within Warp as a reserved mode that rejects requests until proof support exists, and enabled everywhere as the only mode that allows outside-Warp credential requests.
 - Protected local-only mode storage where outside-Warp control defaults off unless the broadest mode is selected.
-- As an interim foundation step, the local-control mode lives in the typed `LocalControlSettings` group as a private setting with `SyncToCloud::Never`, an explicit private storage key, and no `toml_path`. This keeps it out of the user-visible settings file and generated settings schema while leaving the protected-storage migration as a required pre-ship hardening step.
+- The local-control mode lives in the typed `LocalControlSettings` group as a private setting with `SyncToCloud::Never`, an explicit private storage key, and no `toml_path`. This keeps it out of the user-visible settings file and generated settings schema. It is persisted through Warp's secure-storage provider, migrates earlier private-preferences values only after a protected write succeeds, and allows explicitly documented weaker owner-only fallback storage on platforms whose secure provider is unavailable.
 - Discovery registry and CLI instance selection.
 - A `warpctrl` wrapper entrypoint that invokes the existing channel-specific Warp binary with a hidden `--warpctrl` control-mode flag and runs control commands without starting the GUI app runtime.
 - Per-process authenticated local-control server that refuses sensitive work when outside-Warp control is disabled and rejects inside-Warp credential requests until verified terminal proof support is implemented.
@@ -369,7 +369,8 @@ The shipped product shape should be a bundled `warpctrl` wrapper script or helpe
   - Keep channelized naming consistent with the final product name decision; if non-stable channels need aliases, the aliases should still point at the same channel app binary.
 - Linux:
   - Prefer installing a small `warpctrl` wrapper or symlink/helper in the same package as the Warp app, routed to the packaged channel binary with `--warpctrl`.
-  - Do not build a separate standalone Rust binary for `--artifact warpctrl`; if that artifact path exists, it must emit a wrapper plus the channel binary it forwards to.
+  - Do not build a separate standalone Rust binary for `--artifact warpctrl`; the standalone validation artifact emits a wrapper plus the channel binary it forwards to and compiles that binary with `warp_control_cli`.
+  - Installing the wrapper into the normal Linux app package remains a follow-up separate from the standalone validation artifact.
 - Windows:
   - Mirror the existing installer-generated helper-wrapper pattern first.
   - If Windows cannot cheaply use a shell-script-style wrapper, generate the smallest possible helper that forwards to the installed channel binary with `--warpctrl` and preserves stdout/stderr behavior for scripts.
@@ -494,6 +495,7 @@ Map tests directly to `PRODUCT.md` behavior.
   - Protocol version/unit tests.
   - Discovery-registry tests with zero, one, multiple, stale, and incompatible instance records.
   - Local-auth tests for missing, invalid, expired, revoked, and valid credentials.
+  - Grant-lifecycle tests for instance binding, expired-grant pruning, and the active-grant cap. Define and enforce a replay policy before broader or higher-risk command families ship.
 - Behavior 7-13:
   - Selector-resolution unit tests for active, explicit ID, index, stale target, ambiguous target, and non-terminal session target.
   - Tests that no lower-level selector silently retargets after an explicit stale selector fails.

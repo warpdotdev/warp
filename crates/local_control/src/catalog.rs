@@ -353,7 +353,7 @@ define_action_catalog! {
     tab {
         TabList => { name: "tab.list", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Tab, params: None, result: TargetList },
         TabInspect => { name: "tab.inspect", status: Stub, authenticated_user: false, contexts: Any, state: MetadataRead, target: Tab, params: None, result: TargetMetadata },
-        TabCreate => { name: "tab.create", status: Implemented, authenticated_user: false, contexts: OutsideWarpOnly, state: AppStateMutation, target: Tab, params: TabCreate, result: Acknowledgement },
+        TabCreate => { name: "tab.create", status: Implemented, authenticated_user: false, contexts: OutsideWarpOnly, state: AppStateMutation, target: Tab, params: None, result: Acknowledgement },
         TabActivate => { name: "tab.activate", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Tab, params: TabActivate, result: Acknowledgement },
         TabMove => { name: "tab.move", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Tab, params: Direction, result: Acknowledgement },
         TabClose => { name: "tab.close", status: Stub, authenticated_user: false, contexts: Any, state: AppStateMutation, target: Tab, params: TabClose, result: Acknowledgement },
