@@ -163,6 +163,7 @@ impl Element for GitGraphRowCanvas {
         let mid = origin.y() + ROW_HEIGHT / 2.0;
         let bot = origin.y() + ROW_HEIGHT;
         let node_x = Self::col_center_x(origin, self.row.node_col);
+        let radius = DOT_DIAMETER / 2.0;
 
         // Continuing lanes passing through this row: a full-height vertical line.
         for lane in &self.row.passing {
@@ -176,8 +177,12 @@ impl Element for GitGraphRowCanvas {
         }
 
         // The node's own upper half (when it continues from the previous row).
+        // A hollow ring has a transparent center, so the segment is trimmed to the
+        // ring's top edge — otherwise it would show through the hollow center and
+        // make the ring read as a filled dot.
         if self.row.node_continues_up {
-            Self::draw_vertical(ctx, node_x, top, mid, lane_color(self.row.node_color));
+            let y1 = if self.hollow { mid - radius } else { mid };
+            Self::draw_vertical(ctx, node_x, top, y1, lane_color(self.row.node_color));
         }
 
         // Child commits merging into this node from above: vertical (top -> mid,
@@ -198,15 +203,20 @@ impl Element for GitGraphRowCanvas {
             let color = lane_color(parent.color_idx);
             if parent.col != self.row.node_col {
                 Self::draw_horizontal(ctx, node_x, parent_x, mid, color);
+                Self::draw_vertical(ctx, parent_x, mid, bot, color);
+            } else {
+                // Straight-down lane at the node column: trim it to the ring's
+                // bottom edge for a hollow node so it doesn't bleed through the
+                // transparent center.
+                let y0 = if self.hollow { mid + radius } else { mid };
+                Self::draw_vertical(ctx, parent_x, y0, bot, color);
             }
-            Self::draw_vertical(ctx, parent_x, mid, bot, color);
         }
 
         // Commit dot (corner_radius = radius -> a circle). The synthetic
         // uncommitted row draws a ring (border only) instead — reads as "not a
         // real commit" — and its transparent center lets the row's
         // hover/selection highlight show through.
-        let radius = DOT_DIAMETER / 2.0;
         let color = lane_color(self.row.node_color);
         let dot = ctx.scene.draw_rect_with_hit_recording(RectF::new(
             vec2f(node_x - radius, mid - radius),
