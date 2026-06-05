@@ -200,7 +200,8 @@ impl ProjectRules {
 pub struct ProjectContextModel {
     /// Mapping from directory path to list of rule files found in that directory
     path_to_rules: HashMap<LocalOrRemotePath, ProjectRules>,
-    /// Latest metadata-backed async refresh per repository.
+    /// Latest metadata-backed async refresh per exact repository identity.
+    /// This uses the same identifier carried by metadata events rather than an arbitrary file path.
     #[cfg(feature = "local_fs")]
     rule_refresh_generations: HashMap<RepositoryIdentifier, u64>,
     #[cfg(feature = "local_fs")]
@@ -312,6 +313,8 @@ impl ProjectContextModel {
                 },
             );
 
+            // Remote snapshots may have arrived before this model subscribed to metadata events,
+            // so hydrate any remote repositories that are already tracked.
             let remote_repo_ids = RepoMetadataModel::as_ref(ctx)
                 .remote_repository_ids(ctx)
                 .cloned()
@@ -420,6 +423,8 @@ impl ProjectContextModel {
             return;
         };
         if let Some(rules) = self.path_to_rules.remove(&project_root) {
+            // KnownRulesChanged is consumed by local persistence and carries local PathBufs.
+            // Remote removals still update in-memory state and emit PathIndexed below.
             if matches!(repo_id, RepositoryIdentifier::Local(_)) {
                 let deleted_rules = rules.local_rule_paths().collect();
                 ctx.emit(ProjectContextModelEvent::KnownRulesChanged(RulesDelta {

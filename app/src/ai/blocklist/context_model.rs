@@ -399,6 +399,8 @@ impl BlocklistAIContextModel {
         is_user_query: bool,
         current_working_directory_location: Option<&LocalOrRemotePath>,
     ) -> Vec<AIAgentContext> {
+        // `pwd` is the shell-reported path used for directory context and local indexing.
+        // The location is passed separately because it preserves remote host identity for rules.
         let pwd = self.current_pwd();
         let is_pwd_indexed = if cfg!(feature = "agent_mode_evals") {
             // In evals, we want to disable file outline based search. Full
