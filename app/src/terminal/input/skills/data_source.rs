@@ -15,7 +15,7 @@ use warpui::{
     AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _,
 };
 
-use crate::ai::skills::SkillManager;
+use crate::ai::skills::{SkillManager, SkillPathScope};
 use crate::appearance::Appearance;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
@@ -120,8 +120,14 @@ impl SyncDataSource for SkillSelectorDataSource {
         app: &AppContext,
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let cwd = self.get_current_working_directory(app);
+        let path_scope =
+            SkillPathScope::for_session_type(self.active_session.as_ref(app).session_type(app));
         let cli_agent_providers = self.active_cli_agent_providers(app);
-        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
+        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(
+            cwd.as_ref(),
+            path_scope,
+            app,
+        );
 
         // Filter out bundled skills when in open mode, since they cannot be opened.
         // When CLI agent input is open, filter to skills that exist in a supported

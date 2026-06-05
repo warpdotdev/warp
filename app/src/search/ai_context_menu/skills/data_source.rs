@@ -3,7 +3,7 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use super::search_item::SkillSearchItem;
-use crate::ai::skills::SkillManager;
+use crate::ai::skills::{SkillManager, SkillPathScope};
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
@@ -31,21 +31,31 @@ impl SyncDataSource for SkillsDataSource {
         let query_text = &query.text;
 
         // Resolve the current working directory from the active window's session.
-        let cwd: Option<LocalOrRemotePath> = {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                app.windows().state().active_window.and_then(|window_id| {
-                    ActiveSession::as_ref(app)
-                        .working_directory(window_id)
-                        .cloned()
-                })
-            }
-            #[cfg(target_family = "wasm")]
-            {
-                None
-            }
-        };
-        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
+        #[cfg(not(target_family = "wasm"))]
+        let (cwd, path_scope): (Option<LocalOrRemotePath>, SkillPathScope) = app
+            .windows()
+            .state()
+            .active_window
+            .map(|window_id| {
+                let active_session = ActiveSession::as_ref(app);
+                (
+                    active_session.working_directory(window_id).cloned(),
+                    SkillPathScope::for_session_type(
+                        active_session
+                            .session(window_id)
+                            .map(|session| session.session_type()),
+                    ),
+                )
+            })
+            .unwrap_or((None, SkillPathScope::Local));
+        #[cfg(target_family = "wasm")]
+        let (cwd, path_scope): (Option<LocalOrRemotePath>, SkillPathScope) =
+            (None, SkillPathScope::Local);
+        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(
+            cwd.as_ref(),
+            path_scope,
+            app,
+        );
 
         let mut results: Vec<QueryResult<Self::Action>> = if query_text.is_empty() {
             // Zero state: show all skills with a uniform high score.

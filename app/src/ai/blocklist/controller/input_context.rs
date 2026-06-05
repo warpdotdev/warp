@@ -17,7 +17,7 @@ use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::{BlocklistAIContextModel, SessionContext};
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 use crate::ai::facts::CloudAIFactModel;
-use crate::ai::skills::list_skills_if_changed;
+use crate::ai::skills::{list_skills_if_changed, SkillPathScope};
 use crate::cloud_object::model::generic_string_model::{CloudStringObject, GenericStringObjectId};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
@@ -80,9 +80,8 @@ pub(super) fn input_context_for_request(
 
     if FeatureFlag::ListSkills.is_enabled() {
         let skills = list_skills_if_changed(
-            active_session
-                .current_working_directory_location(app)
-                .as_ref(),
+            current_working_directory_location.as_ref(),
+            SkillPathScope::for_session_type(active_session.session_type(app)),
             conversation_id,
             app,
         );

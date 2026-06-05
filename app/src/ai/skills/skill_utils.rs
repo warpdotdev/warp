@@ -16,7 +16,7 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::prelude::MouseStateHandle;
 use warpui::{AppContext, Element, EventContext, SingletonEntity};
 
-use super::{SkillDescriptor, SkillManager};
+use super::{SkillDescriptor, SkillManager, SkillPathScope};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::view_util::render_provider_icon_button;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -88,11 +88,15 @@ pub(crate) fn unique_skills(
 /// Skills are always included except when the current list matches the last list sent.
 pub fn list_skills_if_changed(
     working_directory: Option<&LocalOrRemotePath>,
+    path_scope: SkillPathScope,
     conversation_id: Option<AIConversationId>,
     app: &AppContext,
 ) -> Option<Vec<SkillDescriptor>> {
-    let current_skills =
-        SkillManager::as_ref(app).get_skills_for_working_directory(working_directory, app);
+    let current_skills = SkillManager::as_ref(app).get_skills_for_working_directory(
+        working_directory,
+        path_scope,
+        app,
+    );
 
     let previous_skills: Option<Vec<SkillDescriptor>> =
         conversation_id.and_then(|conversation_id| {

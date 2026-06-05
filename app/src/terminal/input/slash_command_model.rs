@@ -7,7 +7,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 use crate::ai::blocklist::{
     BlocklistAIInputEvent, BlocklistAIInputModel, InputTypeAutoDetectionSource,
 };
-use crate::ai::skills::SkillManager;
+use crate::ai::skills::{SkillManager, SkillPathScope};
 use crate::search::slash_command_menu::StaticCommand;
 use crate::settings::InputSettings;
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
@@ -248,13 +248,12 @@ impl SlashCommandModel {
 
         let skill_name = possible_command.strip_prefix('/')?;
 
-        let cwd_path = self
-            .active_session
-            .as_ref(ctx)
-            .current_working_directory_location(ctx);
+        let active_session = self.active_session.as_ref(ctx);
+        let cwd_path = active_session.current_working_directory_location(ctx);
+        let path_scope = SkillPathScope::for_session_type(active_session.session_type(ctx));
         let skills = SkillManager::handle(ctx)
             .as_ref(ctx)
-            .get_skills_for_working_directory(cwd_path.as_ref(), ctx);
+            .get_skills_for_working_directory(cwd_path.as_ref(), path_scope, ctx);
 
         let matched_skill = skills.into_iter().find(|skill| skill.name == skill_name)?;
 

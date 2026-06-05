@@ -22,7 +22,7 @@ use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConvers
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use crate::ai::skills::{SkillDescriptor, SkillManager};
+use crate::ai::skills::{SkillDescriptor, SkillManager, SkillPathScope};
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
@@ -503,13 +503,12 @@ impl SyncDataSource for SlashCommandDataSource {
         // Skills are invoked by the agent, so they're hidden entirely when AI is globally off.
         if FeatureFlag::ListSkills.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
             let cli_agent_providers = self.active_cli_agent_providers(app);
-            let cwd_path = self
-                .active_session
-                .as_ref(app)
-                .current_working_directory_location(app);
+            let active_session = self.active_session.as_ref(app);
+            let cwd_path = active_session.current_working_directory_location(app);
+            let path_scope = SkillPathScope::for_session_type(active_session.session_type(app));
             let skills = SkillManager::handle(app)
                 .as_ref(app)
-                .get_skills_for_working_directory(cwd_path.as_ref(), app);
+                .get_skills_for_working_directory(cwd_path.as_ref(), path_scope, app);
 
             let skill_manager = SkillManager::as_ref(app);
             for mut skill in skills {
