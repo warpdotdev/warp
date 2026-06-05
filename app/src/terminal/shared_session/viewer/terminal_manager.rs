@@ -14,7 +14,8 @@ use session_sharing_protocol::sharer::SessionSourceType;
 use session_sharing_protocol::viewer::SessionEndedReason;
 use settings::Setting as _;
 use warpui::{
-    AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WeakViewHandle, WindowId,
+    AppContext, ModelContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle,
+    WeakViewHandle, WindowId,
 };
 
 use super::event_loop::SharedSessionInitialLoadMode;
@@ -168,6 +169,28 @@ impl TerminalManager {
         Self::update_current_network(current_network, ctx, |network, _| {
             network.send_universal_developer_input_context_update(update);
         });
+    }
+
+    /// Handles a failed viewer command request and clears any queued-command dispatch state.
+    fn handle_command_execution_request_failed(
+        terminal_view: &mut TerminalView,
+        reason: &CommandExecutionFailureReason,
+        ctx: &mut ViewContext<TerminalView>,
+    ) {
+        let reason_string = command_execution_failure_reason_string(reason);
+        terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
+        terminal_view.clear_queued_command_in_flight(ctx);
+
+        // On command execution request, the input is frozen and set to a loading state.
+        // We only need to restore the input for errors that aren't the result of a new buffer.
+        if matches!(
+            reason,
+            CommandExecutionFailureReason::InsufficientPermissions
+        ) {
+            terminal_view.input().update(ctx, |input, ctx| {
+                input.on_execute_command_for_shared_session_participant_failure(ctx);
+            })
+        }
     }
 
     /// Internal constructor that creates all the models for viewing a shared session. This does not rely on the shared session existing yet.
@@ -1149,19 +1172,7 @@ impl TerminalManager {
                     return;
                 };
                 view.update(ctx, |terminal_view, ctx| {
-                    let reason_string = command_execution_failure_reason_string(reason);
-                    terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
-
-                    // On command execution request, the input is frozen and set to a loading state.
-                    // We only need to restore the input for errors that aren't the result of a new buffer.
-                    if matches!(
-                        reason,
-                        CommandExecutionFailureReason::InsufficientPermissions
-                    ) {
-                        terminal_view.input().update(ctx, |input, ctx| {
-                            input.on_execute_command_for_shared_session_participant_failure(ctx);
-                        })
-                    }
+                    Self::handle_command_execution_request_failed(terminal_view, reason, ctx);
                 });
             }
             NetworkEvent::WriteToPtyRequestFailed { reason } => {

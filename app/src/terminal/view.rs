@@ -4860,6 +4860,21 @@ impl TerminalView {
         self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
     }
 
+    /// Clears queued-command state for this terminal view if dispatch fails.
+    pub(crate) fn clear_queued_command_in_flight(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(conversation_id) = QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(
+                self.view_id,
+                BlocklistAIHistoryModel::as_ref(ctx),
+            )
+        else {
+            return;
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |model, _ctx| {
+            model.clear_command_in_flight(conversation_id);
+        });
+    }
+
     pub(crate) fn has_queued_command_in_flight(&self, ctx: &AppContext) -> bool {
         QueuedQueryModel::as_ref(ctx)
             .command_in_flight_for_terminal_view(self.view_id, BlocklistAIHistoryModel::as_ref(ctx))
