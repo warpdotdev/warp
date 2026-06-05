@@ -253,6 +253,7 @@ pub struct CodebaseIndexManagerConfig {
     embedding_generation_batch_size: usize,
     store_client: Arc<dyn StoreClient>,
     indexing_enabled: bool,
+    restore_persisted_indices_on_startup: bool,
 }
 
 impl CodebaseIndexManagerConfig {
@@ -271,7 +272,13 @@ impl CodebaseIndexManagerConfig {
             embedding_generation_batch_size,
             store_client,
             indexing_enabled,
+            restore_persisted_indices_on_startup: true,
         }
+    }
+
+    pub fn defer_persisted_index_restore(mut self) -> Self {
+        self.restore_persisted_indices_on_startup = false;
+        self
     }
 }
 
@@ -287,6 +294,8 @@ pub struct CodebaseIndexManager {
     watcher: ModelHandle<BulkFilesystemWatcher>,
 
     build_queue: BuildQueue,
+
+    persisted_index_restore_started: bool,
 
     max_indices: Option<usize>,
 
@@ -361,6 +370,7 @@ impl CodebaseIndexManager {
             embedding_generation_batch_size,
             store_client,
             indexing_enabled,
+            restore_persisted_indices_on_startup,
         } = config;
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -381,6 +391,7 @@ impl CodebaseIndexManager {
                 #[cfg(feature = "local_fs")]
                 watcher: file_watcher,
                 build_queue: BuildQueue::empty(),
+                persisted_index_restore_started: false,
                 max_indices: max_index_count,
                 max_files_repo_limit,
                 embedding_generation_batch_size,
@@ -425,6 +436,7 @@ impl CodebaseIndexManager {
             #[cfg(feature = "local_fs")]
             watcher: file_watcher,
             build_queue,
+            persisted_index_restore_started: false,
             max_indices: max_index_count,
             max_files_repo_limit,
             embedding_generation_batch_size,
@@ -433,9 +445,8 @@ impl CodebaseIndexManager {
             snapshot_storage,
         };
 
-        // Start building the first index in the queue.
-        if let Some(next_repo) = me.build_queue.pick_next_sync() {
-            me.build_and_sync_codebase_index(BuildSource::FromPersistedMetadata(next_repo), ctx);
+        if restore_persisted_indices_on_startup {
+            me.start_persisted_index_restore(ctx);
         }
 
         me
@@ -452,6 +463,7 @@ impl CodebaseIndexManager {
             #[cfg(feature = "local_fs")]
             watcher: file_watcher,
             build_queue: BuildQueue::empty(),
+            persisted_index_restore_started: true,
             max_indices: None,
             max_files_repo_limit: 0,
             embedding_generation_batch_size: 100,
@@ -808,6 +820,15 @@ impl CodebaseIndexManager {
         self.indexing_enabled
     }
 
+    pub fn start_persisted_index_restore(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.persisted_index_restore_started || !self.is_indexing_enabled() {
+            return;
+        }
+
+        self.persisted_index_restore_started = true;
+        self.start_next_queued_index(ctx);
+    }
+
     pub fn index_directory(&mut self, directory: PathBuf, ctx: &mut ModelContext<Self>) -> bool {
         if !self.is_indexing_enabled() {
             return false;
@@ -1100,6 +1121,13 @@ impl CodebaseIndexManager {
         let Ok(_) = self.get_codebase_index_internal(finished_repo) else {
             return;
         };
+        self.start_next_queued_index(ctx);
+    }
+
+    fn start_next_queued_index(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.persisted_index_restore_started {
+            return;
+        }
 
         if let Some(next_repo) = self.build_queue.pick_next_sync() {
             self.build_and_sync_codebase_index(BuildSource::FromPersistedMetadata(next_repo), ctx);

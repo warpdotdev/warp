@@ -1997,7 +1997,7 @@ pub(crate) fn initialize_app(
         };
 
         let codebase_limits = AIRequestUsageModel::as_ref(ctx).codebase_context_limits();
-        let codebase_index_config = CodebaseIndexManagerConfig::new(
+        let mut codebase_index_config = CodebaseIndexManagerConfig::new(
             indices_to_restore,
             codebase_limits.max_indices_allowed,
             codebase_limits.max_files_per_repo,
@@ -2005,6 +2005,9 @@ pub(crate) fn initialize_app(
             server_api_provider.as_ref(ctx).get(),
             launch_mode.supports_indexing(),
         );
+        if matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. }) {
+            codebase_index_config = codebase_index_config.defer_persisted_index_restore();
+        }
         #[cfg(feature = "local_fs")]
         if let Some(snapshot_storage) = daemon_codebase_index_snapshot_storage(launch_mode) {
             return CodebaseIndexManager::new_with_snapshot_storage(
