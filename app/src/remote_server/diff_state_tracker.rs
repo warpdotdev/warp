@@ -376,10 +376,9 @@ impl RemoteDiffStateManager {
             }
             DiffStateModelEvent::BranchesReceived(_)
             | DiffStateModelEvent::GitOpCompleted(_)
-            | DiffStateModelEvent::CommitMessageGenerated(_) => {
-                // Client-only events — the server model fetches branches
-                // directly via handle_get_branches, not through this tracker.
-                // Commit-message autogen also runs only on the client dialog.
+            | DiffStateModelEvent::CommitMessageGenerated(_)
+            | DiffStateModelEvent::BranchCommittedFilesReceived(_) => {
+                // Client-only events don't go through this tracker.
             }
         }
     }

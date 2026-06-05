@@ -581,6 +581,14 @@ pub enum RemoteServerManagerEvent {
         repo_path: StandardizedPath,
         result: Result<Option<crate::proto::PrInfo>, String>,
     },
+    /// Response to a committed-branch-files request (backs the Create PR
+    /// dialog's Changes box). Carries the committed per-file entries
+    /// (`merge_base(HEAD, main)..HEAD`) on success.
+    GetCommittedBranchFilesResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<Vec<crate::proto::FileChangeEntry>, String>,
+    },
 
     // --- Setup events ---
     /// Intermediate state change during the binary check/install flow.
@@ -679,7 +687,8 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::GitPushResponse { .. }
             | RemoteServerManagerEvent::CreatePrResponse { .. }
             | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
-            | RemoteServerManagerEvent::GetPrInfoResponse { .. } => None,
+            | RemoteServerManagerEvent::GetPrInfoResponse { .. }
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => None,
             RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
                 session_id: Some(session_id),
                 ..
@@ -1045,8 +1054,8 @@ impl HostRequestHandle {
     }
 
     /// Creates a PR for the current branch on the remote host. When
-    /// `autogenerate_content` is set and `title`/`body` are absent, the daemon
-    /// generates them via AI before running `gh pr create`.
+    /// `autogenerate_content` is set, the daemon AI-generates the title/body
+    /// (with a `gh pr create --fill` fallback) before running `gh pr create`.
     pub async fn git_create_pr(
         &self,
         repo_path: &StandardizedPath,
@@ -1113,9 +1122,43 @@ impl HostRequestHandle {
         }
     }
 
+    /// Lists the committed branch files (`merge_base(HEAD, main)..HEAD`) for
+    /// the current branch on the remote host. Committed-only — excludes
+    /// uncommitted and untracked changes, so it matches what a PR would carry.
+    pub async fn git_get_committed_branch_files(
+        &self,
+        repo_path: &StandardizedPath,
+    ) -> Result<Vec<crate::proto::FileChangeEntry>, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::GitGetCommittedBranchFiles(
+                    crate::proto::GitGetCommittedBranchFilesRequest {
+                        repo_path: repo_path.to_string(),
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GitGetCommittedBranchFilesResponse(
+                resp,
+            )) => match resp.result {
+                Some(crate::proto::git_get_committed_branch_files_response::Result::Success(
+                    success,
+                )) => Ok(success.files),
+                Some(crate::proto::git_get_committed_branch_files_response::Result::Error(e)) => {
+                    Err(HostRequestError::OperationFailed(e.message))
+                }
+                None => Err(HostRequestError::UnexpectedResponse),
+            },
+            other => {
+                log::error!("Unexpected response variant for GetCommittedBranchFiles: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
     /// Generates a commit message via AI on the remote host (the daemon
-    /// computes the diff locally and calls the Warp content endpoint). The
-    /// diff never leaves the host — only the message string is returned.
+    /// computes the diff locally and calls the Warp content endpoint).
     pub async fn git_generate_commit_message(
         &self,
         repo_path: &StandardizedPath,
@@ -3109,8 +3152,8 @@ impl RemoteServerManager {
 
     /// Creates a PR on the remote host and emits `CreatePrResponse`.
     ///
-    /// When `autogenerate_content` is set and `title`/`body` are absent, the
-    /// daemon generates the PR title/body via AI before creating the PR.
+    /// When `autogenerate_content` is set, the daemon AI-generates the PR
+    /// title/body (with a `gh pr create --fill` fallback) before creating the PR.
     #[allow(clippy::too_many_arguments)]
     pub fn git_create_pr(
         &mut self,
@@ -3200,6 +3243,39 @@ impl RemoteServerManager {
                 let _ = spawner
                     .spawn(move |_me, ctx| {
                         ctx.emit(RemoteServerManagerEvent::GetPrInfoResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Fetches the committed branch files (`merge_base(HEAD, main)..HEAD`) for
+    /// the current branch on the remote host and emits
+    /// `GetCommittedBranchFilesResponse` with the result.
+    pub fn git_get_committed_branch_files(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = handle
+                    .git_get_committed_branch_files(&repo_path)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::GetCommittedBranchFilesResponse {
                             host_id: host_id_for_event,
                             repo_path: repo_path_for_event,
                             result,

@@ -48,6 +48,7 @@ message HostScopedRequest {
     GitCreatePrRequest git_create_pr = 17;
     GitGetPrInfoRequest git_get_pr_info = 18;
     GitGenerateCommitMessageRequest git_generate_commit_message = 19;
+    GitGetCommittedBranchFilesRequest git_get_committed_branch_files = 20;
   }
 }
 
@@ -116,6 +117,7 @@ message ServerMessage {
     GitCreatePrResponse git_create_pr_response = 29;
     GitGetPrInfoResponse git_get_pr_info_response = 30;
     GitGenerateCommitMessageResponse git_generate_commit_message_response = 31;
+    GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 32;
   }
 }
 

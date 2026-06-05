@@ -169,6 +169,59 @@ fn apply_snapshot_loaded_with_diffs() {
 }
 
 #[test]
+fn get_committed_branch_files_response_emits_domain_files() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        {
+            let emitted = emitted.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                    if let DiffStateModelEvent::BranchCommittedFilesReceived(files) = event {
+                        emitted
+                            .lock()
+                            .expect("emitted mutex should not be poisoned")
+                            .push(files.clone());
+                    }
+                });
+            });
+        }
+
+        // Success: proto entries are converted to domain entries and emitted.
+        let proto_files = vec![remote_server::proto::FileChangeEntry {
+            path: "src/main.rs".to_string(),
+            additions: 3,
+            deletions: 1,
+        }];
+        handle.update(&mut app, |m, ctx| {
+            m.handle_get_committed_branch_files_response(&Ok(proto_files), ctx);
+        });
+
+        // Error: an empty list is emitted so the dialog shows an empty box
+        // rather than stale data.
+        handle.update(&mut app, |m, ctx| {
+            m.handle_get_committed_branch_files_response(&Err("boom".to_string()), ctx);
+        });
+
+        let emitted = emitted
+            .lock()
+            .expect("emitted mutex should not be poisoned");
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(emitted[0].len(), 1);
+        assert_eq!(emitted[0][0].path, "src/main.rs");
+        assert_eq!(emitted[0][0].additions, 3);
+        assert_eq!(emitted[0][0].deletions, 1);
+        assert!(emitted[1].is_empty());
+    });
+}
+
+#[test]
 fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
     warpui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {

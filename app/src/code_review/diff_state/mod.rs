@@ -398,6 +398,11 @@ pub enum DiffStateModelEvent {
     /// string. The `GitDialog` populates its message editor from this; the
     /// local path fills the editor directly without going through an event.
     CommitMessageGenerated(Result<String, String>),
+    /// Committed branch files (`merge_base(HEAD, main)..HEAD`) arrived for the
+    /// Create PR dialog's Changes box. Fetched on dialog open and delivered the
+    /// same way for both backends: the local model computes them off-thread and
+    /// emits this; the remote model emits it on the daemon's RPC response.
+    BranchCommittedFilesReceived(Vec<FileChangeEntry>),
 }
 
 /// Result of a remote git operation, emitted via
@@ -499,6 +504,11 @@ impl DiffStateModel {
             DiffStateModelEvent::CommitMessageGenerated(result) => {
                 ctx.emit(DiffStateModelEvent::CommitMessageGenerated(result.clone()));
             }
+            DiffStateModelEvent::BranchCommittedFilesReceived(files) => {
+                ctx.emit(DiffStateModelEvent::BranchCommittedFilesReceived(
+                    files.clone(),
+                ));
+            }
         }
     }
 
@@ -537,17 +547,6 @@ impl DiffStateModel {
         match self {
             Self::Local(m) => m.as_ref(ctx).uncommitted_file_entries(),
             Self::Remote(m) => m.as_ref(ctx).uncommitted_file_entries(),
-        }
-    }
-
-    /// Per-file entries for the branch-vs-base diff, sourced from synced
-    /// metadata (`against_base_branch.files`). Empty until metadata loads or
-    /// when no base-branch comparison is available. Used by the create-PR
-    /// dialog's Changes box.
-    pub(crate) fn branch_file_entries<'a>(&self, ctx: &'a AppContext) -> &'a [FileChangeEntry] {
-        match self {
-            Self::Local(m) => m.as_ref(ctx).branch_file_entries(),
-            Self::Remote(m) => m.as_ref(ctx).branch_file_entries(),
         }
     }
 
@@ -804,9 +803,9 @@ impl DiffStateModel {
     /// Creates a PR on the remote host. The result arrives via
     /// `DiffStateModelEvent::GitOpCompleted`. No-op for local repos.
     ///
-    /// When `autogenerate_content` is set and `title`/`body` are absent, the
-    /// daemon generates the PR title/body via AI. `branch` is passed as
-    /// context for that generation.
+    /// When `autogenerate_content` is set, the daemon AI-generates the PR
+    /// title/body (falling back to `gh pr create --fill`). `branch` is passed
+    /// as context for that generation.
     pub(crate) fn create_pr_remote(
         &self,
         branch: String,
@@ -830,6 +829,23 @@ impl DiffStateModel {
             Self::Local(_) => {}
             Self::Remote(model) => model.update(ctx, |model, ctx| {
                 model.fetch_pr_info(ctx);
+            }),
+        }
+    }
+
+    /// Fetches the committed branch files (`merge_base(HEAD, main)..HEAD`) for
+    /// the Create PR dialog's Changes box. Both backends deliver the result via
+    /// `DiffStateModelEvent::BranchCommittedFilesReceived`: the local model
+    /// computes them from committed history off-thread; the remote model issues
+    /// the `GitGetCommittedBranchFiles` RPC. Committed-only, so uncommitted and
+    /// untracked changes are excluded — matching what the PR will contain.
+    pub(crate) fn fetch_committed_branch_files(&self, ctx: &mut ModelContext<Self>) {
+        match self {
+            Self::Local(local) => local.update(ctx, |local, ctx| {
+                local.fetch_committed_branch_files(ctx);
+            }),
+            Self::Remote(model) => model.update(ctx, |model, ctx| {
+                model.fetch_committed_branch_files(ctx);
             }),
         }
     }

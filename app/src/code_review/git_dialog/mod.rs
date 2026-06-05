@@ -588,10 +588,11 @@ impl GitDialog {
             cancel_button,
             close_button,
         };
-        // Both backends source the Changes box from the model's cached
-        // metadata; the local backend keeps it fresh via its filesystem
-        // watcher.
-        pr::refresh_file_changes_from_metadata(&mut this, ctx);
+        // Fetch the committed branch diff on open (committed-only, so the
+        // Changes box previews exactly what the PR will contain). Both backends
+        // deliver the result via `BranchCommittedFilesReceived`, applied in
+        // `handle_diff_state_event`.
+        pr::fetch_committed_file_changes(&mut this, ctx);
         this
     }
 
@@ -652,13 +653,18 @@ impl GitDialog {
             commit::apply_generated_commit_message(self, result.clone(), ctx);
             return;
         }
-        // Refresh the active mode's Changes box whenever metadata lands: PR
-        // mode sources its file list from metadata for both backends, while
-        // commit mode does so for remote repos. Arrives independently of any
+        // Commit mode (remote) sources its Changes box from synced metadata, so
+        // refresh it whenever metadata lands. Arrives independently of any
         // in-flight op, so it's handled outside the `loading` gate below.
         if let DiffStateModelEvent::MetadataRefreshed(_) = event {
             commit::refresh_remote_file_changes(self, ctx);
-            pr::refresh_file_changes_from_metadata(self, ctx);
+            return;
+        }
+        // The create-PR dialog fetches its committed file list on open
+        // (committed-only, so it matches what the PR will contain); the result
+        // arrives here and populates the Changes box.
+        if let DiffStateModelEvent::BranchCommittedFilesReceived(files) = event {
+            pr::apply_committed_file_changes(self, files.clone(), ctx);
             return;
         }
         let DiffStateModelEvent::GitOpCompleted(result) = event else {

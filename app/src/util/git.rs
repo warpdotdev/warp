@@ -323,6 +323,58 @@ pub async fn get_file_change_entries(
     Err(anyhow!("Not supported on wasm"))
 }
 
+/// Returns per-file change entries for the **committed** branch diff
+/// (`merge_base(HEAD, main)..HEAD`) — exactly what an opened PR would contain.
+///
+/// Unlike [`get_file_change_entries`] and the `against_base_branch` metadata
+/// which diff the working tree against the merge base and append untracked files,
+/// this only includes committed changes. The base is the detected main branch,
+/// matching the `--base` that [`create_pr`] targets.
+///
+/// Returns an empty list when the merge base can't be resolved (e.g. no commits
+/// yet, or the branch shares no history with main).
+#[cfg(feature = "local_fs")]
+pub async fn get_committed_branch_file_entries(repo_path: &Path) -> Result<Vec<FileChangeEntry>> {
+    let main_branch = detect_main_branch(repo_path).await?;
+    let merge_base =
+        match run_git_command(repo_path, &["merge-base", "HEAD", main_branch.trim()]).await {
+            Ok(output) => output.trim().to_string(),
+            Err(err) => {
+                log::warn!("Could not determine merge base against branch {main_branch}: {err:?}");
+                return Ok(Vec::new());
+            }
+        };
+
+    // `git diff --numstat <merge_base> HEAD` is the committed-only diff
+    // (equivalent to `main...HEAD`): no working-tree edits, no untracked files.
+    let output = run_git_command(repo_path, &["diff", "--numstat", &merge_base, "HEAD"])
+        .await
+        .unwrap_or_default();
+    let mut entries = Vec::new();
+    for line in output.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 3 {
+            entries.push(FileChangeEntry {
+                path: parts[2].to_string(),
+                // Binary files render as "-\t-\t<path>"; parse failures fall back
+                // to 0, mirroring `get_file_change_entries`.
+                additions: parts[0].parse().unwrap_or(0),
+                deletions: parts[1].parse().unwrap_or(0),
+            });
+        }
+    }
+
+    Ok(entries)
+}
+
+#[cfg(not(feature = "local_fs"))]
+pub async fn get_committed_branch_file_entries(_repo_path: &Path) -> Result<Vec<FileChangeEntry>> {
+    Err(anyhow!("Not supported on wasm"))
+}
+
 /// Unpushed commits: `<upstream>..HEAD`, or `<fork_point>..HEAD` if no upstream.
 #[cfg(feature = "local_fs")]
 pub async fn get_unpushed_commits(

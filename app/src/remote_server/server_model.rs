@@ -35,29 +35,30 @@ use super::diff_state_tracker::{
 use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
     get_fragment_metadata_from_hash_response, git_commit_chain_response, git_create_pr_response,
-    git_generate_commit_message_response, git_get_pr_info_response, git_push_response,
-    host_scoped_request, notification, resolve_conflict_response, run_command_response,
-    save_buffer_response, server_message, session_scoped_request, write_file_response, Abort,
-    Authenticate, BranchInfo, BufferEdit, BufferUpdatedPush, ClientMessage, CloseBuffer,
-    CodebaseIndexLimits, CodebaseIndexStatus, CodebaseIndexStatusUpdated,
-    CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile, DeleteFileResponse,
-    DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse, DiscardFilesSuccess,
-    DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
-    FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    git_generate_commit_message_response, git_get_committed_branch_files_response,
+    git_get_pr_info_response, git_push_response, host_scoped_request, notification,
+    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
+    session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
+    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
+    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
+    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
+    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
+    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
     GetFragmentMetadataFromHashSuccess, GitCommitChainMode, GitCommitChainRequest,
     GitCommitChainResponse, GitCommitChainSuccess, GitCreatePrRequest, GitCreatePrResponse,
-    GitGenerateCommitMessageRequest, GitGenerateCommitMessageResponse, GitGetPrInfoRequest,
-    GitGetPrInfoResponse, GitGetPrInfoSuccess, GitOpDelta, GitOpError, GitPushRequest,
-    GitPushResponse, IndexCodebase, Initialize, InitializeResponse, MissingFragmentMetadata,
-    NavigatedToDirectory, NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse,
-    ReadFileContextResponse, ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess,
-    ResyncCodebase, RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse,
-    RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage,
-    SessionBootstrapped, TextEdit, UploadHandoffSnapshot, WriteFile, WriteFileResponse,
-    WriteFileSuccess,
+    GitGenerateCommitMessageRequest, GitGenerateCommitMessageResponse,
+    GitGetCommittedBranchFilesRequest, GitGetCommittedBranchFilesResponse,
+    GitGetCommittedBranchFilesSuccess, GitGetPrInfoRequest, GitGetPrInfoResponse,
+    GitGetPrInfoSuccess, GitOpDelta, GitOpError, GitPushRequest, GitPushResponse, IndexCodebase,
+    Initialize, InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
+    NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
+    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
+    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
+    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
+    TextEdit, UploadHandoffSnapshot, WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -769,6 +770,9 @@ impl ServerModel {
                     Some(host_scoped_request::Message::GitGenerateCommitMessage(m)) => {
                         self.handle_generate_git_commit_message(m, &request_id, conn_id, ctx)
                     }
+                    Some(host_scoped_request::Message::GitGetCommittedBranchFiles(m)) => {
+                        self.handle_get_committed_branch_files(m, &request_id, conn_id, ctx)
+                    }
                     None => {
                         log::warn!(
                             "HostScopedRequest with no inner message (request_id={request_id})"
@@ -831,7 +835,7 @@ impl ServerModel {
                         self.handle_update_preferences(m, ctx);
                     }
                     Some(notification::Message::SessionBootstrapped(m)) => {
-                        self.handle_session_bootstrapped(m, ctx);
+                        self.handle_session_bootstrapped(m);
                     }
                     Some(notification::Message::BufferEdit(m)) => {
                         self.handle_buffer_edit(m, ctx);
@@ -1649,11 +1653,7 @@ impl ServerModel {
 
     /// Handles `SessionBootstrapped` by creating a `LocalCommandExecutor` for
     /// the session. This is a notification — no response is sent.
-    fn handle_session_bootstrapped(
-        &mut self,
-        msg: SessionBootstrapped,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    fn handle_session_bootstrapped(&mut self, msg: SessionBootstrapped) {
         let session_id = SessionId::from(msg.session_id);
         log::info!(
             "Handling SessionBootstrapped: session_id={session_id:?}, \
@@ -3108,6 +3108,60 @@ impl ServerModel {
                             message: format!("{e:#}"),
                         })),
                     }),
+                };
+                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `GitGetCommittedBranchFilesRequest` — computes the committed
+    /// branch diff (`merge_base(HEAD, main)..HEAD`) on the remote filesystem
+    /// and returns the per-file change entries for the Create PR dialog's
+    /// Changes box. Committed-only, so it excludes uncommitted/untracked files.
+    fn handle_get_committed_branch_files(
+        &mut self,
+        msg: GitGetCommittedBranchFilesRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let repo_path = match requested_repo_path(&msg.repo_path) {
+            Ok(p) => p,
+            Err(e) => return invalid_request_response(e),
+        };
+        log::info!(
+            "Handling GetCommittedBranchFiles repo={} (request_id={request_id})",
+            msg.repo_path
+        );
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move { git::get_committed_branch_file_entries(&repo_path).await },
+            move |me, result, _ctx| {
+                let message = match result {
+                    Ok(files) => server_message::Message::GitGetCommittedBranchFilesResponse(
+                        GitGetCommittedBranchFilesResponse {
+                            result: Some(git_get_committed_branch_files_response::Result::Success(
+                                GitGetCommittedBranchFilesSuccess {
+                                    files: files
+                                        .iter()
+                                        .map(super::proto::FileChangeEntry::from)
+                                        .collect(),
+                                },
+                            )),
+                        },
+                    ),
+                    Err(e) => server_message::Message::GitGetCommittedBranchFilesResponse(
+                        GitGetCommittedBranchFilesResponse {
+                            result: Some(git_get_committed_branch_files_response::Result::Error(
+                                GitOpError {
+                                    message: format!("{e:#}"),
+                                },
+                            )),
+                        },
+                    ),
                 };
                 me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
             },

@@ -424,6 +424,25 @@ message GitGetPrInfoSuccess {
   optional PrInfo pr_info = 1;
 }
 
+// Client → server: list the committed file changes for the current branch's
+// PR-ready diff (merge_base(HEAD, main)..HEAD). Backs the Create PR dialog's
+// Changes box; deliberately committed-only (no working-tree edits, no
+// untracked files) so it matches what `gh pr create` would include.
+message GitGetCommittedBranchFilesRequest {
+  string repo_path = 1;
+}
+
+message GitGetCommittedBranchFilesResponse {
+  oneof result {
+    GitGetCommittedBranchFilesSuccess success = 1;
+    GitOpError error = 2;
+  }
+}
+
+message GitGetCommittedBranchFilesSuccess {
+  repeated FileChangeEntry files = 1;
+}
+
 // Client → server: generate a commit message via AI on the remote host.
 // The daemon computes the working-tree diff locally and calls the Warp
 // server's code-review content endpoint, returning the message string. Sent

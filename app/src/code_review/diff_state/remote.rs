@@ -212,6 +212,13 @@ impl RemoteDiffStateModel {
                 // AI ran on the daemon; just relay the result to the dialog.
                 ctx.emit(DiffStateModelEvent::CommitMessageGenerated(result.clone()));
             }
+            RemoteServerManagerEvent::GetCommittedBranchFilesResponse {
+                host_id,
+                repo_path,
+                result,
+            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+                self.handle_get_committed_branch_files_response(result, ctx);
+            }
             RemoteServerManagerEvent::HostDisconnected { host_id }
                 if host_id == &self.remote_path.host_id =>
             {
@@ -573,16 +580,6 @@ impl RemoteDiffStateModel {
             .unwrap_or(&[])
     }
 
-    /// Per-file entries for the branch-vs-base diff, from synced metadata.
-    /// Empty when no base-branch comparison is loaded.
-    pub fn branch_file_entries(&self) -> &[FileChangeEntry] {
-        self.metadata
-            .as_ref()
-            .and_then(|m| m.against_base_branch.as_ref())
-            .map(|b| b.files.as_slice())
-            .unwrap_or(&[])
-    }
-
     pub fn get_main_branch_name(&self) -> Option<String> {
         self.metadata
             .as_ref()
@@ -736,6 +733,25 @@ impl RemoteDiffStateModel {
         }
     }
 
+    /// Handles a `GetCommittedBranchFilesResponse`: converts the proto entries
+    /// to domain types and emits `BranchCommittedFilesReceived` for the Create
+    /// PR dialog's Changes box. On error, logs and emits an empty list so the
+    /// dialog renders an empty box rather than showing stale data.
+    fn handle_get_committed_branch_files_response(
+        &self,
+        result: &Result<Vec<remote_server::proto::FileChangeEntry>, String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let files = match result {
+            Ok(files) => files.iter().map(FileChangeEntry::from).collect(),
+            Err(msg) => {
+                log::warn!("RemoteDiffStateModel: GetCommittedBranchFiles failed: {msg}");
+                Vec::new()
+            }
+        };
+        ctx.emit(DiffStateModelEvent::BranchCommittedFilesReceived(files));
+    }
+
     // ── Remote git operations (async; results arrive via manager events) ──
     //
     // Each dispatches via `RemoteServerManager` and returns immediately; the
@@ -797,6 +813,19 @@ impl RemoteDiffStateModel {
         });
     }
 
+    /// Fetches the committed branch files (`merge_base(HEAD, main)..HEAD`) for
+    /// the current branch via the remote `GitGetCommittedBranchFiles` RPC. The
+    /// result arrives as a `GetCommittedBranchFilesResponse` manager event,
+    /// handled in `handle_manager_event`, which emits
+    /// `BranchCommittedFilesReceived` for the Create PR dialog.
+    pub fn fetch_committed_branch_files(&self, ctx: &mut ModelContext<Self>) {
+        let host_id = self.remote_path.host_id.clone();
+        let repo_path = self.remote_path.path.clone();
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.git_get_committed_branch_files(host_id, repo_path, ctx);
+        });
+    }
+
     /// Pushes the branch via the remote server manager.
     pub fn git_push(&self, branch: String, ctx: &mut ModelContext<Self>) {
         let host_id = self.remote_path.host_id.clone();
@@ -807,8 +836,8 @@ impl RemoteDiffStateModel {
     }
 
     /// Creates a PR via the remote server manager. When `autogenerate_content`
-    /// is set and `title`/`body` are absent, the daemon generates the PR
-    /// title/body via AI; `branch` is passed as context for that generation.
+    /// is set, the daemon AI-generates the PR title/body (falling back to
+    /// `gh pr create --fill`); `branch` is passed as context for that generation.
     #[allow(clippy::too_many_arguments)]
     pub fn create_pr_remote(
         &self,

@@ -370,16 +370,6 @@ impl LocalDiffStateModel {
             .unwrap_or(&[])
     }
 
-    /// Per-file entries for the branch-vs-base diff, from cached metadata.
-    /// Empty when no base-branch comparison is loaded.
-    pub fn branch_file_entries(&self) -> &[FileChangeEntry] {
-        self.metadata
-            .as_ref()
-            .and_then(|m| m.against_base_branch.as_ref())
-            .map(|b| b.files.as_slice())
-            .unwrap_or(&[])
-    }
-
     /// Get the name of the main branch being used for comparison
     pub fn get_main_branch_name(&self) -> Option<String> {
         self.metadata
@@ -1243,6 +1233,28 @@ impl LocalDiffStateModel {
         ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(
             metadata.clone(),
         )));
+    }
+
+    /// Computes the committed branch files (`merge_base(HEAD, main)..HEAD`)
+    /// off-thread and emits `BranchCommittedFilesReceived` for the Create PR
+    /// dialog's Changes box. Committed-only, so uncommitted edits and untracked
+    /// files are excluded — matching what `gh pr create` includes. Emits an
+    /// empty list when there is no active repository path.
+    pub fn fetch_committed_branch_files(&self, ctx: &mut ModelContext<Self>) {
+        let Some(repo_path) = self.active_repository_path(ctx) else {
+            ctx.emit(DiffStateModelEvent::BranchCommittedFilesReceived(Vec::new()));
+            return;
+        };
+        ctx.spawn(
+            async move { crate::util::git::get_committed_branch_file_entries(&repo_path).await },
+            |_me, result, ctx| {
+                let files = result.unwrap_or_else(|err| {
+                    log::warn!("Failed to load committed branch files: {err}");
+                    Vec::new()
+                });
+                ctx.emit(DiffStateModelEvent::BranchCommittedFilesReceived(files));
+            },
+        );
     }
 
     #[cfg(feature = "local_fs")]

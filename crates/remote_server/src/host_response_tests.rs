@@ -166,6 +166,7 @@ fn every_host_scoped_request_has_a_response_disposition() {
             M::GitCreatePr(_) => "manager::create_pr",
             M::GitGetPrInfo(_) => "manager::get_pr_info",
             M::GitGenerateCommitMessage(_) => "manager::generate_commit_message",
+            M::GitGetCommittedBranchFiles(_) => "manager::get_committed_branch_files",
         }
     }
 

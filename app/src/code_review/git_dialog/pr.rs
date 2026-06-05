@@ -72,23 +72,33 @@ pub(super) fn new_state(base_branch_name: Option<String>) -> PrState {
     }
 }
 
-/// Sources the create-PR Changes box from the model's cached metadata
-/// (`against_base_branch.files`) for both local and remote repos. The local
-/// backend keeps this metadata fresh via its filesystem watcher, so the box
-/// no longer needs a dedicated working-tree read. Safe to call on open and on
-/// every metadata refresh.
-pub(super) fn refresh_file_changes_from_metadata(
+/// Kicks off an on-demand fetch of the committed branch diff
+/// (`merge_base(HEAD, main)..HEAD`) for the create-PR Changes box. The result
+/// arrives via `DiffStateModelEvent::BranchCommittedFilesReceived` and is
+/// applied by [`apply_committed_file_changes`]. Unlike the working-tree-based
+/// `against_base_branch` metadata, this is committed-only, so the box previews
+/// exactly what `gh pr create` will include — not uncommitted or untracked
+/// changes. Called on dialog open; local computes it off-thread, remote fetches
+/// it via RPC.
+pub(super) fn fetch_committed_file_changes(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>) {
+    me.diff_state_model().update(ctx, |model, ctx| {
+        model.fetch_committed_branch_files(ctx);
+    });
+}
+
+/// Applies the committed branch files delivered via
+/// `DiffStateModelEvent::BranchCommittedFilesReceived` to the create-PR
+/// Changes box. No-op when the dialog isn't in create-PR mode.
+pub(super) fn apply_committed_file_changes(
     me: &mut GitDialog,
+    files: Vec<FileChangeEntry>,
     ctx: &mut ViewContext<GitDialog>,
 ) {
-    let entries = me
-        .diff_state_model()
-        .read(ctx, |model, ctx| model.branch_file_entries(ctx).to_vec());
     {
         let GitDialogMode::CreatePr(state) = me.mode_mut() else {
             return;
         };
-        state.file_changes = entries;
+        state.file_changes = files;
     }
     ctx.notify();
 }
