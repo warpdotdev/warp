@@ -11,14 +11,14 @@ We need a periodic sweep that finds open external-contributor PRs with an active
 - `.github/workflows/check_approvals.yml` — precedent for reading PR review state inside a workflow (`gh pr view --json reviews --jq '.reviews[] | select(.state==...)'`).
 
 ## Approach
-Add one scheduled GitHub Action that mirrors `close_stale_fix_prs.yml`. A single `actions/github-script` step does detection, reminders, and closure; reminder state lives in marker comments (no datastore). This was chosen over hosting the scan in the `oz-for-oss` control plane — see "Alternative considered." The only thing the `warp`-hosted GHA gives up is native `oz-for-oss` comment authorship, which `PRODUCT.md` invariant 9 treats as non-functional and deferred.
+Add one scheduled GitHub Action that mirrors `close_stale_fix_prs.yml`. An `actions/github-script` step does detection, reminders, and closure — its logic factored into a standalone `.github/scripts/` JS module the step `require`s, rather than inline YAML — and reminder state lives in marker comments (no datastore). This was chosen over hosting the scan in the `oz-for-oss` control plane — see "Alternative considered." The only thing the `warp`-hosted GHA gives up is native `oz-for-oss` comment authorship, which `PRODUCT.md` invariant 9 treats as non-functional and deferred.
 
 ## Proposed Changes
 
 ### 1. New workflow `.github/workflows/stale_requested_changes_prs.yml`
 - Triggers: `schedule:` with cron `7 12 * * *` — fields are `minute hour day-of-month month day-of-week`, so this is **12:07 UTC daily** (GitHub interprets cron in UTC). Minute `7` rather than `:00` avoids GitHub's top-of-hour scheduler congestion and the existing warp crons there. Also `workflow_dispatch:` with a `mode` input (`dry-run` | `reminder-only` | `full`).
 - Least-privilege `permissions:` — `pull-requests: write`, `issues: write`, `contents: read` (note `close_stale_fix_prs.yml` declares none; do better here).
-- Single `actions/github-script` step pinned to the same SHA already used by `close_stale_fix_prs.yml`.
+- Two steps: a sparse `actions/checkout` (cone limited to `.github/scripts`, `blob:none`) that makes the script available, then an `actions/github-script` step pinned to the same SHA already used by `close_stale_fix_prs.yml` that `require`s `.github/scripts/stale-requested-changes-prs.js` and invokes it with `{ github, context }`. The detection/reminder/closure logic lives in that standalone module for reviewability and `node`-based testing.
 
 ### 2. Eligibility + review state (in github-script JS)
 Paginate open PRs; keep those that are non-draft, carry `external-contributor`, and lack the exemption label. Compute the latest *decisive* review state per PR from the reviews API — track `APPROVED` / `CHANGES_REQUESTED` / `DISMISSED` separately from `COMMENTED` so a later author `COMMENTED` reply doesn't look like a state change — and keep only PRs whose decisive state is `CHANGES_REQUESTED` (Oz- or human-authored). This re-implements `oz-for-oss`'s `_is_stale_oz_changes_requested_review` decision in JS; keep it small and documented.
