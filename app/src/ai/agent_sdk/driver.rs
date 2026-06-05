@@ -1424,22 +1424,25 @@ impl AgentDriver {
         foreground: &ModelSpawner<Self>,
         global_skill_repos: &[GithubRepo],
     ) -> Result<(), AgentDriverError> {
-        for repo in global_skill_repos {
-            let repo = repo.clone();
-            let repo_for_log = repo.clone();
-            let clone_future = foreground
-                .spawn(move |me, ctx| {
-                    let working_dir = me.working_dir.clone();
-                    me.terminal_driver.update(ctx, |_, ctx| {
-                        let spawner = ctx.spawner();
-                        async move { environment::clone_repo(&repo, &working_dir, &spawner).await }
-                    })
-                })
-                .await?;
+        if global_skill_repos.is_empty() {
+            return Ok(());
+        }
 
-            if let Err(err) = clone_future.await {
-                log::warn!("Failed to clone global-skill repo {repo_for_log}: {err}");
-            }
+        let global_skill_repos = global_skill_repos.to_vec();
+        let clone_future = foreground
+            .spawn(move |me, ctx| {
+                let working_dir = me.working_dir.clone();
+                me.terminal_driver.update(ctx, |_, ctx| {
+                    let spawner = ctx.spawner();
+                    async move {
+                        environment::clone_repos(&global_skill_repos, &working_dir, &spawner).await
+                    }
+                })
+            })
+            .await?;
+
+        if let Err(err) = clone_future.await {
+            log::warn!("Failed to clone one or more global-skill repos: {err}");
         }
 
         Ok(())
