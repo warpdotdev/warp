@@ -1,6 +1,6 @@
 # gh-8803: User-Configurable Custom Language Servers
 
-> Linear ticket not yet created. Filed against GitHub issue [warpdotdev/warp#8803](https://github.com/warpdotdev/warp/issues/8803). Replace this directory with `specs/APP-XXXX/` once a Linear ticket exists.
+> Filed against GitHub issue [warpdotdev/warp#8803](https://github.com/warpdotdev/warp/issues/8803).
 
 ## Summary
 
