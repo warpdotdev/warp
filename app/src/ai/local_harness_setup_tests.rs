@@ -20,7 +20,7 @@ fn claude_is_disabled_for_missing_cli() {
 }
 
 #[test]
-fn codex_is_enabled_for_local_testing_when_flag_is_on() {
+fn codex_is_enabled_when_flag_is_on() {
     let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
 
     assert_eq!(
@@ -30,7 +30,7 @@ fn codex_is_enabled_for_local_testing_when_flag_is_on() {
 }
 
 #[test]
-fn codex_requires_cli_when_local_testing_flag_is_on() {
+fn codex_requires_cli_when_flag_is_on() {
     let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
 
     assert_eq!(

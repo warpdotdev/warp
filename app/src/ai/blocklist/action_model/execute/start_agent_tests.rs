@@ -610,7 +610,7 @@ fn execute_rejects_disabled_local_codex_before_other_local_harness_validation() 
 }
 
 #[test]
-fn execute_allows_local_codex_when_testing_flag_is_enabled() {
+fn execute_allows_local_codex_when_flag_is_enabled() {
     App::test((), |mut app| async move {
         let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
         let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);

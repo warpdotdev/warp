@@ -33,7 +33,7 @@ impl LocalHarnessSetupState {
 /// Returns the product-level disabled reason for a local harness.
 pub(crate) fn local_harness_product_disabled_message(harness: Harness) -> Option<&'static str> {
     match harness {
-        Harness::Codex if !local_codex_harness_is_enabled_for_testing() => {
+        Harness::Codex if !local_codex_harness_is_enabled() => {
             Some(LOCAL_CODEX_HARNESS_DISABLED_MESSAGE)
         }
         Harness::Oz | Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Unknown => {
@@ -43,8 +43,8 @@ pub(crate) fn local_harness_product_disabled_message(harness: Harness) -> Option
     }
 }
 
-fn local_codex_harness_is_enabled_for_testing() -> bool {
-    cfg!(debug_assertions) && FeatureFlag::LocalClaudeCodexChildHarnesses.is_enabled()
+fn local_codex_harness_is_enabled() -> bool {
+    FeatureFlag::LocalClaudeCodexChildHarnesses.is_enabled()
 }
 
 /// Returns whether a local harness is exposed by product policy.

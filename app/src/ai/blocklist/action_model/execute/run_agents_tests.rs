@@ -220,7 +220,7 @@ fn with_agent_name(mut action: AIAgentAction, name: &str) -> AIAgentAction {
 }
 
 #[test]
-fn local_codex_run_agents_maps_to_local_harness_mode_when_testing_enabled() {
+fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
     let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
     let cfg = RunAgentsAgentRunConfig {
         name: "child".to_string(),
@@ -236,7 +236,7 @@ fn local_codex_run_agents_maps_to_local_harness_mode_when_testing_enabled() {
         None,
         &cfg,
     )
-    .expect("local Codex should be accepted when the local testing flag is enabled");
+    .expect("local Codex should be accepted when the feature flag is enabled");
 
     assert_eq!(
         mode,

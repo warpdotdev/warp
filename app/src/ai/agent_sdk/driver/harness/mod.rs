@@ -156,8 +156,10 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         &[]
     }
 
-    /// Whether this harness requires its Oz platform plugin to be verified
-    /// before launch.
+    /// Whether this harness must verify its Oz platform plugin before launch.
+    /// Codex opts into this because its unattended launch command bypasses hook
+    /// trust globally, so we should fail setup instead of running without the
+    /// Warp-installed orchestration hooks at the required version.
     fn requires_verified_platform_plugin(&self) -> bool {
         false
     }

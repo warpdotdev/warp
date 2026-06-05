@@ -14,12 +14,10 @@ use crate::features::FeatureFlag;
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
-const PLUGIN_KEY: &str = "warp@codex-warp";
 const PLUGIN_NAME: &str = "warp";
 const MARKETPLACE_REPO: &str = "warpdotdev/codex-warp";
 const MARKETPLACE_NAME: &str = "codex-warp";
 
-const PLATFORM_PLUGIN_KEY: &str = "orchestration@codex-warp";
 const PLATFORM_PLUGIN_NAME: &str = "orchestration";
 
 const CODEX_CONFIG_DIR: &str = ".codex";
@@ -108,7 +106,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         if codex_warp_marketplace_config(&codex_dir).is_some_and(|config| !config.is_git()) {
             return false;
         }
-        plugin_needs_update(&codex_dir, PLUGIN_KEY, PLUGIN_NAME, MINIMUM_PLUGIN_VERSION)
+        plugin_needs_update(&codex_dir, PLUGIN_NAME, MINIMUM_PLUGIN_VERSION)
     }
 
     fn is_platform_plugin_installed(&self) -> bool {
@@ -133,7 +131,6 @@ impl CliAgentPluginManager for CodexPluginManager {
         }
         plugin_needs_update(
             &codex_dir,
-            PLATFORM_PLUGIN_KEY,
             PLATFORM_PLUGIN_NAME,
             MINIMUM_PLATFORM_PLUGIN_VERSION,
         )
@@ -317,40 +314,19 @@ static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(
 });
 
 fn check_installed(codex_dir: &Path) -> bool {
-    check_plugin_installed(codex_dir, PLUGIN_KEY, PLUGIN_NAME)
+    marketplace_plugin_manifest_path(codex_dir, PLUGIN_NAME).is_file()
 }
 
 fn check_platform_plugin_installed(codex_dir: &Path) -> bool {
-    check_plugin_installed(codex_dir, PLATFORM_PLUGIN_KEY, PLATFORM_PLUGIN_NAME)
+    marketplace_plugin_manifest_path(codex_dir, PLATFORM_PLUGIN_NAME).is_file()
 }
 
-fn check_plugin_installed(codex_dir: &Path, plugin_key: &str, plugin_name: &str) -> bool {
-    marketplace_plugin_version(codex_dir, plugin_name).is_some()
-        || check_legacy_plugin_enabled(codex_dir, plugin_key)
-}
-
-fn check_legacy_plugin_enabled(codex_dir: &Path, plugin_key: &str) -> bool {
-    let config_path = codex_dir.join("config.toml");
-    let Ok(contents) = fs::read_to_string(config_path) else {
-        return false;
-    };
-    let Ok(parsed) = contents.parse::<toml_edit::DocumentMut>() else {
-        return false;
-    };
-    parsed
-        .get("plugins")
-        .and_then(|plugins| plugins.get(plugin_key))
-        .and_then(|plugin| plugin.get("enabled"))
-        .and_then(|enabled| enabled.as_bool())
-        .unwrap_or(false)
-}
-
-/// Reads the latest cached Warp plugin version, if present.
+/// Reads the current marketplace Warp plugin version, if present.
 fn installed_version(codex_dir: &Path) -> Option<String> {
     installed_plugin_version(codex_dir, PLUGIN_NAME)
 }
 
-/// Reads the latest cached orchestration plugin version, if present.
+/// Reads the current marketplace orchestration plugin version, if present.
 fn installed_platform_plugin_version(codex_dir: &Path) -> Option<String> {
     installed_plugin_version(codex_dir, PLATFORM_PLUGIN_NAME)
 }
@@ -362,56 +338,22 @@ fn platform_plugin_version_is_current(codex_dir: &Path) -> bool {
 }
 
 fn installed_plugin_version(codex_dir: &Path, plugin_name: &str) -> Option<String> {
-    match (
-        marketplace_plugin_version(codex_dir, plugin_name),
-        legacy_cached_plugin_version(codex_dir, plugin_name),
-    ) {
-        (Some(marketplace), Some(legacy)) => {
-            if compare_versions(&marketplace, &legacy).is_ge() {
-                Some(marketplace)
-            } else {
-                Some(legacy)
-            }
-        }
-        (Some(version), None) | (None, Some(version)) => Some(version),
-        (None, None) => None,
-    }
+    marketplace_plugin_version(codex_dir, plugin_name)
 }
 
-fn marketplace_plugin_version(codex_dir: &Path, plugin_name: &str) -> Option<String> {
-    let manifest_path = codex_dir
+fn marketplace_plugin_manifest_path(codex_dir: &Path, plugin_name: &str) -> PathBuf {
+    codex_dir
         .join(".tmp")
         .join("marketplaces")
         .join(MARKETPLACE_NAME)
         .join("plugins")
         .join(plugin_name)
         .join(".codex-plugin")
-        .join("plugin.json");
-    plugin_manifest_version(manifest_path)
+        .join("plugin.json")
 }
 
-fn legacy_cached_plugin_version(codex_dir: &Path, plugin_name: &str) -> Option<String> {
-    let cache_dir = codex_dir
-        .join("plugins")
-        .join("cache")
-        .join(MARKETPLACE_NAME)
-        .join(plugin_name);
-    let entries = fs::read_dir(cache_dir).ok()?;
-    let mut latest: Option<String> = None;
-    for entry in entries.flatten() {
-        let manifest_path = entry.path().join(".codex-plugin").join("plugin.json");
-        let Some(version) = plugin_manifest_version(manifest_path) else {
-            continue;
-        };
-        if latest
-            .as_deref()
-            .map(|current| compare_versions(&version, current).is_gt())
-            .unwrap_or(true)
-        {
-            latest = Some(version);
-        }
-    }
-    latest
+fn marketplace_plugin_version(codex_dir: &Path, plugin_name: &str) -> Option<String> {
+    plugin_manifest_version(marketplace_plugin_manifest_path(codex_dir, plugin_name))
 }
 
 fn plugin_manifest_version(manifest_path: impl AsRef<Path>) -> Option<String> {
@@ -423,13 +365,8 @@ fn plugin_manifest_version(manifest_path: impl AsRef<Path>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn plugin_needs_update(
-    codex_dir: &Path,
-    plugin_key: &str,
-    plugin_name: &str,
-    minimum_version: &str,
-) -> bool {
-    if !check_plugin_installed(codex_dir, plugin_key, plugin_name) {
+fn plugin_needs_update(codex_dir: &Path, plugin_name: &str, minimum_version: &str) -> bool {
+    if !marketplace_plugin_manifest_path(codex_dir, plugin_name).is_file() {
         return false;
     }
     match installed_plugin_version(codex_dir, plugin_name) {

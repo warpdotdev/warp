@@ -35,6 +35,10 @@ fn invalid_local_child_harness_error(harness_type: &str) -> String {
     }
 }
 
+/// Handles local child launch requests produced by older agents, where the
+/// prompt encoded the target CLI command and `execution_mode.harness_type` was
+/// still unset. Normalizing here keeps those requests routed through the Codex
+/// local harness path instead of launching them as Oz child prompts.
 fn parse_legacy_local_child_harness_command(command: &str) -> Option<(String, String)> {
     let args = split_shell_words(command.trim()).ok()?;
     match args.as_slice() {
