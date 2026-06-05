@@ -346,11 +346,7 @@ integration_tests! {
     test_video_recording,
 
     // Rich Input Ctrl+Enter submit toggle (issue #11588)
-    test_rich_input_enter_submits_when_ctrl_enter_setting_is_false,
-    test_rich_input_ctrl_enter_passthrough_when_ctrl_enter_setting_is_false,
-    test_rich_input_enter_inserts_newline_when_ctrl_enter_setting_is_true,
-    test_rich_input_ctrl_enter_submits_when_ctrl_enter_setting_is_true,
-    test_rich_input_ctrl_enter_preserves_selection,
+    test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits,
     // Regression: Enter must accept inline menus (not insert newline) when toggle=true
     test_rich_input_enter_accepts_menu_item_when_toggle_is_true,
 }
