@@ -8008,11 +8008,21 @@ impl TerminalView {
         agent_has_control: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        let mut state = self.current_long_running_command_agent_interaction_state();
-        if agent_has_control {
-            log::warn!("emit_long_running_command_agent_interaction_state_changed called with agent_has_control=true, but current state is {state:?}. Overriding with InControl.");
-            state = LongRunningCommandAgentInteractionState::InControl;
-        }
+        let state = if agent_has_control {
+            LongRunningCommandAgentInteractionState::InControl
+        } else {
+            let is_tagged_in = self
+                .model
+                .lock()
+                .block_list()
+                .active_block()
+                .is_agent_tagged_in();
+            if is_tagged_in {
+                LongRunningCommandAgentInteractionState::TaggedIn
+            } else {
+                LongRunningCommandAgentInteractionState::NotInteracting
+            }
+        };
         ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged { state });
     }
 
