@@ -5,11 +5,10 @@
 //!
 //! [`Menu`]: crate::menu::Menu
 
-use crate::menu::{MenuItem, MenuItemFields};
-
 use super::data::CommitNode;
 use super::ops::{split_remote_ref, GitWriteOp};
 use super::view::GitGraphAction;
+use crate::menu::{MenuItem, MenuItemFields};
 
 /// What was right-clicked, and the row it lives on. `index` is the commit row
 /// the menu was opened from (the row itself for a commit, or the row a ref badge
@@ -17,15 +16,25 @@ use super::view::GitGraphAction;
 /// Details" selects that row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum MenuKind {
-    Commit { index: usize },
+    Commit {
+        index: usize,
+    },
     /// The short-hash text to the left of a commit's subject. Opens a focused
     /// menu with just "Copy Short Hash to Clipboard" (the 7-char hash), so a
     /// right-click landing on the hash copies exactly what's shown rather than
     /// the full 40-char hash offered by the commit menu.
-    ShortHash { index: usize },
-    Tag { index: usize, name: String },
+    ShortHash {
+        index: usize,
+    },
+    Tag {
+        index: usize,
+        name: String,
+    },
     /// `name` is the remote-branch display name, e.g. `origin/feature`.
-    RemoteBranch { index: usize, name: String },
+    RemoteBranch {
+        index: usize,
+        name: String,
+    },
     /// A local branch. `is_current` is true for the HEAD badge (the checked-out
     /// branch), which omits operations that don't apply to the current branch
     /// (checkout-self / delete / merge-into-current / rebase-onto-self).
@@ -36,7 +45,10 @@ pub(crate) enum MenuKind {
     },
     /// A stash entry badge (`stash@{n}`). `index` is the stash's row; `name` is the
     /// selector (`stash@{0}`) used by stash operations and the "copy name" item.
-    Stash { index: usize, name: String },
+    Stash {
+        index: usize,
+        name: String,
+    },
     /// The synthetic "uncommitted changes" row. Its menu offers working-tree
     /// operations (clean untracked files) and has no anchor commit.
     Uncommitted,
@@ -63,11 +75,19 @@ impl MenuKind {
 /// [`GitWriteOp`] once the text is known.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PromptKind {
-    AddTag { hash: String },
-    CreateBranch { hash: String },
-    RenameBranch { old: String },
+    AddTag {
+        hash: String,
+    },
+    CreateBranch {
+        hash: String,
+    },
+    RenameBranch {
+        old: String,
+    },
     /// Create a branch from a stash; `selector` is the `stash@{n}` to apply.
-    StashBranch { selector: String },
+    StashBranch {
+        selector: String,
+    },
 }
 
 impl PromptKind {
@@ -333,11 +353,7 @@ fn build_short_hash_menu(commit: &CommitNode) -> Vec<MenuItem<GitGraphAction>> {
     )]
 }
 
-fn build_tag_menu(
-    index: usize,
-    name: &str,
-    write_enabled: bool,
-) -> Vec<MenuItem<GitGraphAction>> {
+fn build_tag_menu(index: usize, name: &str, write_enabled: bool) -> Vec<MenuItem<GitGraphAction>> {
     let mut head = vec![item("View Details", GitGraphAction::SelectCommit(index))];
     if write_enabled {
         head.push(item(

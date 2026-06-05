@@ -20,13 +20,7 @@ fn repos() -> Vec<PathBuf> {
 fn follow_anchor_without_saved_selects_repo_containing_anchor() {
     // Fresh tab, no prior manual pick: follow the anchor to the repo it's in.
     let repos = repos();
-    let selected = pick_selected_repo(
-        &repos,
-        Path::new("/work/repo1/src"),
-        true,
-        None,
-        None,
-    );
+    let selected = pick_selected_repo(&repos, Path::new("/work/repo1/src"), true, None, None);
     assert_eq!(selected, Some(0));
 }
 
@@ -69,13 +63,7 @@ fn follow_anchor_keeps_previous_when_anchor_outside_all_repos() {
     // previously selected repo rather than jumping to the first.
     let repos = repos();
     let previous = PathBuf::from("/work/repo3");
-    let selected = pick_selected_repo(
-        &repos,
-        Path::new("/elsewhere"),
-        true,
-        Some(&previous),
-        None,
-    );
+    let selected = pick_selected_repo(&repos, Path::new("/elsewhere"), true, Some(&previous), None);
     assert_eq!(selected, Some(2));
 }
 
@@ -107,7 +95,13 @@ fn no_follow_keeps_previous_and_ignores_saved_and_anchor() {
 fn no_follow_falls_back_to_first_when_previous_gone() {
     let repos = repos();
     let previous = PathBuf::from("/work/removed");
-    let selected = pick_selected_repo(&repos, Path::new("/work/repo1"), false, Some(&previous), None);
+    let selected = pick_selected_repo(
+        &repos,
+        Path::new("/work/repo1"),
+        false,
+        Some(&previous),
+        None,
+    );
     assert_eq!(selected, Some(0));
 }
 

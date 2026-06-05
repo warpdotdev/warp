@@ -17,6 +17,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_channel::Sender;
 use pathfinder_color::ColorU;
+#[cfg(feature = "local_fs")]
+use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
+#[cfg(feature = "local_fs")]
+use repo_metadata::repository::SubscriberId;
+#[cfg(feature = "local_fs")]
+use repo_metadata::Repository;
+use warp_core::ui::color::pick_foreground_color;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::shimmering_text::{
     ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle,
@@ -27,39 +36,29 @@ use warpui::elements::{
     DragBarSide, Element, Empty, Expanded, Fill, Flex, Highlight, Hoverable, MainAxisAlignment,
     MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, PositionedElementAnchor,
     PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
-    Scrollable, ScrollableElement, ScrollStateHandle, ScrollbarWidth, SelectableArea,
+    ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, SelectableArea,
     SelectionHandle, Shrinkable, Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::{vec2f, Vector2F};
 use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
+use warpui::platform::SaveFilePickerConfiguration;
 use warpui::scene::DropShadow;
 use warpui::text_layout::ClipConfig;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
+#[cfg(feature = "local_fs")]
+use warpui::ModelHandle;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
-use warp_core::ui::color::pick_foreground_color;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::platform::SaveFilePickerConfiguration;
-use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-
+#[cfg(feature = "local_fs")]
+use super::auto_refresh;
 use super::data::{BranchRef, ChangedFile, CommitDetail, CommitNode, RefKind, RefLabel};
 use super::layout::{assign_lanes, build_layout, GraphLayout, GraphRow};
 use super::menu::{build_menu, MenuKind, PromptKind};
 use super::ops::{archive_format_from_path, GitWriteOp, ResetMode};
 use super::row_canvas::GitGraphRowCanvas;
-#[cfg(feature = "local_fs")]
-use super::auto_refresh;
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-#[cfg(feature = "local_fs")]
-use repo_metadata::repository::SubscriberId;
-#[cfg(feature = "local_fs")]
-use repo_metadata::Repository;
-#[cfg(feature = "local_fs")]
-use warpui::ModelHandle;
 use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions};
@@ -1643,8 +1642,11 @@ impl GitGraphView {
     /// set: one per file row (indexed parallel to `files`) plus one per
     /// directory row in the file tree (keyed by full directory path).
     fn rebuild_detail_mouse_states(&mut self, files: &[ChangedFile]) {
-        self.detail_file_mouse_states =
-            Arc::new((0..files.len()).map(|_| MouseStateHandle::default()).collect());
+        self.detail_file_mouse_states = Arc::new(
+            (0..files.len())
+                .map(|_| MouseStateHandle::default())
+                .collect(),
+        );
         self.detail_dir_mouse_states = Arc::new(
             super::file_tree::all_dir_paths(files)
                 .into_iter()
@@ -2880,8 +2882,8 @@ impl GitGraphView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
         for (i, button) in buttons.into_iter().enumerate() {
             if i > 0 {
-                button_row = button_row
-                    .with_child(Container::new(button).with_padding_left(8.).finish());
+                button_row =
+                    button_row.with_child(Container::new(button).with_padding_left(8.).finish());
             } else {
                 button_row = button_row.with_child(button);
             }
@@ -3118,7 +3120,13 @@ fn render_graph_row(
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(GitGraphRowCanvas::new(row.clone(), lane_count, false).finish())
-        .with_child(Expanded::new(1.0, render_commit_text(commit, index, position_id, appearance)).finish())
+        .with_child(
+            Expanded::new(
+                1.0,
+                render_commit_text(commit, index, position_id, appearance),
+            )
+            .finish(),
+        )
         .finish()
 }
 
@@ -3148,9 +3156,13 @@ fn render_commit_text(
     if !super::data::is_stash_node(commit) {
         let position_id = position_id.to_string();
         let hash_label = Container::new(
-            Text::new_inline(commit.short_hash.clone(), appearance.monospace_font_family(), size)
-                .with_color(dim.into())
-                .finish(),
+            Text::new_inline(
+                commit.short_hash.clone(),
+                appearance.monospace_font_family(),
+                size,
+            )
+            .with_color(dim.into())
+            .finish(),
         )
         .with_padding_right(8.)
         .finish();
@@ -3566,11 +3578,7 @@ fn render_detail_body(
                 .finish(),
         )
         .with_child(render_diff_counts(
-            total_add,
-            total_del,
-            add_width,
-            del_width,
-            appearance,
+            total_add, total_del, add_width, del_width, appearance,
         ))
         .finish();
 
@@ -3778,11 +3786,7 @@ fn render_file_tree_row(
         if let Some((additions, deletions)) = counts {
             row = row.with_child(
                 Container::new(render_diff_counts(
-                    additions,
-                    deletions,
-                    add_width,
-                    del_width,
-                    appearance,
+                    additions, deletions, add_width, del_width, appearance,
                 ))
                 .with_padding_left(8.)
                 .finish(),
@@ -3858,7 +3862,8 @@ impl TypedActionView for GitGraphView {
                 self.open_context_menu(kind.clone(), vec2f(*x, *y), ctx)
             }
             GitGraphAction::CopyToClipboard(text) => {
-                ctx.clipboard().write(ClipboardContent::plain_text(text.clone()));
+                ctx.clipboard()
+                    .write(ClipboardContent::plain_text(text.clone()));
             }
             GitGraphAction::PromptInput(kind) => self.open_input_dialog(kind.clone(), ctx),
             GitGraphAction::SubmitInput => self.submit_input(ctx),
@@ -3996,9 +4001,7 @@ impl View for GitGraphView {
         if !matches!(self.dialog, DialogState::None) {
             stack.add_positioned_overlay_child(
                 Dismiss::new(Align::new(self.render_dialog(appearance)).finish())
-                    .on_dismiss(|ctx, _app| {
-                        ctx.dispatch_typed_action(GitGraphAction::CancelDialog)
-                    })
+                    .on_dismiss(|ctx, _app| ctx.dispatch_typed_action(GitGraphAction::CancelDialog))
                     .finish(),
                 OffsetPositioning::offset_from_save_position_element(
                     self.position_id.clone(),

@@ -220,5 +220,8 @@ fn directory_roll_up_prefers_conflicts() {
     let decorations = RepoGitFileStatuses::from_relative(&repo, statuses);
 
     let dir = StandardizedPath::try_from_local(&repo.join("a")).unwrap();
-    assert_eq!(decorations.dir_status(&dir), Some(&GitFileStatus::Conflicted));
+    assert_eq!(
+        decorations.dir_status(&dir),
+        Some(&GitFileStatus::Conflicted)
+    );
 }

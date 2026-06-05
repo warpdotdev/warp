@@ -167,9 +167,7 @@ mod subscription {
     /// (`remote_ref_updated`), or any non-ignored working-tree file change (so
     /// the uncommitted-changes row's count stays current).
     pub(crate) fn should_reload(update: &RepositoryUpdate) -> bool {
-        update.commit_updated
-            || update.remote_ref_updated
-            || has_non_ignored_file_change(update)
+        update.commit_updated || update.remote_ref_updated || has_non_ignored_file_change(update)
     }
 
     /// Whether the update touches any non-ignored working-tree file.

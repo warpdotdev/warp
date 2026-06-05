@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "local_fs")]
 use settings::Setting as _;
 #[cfg(feature = "local_fs")]
+use warp_core::features::FeatureFlag;
+#[cfg(feature = "local_fs")]
+use warp_util::standardized_path::StandardizedPath;
+#[cfg(feature = "local_fs")]
 use warpui::ModelContext;
 use warpui::{Entity, SingletonEntity};
 #[cfg(feature = "local_fs")]
@@ -29,13 +33,9 @@ use {
 };
 
 #[cfg(feature = "local_fs")]
-use super::diff_state::{diff_metadata_against_head, file_statuses_against_head, DiffStats};
-#[cfg(feature = "local_fs")]
 use super::diff_state::GitFileStatus;
 #[cfg(feature = "local_fs")]
-use warp_core::features::FeatureFlag;
-#[cfg(feature = "local_fs")]
-use warp_util::standardized_path::StandardizedPath;
+use super::diff_state::{diff_metadata_against_head, file_statuses_against_head, DiffStats};
 use crate::util::git::{PrInfo, RepositoryInfo};
 #[cfg(feature = "local_fs")]
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);

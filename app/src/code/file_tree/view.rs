@@ -25,10 +25,9 @@ use warpui::elements::{
     AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
     CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Expanded, Flex,
     FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Percentage, Rect, SavePosition, ScrollStateHandle,
-    Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
-    UniformListState,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Percentage, Rect,
+    SavePosition, ScrollStateHandle, Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable,
+    Stack, Text, UniformList, UniformListState,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
@@ -41,12 +40,12 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code_review::diff_state::GitFileStatus;
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{
     GitRepoStatusEvent, GitRepoStatusModel, GitStatusUpdateModel, RepoGitFileStatuses,
 };
-use crate::code::buffer_location::LocalOrRemotePath;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
 use crate::menu::{Menu, MenuItem, MenuItemFields};

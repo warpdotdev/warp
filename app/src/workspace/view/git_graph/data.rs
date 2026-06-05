@@ -298,10 +298,7 @@ fn parse_stash_record(record: &str) -> Option<CommitNode> {
 /// Merge stash nodes into a commit list (both already newest→oldest) by author
 /// time descending, so each stash appears near where it was created. Stable on
 /// ties: a stash sorts ahead of a commit with the same time.
-pub(crate) fn merge_stashes(
-    commits: Vec<CommitNode>,
-    stashes: Vec<CommitNode>,
-) -> Vec<CommitNode> {
+pub(crate) fn merge_stashes(commits: Vec<CommitNode>, stashes: Vec<CommitNode>) -> Vec<CommitNode> {
     if stashes.is_empty() {
         return commits;
     }
@@ -815,7 +812,14 @@ pub(crate) async fn load_uncommitted_detail(repo_root: &Path) -> Result<CommitDe
     for path in untracked.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let numstat = warp_util::git::run_git_command(
             repo_root,
-            &["diff", "--no-index", "--numstat", "--no-color", "/dev/null", path],
+            &[
+                "diff",
+                "--no-index",
+                "--numstat",
+                "--no-color",
+                "/dev/null",
+                path,
+            ],
         )
         .await
         .unwrap_or_default();

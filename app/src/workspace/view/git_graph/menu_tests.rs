@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::menu::MenuItem;
-
 use crate::workspace::view::git_graph::data::CommitNode;
 
 fn commit() -> CommitNode {
@@ -251,9 +250,9 @@ fn uncommitted_menu_offers_stash_reset_and_clean_when_writable() {
     // Clean seeds its op with the directories checkbox on by default.
     assert_eq!(
         items[3].item_on_select_action(),
-        Some(&GitGraphAction::BeginWriteOp(
-            GitWriteOp::CleanUntracked { directories: true }
-        ))
+        Some(&GitGraphAction::BeginWriteOp(GitWriteOp::CleanUntracked {
+            directories: true
+        }))
     );
 }
 
@@ -291,7 +290,10 @@ fn stash_menu_read_only_shows_only_copy() {
     let items = build_stash_menu("stash@{0}", &commit(), false);
     assert_eq!(
         labels(&items),
-        vec!["Copy Stash Name to Clipboard", "Copy Stash Hash to Clipboard"]
+        vec![
+            "Copy Stash Name to Clipboard",
+            "Copy Stash Hash to Clipboard"
+        ]
     );
     // Name copies the selector; hash copies the full commit hash.
     assert_eq!(
