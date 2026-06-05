@@ -6329,6 +6329,8 @@ impl CodeReviewView {
             GitRepoStatusEvent::MetadataChanged | GitRepoStatusEvent::PrInfoChanged => {
                 me.update_git_operations_ui(ctx);
             }
+            // Per-file status drives only the Project Explorer's decorations.
+            GitRepoStatusEvent::FileStatusesChanged => {}
         });
         self.git_repo_status = Some(handle);
     }

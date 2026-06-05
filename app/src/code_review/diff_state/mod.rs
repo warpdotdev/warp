@@ -21,7 +21,7 @@ use crate::util::git::{BranchEntry, Commit, PrInfo};
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 mod local;
 #[cfg(feature = "local_fs")]
-pub(crate) use local::diff_metadata_against_head;
+pub(crate) use local::{diff_metadata_against_head, file_statuses_against_head};
 pub use local::LocalDiffStateModel;
 
 mod remote;
