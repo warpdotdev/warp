@@ -250,12 +250,13 @@ enum LoadAnchor {
     /// switch and branch-filter changes, where the previous position is moot.
     Top,
     /// Preserve the user's place across an auto-refresh: re-select / re-anchor
-    /// the list by commit hash (see [`auto_refresh::relocate_view`]).
+    /// the list by commit hash. The selection / scroll snapshot is captured
+    /// when the reload *lands* (see [`auto_refresh::capture_anchor`] /
+    /// [`auto_refresh::relocate_view`]), not when it starts — a selection made
+    /// while the reload is in flight must win over the pre-reload state, so
+    /// the anchor carries no data of its own.
     #[cfg(feature = "local_fs")]
-    Preserve {
-        selected_hash: Option<String>,
-        anchor_hash: Option<String>,
-    },
+    Preserve,
 }
 
 /// The repository the Git Graph is currently subscribed to for auto-refresh.
@@ -1059,24 +1060,7 @@ impl GitGraphView {
         // This refresh covers any catch-up still scheduled for the current
         // window; absorb it so the timer's callback becomes a no-op.
         self.auto_refresh_pending = false;
-        // Convert the visible-row anchor (a UniformList index that includes the
-        // synthetic uncommitted row) back to a commit index.
-        let offset = usize::from(self.uncommitted_count > 0);
-        let selected_hash = self
-            .selected
-            .and_then(|i| self.commits.get(i))
-            .map(|c| c.hash.clone());
-        let anchor_hash = self
-            .commits
-            .get(self.last_visible_range.start.saturating_sub(offset))
-            .map(|c| c.hash.clone());
-        self.reload(
-            LoadAnchor::Preserve {
-                selected_hash,
-                anchor_hash,
-            },
-            ctx,
-        );
+        self.reload(LoadAnchor::Preserve, ctx);
     }
 
     /// Re-points the auto-refresh watch at the currently selected repo: detects
@@ -1178,7 +1162,7 @@ impl GitGraphView {
         // An auto-refresh keeps the branch overlay as-is; a manual repo/branch
         // change collapses it and clears its search box.
         #[cfg(feature = "local_fs")]
-        let preserve = matches!(anchor, LoadAnchor::Preserve { .. });
+        let preserve = matches!(anchor, LoadAnchor::Preserve);
         #[cfg(not(feature = "local_fs"))]
         let preserve = false;
         if !preserve {
@@ -1257,7 +1241,7 @@ impl GitGraphView {
         // `Preserve` (auto-refresh) keeps them and re-anchors by hash once the
         // new page lands.
         #[cfg(feature = "local_fs")]
-        let preserve = matches!(anchor, LoadAnchor::Preserve { .. });
+        let preserve = matches!(anchor, LoadAnchor::Preserve);
         #[cfg(not(feature = "local_fs"))]
         let preserve = false;
         if !preserve {
@@ -1314,6 +1298,23 @@ impl GitGraphView {
                     }
                     match result {
                         Ok((commits, has_more, uncommitted)) => {
+                            // Snapshot the user's place from the outgoing list
+                            // NOW — at landing time — so a selection made while
+                            // this reload was in flight is what gets restored
+                            // (a start-time snapshot would roll it back; e.g.
+                            // quick refresh ×2 then clicking another commit).
+                            #[cfg(feature = "local_fs")]
+                            let (selected_hash, anchor_hash) =
+                                if matches!(anchor, LoadAnchor::Preserve) {
+                                    auto_refresh::capture_anchor(
+                                        &view.commits,
+                                        view.selected,
+                                        view.last_visible_range.start,
+                                        view.uncommitted_count > 0,
+                                    )
+                                } else {
+                                    (None, None)
+                                };
                             view.has_more = has_more;
                             view.uncommitted_count = uncommitted;
                             view.layout = Arc::new(build_layout(&commits, uncommitted > 0));
@@ -1327,11 +1328,7 @@ impl GitGraphView {
                             // Auto-refresh: restore the user's place in the new
                             // list by hash (see `auto_refresh::relocate_view`).
                             #[cfg(feature = "local_fs")]
-                            if let LoadAnchor::Preserve {
-                                selected_hash,
-                                anchor_hash,
-                            } = &anchor
-                            {
+                            if matches!(anchor, LoadAnchor::Preserve) {
                                 let placement = auto_refresh::relocate_view(
                                     &view.commits,
                                     selected_hash.as_deref(),
@@ -1512,10 +1509,20 @@ impl GitGraphView {
             let Some(dir) = self.current_repo_path() else {
                 return;
             };
+            let loaded_hash = hash.clone();
             ctx.spawn(
                 async move { super::data::load_commit_detail(&dir, &hash).await },
                 move |view, result, ctx| {
-                    if view.selected != Some(index) {
+                    // Stale check by hash, not index: a reload landing while
+                    // this detail loads may shift the commit's index when it
+                    // re-anchors, but the same commit keeps its in-flight
+                    // detail (an index compare would misjudge it as stale and
+                    // leave the pane stuck on Loading).
+                    let still_selected = view
+                        .selected
+                        .and_then(|i| view.commits.get(i))
+                        .is_some_and(|c| c.hash == loaded_hash);
+                    if !still_selected {
                         // Selection has changed; discard the stale result.
                         return;
                     }

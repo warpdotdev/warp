@@ -32,6 +32,34 @@ pub(crate) struct ViewAnchor {
     pub(crate) scroll_to: usize,
 }
 
+/// Snapshot the user's place in the outgoing commit list as hashes — the
+/// capture half of [`relocate_view`]. Taken when a reload *lands* (not when it
+/// starts), so a selection made while the reload was in flight wins over any
+/// pre-reload state.
+///
+/// - `selected`: selected row as a commit index.
+/// - `visible_start`: top visible row as a UniformList index, which counts the
+///   synthetic uncommitted row when present (`has_uncommitted_row`).
+///
+/// Returns `(selected_hash, anchor_hash)`. Out-of-range indices (the list
+/// shrank under a stale index) yield `None`.
+#[cfg(feature = "local_fs")]
+pub(crate) fn capture_anchor(
+    commits: &[CommitNode],
+    selected: Option<usize>,
+    visible_start: usize,
+    has_uncommitted_row: bool,
+) -> (Option<String>, Option<String>) {
+    let offset = usize::from(has_uncommitted_row);
+    let selected_hash = selected
+        .and_then(|i| commits.get(i))
+        .map(|c| c.hash.clone());
+    let anchor_hash = commits
+        .get(visible_start.saturating_sub(offset))
+        .map(|c| c.hash.clone());
+    (selected_hash, anchor_hash)
+}
+
 /// Map a pre-refresh selection + scroll anchor onto a freshly-loaded commit
 /// list, *by commit hash*, so an auto-refresh doesn't jump the view.
 ///

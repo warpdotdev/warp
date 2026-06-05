@@ -1,4 +1,5 @@
-//! Unit tests for [`super::relocate_view`] (position restore by hash),
+//! Unit tests for [`super::capture_anchor`] (position snapshot by hash),
+//! [`super::relocate_view`] (position restore by hash),
 //! [`super::detail_refresh_after_reload`] (detail-pane fate after a reload),
 //! [`super::throttle_signal`] (the reload-rate throttle), and
 //! [`super::should_reload`] (the reload predicate).
@@ -60,6 +61,56 @@ fn no_prior_selection_anchors_on_the_viewport_top_only() {
     let anchor = relocate_view(&new, None, Some("b"));
     assert_eq!(anchor.selected, None);
     assert_eq!(anchor.scroll_to, 1);
+}
+
+mod capture {
+    use super::super::capture_anchor;
+    use super::commits;
+
+    #[test]
+    fn captures_the_selected_and_viewport_top_hashes() {
+        let list = commits(&["a", "b", "c", "d"]);
+        let (selected, anchor) = capture_anchor(&list, Some(2), 1, false);
+        assert_eq!(selected.as_deref(), Some("c"));
+        assert_eq!(anchor.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn uncommitted_row_offsets_the_viewport_anchor_only() {
+        // `visible_start` is a UniformList index that counts the synthetic
+        // uncommitted row at index 0; `selected` is already a commit index.
+        let list = commits(&["a", "b", "c"]);
+        let (selected, anchor) = capture_anchor(&list, Some(0), 2, true);
+        assert_eq!(selected.as_deref(), Some("a"));
+        assert_eq!(anchor.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn viewport_on_the_uncommitted_row_anchors_on_the_newest_commit() {
+        // The uncommitted row itself is at the viewport top: it has no hash,
+        // so the anchor degrades to the newest commit below it.
+        let list = commits(&["a", "b"]);
+        let (_, anchor) = capture_anchor(&list, None, 0, true);
+        assert_eq!(anchor.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn no_selection_captures_no_selected_hash() {
+        let list = commits(&["a", "b"]);
+        let (selected, anchor) = capture_anchor(&list, None, 1, false);
+        assert_eq!(selected, None);
+        assert_eq!(anchor.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn out_of_range_indices_capture_nothing() {
+        // A selection index past the end (the list shrank under it) must not
+        // panic and yields no hash.
+        let list = commits(&["a"]);
+        let (selected, anchor) = capture_anchor(&list, Some(5), 9, false);
+        assert_eq!(selected, None);
+        assert_eq!(anchor, None);
+    }
 }
 
 mod detail_refresh {
