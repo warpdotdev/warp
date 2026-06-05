@@ -9,11 +9,13 @@ use repo_metadata::RepoMetadataModel;
 use settings::Setting;
 use virtual_fs::{Stub, VirtualFS};
 use warp_core::ui::appearance::Appearance;
-use warpui::{platform::WindowStyle, App, ModelHandle, SingletonEntity};
+use warpui::platform::WindowStyle;
+use warpui::{App, ModelHandle};
 
+use super::FileTreeView;
 use crate::auth::AuthStateProvider;
-use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceClient};
-use crate::settings::CodeSettings;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
@@ -21,11 +23,12 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-use super::FileTreeView;
-
 fn std_path(path: &std::path::Path) -> warp_util::standardized_path::StandardizedPath {
     warp_util::standardized_path::StandardizedPath::try_from_local(path).unwrap()
 }
+
+use crate::settings::CodeSettings;
+use warpui::SingletonEntity;
 
 fn initialize_app(
     app: &mut App,
@@ -205,56 +208,60 @@ fn hidden_root_directory_is_not_filtered() {
 
 #[test]
 fn selected_hidden_file_is_cleared_when_filtered() {
-    VirtualFS::test("file_tree_selected_hidden_file_filtered", |dirs, mut vfs| {
-        vfs.mkdir("tree").with_files(vec![
-            Stub::FileWithContent("tree/.env", "SECRET=value\n"),
-            Stub::FileWithContent("tree/visible.txt", "content\n"),
-        ]);
-        let tree = dirs.tests().join("tree");
-        let hidden_file = tree.join(".env");
+    VirtualFS::test(
+        "file_tree_selected_hidden_file_filtered",
+        |dirs, mut vfs| {
+            vfs.mkdir("tree").with_files(vec![
+                Stub::FileWithContent("tree/.env", "SECRET=value\n"),
+                Stub::FileWithContent("tree/visible.txt", "content\n"),
+            ]);
+            let tree = dirs.tests().join("tree");
+            let hidden_file = tree.join(".env");
 
-        App::test((), |mut app| async move {
-            let _ = initialize_app(&mut app);
-            CodeSettings::handle(&app).update(&mut app, |settings, ctx| {
-                settings
-                    .show_hidden_files
-                    .set_value(true, ctx)
-                    .expect("show hidden files setting updates");
+            App::test((), |mut app| async move {
+                let _ = initialize_app(&mut app);
+                CodeSettings::handle(&app).update(&mut app, |settings, ctx| {
+                    settings
+                        .show_hidden_files
+                        .set_value(true, ctx)
+                        .expect("show hidden files setting updates");
+                });
+
+                let (_, file_tree_view) =
+                    app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+                file_tree_view.update(&mut app, |view, ctx| {
+                    view.set_is_active(true, ctx);
+                    view.set_root_directories(vec![tree.clone()], ctx);
+
+                    let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
+                    let (index, _) = root_dir
+                        .items
+                        .iter()
+                        .enumerate()
+                        .find(|(_, item)| item.path() == &std_path(&hidden_file))
+                        .expect("hidden file is visible");
+                    let id = super::FileTreeIdentifier {
+                        root: std_path(&tree),
+                        index,
+                    };
+                    view.select_id(&id, ctx);
+                });
+
+                CodeSettings::handle(&app).update(&mut app, |settings, ctx| {
+                    settings
+                        .show_hidden_files
+                        .set_value(false, ctx)
+                        .expect("show hidden files setting updates");
+                });
+
+                file_tree_view.read(&app, |view, _ctx| {
+                    let paths = flattened_paths(view, &tree);
+                    assert!(!paths.contains(&std_path(&hidden_file)));
+                    assert!(view.selected_item.is_none());
+                });
             });
-
-            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
-            file_tree_view.update(&mut app, |view, ctx| {
-                view.set_is_active(true, ctx);
-                view.set_root_directories(vec![tree.clone()], ctx);
-
-                let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
-                let (index, _) = root_dir
-                    .items
-                    .iter()
-                    .enumerate()
-                    .find(|(_, item)| item.path() == &std_path(&hidden_file))
-                    .expect("hidden file is visible");
-                let id = super::FileTreeIdentifier {
-                    root: std_path(&tree),
-                    index,
-                };
-                view.select_id(&id, ctx);
-            });
-
-            CodeSettings::handle(&app).update(&mut app, |settings, ctx| {
-                settings
-                    .show_hidden_files
-                    .set_value(false, ctx)
-                    .expect("show hidden files setting updates");
-            });
-
-            file_tree_view.read(&app, |view, _ctx| {
-                let paths = flattened_paths(view, &tree);
-                assert!(!paths.contains(&std_path(&hidden_file)));
-                assert!(view.selected_item.is_none());
-            });
-        });
-    });
+        },
+    );
 }
 
 #[test]

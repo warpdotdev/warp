@@ -1,3 +1,8 @@
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use editing::sort_entries_for_file_tree;
 use itertools::Itertools;
 use pathfinder_geometry::rect::RectF;
@@ -7,49 +12,44 @@ use repo_metadata::file_tree_store::{
     FileTreeDirectoryEntryState, FileTreeEntryState, FileTreeFileMetadata,
 };
 use repo_metadata::local_model::IndexedRepoState;
-use repo_metadata::FileTreeEntry;
-use repo_metadata::RepoMetadataModel;
-use std::collections::{HashMap, HashSet};
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::{FileTreeEntry, RepoMetadataModel};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::Fill;
+use warp_core::{send_telemetry_from_ctx, HostId};
 use warp_util::path::LineAndColumnArg;
 use warp_util::standardized_path::StandardizedPath;
-
-use repo_metadata::repositories::DetectedRepositories;
-use warp_core::send_telemetry_from_ctx;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    AcceptedByDropTarget, Align, Clipped, ConstrainedBox, Container, Dismiss, Draggable,
-    DraggableState, Empty, FormattedTextElement, MainAxisAlignment, Percentage, Rect, SavePosition,
-    Scrollable, Shrinkable,
+    AcceptedByDropTarget, Align, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container,
+    CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, FormattedTextElement,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Percentage, Rect, SavePosition, ScrollStateHandle,
+    Scrollable, ScrollableElement, ScrollbarWidth, Shrinkable, Stack, Text, UniformList,
+    UniformListState,
 };
-use warpui::fonts::Style;
+use warpui::fonts::{Properties, Style, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::text_layout::TextAlignment;
-use warpui::{clipboard::ClipboardContent, id, ViewContext, WeakViewHandle};
 use warpui::{
-    elements::{
-        ChildAnchor, ChildView, CrossAxisAlignment, Flex, Hoverable, MainAxisSize,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds,
-        ScrollStateHandle, ScrollableElement, ScrollbarWidth, Stack, Text, UniformList,
-        UniformListState,
-    },
-    fonts::{Properties, Weight},
-    AppContext, Element, Entity, EventContext, SingletonEntity as _, TypedActionView, View,
-    ViewHandle,
+    id, AppContext, BlurContext, Element, Entity, EventContext, ModelHandle, SingletonEntity as _,
+    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
-use warpui::{BlurContext, ModelHandle};
 
+use crate::appearance::Appearance;
 use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
 use crate::code::buffer_location::FileLocation;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
+use crate::menu::{Menu, MenuItem, MenuItemFields};
 #[cfg(feature = "local_fs")]
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
-use crate::settings::{CodeSettings, CodeSettingsChangedEvent};
+use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::input::InputDropTargetData;
 use crate::terminal::view::{TerminalDropTargetData, TerminalView};
+use crate::ui_components::icons::Icon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
@@ -58,20 +58,11 @@ use crate::util::openable_file_type::{is_file_content_binary, EditorLayout, File
 use crate::util::openable_file_type::{
     resolve_file_target_to_open_in_warp, resolve_file_target_with_editor_choice,
 };
-use crate::{
-    appearance::Appearance,
-    menu::{Menu, MenuItem, MenuItemFields},
-    server::telemetry::TelemetryEvent,
-    ui_components::icons::Icon,
-    view_components::DismissibleToast,
-    workspace::ToastStack,
-};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::{color::internal_colors, Fill};
-use warp_core::HostId;
 
 mod editing;
 mod render;
+
+use crate::settings::{CodeSettings, CodeSettingsChangedEvent};
 
 const REMOTE_TEXT: &str = "The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.";
 const DISABLED_TEXT: &str = "The Project Explorer requires access to your local workspace. Open a new session or navigate to an active session to view.";
@@ -1433,14 +1424,6 @@ impl FileTreeView {
                 .update(ctx, |model: &mut RepoMetadataModel, ctx| {
                     model.load_directory(&backing_root, &dir_path, ctx)
                 });
-        if matches!(
-            load_result,
-            Err(repo_metadata::RepoMetadataError::BuildTree(
-                repo_metadata::BuildTreeError::ExceededMaxFileLimit,
-            ))
-        ) {
-            Self::show_exceeded_file_limit_toast(ctx);
-        }
         if let Err(error) = load_result {
             log::warn!("Failed to load directory {dir_path}: {error}");
         }
@@ -1574,14 +1557,6 @@ impl FileTreeView {
                 .update(ctx, |model: &mut RepoMetadataModel, ctx| {
                     model.index_lazy_loaded_path(path, ctx)
                 });
-            if matches!(
-                index_result,
-                Err(repo_metadata::RepoMetadataError::BuildTree(
-                    repo_metadata::BuildTreeError::ExceededMaxFileLimit,
-                ))
-            ) {
-                Self::show_exceeded_file_limit_toast(ctx);
-            }
             if let Err(error) = &index_result {
                 log::warn!("Failed to index lazy-loaded path {path}: {error}");
             }
@@ -1611,17 +1586,6 @@ impl FileTreeView {
 
     fn create_empty_entry(path: &StandardizedPath) -> FileTreeEntry {
         FileTreeEntry::new_for_directory(Arc::new(path.clone()))
-    }
-
-    fn show_exceeded_file_limit_toast(ctx: &mut ViewContext<Self>) {
-        let window_id = ctx.window_id();
-        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            let toast = DismissibleToast::error(String::from(
-                "Folder has too many files to display in the file explorer.",
-            ))
-            .with_object_id("file_tree_exceeded_file_limit".to_string());
-            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
-        });
     }
 
     /// Rebuilds the flattened items list for a single root directory only,
