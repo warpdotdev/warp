@@ -277,3 +277,28 @@ fn test_oversized_image_is_omitted_with_placeholder() {
         "oversized image should not be embedded as a data URI"
     );
 }
+
+#[test]
+fn test_raw_fallback_fences_content_verbatim() {
+    // Content that is not a parseable notebook is wrapped in a fenced block so
+    // any Markdown/HTML inside it is shown verbatim, not interpreted.
+    let raw = "{ \"nbformat\": 4, # Heading <b>bold</b>";
+    let md = raw_fallback_markdown(raw);
+    assert!(md.starts_with("```json\n"), "should open a json fence: {md:?}");
+    assert!(md.ends_with("\n```"), "should close the fence: {md:?}");
+    assert!(
+        md.contains("# Heading <b>bold</b>"),
+        "raw content should be preserved verbatim: {md:?}"
+    );
+}
+
+#[test]
+fn test_raw_fallback_adapts_fence_for_backticks() {
+    // Raw content containing a triple-backtick run gets a longer fence so it
+    // cannot break out of the code block.
+    let md = raw_fallback_markdown("```");
+    assert!(
+        md.starts_with("````json\n"),
+        "fence should be 4 backticks: {md:?}"
+    );
+}

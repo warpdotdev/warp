@@ -54,7 +54,7 @@ use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::{
-    is_file_content_binary, is_markdown_file, EditorLayout, FileTarget,
+    is_file_content_binary, is_jupyter_notebook_file, is_markdown_file, EditorLayout, FileTarget,
 };
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{
@@ -2231,7 +2231,15 @@ impl FileTreeView {
                             (*metadata.path).clone(),
                         );
                         let path_str = metadata.path.as_str();
-                        let target = if is_markdown_file(Path::new(path_str)) {
+                        let remote_file_path = Path::new(path_str);
+                        let target = if is_jupyter_notebook_file(remote_file_path)
+                            && FeatureFlag::JupyterNotebookRendering.is_enabled()
+                        {
+                            // Jupyter notebooks render in the notebook viewer
+                            // regardless of the markdown-viewer preference, the
+                            // same way local notebooks do.
+                            FileTarget::MarkdownViewer(EditorLayout::SplitPane)
+                        } else if is_markdown_file(remote_file_path) {
                             #[cfg(feature = "local_fs")]
                             {
                                 let prefer_md = *EditorSettings::as_ref(ctx).prefer_markdown_viewer;

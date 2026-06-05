@@ -83,6 +83,16 @@ pub fn ipynb_to_markdown(json: &str) -> Result<String, IpynbError> {
     Ok(out.trim_end().to_string())
 }
 
+/// Wrap raw file contents in a fenced code block so a notebook that fails to
+/// parse (malformed JSON, unsupported nbformat version, etc.) is shown verbatim
+/// as a fallback, never re-interpreted as Markdown/HTML. The fence length
+/// adapts so content containing backtick runs cannot break out of the block.
+pub fn raw_fallback_markdown(content: &str) -> String {
+    let mut out = String::new();
+    push_code_block(&mut out, "json", content.trim_end_matches('\n'));
+    out.trim_end().to_string()
+}
+
 /// Append a block of already-formatted Markdown, separated from surrounding
 /// content by a blank line. Empty blocks are skipped.
 fn push_block(out: &mut String, content: &str) {

@@ -349,9 +349,11 @@ impl FileNotebookView {
     }
 
     /// If the open file is a Jupyter notebook and the feature is enabled,
-    /// convert its JSON `content` to Markdown. Returns `None` (so the caller
-    /// uses the raw content) when the file is not a notebook, the feature is
-    /// disabled, or conversion fails.
+    /// convert its JSON `content` to Markdown. When conversion fails, returns a
+    /// fenced raw fallback so the contents are shown verbatim rather than
+    /// re-interpreted as Markdown. Returns `None` (so the caller uses the raw
+    /// content unchanged) only when the file is not a notebook or the feature
+    /// is disabled.
     fn maybe_render_ipynb(&self, content: &str) -> Option<String> {
         if !FeatureFlag::JupyterNotebookRendering.is_enabled() || !self.is_jupyter_notebook_file() {
             return None;
@@ -363,7 +365,10 @@ impl FileNotebookView {
                     safe: ("Failed to render Jupyter notebook; showing raw contents"),
                     full: ("Failed to render Jupyter notebook: {err}")
                 );
-                None
+                // Show the raw notebook contents verbatim as a fenced code block
+                // rather than feeding the JSON back through the Markdown renderer,
+                // which could interpret notebook strings as Markdown/HTML.
+                Some(ipynb::raw_fallback_markdown(content))
             }
         }
     }
