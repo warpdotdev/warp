@@ -100,8 +100,6 @@ const MENU_WIDTH: f32 = 200.0;
 const MAX_HEIGHT: f32 = 320.0;
 const MIN_RESIZABLE_WIDTH: f32 = 280.0;
 const DEFAULT_RESIZABLE_WIDTH: f32 = 480.0;
-// Small enough to stay under the layout constraint even for short blocks (2–3 rows),
-// while still keeping at least a couple of lines of text visible.
 const MIN_RESIZABLE_HEIGHT: f32 = 40.0;
 const AVATAR_RIGHT_MARGIN: f32 = 8.;
 const CONTENT_PADDING: f32 = 12.;
