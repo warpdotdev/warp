@@ -6,7 +6,6 @@ use repo_metadata::local_model::IndexedRepoState;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
-use settings::Setting;
 use virtual_fs::{Stub, VirtualFS};
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
@@ -16,14 +15,12 @@ use super::FileTreeView;
 use crate::auth::AuthStateProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::settings::CodeSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warpui::SingletonEntity;
 
 fn std_path(path: &std::path::Path) -> warp_util::standardized_path::StandardizedPath {
     warp_util::standardized_path::StandardizedPath::try_from_local(path).unwrap()
@@ -159,12 +156,13 @@ fn hidden_files_are_filtered_until_setting_is_enabled() {
                 assert!(!paths.contains(&std_path(&hidden_dir)));
             });
 
-            CodeSettings::handle(&app).update(&mut app, |settings, ctx| {
-                settings
-                    .show_hidden_files
-                    .set_value(true, ctx)
-                    .expect("show hidden files setting updates");
-            });
+            <crate::settings::CodeSettings as warpui::SingletonEntity>::handle(&app).update(
+                &mut app,
+                |settings, ctx| {
+                    settings::Setting::set_value(&mut settings.show_hidden_files, true, ctx)
+                        .expect("show hidden files setting updates");
+                },
+            );
 
             file_tree_view.read(&app, |view, _ctx| {
                 let paths = flattened_paths(view, &tree);
@@ -219,12 +217,13 @@ fn selected_hidden_file_is_cleared_when_filtered() {
 
             App::test((), |mut app| async move {
                 let _ = initialize_app(&mut app);
-                CodeSettings::handle(&app).update(&mut app, |settings, ctx| {
-                    settings
-                        .show_hidden_files
-                        .set_value(true, ctx)
-                        .expect("show hidden files setting updates");
-                });
+                <crate::settings::CodeSettings as warpui::SingletonEntity>::handle(&app).update(
+                    &mut app,
+                    |settings, ctx| {
+                        settings::Setting::set_value(&mut settings.show_hidden_files, true, ctx)
+                            .expect("show hidden files setting updates");
+                    },
+                );
 
                 let (_, file_tree_view) =
                     app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
@@ -246,12 +245,13 @@ fn selected_hidden_file_is_cleared_when_filtered() {
                     view.select_id(&id, ctx);
                 });
 
-                CodeSettings::handle(&app).update(&mut app, |settings, ctx| {
-                    settings
-                        .show_hidden_files
-                        .set_value(false, ctx)
-                        .expect("show hidden files setting updates");
-                });
+                <crate::settings::CodeSettings as warpui::SingletonEntity>::handle(&app).update(
+                    &mut app,
+                    |settings, ctx| {
+                        settings::Setting::set_value(&mut settings.show_hidden_files, false, ctx)
+                            .expect("show hidden files setting updates");
+                    },
+                );
 
                 file_tree_view.read(&app, |view, _ctx| {
                     let paths = flattened_paths(view, &tree);
