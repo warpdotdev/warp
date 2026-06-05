@@ -115,13 +115,8 @@ if ("$CHANNEL" -eq 'local') {
     $FEATURES = 'release_bundle,gui'
 }
 
-# The OSS channel stays on the v1 classifier/heuristic; all other channels
-# (local, dev, preview, stable) ship the v3 classifier and v2 heuristic.
-if ("$CHANNEL" -eq 'oss') {
-    $FEATURES = "$FEATURES,nld_classifier_v1,nld_heuristic_v1"
-} else {
-    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
-}
+# All channels ship the v3 classifier and v2 heuristic.
+$FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
 $BUNDLE_ID = "dev.warp.$APP_NAME"
