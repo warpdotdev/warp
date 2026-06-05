@@ -16,19 +16,18 @@ use super::FileTreeView;
 use crate::auth::AuthStateProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::settings::CodeSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ToastStack;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use warpui::SingletonEntity;
 
 fn std_path(path: &std::path::Path) -> warp_util::standardized_path::StandardizedPath {
     warp_util::standardized_path::StandardizedPath::try_from_local(path).unwrap()
 }
-
-use crate::settings::CodeSettings;
-use warpui::SingletonEntity;
 
 fn initialize_app(
     app: &mut App,
