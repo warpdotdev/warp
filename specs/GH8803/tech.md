@@ -189,7 +189,7 @@ After all three sub-phases land, the settings group mirrors the user's `[[editor
 
 Goal: enable a user-configured descriptor to spawn a server, exchange JSON-RPC, and tear down. Built-in path is untouched.
 
-**The LSP runtime below the spawn line is identity-free** (verified by exploration). `LspService` (`crates/lsp/src/service.rs`) and `transport::ProcessTransport` have zero `LSPServerType` references; `repo_watcher` only uses `config.initial_workspace()`. Customs reuse all of this directly. Identity matters only at three places: spawn-time config construction, manager-internal duplicate detection, and display.
+**The LSP runtime below the spawn line is identity-free** (verified by exploration). `LspService` (`crates/lsp/src/service.rs`) and `transport::ProcessTransport` have zero `LSPServerType` references; `repo_watcher` only uses `config.initial_workspace()`. Customs reuse all of this directly. Identity matters at four places: spawn-time config construction, manager-internal duplicate detection, display, and `TextDocumentService::did_open`'s `language_id` derivation (currently `LanguageId::from_path(path)`, which silently fails for custom filetypes — Phase 3 changes it to take `language_id: String` from the caller, sourced from the matched descriptor for customs or `LanguageId::from_path().lsp_language_identifier()` for built-ins).
 
 **`CustomLspServerConfig` parallel to `LspServerConfig`** in `crates/lsp/src/config.rs`:
 
