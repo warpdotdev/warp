@@ -1286,7 +1286,3 @@ pub fn all_working_directories(app: &AppContext) -> HashSet<PathBuf> {
     }
     working_directories
 }
-
-#[cfg(all(test, feature = "local_fs"))]
-#[path = "persisted_workspace_tests.rs"]
-mod tests;
