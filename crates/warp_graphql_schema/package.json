@@ -7,14 +7,15 @@
     "graphql": "^16.8.1"
   },
   "devDependencies": {
-    "@graphql-codegen/cli": "^5.0.2",
+    "@graphql-codegen/cli": "^7.1.2",
     "@graphql-tools/utils": "^10.1.2",
     "cross-fetch": "^4.0.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.3"
+    "typescript": "^6.0.3"
   },
   "resolutions": {
     "immutable": "3.8.3",
-    "lodash": "4.18.1"
+    "lodash": "4.18.1",
+    "ws": "8.20.1"
   }
 }
