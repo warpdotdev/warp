@@ -69,4 +69,44 @@ define_settings_group!(CodeSettings, settings: [
         toml_path: "code.editor.show_hidden_files",
         description: "Whether hidden files (dotfiles) are shown in the project explorer.",
     },
+    // Controls whether the language server reformats the file on save.
+    format_on_save: FormatOnSave {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "code.editor.format_on_save",
+        description: "Whether the language server automatically formats the file on save. Other LSP features (hover, go-to-definition, references, diagnostics) are unaffected.",
+    },
 ]);
+
+#[cfg(test)]
+mod format_on_save_tests {
+    use settings::Setting;
+    use warpui::{App, SingletonEntity};
+
+    use super::*;
+    use crate::test_util::settings::initialize_settings_for_tests;
+
+    #[test]
+    fn format_on_save_defaults_to_true() {
+        App::test((), |mut app| async move {
+            initialize_settings_for_tests(&mut app);
+
+            CodeSettings::handle(&app).read(&app, |settings, _ctx| {
+                assert!(*settings.format_on_save);
+            });
+        });
+    }
+
+    #[test]
+    fn format_on_save_uses_code_editor_toml_path() {
+        assert_eq!(
+            FormatOnSave::toml_path(),
+            Some("code.editor.format_on_save")
+        );
+        assert_eq!(FormatOnSave::hierarchy(), Some("code.editor"));
+        assert_eq!(FormatOnSave::toml_key(), "format_on_save");
+    }
+}
