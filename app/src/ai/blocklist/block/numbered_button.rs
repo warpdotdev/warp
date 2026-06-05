@@ -116,6 +116,9 @@ pub(super) fn build_numbered_button(
         / 2.;
 
     let row = Flex::row()
+        // Use `Start`, not `Center`: `Center` would center the badge against the full content
+        // height, floating it off the first line when the label wraps. `content_top_margin`
+        // recenters it against a single line.
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_child(badge)
         .with_child(
@@ -173,9 +176,11 @@ pub(super) fn build_text_button_content(
         return label_element;
     }
 
+    // Center the label and the (taller) "Recommended" chip against each other; the outer row keeps
+    // the number badge `Start`-aligned to the first line.
     Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_child(Expanded::new(1., label_element).finish())
         .with_child(
             Container::new(render_recommended_badge(appearance))
