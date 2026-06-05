@@ -49,6 +49,16 @@ use crate::ui_components::icons::Icon;
 
 const GENERATING_TITLE_PLACEHOLDER: &str = "Generating title...";
 const ORCHESTRATION_COLLAPSED_MAX_HEIGHT: f32 = 200.;
+
+/// Local section counters for markdown blocks outside the main output stream.
+#[derive(Default)]
+struct StandaloneMarkdownSectionIndices {
+    text: usize,
+    code: usize,
+    table: usize,
+    image: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OrchestrationParticipant {
     display_name: String,
@@ -755,8 +765,7 @@ fn start_agent_in_progress_prefix(execution_mode: &StartAgentExecutionMode) -> &
     }
 }
 
-/// Renders a selectable markdown block below an orchestration action header, using a muted color.
-/// Used for both StartAgent prompts and SendMessageToAgent message bodies.
+/// Renders orchestration prompts and messages as markdown-backed sections.
 fn render_collapsible_markdown_body(
     text: &str,
     text_color: ColorU,
@@ -766,17 +775,14 @@ fn render_collapsible_markdown_body(
 ) -> Box<dyn Element> {
     let sections = parse_markdown_into_text_and_code_sections(text);
     let empty_secret_redaction_state = SecretRedactionState::default();
-    let mut text_section_index = 0;
-    let mut code_section_index = 0;
-    let mut table_section_index = 0;
-    let mut image_section_index = 0;
+    let mut section_indices = StandaloneMarkdownSectionIndices::default();
     let body = render_text_sections(
         TextSectionsProps {
             model: props.model,
-            starting_text_section_index: &mut text_section_index,
-            starting_code_section_index: &mut code_section_index,
-            starting_table_section_index: &mut table_section_index,
-            starting_image_section_index: &mut image_section_index,
+            starting_text_section_index: &mut section_indices.text,
+            starting_code_section_index: &mut section_indices.code,
+            starting_table_section_index: &mut section_indices.table,
+            starting_image_section_index: &mut section_indices.image,
             sections: &sections,
             text_color,
             selectable: true,

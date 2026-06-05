@@ -6547,8 +6547,8 @@ impl SettingsWidget for OtherAIWidget {
 
         column.add_child(render_dropdown_item(
             appearance,
-            "Child-agent message display",
-            Some("Controls whether messages to and from child agents stay expanded."),
+            "Orchestration message display",
+            Some("Controls whether orchestration messages stay expanded."),
             None,
             LocalOnlyIconState::for_setting(
                 OrchestrationMessageDisplayMode::storage_key(),

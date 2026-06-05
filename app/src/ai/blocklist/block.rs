@@ -816,7 +816,7 @@ impl CollapsibleElementState {
         }
     }
 
-    /// Applies child-agent message display behavior after streaming finishes.
+    /// Applies orchestration message display behavior after streaming finishes.
     fn finish_orchestration_message(&mut self, display_mode: OrchestrationMessageDisplayMode) {
         let should_auto_collapse = self.should_auto_collapse_on_finish();
 
@@ -2389,7 +2389,7 @@ impl AIBlock {
         self.keyboard_navigable_buttons = Some(menu);
     }
 
-    /// Applies final display behavior to child-agent message bodies.
+    /// Applies final display behavior to orchestration message bodies.
     fn finish_orchestration_message_collapsible_states(
         &mut self,
         output: &AIAgentOutput,
