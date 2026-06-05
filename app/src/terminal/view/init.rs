@@ -1105,7 +1105,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             CYCLE_NEXT_ORCHESTRATION_CHILD_AGENT_KEYBINDING,
-            "Cycle to next orchestration subagent",
+            "Cycle to next orchestration session",
             TerminalAction::CycleNextOrchestrationChildAgent,
         )
         .with_group(bindings::BindingGroup::WarpAi.as_str())
