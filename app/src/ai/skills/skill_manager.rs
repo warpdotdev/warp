@@ -137,7 +137,6 @@ impl SkillManager {
                 skill_paths.extend(
                     self.home_skill_paths()
                         .into_iter()
-                        .filter(|path| path_scope.includes(path))
                         .map(|path| (home_dir.clone(), path)),
                 );
             }
@@ -151,9 +150,7 @@ impl SkillManager {
                     continue;
                 }
                 for path in dir_skill_paths {
-                    if path_scope.includes(path) {
-                        skill_paths.push((dir.clone(), path.clone()));
-                    }
+                    skill_paths.push((dir.clone(), path.clone()));
                 }
             }
         } else if let Some(working_directory) =
@@ -163,7 +160,7 @@ impl SkillManager {
                 .get_root_for_path(working_directory);
 
             for (dir, dir_skill_paths) in &self.directory_skills {
-                if is_home_directory(dir) || !path_scope.includes(dir) {
+                if is_home_directory(dir) {
                     continue;
                 }
                 // Only include skills from directories that are ancestors of the working directory
@@ -172,9 +169,7 @@ impl SkillManager {
                     // Also verify this directory is within the detected repo (if any)
                     if repo_root.as_ref().is_none_or(|root| dir.starts_with(root)) {
                         for path in dir_skill_paths {
-                            if path_scope.includes(path) {
-                                skill_paths.push((dir.clone(), path.clone()));
-                            }
+                            skill_paths.push((dir.clone(), path.clone()));
                         }
                     }
                 }
