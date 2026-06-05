@@ -420,7 +420,6 @@ impl LaidOutEmbeddedItem for LaidOutInlineSavedComment {
     }
 }
 
-
 /// The embedded item transformation for comments.
 #[cfg_attr(not(test), allow(unused))] // TODO(CODE-1464): use this
 pub(super) fn comment_embedded_item_conversion(

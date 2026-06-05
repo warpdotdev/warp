@@ -285,6 +285,9 @@ pub struct CodeEditorView {
     /// `EmbeddedCodeReviewComments` flag is enabled; the views are hosted inline by the per-view
     /// render state. Created and destroyed only in `&mut self`, never in `render`.
     inline_comments: HashMap<CommentId, ViewHandle<InlineCommentView>>,
+    /// When `true`, the next `sync_inline_comment_blocks` call will perform a full reconciliation.
+    /// Set by any mutation that changes comment state; cleared at the end of a successful sync.
+    comment_blocks_dirty: bool,
     /// Save position of the comment button rendered within this code editor view.
     comment_save_position_id: String,
     /// Save position of the flag-OFF floating comment composer overlay, so its painted presence and
@@ -396,7 +399,7 @@ impl CodeEditorView {
         // out, so the block grows and shrinks with the draft.
         let comment_render_state = comment_editor.as_ref(ctx).inner_render_state(ctx);
         ctx.observe(&comment_render_state, |me, _, ctx| {
-            me.sync_inline_comment_blocks(ctx);
+            me.mark_comment_blocks_dirty(ctx);
         });
 
         Self {
@@ -410,6 +413,7 @@ impl CodeEditorView {
             nav_bar,
             comment_locations: Vec::new(),
             inline_comments: HashMap::new(),
+            comment_blocks_dirty: true,
             display_options: CodeEditorViewDisplayOptions {
                 vertical_expansion_behavior: render_options.vertical_expansion_behavior,
                 can_show_diff_ui: true,
@@ -1133,6 +1137,12 @@ impl CodeEditorView {
         }
     }
 
+    /// Mark inline comment blocks as needing reconciliation on the next sync pass.
+    fn mark_comment_blocks_dirty(&mut self, ctx: &mut ViewContext<Self>) {
+        self.comment_blocks_dirty = true;
+        ctx.notify();
+    }
+
     /// Reconcile the full set of inline comment blocks on the per-view render state with the current
     /// state: one [`InlineCommentView`] per saved comment plus, when open, one pending draft view.
     /// Under the `EmbeddedCodeReviewComments` flag each block occupies real vertical space at its
@@ -1141,14 +1151,16 @@ impl CodeEditorView {
     ///
     /// This only ever runs in `&mut self`, never in `render`, so the hosted views are never created
     /// during rendering (they are reconciled in `set_comment_locations`).
-    // TODO: consider a dirty flag to avoid redundant full reconciliation passes — the current
-    // frequency (every keystroke, render-state observation, save, cancel, etc.) is acceptable for
-    // the comment counts expected in the initial rollout.
     fn sync_inline_comment_blocks(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.comment_blocks_dirty {
+            return;
+        }
+
         if !FeatureFlag::EmbeddedCodeReviewComments.is_enabled() {
             self.model.update(ctx, |model, ctx| {
                 model.set_inline_comment_blocks(Vec::new(), ctx);
             });
+            self.comment_blocks_dirty = false;
             return;
         }
 
@@ -1176,6 +1188,7 @@ impl CodeEditorView {
         self.model.update(ctx, |model, ctx| {
             model.set_inline_comment_blocks(blocks, ctx);
         });
+        self.comment_blocks_dirty = false;
     }
 
     fn wire_inline_comment_view(view: &ViewHandle<InlineCommentView>, ctx: &mut ViewContext<Self>) {
@@ -1184,7 +1197,7 @@ impl CodeEditorView {
         });
         let inner_render_state = view.as_ref(ctx).inner_render_state(ctx);
         ctx.observe(&inner_render_state, |me, _, ctx| {
-            me.sync_inline_comment_blocks(ctx);
+            me.mark_comment_blocks_dirty(ctx);
         });
     }
 
@@ -1195,8 +1208,7 @@ impl CodeEditorView {
     ) {
         match event {
             CommentEditorEvent::ContentChanged => {
-                self.sync_inline_comment_blocks(ctx);
-                ctx.notify();
+                self.mark_comment_blocks_dirty(ctx);
             }
             CommentEditorEvent::CommentSaved {
                 id,
@@ -1216,8 +1228,7 @@ impl CodeEditorView {
                         comments.pending_comment = PendingComment::Closed;
                     });
                 });
-                self.sync_inline_comment_blocks(ctx);
-                ctx.notify();
+                self.mark_comment_blocks_dirty(ctx);
             }
             CommentEditorEvent::DeleteComment { id } => {
                 ctx.emit(CodeEditorEvent::DeleteComment { id: *id });
@@ -1274,7 +1285,12 @@ impl CodeEditorView {
         comments: impl Iterator<Item = EditorReviewComment>,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.comment_locations.clear();
+        // Preserve existing MouseStateHandles so hover state survives across refreshes.
+        let prev_handles: HashMap<CommentId, MouseStateHandle> = self
+            .comment_locations
+            .drain(..)
+            .map(|sc| (sc.uuid, sc.mouse_state))
+            .collect();
 
         let inline_enabled = FeatureFlag::EmbeddedCodeReviewComments.is_enabled();
         let mut new_inline_comments: HashMap<CommentId, ViewHandle<InlineCommentView>> =
@@ -1282,10 +1298,11 @@ impl CodeEditorView {
 
         for comment in comments {
             let id = comment.id;
+            let mouse_state = prev_handles.get(&id).cloned().unwrap_or_default();
             self.comment_locations.push(SavedComment {
                 uuid: id,
                 location: comment.line.clone(),
-                mouse_state: MouseStateHandle::default(),
+                mouse_state,
             });
 
             if inline_enabled {
@@ -1311,8 +1328,7 @@ impl CodeEditorView {
         }
         self.inline_comments = new_inline_comments;
         // Reconcile the rendered inline blocks (saved cards + composer) against the new set.
-        self.sync_inline_comment_blocks(ctx);
-        ctx.notify();
+        self.mark_comment_blocks_dirty(ctx);
     }
 
     fn handle_inline_comment_event(
@@ -1328,9 +1344,8 @@ impl CodeEditorView {
                 view.update(ctx, |view, ctx| {
                     view.begin_editing(ctx);
                 });
-                self.sync_inline_comment_blocks(ctx);
+                self.mark_comment_blocks_dirty(ctx);
                 ctx.emit(CodeEditorEvent::CommentEditorOpened);
-                ctx.notify();
             }
             InlineCommentViewEvent::RequestRemove { id } => {
                 ctx.emit(CodeEditorEvent::DeleteComment { id: *id });
@@ -1346,8 +1361,7 @@ impl CodeEditorView {
                         view.complete_save(review_comment.clone(), ctx);
                     });
                 }
-                self.sync_inline_comment_blocks(ctx);
-                ctx.notify();
+                self.mark_comment_blocks_dirty(ctx);
             }
             InlineCommentViewEvent::Cancelled { id } => {
                 if let Some(view) = self.inline_comments.get(id).cloned() {
@@ -1359,12 +1373,10 @@ impl CodeEditorView {
                         });
                     }
                 }
-                self.sync_inline_comment_blocks(ctx);
-                ctx.notify();
+                self.mark_comment_blocks_dirty(ctx);
             }
             InlineCommentViewEvent::ContentChanged => {
-                self.sync_inline_comment_blocks(ctx);
-                ctx.notify();
+                self.mark_comment_blocks_dirty(ctx);
             }
         }
     }
@@ -1373,8 +1385,7 @@ impl CodeEditorView {
     pub fn clear_comment_locations(&mut self, ctx: &mut ViewContext<Self>) {
         self.comment_locations.clear();
         self.inline_comments.clear();
-        self.sync_inline_comment_blocks(ctx);
-        ctx.notify();
+        self.mark_comment_blocks_dirty(ctx);
     }
 
     fn line_number_config(&self, ctx: &AppContext) -> Option<LineNumberConfig> {
@@ -2319,9 +2330,8 @@ impl CodeEditorView {
                 return;
             };
             view.update(ctx, |view, ctx| view.begin_editing(ctx));
-            self.sync_inline_comment_blocks(ctx);
+            self.mark_comment_blocks_dirty(ctx);
             ctx.emit(CodeEditorEvent::CommentEditorOpened);
-            ctx.notify();
             return;
         }
 
@@ -2339,10 +2349,8 @@ impl CodeEditorView {
         self.model.update(ctx, |editor_model, ctx| {
             editor_model.reopen_comment_line(id, location, comment_text, origin, ctx);
         });
-        self.sync_inline_comment_blocks(ctx);
+        self.mark_comment_blocks_dirty(ctx);
         ctx.emit(CodeEditorEvent::CommentEditorOpened);
-
-        ctx.notify();
     }
 }
 

@@ -39,6 +39,16 @@ enum InlineCommentMode {
     EditingExisting,
 }
 
+/// Bundled configuration for constructing an [`InlineCommentView`].
+struct InlineCommentConfig {
+    id: CommentId,
+    line: EditorLineLocation,
+    saved_content: String,
+    last_update_time: DateTime<Local>,
+    origin: CommentOrigin,
+    mode: InlineCommentMode,
+}
+
 #[derive(Debug)]
 pub enum InlineCommentViewAction {
     Edit,
@@ -92,12 +102,14 @@ impl InlineCommentView {
         let body_editor =
             create_editable_comment_markdown_editor(Some(&comment.comment_content), ctx);
         Self::new_inner(
-            comment.id,
-            comment.line,
-            comment.comment_content,
-            comment.last_update_time,
-            comment.origin,
-            InlineCommentMode::Saved,
+            InlineCommentConfig {
+                id: comment.id,
+                line: comment.line,
+                saved_content: comment.comment_content,
+                last_update_time: comment.last_update_time,
+                origin: comment.origin,
+                mode: InlineCommentMode::Saved,
+            },
             body_editor,
             ctx,
         )
@@ -106,25 +118,21 @@ impl InlineCommentView {
     pub fn new_draft(line: EditorLineLocation, ctx: &mut ViewContext<Self>) -> Self {
         let body_editor = create_editable_comment_markdown_editor(None, ctx);
         Self::new_inner(
-            CommentId::new(),
-            line,
-            String::new(),
-            Local::now(),
-            CommentOrigin::default(),
-            InlineCommentMode::NewDraft,
+            InlineCommentConfig {
+                id: CommentId::new(),
+                line,
+                saved_content: String::new(),
+                last_update_time: Local::now(),
+                origin: CommentOrigin::default(),
+                mode: InlineCommentMode::NewDraft,
+            },
             body_editor,
             ctx,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn new_inner(
-        id: CommentId,
-        line: EditorLineLocation,
-        saved_content: String,
-        last_update_time: DateTime<Local>,
-        origin: CommentOrigin,
-        mode: InlineCommentMode,
+        config: InlineCommentConfig,
         body_editor: ViewHandle<RichTextEditorView>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -154,12 +162,12 @@ impl InlineCommentView {
         });
 
         let mut me = Self {
-            id,
-            line,
-            saved_content,
-            last_update_time,
-            origin,
-            mode,
+            id: config.id,
+            line: config.line,
+            saved_content: config.saved_content,
+            last_update_time: config.last_update_time,
+            origin: config.origin,
+            mode: config.mode,
             body_editor,
             edit_button,
             remove_button,
@@ -498,7 +506,11 @@ impl View for InlineCommentView {
         render_inline_comment_shell(
             ChildView::new(&self.body_editor).finish(),
             footer_row,
-            if self.is_editing() { Some(MAX_COMMENT_HEIGHT) } else { None },
+            if self.is_editing() {
+                Some(MAX_COMMENT_HEIGHT)
+            } else {
+                None
+            },
             12.,
             appearance,
         )

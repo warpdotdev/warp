@@ -19,10 +19,10 @@ use warpui::{
 };
 
 use crate::code::editor::comments::{EditorCommentsModel, PendingCommentEvent};
-use crate::features::FeatureFlag;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};

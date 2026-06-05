@@ -431,6 +431,40 @@ pub struct EditorWrapper<V: EditorView> {
     find_references_anchor: Option<EditorLineLocation>,
 }
 
+/// Extend a decoration's end Y offset to cover an inline comment block anchored within the
+/// decoration's vertical range.
+fn extend_decoration_end_for_inline_comment(
+    decoration_start_y: Pixels,
+    decoration_end_y: Pixels,
+    extended_end_y: &mut Pixels,
+    line: &EditorLineLocation,
+    model: &RenderState,
+) {
+    let Some(position) =
+        model.comment_block_position(line.clone().into_inline_comment_render_line_location())
+    else {
+        return;
+    };
+
+    // Inline comment blocks are inserted immediately after their anchor line, so a block that
+    // belongs to this decoration starts at the decoration's current bottom edge. Allow a small
+    // tolerance for float-to-pixel conversions and for zero-height intermediate items.
+    const DECORATION_TOLERANCE: f32 = 0.5;
+    let position_start = position.start_y_offset.as_f32();
+    let decoration_start = decoration_start_y.as_f32();
+    let decoration_end = decoration_end_y.as_f32();
+    if position_start + DECORATION_TOLERANCE < decoration_start
+        || position_start - DECORATION_TOLERANCE > decoration_end
+    {
+        return;
+    }
+
+    let block_end = position.start_y_offset + position.content_height;
+    if block_end > *extended_end_y {
+        *extended_end_y = block_end;
+    }
+}
+
 impl<V: EditorView> EditorWrapper<V> {
     fn paint_removed_line_overlays(
         &self,
@@ -585,39 +619,6 @@ impl<V: EditorView> EditorWrapper<V> {
             .iter()
             .find(|comment| comment.location().is_same_line(line))
             .cloned()
-    }
-
-    fn extend_decoration_end_for_inline_comment(
-        &self,
-        decoration_start_y: Pixels,
-        decoration_end_y: Pixels,
-        extended_end_y: &mut Pixels,
-        line: &EditorLineLocation,
-        model: &RenderState,
-    ) {
-        let Some(position) =
-            model.comment_block_position(line.clone().into_inline_comment_render_line_location())
-        else {
-            return;
-        };
-
-        // Inline comment blocks are inserted immediately after their anchor line, so a block that
-        // belongs to this decoration starts at the decoration's current bottom edge. Allow a small
-        // tolerance for float-to-pixel conversions and for zero-height intermediate items.
-        const DECORATION_TOLERANCE: f32 = 0.5;
-        let position_start = position.start_y_offset.as_f32();
-        let decoration_start = decoration_start_y.as_f32();
-        let decoration_end = decoration_end_y.as_f32();
-        if position_start + DECORATION_TOLERANCE < decoration_start
-            || position_start - DECORATION_TOLERANCE > decoration_end
-        {
-            return;
-        }
-
-        let block_end = position.start_y_offset + position.content_height;
-        if block_end > *extended_end_y {
-            *extended_end_y = block_end;
-        }
     }
 
     fn should_display_relative_line_number(&self) -> bool {
@@ -1517,7 +1518,7 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 let end_y = content.y_offset_at_line(decoration.end);
                 let mut extended_end_y = end_y;
                 if let Some(comment_box) = &self.comment_box {
-                    self.extend_decoration_end_for_inline_comment(
+                    extend_decoration_end_for_inline_comment(
                         start_y,
                         end_y,
                         &mut extended_end_y,
@@ -1526,7 +1527,7 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                     );
                 }
                 for saved_comment in &self.saved_comments {
-                    self.extend_decoration_end_for_inline_comment(
+                    extend_decoration_end_for_inline_comment(
                         start_y,
                         end_y,
                         &mut extended_end_y,
