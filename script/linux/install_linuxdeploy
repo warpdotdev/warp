@@ -26,14 +26,15 @@ download_appimage() {
 
   APPIMAGE_PATH="$LOCAL_BIN/$BINARY_NAME-$VERSION-$(uname -m).AppImage"
 
-  if [ ! -f "$APPIMAGE_PATH" ]; then
+  if [ ! -x "$APPIMAGE_PATH" ]; then
     APPIMAGE_RELEASE_URL="$DOWNLOAD_URL_BASE/$BINARY_NAME-$(uname -m).AppImage"
     echo "⬇️  Downloading $APPIMAGE_RELEASE_URL..."
     curl -fL "$APPIMAGE_RELEASE_URL" --output "$APPIMAGE_PATH"
     chmod +x "$APPIMAGE_PATH"
-    # Create a symlink so we can invoke it like a normal binary.
-    ln -sf "$APPIMAGE_PATH" "$LOCAL_BIN/$BINARY_NAME"
   fi
+
+  # Create a symlink so we can invoke it like a normal binary.
+  ln -sf "$APPIMAGE_PATH" "$LOCAL_BIN/$BINARY_NAME"
 }
 
 # Install linuxdeploy, a helper for constructing an AppDir (and then invoking
