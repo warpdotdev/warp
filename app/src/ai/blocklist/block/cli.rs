@@ -102,7 +102,6 @@ const MIN_RESIZABLE_WIDTH: f32 = 280.0;
 const DEFAULT_RESIZABLE_WIDTH: f32 = 480.0;
 const MAX_RESIZABLE_WIDTH_RATIO: f32 = 0.75;
 const MIN_RESIZABLE_HEIGHT: f32 = 160.0;
-const DEFAULT_RESIZABLE_HEIGHT: f32 = MAX_HEIGHT;
 const MAX_RESIZABLE_HEIGHT_RATIO: f32 = 0.75;
 const AVATAR_RIGHT_MARGIN: f32 = 8.;
 const CONTENT_PADDING: f32 = 12.;
@@ -479,7 +478,7 @@ impl CLISubagentView {
             is_input_dismissed: false,
             input_dismiss_timer_handle: None,
             resizable_width: resizable_state_handle(DEFAULT_RESIZABLE_WIDTH),
-            resizable_height: resizable_state_handle(DEFAULT_RESIZABLE_HEIGHT),
+            resizable_height: resizable_state_handle(MAX_HEIGHT),
             current_working_directory,
             shell_launch_data,
             selected_text: Arc::new(RwLock::new(None)),
@@ -972,7 +971,7 @@ impl View for CLISubagentView {
             .resizable_height
             .lock()
             .map(|g| g.size())
-            .unwrap_or(DEFAULT_RESIZABLE_HEIGHT);
+            .unwrap_or(MAX_HEIGHT);
 
         let mut result = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
