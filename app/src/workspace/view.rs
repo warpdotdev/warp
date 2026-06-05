@@ -3644,7 +3644,8 @@ impl Workspace {
                 ..
             }
             | TabSettingsChangedEvent::VerticalTabsShowPrLink { .. }
-            | TabSettingsChangedEvent::VerticalTabsShowDiffStats { .. } => {
+            | TabSettingsChangedEvent::VerticalTabsShowDiffStats { .. }
+            | TabSettingsChangedEvent::HideTitleBarSearchBarInVerticalTabs { .. } => {
                 ctx.notify();
             }
             TabSettingsChangedEvent::VerticalTabsShowDetailsOnHover { .. } => {
@@ -19381,25 +19382,33 @@ impl Workspace {
 
             let left_padding = self.compute_tab_bar_left_padding(ctx);
 
-            let tab_bar = Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(tab_bar.finish())
-                .with_child(
-                    Shrinkable::new(
-                        1.,
-                        Clipped::new(
-                            Container::new(
-                                Align::new(self.render_title_bar_search_bar(appearance)).finish(),
-                            )
-                            .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                            .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
-                            .finish(),
+            // The title bar search bar can be hidden via a user setting; when hidden,
+            // an empty flexible slot keeps the right-side controls aligned to the right.
+            let hide_search_bar =
+                *TabSettings::as_ref(ctx).hide_title_bar_search_bar_in_vertical_tabs;
+            let search_bar_slot = if hide_search_bar {
+                Expanded::new(1., Empty::new().finish()).finish()
+            } else {
+                Shrinkable::new(
+                    1.,
+                    Clipped::new(
+                        Container::new(
+                            Align::new(self.render_title_bar_search_bar(appearance)).finish(),
                         )
+                        .with_padding_left(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
+                        .with_padding_right(TITLE_BAR_SEARCH_BAR_SLOT_PADDING)
                         .finish(),
                     )
                     .finish(),
                 )
+                .finish()
+            };
+
+            let tab_bar = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(tab_bar.finish())
+                .with_child(search_bar_slot)
                 .with_child(right_controls.finish())
                 .finish();
 
