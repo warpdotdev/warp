@@ -535,20 +535,19 @@ impl MCPServersEditPageView {
         let contains_secrets =
             !find_secrets_in_text(&templatable_mcp_server.template.json).is_empty();
 
-        if !should_block_save_for_secrets(safe_mode_enabled, enterprise_enforced, contains_secrets)
-        {
-            return Ok(());
+        if should_block_save_for_secrets(safe_mode_enabled, enterprise_enforced, contains_secrets) {
+            let window_id = ctx.window_id();
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string()),
+                    window_id,
+                    ctx,
+                );
+            });
+            return Err("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string());
         }
 
-        let window_id = ctx.window_id();
-        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            toast_stack.add_ephemeral_toast(
-                DismissibleToast::error("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string()),
-                window_id,
-                ctx,
-            );
-        });
-        Err("This MCP server contains secrets. Visit Settings > Privacy to modify your secret redaction settings.".to_string())
+        Ok(())
     }
 
     fn parse_templatable_json(
