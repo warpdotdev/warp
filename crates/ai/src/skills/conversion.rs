@@ -58,7 +58,10 @@ impl SkillPathOrigin {
         let path = path.into();
         match self {
             SkillPathOrigin::Local | SkillPathOrigin::RestoredDisplayOnly => {
-                Ok(LocalOrRemotePath::Local(PathBuf::from(path)))
+                // Normalize the path to collapse duplicate separators (e.g. `//workspace/...`
+                // → `/workspace/...`) so skill cache lookups match the filesystem-derived keys.
+                let normalized: PathBuf = PathBuf::from(&path).components().collect();
+                Ok(LocalOrRemotePath::Local(normalized))
             }
             SkillPathOrigin::Remote { host_id } => {
                 let path = StandardizedPath::try_new(&path)
