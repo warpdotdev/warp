@@ -95,36 +95,6 @@ fn scoped_credential_carries_authenticated_user_metadata() {
 }
 
 #[test]
-fn scoped_credential_carries_permission_category() {
-    let grant = CredentialGrant::new(
-        InstanceId("inst_test".to_owned()),
-        ActionKind::TabCreate,
-        InvocationContext::OutsideWarp,
-        Duration::minutes(5),
-    );
-    assert_eq!(
-        grant.permission_category,
-        ActionKind::TabCreate.metadata().permission_category
-    );
-}
-
-#[test]
-fn scoped_credential_rejects_permission_category_mismatch() {
-    let mut grant = CredentialGrant::new(
-        InstanceId("inst_test".to_owned()),
-        ActionKind::TabCreate,
-        InvocationContext::OutsideWarp,
-        Duration::minutes(5),
-    );
-    grant.permission_category = PermissionCategory::ReadMetadata;
-
-    let err = grant
-        .verify_for_action(&grant.instance_id, ActionKind::TabCreate)
-        .expect_err("mismatched permission category is rejected");
-    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
-}
-
-#[test]
 fn authenticated_user_actions_require_subject() {
     let grant = CredentialGrant::new(
         InstanceId("inst_test".to_owned()),

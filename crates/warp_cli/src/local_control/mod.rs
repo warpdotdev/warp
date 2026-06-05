@@ -4,16 +4,15 @@ mod completions;
 mod output;
 mod selectors;
 use std::ffi::OsString;
-
 use std::process::ExitCode;
 
-use crate::agent::OutputFormat;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::aot::Shell;
-
 use commands::{run_app_command, run_instance_command, run_tab_command};
 use completions::generate_completions_to_stdout;
 use output::write_control_error;
+
+use crate::agent::OutputFormat;
 /// Hidden flag used by the channel-specific Warp app binary to enter `warpctrl` mode.
 pub const CONTROL_MODE_FLAG: &str = "--warpctrl";
 

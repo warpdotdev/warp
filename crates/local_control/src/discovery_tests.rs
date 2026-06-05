@@ -1,7 +1,8 @@
-#[cfg(unix)]
-use command::blocking::Command;
 use std::fs;
 use std::path::Path;
+
+#[cfg(unix)]
+use command::blocking::Command;
 
 use super::*;
 

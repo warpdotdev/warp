@@ -1,6 +1,6 @@
 # Context
 `PRODUCT.md` defines a local Warp control CLI command, provisionally named `warpctrl`, with an allowlisted action catalog, deterministic addressing across multiple running Warp app processes, and an incremental implementation plan. The public command should be exposed through an Oz-style wrapper script that invokes the existing channel-specific Warp binary in control mode, not through a separate standalone control binary.
-`SECURITY.md` is the normative security architecture for this feature. Implementation work must follow it for the top-level Settings > Scripting surface, protected mode storage, discovery metadata, credential storage, scoped safety grants, verified execution context, authenticated-user requirements, localhost/browser protections, permission-category enforcement, deterministic target resolution, and local app-side validation. The long-term architecture includes separate verified inside-Warp and outside-Warp invocation contexts, but the current foundation implementation supports outside-Warp requests only in the broadest mode and must reject `InvocationContext::InsideWarp` until the verified Warp-terminal proof broker lands. If this technical plan and `SECURITY.md` disagree, update the plan before implementing rather than treating the security architecture as optional follow-up work.
+`SECURITY.md` is the normative security architecture for this feature. Implementation work must follow it for the top-level Settings > Scripting surface, protected mode storage, discovery metadata, credential storage, exact-action grants, verified execution context, authenticated-user requirements, localhost/browser protections, deterministic target resolution, and local app-side validation. The long-term architecture includes separate verified inside-Warp and outside-Warp invocation contexts, but the current foundation implementation supports outside-Warp requests only in the broadest mode and must reject `InvocationContext::InsideWarp` until the verified Warp-terminal proof broker lands. If this technical plan and `SECURITY.md` disagree, update the plan before implementing rather than treating the security architecture as optional follow-up work.
 The existing app already has three relevant building blocks:
 - `crates/http_server/src/lib.rs (7-61)` runs a native-only loopback Axum server on fixed port `9277`.
 - `app/src/lib.rs (1993-2001)` registers that HTTP server in the native app and currently merges only installation-detection and profiling routers.
@@ -39,18 +39,18 @@ Required security gates:
 - External invocations are limited to a smaller logged-out-safe action set that does not touch user-authenticated data and cannot receive authenticated-user authority.
 - Verified Warp-terminal invocations may receive authenticated-user grants only when the selected app has a true logged-in Warp user and local-control mode plus action policy allow authenticated-user actions from Warp terminals.
 - The app rejects disabled, unauthenticated, expired, revoked, insufficient-scope, unsupported, malformed, ambiguous, missing-target, and stale-target requests with structured errors.
-- Every action has a documented state/data category and the app bridge enforces the required permission category locally before selector resolution or handler dispatch.
+- Every credential grants one exact action, and the app bridge verifies that action locally before selector resolution or handler dispatch.
 - Every action has a documented `requires_authenticated_user` value and allowed execution contexts. New actions default to requiring an authenticated user unless explicitly reviewed as logged-out-safe.
-- The Settings > Scripting mode gates invocation contexts; action metadata, credential grants, Agent/Profile policy, and authenticated-scripting identity gate metadata reads, underlying data reads, app-state mutations, metadata/configuration mutations, underlying data mutations, and authenticated-user actions.
-- Permission categories are treated as user-intent and accident-prevention guardrails, not as strong same-user malicious-app isolation.
+- The Settings > Scripting mode gates invocation contexts; exact-action credentials, Agent/Profile policy, authenticated-scripting identity, target restrictions, and action-specific approval or audit requirements gate each request.
+- Exact-action grants and approval policy are treated as user-intent and accident-prevention guardrails, not as strong same-user malicious-app isolation.
 - Remote control remains out of scope for the local same-machine credential model.
-The first implementation slice should include the protected enablement gate, credential issuance checks, and app-side permission-category enforcement even if the only mutating action initially implemented is `tab.create`. Shipping `tab.create` without the enablement and validation architecture would create the wrong foundation for the full catalog.
+The first implementation slice should include the protected enablement gate, exact-action credential issuance, and app-side exact-action enforcement even if the only mutating action initially implemented is `tab.create`. Shipping `tab.create` without the enablement and validation architecture would create the wrong foundation for the full catalog.
 ### 1. Protocol crate and stable envelope
 Create a small shared protocol crate or equivalent shared module used by both the app server and the `warpctrl` command-mode client. It should define:
 - A request protocol version used as a defensive schema guard for stale copied JSON, stale wrappers, and future external clients, not as a normal compatibility-negotiation mechanism between separately versioned CLI and GUI binaries.
 - Discovery/health response types.
 - Execution-context proof/request types for verified Warp-terminal invocations versus external invocations.
-- Action metadata describing state/data category, required permission grant, `requires_authenticated_user`, allowed execution contexts, and target families.
+- Action metadata describing implementation status, `requires_authenticated_user`, allowed execution contexts, target families, and typed parameter/result contracts.
 - Selector types:
   - `InstanceSelector`
   - `WindowSelector`
@@ -154,11 +154,11 @@ Recommended local trust model:
 - The broker verifies whether the invocation originated from a Warp-managed terminal session before issuing in-Warp-only grants.
 - The broker issues authenticated-user grants only when the selected app has a true logged-in Warp user and the selected mode plus action policy allow the grant.
 - The app rejects disabled-state, missing, malformed, invalid, expired, or revoked credentials before selector resolution or mutation.
-- The app maps every action to a state/data category and rejects insufficient grants before selector resolution or mutation.
+- The app rejects credentials issued for any action other than the requested action before selector resolution or mutation.
 - The app maps every action to a `requires_authenticated_user` value and allowed execution contexts, rejecting mismatches before selector resolution or mutation.
 - Health metadata exposed without credentials, if needed for stale-record pruning, must not reveal mutating capabilities, credentials, or sensitive target state.
 This keeps the protocol local and scriptable without creating an ambient browser-to-localhost control surface.
-Do not ship the first slice as a plaintext discovery bearer token, even for same-user human CLI use. The first slice is the foundation for underlying data reads, app-state mutations, metadata/configuration mutations, and underlying data mutations, so it must establish the protected enablement, credential storage, scoped grant, and app-side enforcement model from `SECURITY.md`.
+Do not ship the first slice as a plaintext discovery bearer token, even for same-user human CLI use. The first slice is the foundation for sensitive reads, UI mutations, persistent configuration changes, and actions that mutate user data or execute code, so it must establish the protected enablement, credential storage, exact-action grant, and app-side enforcement model from `SECURITY.md`.
 ### 4. Future verified Warp-terminal invocation context
 The current foundation branch does not implement verified inside-Warp invocation. `InvocationContext::InsideWarp` and `ExecutionContextProof::VerifiedWarpTerminal` may remain in the shared protocol as reserved future concepts, but the credential broker must reject them until the proof broker described here exists.
 Minimum implementable design:
@@ -167,8 +167,8 @@ Minimum implementable design:
 - The shell receives only proof material needed by `warpctrl`, such as an opaque handle plus a short-lived token or challenge-response input. Plain environment variables may carry handles or hints, but a caller-set variable must not be sufficient authority.
 - `warpctrl` invoked from that terminal sends `InvocationContext::InsideWarp` and `ExecutionContextProof::VerifiedWarpTerminal` to the owner-authenticated credential broker when it has proof material. Without proof material it must use `OutsideWarp`.
 - The broker verifies the proof against the app-owned registry, including app instance, session liveness, expiry, revocation, and nonce or challenge binding before minting any inside-Warp scoped credential.
-- The broker then checks Settings > Scripting mode and permission-category policy for the requested action. A valid proof raises the maximum eligible grant set; it does not bypass user settings, action metadata, authenticated-user requirements, target scopes, or bridge enforcement.
-- The minted credential records `invocation_context: InsideWarp`, the granted permission category, expiry, instance, and any authenticated-user subject. The app bridge revalidates the grant and current app policy on every control request.
+- The broker then checks Settings > Scripting mode and action-specific policy for the requested action. A valid proof raises the maximum eligible authority; it does not bypass user settings, exact-action enforcement, authenticated-user requirements, target scopes, or bridge enforcement.
+- The minted credential records `invocation_context: InsideWarp`, the granted action, expiry, instance, and any authenticated-user subject. The app bridge revalidates the grant and current app policy on every control request.
 Hardened follow-ups can strengthen this minimum design by storing secret material in platform secure storage, exposing only opaque handles through the shell, adding a Windows named-pipe equivalent to the current Unix-domain-socket peer-credential check, binding proofs to broker challenges, and invalidating proofs on shell/session teardown, app logout, user switch, or Settings > Scripting changes. These hardening layers improve direct-token theft resistance, but they do not create a perfect security boundary against malicious same-user software with process, filesystem, Accessibility, or screen-observation access.
 ### 5. Authenticated scripting identity
 The full control catalog includes Warp Drive data mutation and execution-underlying actions. Those actions require an authenticated scripting layer in addition to local-control credentials. Local-control credentials prove authority to call the local app; authenticated scripting credentials prove the logged-in Warp user allowed to request user-backed or high-risk actions.
@@ -212,9 +212,9 @@ HTTP handler (Tokio thread)
 LocalControlBridge::handle_request (main thread)
   │
   ├─ verify protected local-control mode still allows the context
-  ├─ map action to required permission category
+  ├─ verify the presented credential grants the exact requested action
   ├─ map action to authenticated-user and execution-context requirements
-  ├─ verify presented credential grants that category, target family, execution context, and authenticated-user access
+  ├─ verify target restrictions, execution context, and authenticated-user access
   ├─ match request.action.kind
   │   └─ ActionKind::TabCreate
   │       ├─ validate_tab_create_target(&request.target)
@@ -239,9 +239,9 @@ LocalControlBridge::handle_request (main thread)
 #### Adding new action handlers
 To add a new action to the bridge:
 1. Add an entry to the macro-backed `ActionKind` catalog in `crates/local_control/src/catalog.rs`.
-2. Document its `SECURITY.md` state/data category, required permission grant, `requires_authenticated_user` value, and allowed execution contexts.
+2. Document its `SECURITY.md` authenticated-user requirement, allowed execution contexts, target restrictions, and any action-specific approval or audit policy.
 3. Add a match arm in `LocalControlBridge::handle_request` in `app/src/local_control/mod.rs`.
-4. Before selector resolution or dispatch, verify local control is enabled and the presented credential grants the action category, target family, execution context, and authenticated-user access if required.
+4. Before selector resolution or dispatch, verify local control is enabled and the presented credential grants the exact action, target family, execution context, and authenticated-user access if required.
 5. Inside the match arm, use `ctx` (which is a `&mut ModelContext<LocalControlBridge>` that derefs to `&mut AppContext`) to resolve selectors and dispatch the action onto existing app types.
 6. Return a `ResponseEnvelope::ok(...)` or `ResponseEnvelope::error(...)` with the result.
 The bridge closure has access to the full `AppContext` API surface, including `ctx.windows()`, `ctx.window_ids()`, `ctx.views_of_type::<T>(window_id)`, `handle.update(ctx, ...)`, and `handle.read(ctx, ...)`. This makes it straightforward to wire new actions to existing UI behavior without introducing new concurrency concerns.
@@ -260,7 +260,7 @@ Selector behavior:
 - Index selectors are allowed only for user-visible indexed concepts and should resolve to a concrete opaque ID before execution.
 - Title, name, and path selectors are convenience selectors. They must be exact by default, document any future fuzzy behavior explicitly, and return `ambiguous_target` when more than one target matches.
 - A session-scoped request against a non-terminal pane returns `target_state_conflict`.
-Target resolution must happen after protected enablement, authentication, and safety-grant checks. This prevents denied requests from learning more target state than necessary and keeps enforcement centralized.
+Target resolution must happen after protected enablement, authentication, and exact-action grant checks. This prevents denied requests from learning more target state than necessary and keeps enforcement centralized.
 Implementation references:
 - Window-level active selection already exists inside the app through `WindowManager`.
 - Pane scoping can build on the conceptual model of `PaneViewLocator` in `app/src/workspace/util.rs (12-18)`.
@@ -296,7 +296,7 @@ Recommended modules/families:
   - object listing/inspection/opening, object creation/update/delete/insert, opening the share dialog, the v0 personal-to-team share mutation, and typed workflow execution where supported.
 Do not use a generic “dispatch action by string” endpoint. Every handler should be reachable only through an explicit `ControlAction` variant.
 #### Future WarpCtrlBehavior review gate
-The public `ControlAction` catalog remains the source of truth for the wire protocol, CLI parser, permission metadata, generated documentation, and app bridge handlers. Internal app actions such as `WorkspaceAction`, `TerminalAction`, `PaneGroupAction`, settings actions, and future user-visible action enums must not become the public protocol directly because they can contain transient view locators, indices, debug-only variants, implementation-specific payloads, and unstable internal semantics.
+The public `ControlAction` catalog remains the source of truth for the wire protocol, CLI parser, authorization metadata, generated documentation, and app bridge handlers. Internal app actions such as `WorkspaceAction`, `TerminalAction`, `PaneGroupAction`, settings actions, and future user-visible action enums must not become the public protocol directly because they can contain transient view locators, indices, debug-only variants, implementation-specific payloads, and unstable internal semantics.
 The exhaustive `WarpCtrlBehavior` review mapping is not a current foundation-branch requirement. It should land in a later action-review or `zach/warp-cli-v2/cli-catalog-docs` branch after the public catalog and generated docs surface are mature enough to enforce it consistently. Once added, the mapping is a code-level forcing function, not an automatic exposure mechanism. It answers whether each internal app action is:
 - `Exposed` through a specific public `ControlAction` kind.
 - `CoveredBy` an existing public `ControlAction` kind because several internal actions map to one stable CLI behavior.
@@ -308,7 +308,7 @@ Recommended shape:
 - Define review enums such as `WarpCtrlActionReview`, `WarpCtrlExclusionReason`, and `WarpCtrlDeferredReason`.
 - Implement `WarpCtrlBehavior` for the major user-visible action enums, starting with `WorkspaceAction` and `TerminalAction`.
 - Keep the mapping one-way from internal behavior to public catalog metadata. `WarpCtrlBehavior::Exposed(ControlActionKind::TabCreate)` means the action is represented by the public `tab.create` command; it does not mean raw `WorkspaceAction::AddTerminalTab` is serializable or dispatchable over the protocol.
-- Add tests that collect reviewed action kinds and verify every `ControlActionKind` has protocol metadata, permission metadata, CLI parser coverage, generated-doc coverage, and an app-side handler before it can be advertised as supported.
+- Add tests that collect reviewed action kinds and verify every `ControlActionKind` has protocol metadata, authorization metadata, CLI parser coverage, generated-doc coverage, and an app-side handler before it can be advertised as supported.
 The `warpui::Action` trait should not be extended for this purpose because it currently has a blanket implementation for any `Any + Debug + Send + Sync` type. The enforcement point is the concrete user-visible action enums and binding/action registration surfaces, where exhaustive review can be required without weakening the allowlisted protocol boundary.
 ### 9. First slice: prove discovery and `tab.create`
 The first `warpctrl` implementation slice should land the minimum cross-cutting architecture plus a single representative tab mutation:
@@ -316,14 +316,14 @@ The first `warpctrl` implementation slice should land the minimum cross-cutting 
 - `FeatureFlag::WarpControlCli` and Cargo feature `warp_control_cli`, with app-side runtime gating for settings, discovery, bridge registration, and local-control endpoints.
 - New top-level Settings > Scripting page rendered only while `FeatureFlag::WarpControlCli` is enabled. The current foundation exposes one local-control mode with disabled as the default, enabled within Warp as a reserved mode that rejects requests until proof support exists, and enabled everywhere as the only mode that allows outside-Warp credential requests.
 - Protected local-only mode storage where outside-Warp control defaults off unless the broadest mode is selected.
-- The local-control mode lives in the typed `LocalControlSettings` group as a private setting with `SyncToCloud::Never`, an explicit private storage key, and no `toml_path`. This keeps it out of the user-visible settings file and generated settings schema. It is persisted through Warp's secure-storage provider, migrates earlier private-preferences values only after a protected write succeeds, and allows explicitly documented weaker owner-only fallback storage on platforms whose secure provider is unavailable.
+- The local-control mode lives in the typed `LocalControlSettings` group as a private setting with `SyncToCloud::Never`, an explicit private storage key, and no `toml_path`. This keeps it out of the user-visible settings file and generated settings schema. It is persisted only through Warp's secure-storage provider, never imports a value from ordinary or private preferences, and fails closed to disabled when no valid protected value is available.
 - Discovery registry and CLI instance selection.
 - A `warpctrl` wrapper entrypoint that invokes the existing channel-specific Warp binary with a hidden `--warpctrl` control-mode flag and runs control commands without starting the GUI app runtime.
 - Per-process authenticated local-control server that refuses sensitive work when outside-Warp control is disabled and rejects inside-Warp credential requests until verified terminal proof support is implemented.
 - Scoped credential issuance/storage with no raw credentials in plaintext discovery records, including execution-context fields and authenticated-user grant fields.
 - App-side request bridge and selector resolver.
-- Action-category mapping and app-side safety-grant enforcement.
-- Action metadata for `tab.create` that deliberately classifies it as a logged-out-safe app-state mutation only when the selected local-control mode allows the invocation context.
+- Exact-action credential issuance and app-side exact-action enforcement.
+- Action metadata for `tab.create` that deliberately marks it logged-out-safe and outside-Warp-only in the foundation slice.
 - Read-only `ping/version` plus `warpctrl instance list` or equivalent minimal discovery command.
 - End-to-end `warpctrl tab create` for the selected instance, reusing the same app behavior as the user-visible new-terminal-tab action.
 Why `tab.create` first:
@@ -376,13 +376,13 @@ The active durable review stack is the recovered `zach/warp-cli-v2/*` stack. Thi
 Spec ownership is part of the branch architecture. The only v2 branch that may intentionally change `specs/warp-control-cli/PRODUCT.md`, `TECH.md`, `SECURITY.md`, or `README.md` is `zach/warp-cli-v2/contract-spec-sync`. After a spec change lands there, propagate it upward through every higher v2 branch with raw git rebases so those files remain byte-identical across the stack. Higher implementation branches must not make independent spec edits except when resolving a propagation conflict in a way that preserves the bottom-branch content.
 The intended v2 stack is:
 1. `zach/warp-cli-v2/contract-spec-sync` — create from `origin/master`. It owns the product, technical, security, and README specs plus the shared contract/foundation: protocol crate shape, discovery/auth scaffolding, initial instance selector and error types, action metadata/catalog structure, Scripting settings surface, protected local-control settings, local-control server/bridge skeleton, `warpctrl` wrapper/control-mode entrypoint, packaging hooks, module split, and the minimum first-slice smoke path needed to prove the end-to-end architecture.
-2. `zach/warp-cli-v2/auth-security` — create from `zach/warp-cli-v2/contract-spec-sync`. It owns authentication and security enforcement that applies across command families: scoped grants, execution-context policy, authenticated-user plumbing, denial paths, Settings > Scripting security controls, and tests proving high-risk actions cannot run without the required identity and permission category.
-3. `zach/warp-cli-v2/readonly-capability-targets` — create from `zach/warp-cli-v2/auth-security`. It owns structural metadata reads, capability/action metadata, target selector parsing and resolution, opaque IDs, active window/tab/pane/session targeting, metadata-read permission checks, and read-only CLI output for these surfaces. It must not expose terminal output, input buffers, history, Drive object contents, or other underlying user data.
-4. `zach/warp-cli-v2/appstate-file-drive-views` — create from `zach/warp-cli-v2/readonly-capability-targets`. It owns read-only app-state, file view, Drive view, block/input/history-style underlying-data read surfaces that are approved for the public catalog, along with the required underlying-data-read permission checks. It must keep local filesystem content reads/writes outside the v0 public catalog unless the specs are updated first.
+2. `zach/warp-cli-v2/auth-security` — create from `zach/warp-cli-v2/contract-spec-sync`. It owns authentication and security enforcement that applies across command families: scoped grants, execution-context policy, authenticated-user plumbing, denial paths, Settings > Scripting security controls, and tests proving high-risk actions cannot run without the required identity and exact-action grant.
+3. `zach/warp-cli-v2/readonly-capability-targets` — create from `zach/warp-cli-v2/auth-security`. It owns structural metadata reads, capability/action metadata, target selector parsing and resolution, opaque IDs, active window/tab/pane/session targeting, exact-action checks for structural metadata reads, and read-only CLI output for these surfaces. It must not expose terminal output, input buffers, history, Drive object contents, or other underlying user data.
+4. `zach/warp-cli-v2/appstate-file-drive-views` — create from `zach/warp-cli-v2/readonly-capability-targets`. It owns read-only app-state, file view, Drive view, block/input/history-style underlying-data read surfaces that are approved for the public catalog, along with the exact-action checks for content-bearing reads. It must keep local filesystem content reads/writes outside the v0 public catalog unless the specs are updated first.
 5. `zach/warp-cli-v2/metadata-config-mutations` — create from `zach/warp-cli-v2/appstate-file-drive-views`. It owns metadata/configuration mutations: allowlisted settings changes, labels/titles/appearance/configuration updates, settings or surface-opening commands that are metadata/configuration rather than underlying-data mutations, and tests proving unallowlisted or private settings are rejected.
 6. `zach/warp-cli-v2/drive-data-mutations` — create from `zach/warp-cli-v2/metadata-config-mutations`. It owns authenticated underlying-data mutations for Warp Drive objects, including typed object create/update/delete/insert and the approved v0 personal-to-team sharing path. It must use disposable resources in tests and must not implement local file content reads, writes, appends, deletes, or other filesystem-content mutations.
-7. `zach/warp-cli-v2/execution-underlying` — create from `zach/warp-cli-v2/drive-data-mutations`. It owns authenticated execution-underlying actions such as `input.run` and typed workflow execution where supported. It must require underlying-data-mutation permission plus authenticated scripting identity, deterministic target resolution, audit records, and tests proving accepted-command submission and agent-prompt submission remain unavailable.
-8. `zach/warp-cli-v2/cli-catalog-docs` — create from `zach/warp-cli-v2/execution-underlying`. It owns the final CLI/catalog/docs integration pass: generated or curated command catalog output, help/completion polish, user-facing docs, Agent skill updates, command-family documentation, future `WarpCtrlBehavior` action-review scaffolding if it has not landed earlier, and consistency checks that every advertised action has protocol metadata, permission metadata, parser coverage, handler coverage, and tests.
+7. `zach/warp-cli-v2/execution-underlying` — create from `zach/warp-cli-v2/drive-data-mutations`. It owns authenticated execution-underlying actions such as `input.run` and typed workflow execution where supported. It must require an exact execution-action grant plus authenticated scripting identity, deterministic target resolution, audit records, and tests proving accepted-command submission and agent-prompt submission remain unavailable.
+8. `zach/warp-cli-v2/cli-catalog-docs` — create from `zach/warp-cli-v2/execution-underlying`. It owns the final CLI/catalog/docs integration pass: generated or curated command catalog output, help/completion polish, user-facing docs, Agent skill updates, command-family documentation, future `WarpCtrlBehavior` action-review scaffolding if it has not landed earlier, and consistency checks that every advertised action has protocol metadata, authorization metadata, parser coverage, handler coverage, and tests.
 9. `zach/warp-cli-v2/fanin-finalize` — create from `zach/warp-cli-v2/cli-catalog-docs`. It owns fan-in cleanup only: conflict-resolution preservation, naming/format consistency, final test fixes, validation matrix updates, and integration fixes required for the recovered stack to compile and pass tests. It should not introduce broad new command families.
 Recommended raw-git setup for a clean local reconstruction:
 ```bash
@@ -397,7 +397,7 @@ git checkout -b zach/warp-cli-v2/execution-underlying
 git checkout -b zach/warp-cli-v2/cli-catalog-docs
 git checkout -b zach/warp-cli-v2/fanin-finalize
 ```
-If a lower branch changes after higher branches exist, rebase each higher branch onto its immediate lower branch in stack order. Resolve conflicts by preserving the lower branch's shared contracts, permission model, and spec files while also keeping the higher branch's owned behavior.
+If a lower branch changes after higher branches exist, rebase each higher branch onto its immediate lower branch in stack order. Resolve conflicts by preserving the lower branch's shared contracts, exact-action authorization model, and spec files while also keeping the higher branch's owned behavior.
 The previous `zach/warp-cli-integration-fanin` branch and its backup are preservation/history refs for the integrated implementation work. They are not review branches. Earlier non-v2 proposed branch names and the older broad stacks are migration-source/history material only unless the stack is deliberately renamed in a future explicit reslicing.
 ### Feature flag and rollout gate
 The entire feature should be gated behind a Warp feature flag, proposed as `FeatureFlag::WarpControlCli` with Cargo feature `warp_control_cli`.
@@ -421,7 +421,7 @@ Keep PR boundaries aligned with the v2 stack:
 - PR1: `zach/warp-cli-v2/contract-spec-sync` into `master` for specs, shared contracts, protocol, CLI skeleton, settings, bridge, module scaffolding, and first-slice smoke behavior.
 - PR2: `zach/warp-cli-v2/auth-security` into `zach/warp-cli-v2/contract-spec-sync` or its merged successor for auth/security enforcement, execution-context policy, scoped grants, and Settings > Scripting security controls.
 - PR3: `zach/warp-cli-v2/readonly-capability-targets` into `zach/warp-cli-v2/auth-security` or its merged successor for metadata reads, capabilities, target selectors, and read-only structural command output.
-- PR4: `zach/warp-cli-v2/appstate-file-drive-views` into `zach/warp-cli-v2/readonly-capability-targets` or its merged successor for approved underlying-data read surfaces, app-state/file/Drive views, and underlying-data-read permission tests.
+- PR4: `zach/warp-cli-v2/appstate-file-drive-views` into `zach/warp-cli-v2/readonly-capability-targets` or its merged successor for approved content-bearing read surfaces, app-state/file/Drive views, and exact-action denial tests.
 - PR5: `zach/warp-cli-v2/metadata-config-mutations` into `zach/warp-cli-v2/appstate-file-drive-views` or its merged successor for metadata/configuration mutations, allowlisted settings changes, and configuration-denial tests.
 - PR6: `zach/warp-cli-v2/drive-data-mutations` into `zach/warp-cli-v2/metadata-config-mutations` or its merged successor for authenticated Warp Drive underlying-data mutations.
 - PR7: `zach/warp-cli-v2/execution-underlying` into `zach/warp-cli-v2/drive-data-mutations` or its merged successor for authenticated execution-underlying actions.
@@ -450,7 +450,7 @@ sequenceDiagram
     CLI->>HTTP: Authenticated POST tab.create request
     HTTP->>HTTP: Verify context-specific enablement + credential + execution context
     HTTP->>BRIDGE: Typed request + response channel
-    BRIDGE->>BRIDGE: Recheck enablement + permission + auth-user policy
+    BRIDGE->>BRIDGE: Recheck enablement + exact action + auth-user policy
     BRIDGE->>RES: Resolve window/tab/pane/session selectors
     RES-->>BRIDGE: Concrete target handles or typed error
     BRIDGE->>ACT: Execute allowlisted ControlAction
@@ -473,7 +473,7 @@ Map tests directly to `PRODUCT.md` behavior.
   - Tests proving discovery in disabled state exposes no actionable endpoint authority or credential reference.
   - Credential-storage tests proving raw credentials are not written into plaintext discovery records.
   - Execution-context tests proving external clients cannot receive grants reserved for verified Warp-terminal invocations.
-  - Permission-category enforcement tests proving insufficient grants fail with `insufficient_permissions` before selector resolution or handler dispatch, including separate denial cases for app-state mutation, metadata/configuration mutation, and underlying-data mutation.
+  - Exact-action enforcement tests proving a valid credential for one action fails with `insufficient_permissions` when used for any other action, before selector resolution or handler dispatch.
   - Authenticated-user tests proving user-authenticated actions fail without a logged-in app user or authenticated-user grant.
   - External-context tests proving authenticated-user actions remain unavailable outside verified Warp-terminal invocations and fail before selector resolution or handler dispatch.
   - Settings > Scripting tests proving mode changes invalidate credentials and prevent new grants for invocation contexts no longer allowed.
@@ -504,7 +504,7 @@ Map tests directly to `PRODUCT.md` behavior.
   - Shell completions/help output checks once final command naming is selected.
 ### Computer-use CLI verification
 Before any stacked PR is considered ready for review, run an end-to-end computer-use verification pass against a cloud built validation artifact from that branch. The validation artifact is a Warp app build plus its packaged `warpctrl` wrapper from the exact commit under review, with `warp_control_cli` compiled in and `FeatureFlag::WarpControlCli` enabled at runtime.
-The verifier must launch the built Warp app, enable the Scripting settings needed for the command category under test, and capture screenshots or screen recordings that prove both the terminal invocation and the user-visible result of each basic command family. Every `warpctrl` invocation executed during verification must have a durable screenshot captured immediately after the command runs, showing the exact command line and full terminal output in either pretty or JSON mode. Screenshots should be saved as durable artifacts and named by branch, invocation context, command family, command name, and whether the image shows terminal output or app UI state.
+The verifier must launch the built Warp app, enable the Scripting settings and satisfy the direct policy requirements for the command under test, and capture screenshots or screen recordings that prove both the terminal invocation and the user-visible result of each basic command family. Every `warpctrl` invocation executed during verification must have a durable screenshot captured immediately after the command runs, showing the exact command line and full terminal output in either pretty or JSON mode. Screenshots should be saved as durable artifacts and named by branch, invocation context, command family, command name, and whether the image shows terminal output or app UI state.
 Verification screenshots should make the cause and effect visible in a single image whenever possible. The preferred composition is a staggered two-window layout where the terminal running the `warpctrl` command remains visible and unobscured, while the target Warp window or terminal is also visible enough to prove the UI state before or after the command. For outside-Warp invocations, use one external terminal window for the CLI command and one built Warp app window, staggered so the screenshot shows both the command/output and the Warp UI result. For inside-Warp invocations, use two Warp terminal windows or panes when possible: one Warp terminal running `warpctrl` and a second Warp terminal or Warp window showing the target/result state, staggered so both are visible in the same screenshot. Avoid screenshots that show only the CLI terminal or only the Warp UI when a combined view can be captured.
 Before/after screenshots for visible mutations should preserve the same staggered layout so reviewers can compare the command context and UI state directly. If a single combined screenshot is not possible because of window-manager, display-size, or focus limitations, the verifier must capture paired screenshots with the same ordinal: one terminal-output screenshot that fully shows the command and output, and one UI screenshot that shows the resulting Warp state. The manifest entry should explain why the combined composition was not possible. Screenshots should not crop out the command, exit status, selected Warp target, or relevant visible UI effect.
 Before every computer-use scenario, the verifier must explicitly ask and answer, "What is the best way to show the impact of this CLI command?" The verifier should then put Warp into a state where the expected effect is clearly visible before running the command. For example, syntax-highlighting changes should start with recognizable text in the input editor that will visibly change; font-size and zoom changes should start with enough terminal text or UI chrome to compare scale; tab or pane rename/color commands should keep the affected tab or pane label visible; app-state mutation commands should make the target workspace, tab, pane, input box, or surface visible; and denial paths should show the relevant Settings > Scripting state or target state that makes the denial meaningful. Each manifest entry for a visible or user-facing command should describe the chosen proof setup, the expected visual effect, and any setup screenshot used to establish the before state.
@@ -512,17 +512,17 @@ After each command that has a visible or user-facing result, the verifier must u
 The verifier must exercise every invocation context implemented by the branch under review. For the current foundation branch, inside-Warp verification means proving `InsideWarp` requests are rejected because proof verification does not exist yet, while the default disabled mode blocks all contexts until the user changes it. Once verified Warp-terminal support is implemented, the verifier must also run `warpctrl` from a terminal session inside the feature-flag-enabled Warp app and prove the app-issued execution-context proof is accepted and Settings > Scripting mode gates the invocation context. The outside-Warp path must run the packaged `warpctrl` wrapper from an external terminal or automation shell outside the built Warp app and prove outside-Warp control is default-off, then works only after selecting the broadest mode in Settings > Scripting.
 The verification matrix should cover every implemented command in `PRODUCT.md` at least once in JSON output mode. The verifier must capture a terminal-output screenshot for every command invocation, including successful calls, expected denials, unsupported stubs, and fail-closed policy gates. Where there is a visible UI effect, the verifier must also capture app UI screenshots after the command runs, and before the command when that is needed to prove a before/after state transition. At minimum:
 - read-only metadata commands show successful CLI output in a terminal screenshot and, for active/focus/list commands, a visible target that matches the output;
-- underlying data read commands show successful CLI output only when the underlying-data-read permission is enabled, plus terminal screenshots for disabled-permission denials;
+- content-bearing read commands show successful CLI output only with a credential for that exact action, plus terminal screenshots proving another action credential is denied;
 - app-state mutation commands show terminal-output screenshots plus before/after app UI screenshots proving the visible Warp UI changed;
 - metadata/configuration mutation commands show terminal-output screenshots plus before/after app UI screenshots proving the persisted setting or label changed;
-- underlying data mutation commands run only in a disposable test workspace/session with test Warp Drive objects, show terminal screenshots for denial without the underlying-data-mutation permission, then show terminal screenshots and any relevant app/file/Drive state evidence for success with the permission enabled;
+- commands that mutate user data or execute code run only in a disposable test workspace/session with test Warp Drive objects, show terminal screenshots proving a different action credential is denied, then show terminal screenshots and any relevant app/file/Drive state evidence for success with the exact action grant and required approval;
 - authenticated-user commands show terminal screenshots for both the logged-out or missing-grant denial path and the enabled authenticated path when a test account/environment is available.
-The verifier should produce a verification manifest checked into or attached to the PR artifacts. The manifest should list each command, branch under test, invocation context, required permission category, expected result, actual result, terminal screenshot artifact path, UI screenshot artifact path when applicable, and any skipped case with a reason. Missing terminal screenshots for any executed `warpctrl` invocation block review readiness. Missing UI screenshots for visible commands also block review readiness.
+The verifier should produce a verification manifest checked into or attached to the PR artifacts. The manifest should list each command, branch under test, invocation context, required exact action and direct policy requirements, expected result, actual result, terminal screenshot artifact path, UI screenshot artifact path when applicable, and any skipped case with a reason. Missing terminal screenshots for any executed `warpctrl` invocation block review readiness. Missing UI screenshots for visible commands also block review readiness.
 ## Parallelization
 The durable review stack should remain linear, but implementation can still happen in parallel with Oz cloud agents. For the recovered v2 stack, parallel work should feed short-lived shard branches that are merged or cherry-picked into exactly one v2 review branch by the lead integrator. Shard branches should not become long-lived PRs by default.
 The completed recovery used fan-in shard work as source material, then sliced it into the v2 stack. Future parallel work should use the same contract-first fan-out pattern:
 - Start from the lowest v2 branch that already contains the contracts needed by the shard.
-- Give each shard a single owned command family or permission boundary.
+- Give each shard a single owned command family or authorization boundary.
 - Keep `specs/warp-control-cli/*` unchanged on shards unless the shard explicitly starts from and targets `zach/warp-cli-v2/contract-spec-sync` for a spec update.
 - Have the lead integrator merge or cherry-pick shard work into the appropriate v2 branch, then rebase all higher v2 branches upward.
 Suggested shard-to-stack ownership:
@@ -536,7 +536,7 @@ Suggested shard-to-stack ownership:
 Each cloud shard prompt should include:
 - The exact base branch and shard branch name.
 - The v2 review branch it is intended to feed.
-- Owned command families and permission categories.
+- Owned command families and action-specific policy decisions.
 - Owned files/modules.
 - Files/modules the shard must not edit without calling out the need for integration.
 - Selector resolution requirements.
@@ -581,7 +581,7 @@ flowchart LR
 - Over-broad settings mutation:
   - Mitigation: allowlisted setting keys only, with private/debug/derived settings rejected.
 - Command execution risk:
-  - Mitigation: keep `input.run`/typed workflow execution in the catalog but implement it only in `zach/warp-cli-v2/execution-underlying` after authenticated scripting identity, underlying-data-mutation permission, deterministic target resolution, and audit coverage are in place.
+  - Mitigation: keep `input.run`/typed workflow execution in the catalog but implement it only in `zach/warp-cli-v2/execution-underlying` after authenticated scripting identity, an exact `input.run` or workflow-execution grant, deterministic target resolution, approval policy, and audit coverage are in place.
 - Packaging churn due to provisional wrapper naming:
   - Mitigation: document `warpctrl` as provisional and settle final aliases before broad release workflow rollout.
 - Heavyweight CLI startup caused by sharing the app binary:

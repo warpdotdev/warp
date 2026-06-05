@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use super::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 use settings::{PrivatePreferences, PublicPreferences, Setting as _, SettingsManager, SyncToCloud};
 use warpui::SingletonEntity as _;
 use warpui_extras::secure_storage::{self, AppContextExt as _};
 use warpui_extras::user_preferences;
+
+use super::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 
 #[derive(Default)]
 struct InMemorySecureStorage {
@@ -50,23 +51,6 @@ impl secure_storage::SecureStorage for InMemorySecureStorage {
     }
 }
 
-struct UnavailableSecureStorage;
-
-impl secure_storage::SecureStorage for UnavailableSecureStorage {
-    fn write_value(&self, _key: &str, _value: &str) -> Result<(), secure_storage::Error> {
-        Err(secure_storage::Error::Unknown(anyhow::anyhow!(
-            "secure storage unavailable"
-        )))
-    }
-
-    fn read_value(&self, _key: &str) -> Result<String, secure_storage::Error> {
-        Err(secure_storage::Error::NotFound)
-    }
-
-    fn remove_value(&self, _key: &str) -> Result<(), secure_storage::Error> {
-        Err(secure_storage::Error::NotFound)
-    }
-}
 fn default_settings() -> LocalControlSettings {
     LocalControlSettings {
         local_control_mode: LocalControlModeSetting::new(None),
@@ -131,7 +115,7 @@ fn mode_is_persisted_to_secure_storage() {
 }
 
 #[test]
-fn migration_preserves_private_fallback_when_secure_storage_is_unavailable() {
+fn mode_does_not_migrate_from_private_preferences() {
     warpui::App::test((), |mut app| async move {
         app.update(|ctx| {
             ctx.add_singleton_model(|_| {
@@ -146,7 +130,7 @@ fn migration_preserves_private_fallback_when_secure_storage_is_unavailable() {
             });
             ctx.add_singleton_model(|_| SettingsManager::default());
             ctx.add_singleton_model(|_| -> secure_storage::Model {
-                Box::new(UnavailableSecureStorage)
+                Box::<InMemorySecureStorage>::default()
             });
             LocalControlModeSetting::preferences_for_setting(ctx)
                 .write_value(
@@ -154,23 +138,22 @@ fn migration_preserves_private_fallback_when_secure_storage_is_unavailable() {
                     serde_json::to_string(&LocalControlMode::EnabledEverywhere)
                         .expect("mode serializes"),
                 )
-                .expect("private fallback is writable");
+                .expect("private preference is writable");
             LocalControlSettings::register(ctx);
         });
 
         app.read(|ctx| {
             assert_eq!(
                 LocalControlSettings::as_ref(ctx).mode(),
-                LocalControlMode::EnabledEverywhere
+                LocalControlMode::Disabled
             );
-            let fallback = LocalControlModeSetting::preferences_for_setting(ctx)
+            let private_value = LocalControlModeSetting::preferences_for_setting(ctx)
                 .read_value(LocalControlModeSetting::storage_key())
-                .expect("private fallback is readable");
-            assert!(fallback.is_some());
+                .expect("private preference is readable");
+            assert!(private_value.is_some());
         });
     });
 }
-
 #[test]
 fn mode_is_private_and_never_cloud_synced() {
     assert_eq!(LocalControlModeSetting::sync_to_cloud(), SyncToCloud::Never);

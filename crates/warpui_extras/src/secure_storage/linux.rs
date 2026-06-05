@@ -230,6 +230,13 @@ impl SecureStorage {
         let fallback_file = self.fallback_file(key)?;
 
         let encrypted = self.fallback_encrypt(value)?;
+        std::fs::write(fallback_file, encrypted).map_err(|err| Error::Unknown(err.into()))
+    }
+
+    fn write_owner_only_fallback_value(&self, key: &str, value: &str) -> Result<(), Error> {
+        let fallback_file = self.fallback_file(key)?;
+
+        let encrypted = self.fallback_encrypt(value)?;
         let Some(fallback_dir) = fallback_file.parent() else {
             return Err(Error::Unknown(anyhow!(
                 "Invalid fallback secure-storage directory"
@@ -287,6 +294,17 @@ impl super::SecureStorage for SecureStorage {
                 Ok(())
             }
             Err(_) => self.write_fallback_value(key, value),
+        }
+    }
+    fn write_value_with_owner_only_fallback(&self, key: &str, value: &str) -> Result<(), Error> {
+        let secret_result = self.write_secret_value(key, value);
+
+        match secret_result {
+            Ok(_) => {
+                let _ = self.delete_fallback_value(key);
+                Ok(())
+            }
+            Err(_) => self.write_owner_only_fallback_value(key, value),
         }
     }
 

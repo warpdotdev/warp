@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
-#[cfg(unix)]
-use super::ensure_peer_uid;
 use ::local_control::auth::{CredentialGrant, CredentialRequest};
-use ::local_control::protocol::ActionKind;
 use ::local_control::protocol::{
-    Action, PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector,
-    WindowTarget,
+    Action, ActionKind, PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector,
+    WindowSelector, WindowTarget,
 };
 use ::local_control::{ErrorCode, InstanceId, InvocationContext, RequestEnvelope};
 use axum::body::Bytes;
@@ -18,13 +15,15 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity as _;
 
+#[cfg(unix)]
+use super::ensure_peer_uid;
 use super::{
     capabilities, ensure_feature_enabled, ensure_protocol_version, ensure_settings_allow_action,
     handle_control_request, insert_credential, issue_credential, lookup_credential,
     outside_warp_control_enabled_for_settings, require_active_window_id, resolve_index_from_ids,
     resolve_title_from_matches, validate_action_params, validate_loopback_headers,
     validate_request_authority, validate_tab_create_target, ControlServerState, LocalControlBridge,
-    MAX_ACTIVE_CREDENTIALS,
+    LocalControlServer, MAX_ACTIVE_CREDENTIALS,
 };
 use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 
@@ -227,6 +226,29 @@ fn feature_flag_disabled_denies_local_control() {
     let _flag = FeatureFlag::WarpControlCli.override_enabled(false);
     let err = ensure_feature_enabled().expect_err("feature flag disabled");
     assert_eq!(err.code, ErrorCode::LocalControlDisabled);
+}
+#[test]
+fn duplicate_server_start_is_rejected() {
+    warpui::App::test((), |mut app| async move {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        let server = app.add_model(|_| LocalControlServer {
+            _runtime: Some(runtime),
+            control_endpoint: None,
+            registered_instance: None,
+        });
+
+        let err = server
+            .update(&mut app, |server, ctx| server.start(ctx))
+            .expect_err("duplicate start should fail");
+        assert_eq!(err.code, ErrorCode::Internal);
+
+        server
+            .update(&mut app, |server, _| server._runtime.take())
+            .expect("existing runtime should remain active")
+            .shutdown_background();
+    });
 }
 
 #[test]

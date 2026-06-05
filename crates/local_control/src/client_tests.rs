@@ -1,6 +1,7 @@
-use chrono::Utc;
 #[cfg(unix)]
 use std::io::{Read as _, Write as _};
+
+use chrono::Utc;
 use uuid::Uuid;
 
 use super::*;

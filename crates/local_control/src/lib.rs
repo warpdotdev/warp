@@ -16,7 +16,7 @@ pub use auth::{
 };
 pub use catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, AuthenticatedUserRequirement,
-    InvocationContext, PermissionCategory, RiskTier, StateDataCategory, TargetScope,
+    InvocationContext, TargetScope,
 };
 pub use discovery::{
     ControlEndpoint, CredentialBrokerReference, InstanceId, InstanceRecord, RegisteredInstance,

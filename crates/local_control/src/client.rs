@@ -1,10 +1,26 @@
 //! Blocking client helpers used by the standalone `warpctrl` CLI.
-use crate::auth::{CredentialRequest, ScopedCredential};
-use crate::discovery::InstanceRecord;
-use crate::protocol::{
-    Action, ActionKind, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope,
-    InvocationContext, RequestEnvelope, ResponseEnvelope,
-};
+//!
+//! Authentication is a two-transport flow:
+//!
+//! 1. Discovery supplies instance metadata, an exact `127.0.0.1` control
+//!    endpoint, and an instance-bound credential-broker socket reference. It
+//!    never supplies a bearer credential.
+//! 2. Before using either reference, the client validates that the endpoint is
+//!    loopback and that the broker filename is derived from the selected
+//!    instance ID.
+//! 3. The client requests a credential for one action and invocation context
+//!    over the owner-only broker socket. On Unix, the server authenticates the
+//!    connecting process through kernel-reported peer credentials before
+//!    issuing a short-lived, action-scoped credential.
+//! 4. The client keeps that credential in memory and presents it as a bearer
+//!    token only to the selected instance's loopback HTTP endpoint. The running
+//!    Warp app revalidates the credential, current settings, action scope, and
+//!    request before dispatch.
+//!
+//! Client-side validation prevents accidental use of inconsistent discovery
+//! authority, but it is not the authorization boundary. The broker and running
+//! app enforce authorization, and credentials must never be written to
+//! discovery records, logs, or command output.
 #[cfg(unix)]
 use std::io::{Read as _, Write as _};
 #[cfg(unix)]
@@ -14,6 +30,14 @@ use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::path::Path;
 
+use crate::auth::{CredentialRequest, ScopedCredential};
+use crate::discovery::InstanceRecord;
+use crate::protocol::{
+    Action, ActionKind, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope,
+    InvocationContext, RequestEnvelope, ResponseEnvelope,
+};
+
+/// Requests an action-scoped credential and sends one authenticated control request.
 pub fn send_request(
     instance: &InstanceRecord,
     request: &RequestEnvelope,
@@ -68,6 +92,7 @@ pub fn send_request(
 }
 
 #[cfg(unix)]
+/// Resolves the selected instance's validated broker path and requests a credential.
 fn request_credential_over_owner_ipc(
     instance: &InstanceRecord,
     request: &CredentialRequest,
@@ -77,6 +102,11 @@ fn request_credential_over_owner_ipc(
 }
 
 #[cfg(unix)]
+/// Exchanges one credential request and response over an owner-authenticated socket.
+///
+/// Shutting down the write half delimits the JSON request so the broker can
+/// read it to EOF before returning either a scoped credential or a structured
+/// error response.
 fn request_credential_over_socket(
     path: &Path,
     request: &CredentialRequest,
@@ -121,6 +151,7 @@ fn request_credential_over_socket(
 }
 
 #[cfg(not(unix))]
+/// Fails closed on platforms without an owner-authenticated broker transport.
 fn request_credential_over_owner_ipc(
     _instance: &InstanceRecord,
     _request: &CredentialRequest,
@@ -131,6 +162,7 @@ fn request_credential_over_owner_ipc(
     ))
 }
 
+/// Requests and decodes a short-lived credential for one action and invocation context.
 pub fn request_credential(
     instance: &InstanceRecord,
     action: crate::protocol::ActionKind,
@@ -152,6 +184,7 @@ pub fn request_credential(
     ))
 }
 
+/// Authenticates an app-ping request and verifies the selected instance is live.
 pub fn probe_instance(instance: &InstanceRecord) -> Result<(), ControlError> {
     let response = send_request(
         instance,
@@ -160,6 +193,7 @@ pub fn probe_instance(instance: &InstanceRecord) -> Result<(), ControlError> {
     validate_probe_response(instance, response)
 }
 
+/// Rejects a health response that does not prove the selected instance identity.
 fn validate_probe_response(
     instance: &InstanceRecord,
     response: ResponseEnvelope,

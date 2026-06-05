@@ -1,4 +1,29 @@
-//! Filesystem discovery records for running local Warp instances.
+//! Private filesystem registry for discovering running local Warp instances.
+//!
+//! This module answers “which compatible instances are available, and where
+//! can a client begin authentication?” It does not listen for control requests
+//! and does not grant control authority. `app/src/local_control/mod.rs` owns the
+//! running app-side listeners and uses these types to publish their routing
+//! metadata.
+//!
+//! An enabled instance publishes an owner-only JSON record containing
+//! instance/build metadata, implemented actions, its exact loopback HTTP
+//! endpoint, and the filename of its instance-bound credential-broker socket.
+//! The client reads that record, connects to the Unix socket to request a
+//! short-lived credential for one exact action, and then presents the credential
+//! to the HTTP endpoint. Discovery records never contain bearer tokens or
+//! reusable credentials.
+//!
+//! Before following a record, clients require the endpoint host to be exactly
+//! `127.0.0.1` and the broker filename to be derived from the instance ID. A
+//! discovery scan also rejects incompatible records, prunes dead PIDs, and
+//! performs an authenticated `app.ping` probe. When outside-Warp control is
+//! disabled, records contain neither an endpoint nor a broker reference.
+//!
+//! The owner-only directory, records, and broker sockets protect against other
+//! OS users. The broker's kernel-reported peer-UID check is the authoritative
+//! same-user check before credential issuance. Neither mechanism distinguishes
+//! trusted Warp code from arbitrary software already running as that user.
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
@@ -29,7 +54,10 @@ impl Default for InstanceId {
     }
 }
 
-/// Loopback HTTP endpoint for a running local-control server.
+/// Exact loopback HTTP route used after a client obtains a broker-issued credential.
+///
+/// Publishing this endpoint lets clients route requests; it does not authorize
+/// them to invoke actions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlEndpoint {
     pub host: String,
@@ -49,13 +77,23 @@ impl ControlEndpoint {
     }
 }
 
-/// Discovery reference to the owner-authenticated socket that issues scoped credentials.
+/// Discovery reference to the owner-authenticated socket that issues credentials.
+///
+/// Enabled records publish the instance-derived filename, not an arbitrary
+/// socket path or a credential. Clients validate the filename and resolve it
+/// inside the owner-only discovery directory before connecting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialBrokerReference {
     pub socket_path: PathBuf,
 }
 
-/// Filesystem-published metadata for a running Warp app process.
+/// Filesystem-published routing metadata for a running Warp app process.
+///
+/// An enabled record connects the three stages of the protocol: filesystem
+/// discovery, Unix-socket credential issuance, and authenticated loopback HTTP
+/// dispatch. The optional endpoint and broker reference are present together or
+/// absent together, so a disabled record cannot accidentally publish a usable
+/// partial control route.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstanceRecord {
     pub protocol_version: u32,
@@ -100,6 +138,12 @@ impl InstanceRecord {
         }
     }
 
+    /// Rejects records that could redirect a client away from the selected instance.
+    ///
+    /// This validates routing metadata rather than granting authority: an
+    /// enabled record must name exactly loopback and the broker filename derived
+    /// from its instance ID. The broker and app bridge still authenticate and
+    /// authorize the eventual request.
     pub fn validate_local_control_authority(&self) -> Result<(), ControlError> {
         match (
             self.outside_warp_control_enabled,
@@ -121,6 +165,7 @@ impl InstanceRecord {
         }
     }
 
+    /// Resolves the validated broker filename inside the private discovery directory.
     pub fn broker_socket_path(&self) -> Result<PathBuf, ControlError> {
         self.validate_local_control_authority()?;
         let credential_broker = self.credential_broker.as_ref().ok_or_else(|| {
@@ -133,7 +178,11 @@ impl InstanceRecord {
     }
 }
 
-/// RAII registration that publishes and removes one discovery record.
+/// RAII registration for one app-owned discovery record and broker socket.
+///
+/// The registration publishes routing metadata for the lifetime of the running
+/// server. Dropping it removes the record and socket on graceful shutdown;
+/// discovery scans prune dead-PID records left behind by crashes.
 pub struct RegisteredInstance {
     record: InstanceRecord,
     path: PathBuf,
@@ -141,6 +190,7 @@ pub struct RegisteredInstance {
 }
 
 impl RegisteredInstance {
+    /// Publishes a record in the protected per-user registry.
     pub fn register(record: InstanceRecord) -> Result<Self, ControlError> {
         let dir = discovery_dir();
         fs::create_dir_all(&dir).map_err(|err| {
@@ -216,6 +266,7 @@ impl Drop for RegisteredInstance {
     }
 }
 
+/// Returns the private registry shared by app publishers and local clients.
 pub fn discovery_dir() -> PathBuf {
     if let Some(path) = std::env::var_os(DISCOVERY_DIR_ENV) {
         return PathBuf::from(path);
@@ -227,6 +278,10 @@ pub fn discovery_dir() -> PathBuf {
     PathBuf::from(home).join(".warp").join("local-control")
 }
 
+/// Returns compatible live instances that pass an authenticated app ping.
+///
+/// The ping follows the normal broker-to-HTTP flow and verifies the responding
+/// app's instance ID, so a live PID and parseable record alone are insufficient.
 pub fn list_instances() -> Vec<InstanceRecord> {
     list_instances_from_dir(&discovery_dir())
         .into_iter()
@@ -234,6 +289,11 @@ pub fn list_instances() -> Vec<InstanceRecord> {
         .collect()
 }
 
+/// Parses structurally valid candidate records and prunes records with dead PIDs.
+///
+/// This lower-level scan does not contact the advertised endpoint; callers that
+/// need invokable instances should use [`list_instances`] so candidates also
+/// pass the authenticated probe.
 pub fn list_instances_from_dir(dir: &Path) -> Vec<InstanceRecord> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();

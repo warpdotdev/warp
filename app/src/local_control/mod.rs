@@ -1,17 +1,58 @@
-//! Local HTTP server entry point for Warp control requests.
+//! Running app-side server for local Warp control requests.
 //!
 //! This module owns the in-process listener, discovery registration, credential
 //! broker socket, and request handoff from Axum into the WarpUI model graph.
+//! It complements `crates/local_control/src/discovery.rs`: that shared module
+//! defines how clients find and validate candidate instances, while this module
+//! creates the app-owned endpoints and publishes their routing metadata through
+//! `RegisteredInstance`.
 //!
-//! Clients first request a short-lived scoped credential from an owner-authenticated
-//! Unix-domain-socket broker. The broker checks the caller's peer UID, feature
-//! flag, requested invocation context, action metadata, execution-context proof,
-//! and Settings > Scripting permissions before minting a bearer token. Verified
-//! inside-Warp terminal credentials remain future work until the app-issued proof
-//! broker is implemented. The client then presents that bearer token to
-//! `/v1/control`, where the server looks up the in-memory grant, verifies it still
-//! matches the requested action, and only then hands the request to the
-//! main-thread `LocalControlBridge`.
+//! A client uses all three transports in order. It reads the filesystem record
+//! to find an instance, connects to that instance's Unix socket to obtain
+//! temporary authority, and presents that authority to the instance's loopback
+//! HTTP endpoint with one typed action. The filesystem and socket are therefore
+//! complementary parts of discovery and credential bootstrap, not competing
+//! discovery mechanisms.
+//!
+//! Credential broker security flow:
+//!
+//! ```text
+//! owner-only discovery record
+//! (loopback endpoint + broker path; never a token)
+//!                 |
+//!                 v
+//! CLI client -- instance-bound Unix socket --> credential broker
+//!                 [0600 socket + kernel-reported peer UID]
+//!                                             |
+//!                                             v
+//!                           feature flag + Settings > Scripting gate
+//!                           + protocol + action metadata
+//!                           + invocation context + required proof
+//!                                             |
+//!                                             v
+//!                           short-lived, instance-bound, action-scoped
+//!                           bearer grant stored only in process memory
+//!                                             |
+//!                                             v
+//! CLI client -- loopback HTTP + bearer --> /v1/control
+//!                 [reject browser Origin + require exact Host
+//!                  + validate grant existence, expiry, instance, and scope]
+//!                                             |
+//!                                             v
+//!                           typed allowlisted action
+//!                                             |
+//!                                             v
+//!                           main-thread LocalControlBridge
+//!                           [re-check current settings before dispatch]
+//! ```
+//!
+//! These boundaries prevent browser-origin clients, other OS users,
+//! unauthenticated clients that only obtain or guess the HTTP endpoint, stale
+//! or wrong-instance credentials, and accidentally over-scoped credentials from
+//! invoking actions. The broker authenticates the OS account, not the calling
+//! application: malicious software already running as the same user remains
+//! outside this boundary. Verified inside-Warp terminal credentials remain
+//! future work until the app-issued proof broker is implemented.
 //!
 //! The Settings > Scripting gates used here are local-only settings backed by
 //! Warp's secure storage provider.
@@ -45,18 +86,20 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
+pub use bridge::LocalControlBridge;
 use chrono::Duration;
+use permissions::{ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version};
 #[cfg(unix)]
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
-
-pub use bridge::LocalControlBridge;
-use permissions::{ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version};
 const MAX_ACTIVE_CREDENTIALS: usize = 128;
 
-/// Shared state made available to Axum handlers for one localhost server
-/// running inside Warp.
+/// App-owned authority shared by one instance's broker and HTTP listener.
+///
+/// Broker-issued bearer tokens map to grants only in this process-local state.
+/// Knowing the endpoint from discovery is therefore insufficient to authenticate
+/// an HTTP request.
 #[derive(Clone)]
 struct ControlServerState {
     bridge_spawner: ModelSpawner<LocalControlBridge>,
@@ -64,7 +107,11 @@ struct ControlServerState {
     expected_host: String,
     credentials: Arc<Mutex<HashMap<String, CredentialGrant>>>,
 }
-/// Process-local localhost server running inside Warp for control actions.
+/// Process-local publisher, credential broker, and HTTP server for one Warp instance.
+///
+/// Holding the runtime and registration keeps both listeners and the discovery
+/// route alive. Dropping them stops request handling and removes the app's
+/// published record and broker socket.
 pub struct LocalControlServer {
     _runtime: Option<tokio::runtime::Runtime>,
     control_endpoint: Option<ControlEndpoint>,
@@ -98,6 +145,7 @@ impl LocalControlServer {
         server
     }
 
+    /// Starts, refreshes, or removes all outside-Warp publication as settings change.
     fn refresh_for_settings(&mut self, ctx: &mut ModelContext<Self>) -> Result<(), ControlError> {
         if !permissions::warp_control_cli_enabled() {
             self.stop();
@@ -116,17 +164,28 @@ impl LocalControlServer {
         if self._runtime.is_some() {
             return self.refresh_discovery_record(ctx);
         }
-        *self = Self::start(ctx)?;
-        Ok(())
+        self.start(ctx)
     }
 
+    /// Stops both listeners and removes the discovery record and broker socket.
     fn stop(&mut self) {
         self.registered_instance = None;
         self.control_endpoint = None;
         self._runtime = None;
     }
 
-    fn start(ctx: &mut ModelContext<Self>) -> Result<Self, ControlError> {
+    /// Binds both transports and publishes the routing record that connects them.
+    ///
+    /// Startup first binds an ephemeral loopback HTTP port, publishes that port
+    /// plus the instance-derived broker filename, binds the broker socket, and
+    /// then serves credential issuance and typed control requests concurrently.
+    fn start(&mut self, ctx: &mut ModelContext<Self>) -> Result<(), ControlError> {
+        if self._runtime.is_some() {
+            return Err(ControlError::new(
+                ErrorCode::Internal,
+                "local-control server is already running",
+            ));
+        }
         ensure_feature_enabled()?;
         if !outside_warp_publication_supported() {
             return Err(ControlError::new(
@@ -135,11 +194,7 @@ impl LocalControlServer {
             ));
         }
         if !crate::settings::LocalControlSettings::as_ref(ctx).outside_warp_control_enabled() {
-            return Ok(Self {
-                _runtime: None,
-                control_endpoint: None,
-                registered_instance: None,
-            });
+            return Ok(());
         }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -202,11 +257,12 @@ impl LocalControlServer {
         });
         #[cfg(unix)]
         runtime.spawn(run_credential_broker(broker_listener, state));
-        Ok(Self {
-            _runtime: Some(runtime),
-            control_endpoint: Some(control_endpoint),
-            registered_instance: Some(registered_instance),
-        })
+        let endpoint_url = control_endpoint.url();
+        self._runtime = Some(runtime);
+        self.control_endpoint = Some(control_endpoint);
+        self.registered_instance = Some(registered_instance);
+        log::info!("local-control server started at {endpoint_url}");
+        Ok(())
     }
 
     fn refresh_discovery_record(
@@ -226,6 +282,10 @@ impl LocalControlServer {
     }
 }
 
+/// Builds routing metadata without embedding any bearer credential or secret.
+///
+/// The endpoint and derived broker reference are published only while the
+/// protected outside-Warp setting permits clients to use them.
 fn discovery_record_for_settings(
     ctx: &ModelContext<LocalControlServer>,
     control_endpoint: ControlEndpoint,
@@ -242,6 +302,12 @@ fn discovery_record_for_settings(
     )
 }
 
+/// Binds the instance's credential-bootstrap socket and restricts it to the owning user.
+///
+/// Any stale socket at the instance-specific path is removed before binding, and
+/// the new socket is set to owner-only permissions before it accepts clients.
+/// The path came from a validated instance-derived discovery reference, so a
+/// record cannot redirect credential requests to an arbitrary socket.
 #[cfg(unix)]
 fn bind_credential_broker(
     record: &InstanceRecord,
@@ -274,6 +340,7 @@ fn bind_credential_broker(
 }
 
 #[cfg(unix)]
+/// Accepts same-user credential requests independently from the HTTP listener.
 async fn run_credential_broker(listener: tokio::net::UnixListener, state: ControlServerState) {
     loop {
         let Ok((stream, _)) = listener.accept().await else {
@@ -289,6 +356,10 @@ async fn run_credential_broker(listener: tokio::net::UnixListener, state: Contro
 }
 
 #[cfg(unix)]
+/// Authenticates the socket peer before decoding and evaluating its request.
+///
+/// This ordering makes the kernel-reported OS user, rather than any field in
+/// caller-controlled JSON, the credential broker's client-identity boundary.
 async fn handle_credential_broker_connection(
     mut stream: tokio::net::UnixStream,
     state: ControlServerState,
@@ -330,11 +401,16 @@ async fn handle_credential_broker_connection(
 }
 
 #[cfg(unix)]
+/// Requires the kernel-reported peer UID to match Warp's effective UID.
+///
+/// This excludes other OS users but does not distinguish trusted Warp code from
+/// arbitrary processes already running as the same user.
 fn ensure_same_user_peer(stream: &tokio::net::UnixStream) -> Result<(), ControlError> {
     ensure_peer_uid(stream, unsafe { libc::geteuid() })
 }
 
 #[cfg(unix)]
+/// Verifies a socket peer against an expected UID obtained outside request data.
 fn ensure_peer_uid(stream: &tokio::net::UnixStream, expected_uid: u32) -> Result<(), ControlError> {
     let peer = stream.peer_cred().map_err(|err| {
         ControlError::with_details(
@@ -364,6 +440,10 @@ fn serialize_credential_broker_response(
     })
 }
 
+/// Evaluates current action policy and mints one short-lived exact-action grant.
+///
+/// The bearer secret and its grant are retained only in the running instance's
+/// process-local map; neither is written back into the discovery registry.
 async fn issue_credential(
     state: &ControlServerState,
     request: CredentialRequest,
@@ -431,6 +511,12 @@ async fn issue_credential(
     })
 }
 
+/// Authenticates and hands one typed HTTP request to the app bridge.
+///
+/// Header hardening rejects browser-origin and wrong-endpoint requests. The
+/// process-local credential lookup authenticates the transport, after which the
+/// bridge revalidates current settings and exact-action authority before
+/// resolving targets or dispatching a handler.
 async fn handle_control_request(
     State(state): State<ControlServerState>,
     headers: HeaderMap,
@@ -540,6 +626,7 @@ fn insert_credential(
     credentials.insert(secret, grant);
 }
 
+/// Resolves an unexpired bearer token issued by this exact running instance.
 fn lookup_credential(
     credentials: &mut HashMap<String, CredentialGrant>,
     auth_token: &AuthToken,

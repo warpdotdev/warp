@@ -5,7 +5,7 @@ use uuid::Uuid;
 pub use crate::catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, ActionParameterSpec, ActionResultSpec,
     AuthenticatedUserRequirement, ExecutionContextProof, InvocationContext, PROTOCOL_VERSION,
-    PermissionCategory, RiskTier, StateDataCategory, TargetScope,
+    TargetScope,
 };
 pub use crate::selectors::{
     PaneSelector, PaneTarget, TabSelector, TabTarget, TargetSelector, WindowSelector, WindowTarget,

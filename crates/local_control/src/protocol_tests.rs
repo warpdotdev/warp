@@ -48,31 +48,23 @@ fn non_allowlisted_action_names_are_not_deserialized() {
 }
 
 #[test]
-fn tab_create_metadata_is_first_slice_logged_out_safe_mutation() {
+fn tab_create_metadata_is_first_slice_logged_out_safe_action() {
     let metadata = ActionKind::TabCreate.metadata();
     assert_eq!(
         metadata.implementation_status,
         ActionImplementationStatus::Implemented
     );
-    assert_eq!(metadata.risk_tier, RiskTier::MutatingNonDestructive);
-    assert_eq!(
-        metadata.state_data_category,
-        StateDataCategory::AppStateMutation
-    );
     assert!(!metadata.requires_authenticated_user);
     assert!(!metadata.authenticated_user.required);
-    assert_eq!(
-        metadata.permission_category,
-        PermissionCategory::MutateAppState
-    );
     assert_eq!(
         metadata.allowed_invocation_contexts,
         vec![InvocationContext::OutsideWarp]
     );
+    assert_eq!(metadata.target_scope, TargetScope::Tab);
 }
 
 #[test]
-fn core_smoke_metadata_has_explicit_read_metadata_category() {
+fn core_smoke_metadata_has_explicit_instance_policy() {
     for action in [
         ActionKind::InstanceList,
         ActionKind::AppPing,
@@ -83,19 +75,15 @@ fn core_smoke_metadata_has_explicit_read_metadata_category() {
             metadata.implementation_status,
             ActionImplementationStatus::Implemented
         );
-        assert_eq!(metadata.risk_tier, RiskTier::ReadOnlyMetadata);
-        assert_eq!(
-            metadata.state_data_category,
-            StateDataCategory::MetadataRead
-        );
-        assert_eq!(
-            metadata.permission_category,
-            PermissionCategory::ReadMetadata
-        );
         assert!(!metadata.authenticated_user.required);
+        assert_eq!(
+            metadata.allowed_invocation_contexts,
+            vec![InvocationContext::OutsideWarp]
+        );
         assert_eq!(metadata.target_scope, TargetScope::Instance);
     }
 }
+
 #[test]
 fn implemented_catalog_is_exactly_the_first_slice() {
     let actions = ActionKind::implemented_metadata()
@@ -114,37 +102,22 @@ fn implemented_catalog_is_exactly_the_first_slice() {
 }
 
 #[test]
-fn action_metadata_serializes_security_categories() {
+fn action_metadata_serializes_action_policy() {
     let metadata = ActionKind::TabCreate.metadata();
     let value = serde_json::to_value(metadata).expect("metadata serializes");
     assert_eq!(value["name"], "tab.create");
-    assert_eq!(value["state_data_category"], "app_state_mutation");
-    assert_eq!(value["permission_category"], "mutate_app_state");
+    assert_eq!(value["implementation_status"], "implemented");
     assert_eq!(
         value["authenticated_user"]["required"],
         serde_json::json!(false)
     );
+    assert_eq!(
+        value["allowed_invocation_contexts"],
+        serde_json::json!(["outside_warp"])
+    );
+    assert_eq!(value["target_scope"], "tab");
 }
 
-#[test]
-fn default_permissions_preserve_security_categories() {
-    assert_eq!(
-        ActionKind::TabCreate.metadata().permission_category,
-        PermissionCategory::MutateAppState
-    );
-    assert_eq!(
-        ActionKind::InputInsert.metadata().permission_category,
-        PermissionCategory::MutateAppState
-    );
-    assert_eq!(
-        ActionKind::SettingSet.metadata().permission_category,
-        PermissionCategory::MutateMetadataConfiguration
-    );
-    assert_eq!(
-        ActionKind::TabList.metadata().permission_category,
-        PermissionCategory::ReadMetadata
-    );
-}
 #[test]
 fn logged_out_safe_stub_actions_can_advertise_external_context() {
     let metadata = ActionKind::WindowCreate.metadata();

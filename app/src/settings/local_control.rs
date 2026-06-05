@@ -3,11 +3,12 @@
 //! This setting is local-only, kept out of the user-visible settings file, and
 //! persisted through Warp's secure storage provider. It is the authoritative
 //! enablement bit for local control.
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use settings::{macros::define_settings_group, Setting, SupportedPlatforms, SyncToCloud};
+use settings::macros::define_settings_group;
+use settings::{SecureSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warpui::{AppContext, ModelContext};
-use warpui_extras::secure_storage::{self, AppContextExt as _};
+use warpui_extras::secure_storage;
 
 const LOCAL_CONTROL_MODE_STORAGE_KEY: &str = "LocalControlMode";
 
@@ -70,74 +71,6 @@ pub struct LocalControlModeSetting {
 }
 
 impl LocalControlModeSetting {
-    fn read_from_secure_storage(ctx: &AppContext) -> Option<LocalControlMode> {
-        let value = match ctx.secure_storage().read_value(Self::storage_key()) {
-            Ok(value) => value,
-            Err(secure_storage::Error::NotFound) => return None,
-            Err(err) => {
-                log::error!("Failed to read local-control mode from secure storage: {err:#}");
-                return None;
-            }
-        };
-        match serde_json::from_str(&value) {
-            Ok(value) => Some(value),
-            Err(err) => {
-                log::error!("Failed to deserialize local-control mode: {err:#}");
-                None
-            }
-        }
-    }
-
-    /// Preserves the weaker private-preferences value when protected storage is
-    /// unavailable so platforms without a working secure provider do not lose
-    /// an existing user choice during migration.
-    fn migrate_from_private_preferences(ctx: &AppContext) -> Option<LocalControlMode> {
-        let value = Self::read_from_preferences(Self::preferences_for_setting(ctx))?;
-        if let Err(err) = Self::write_value_to_secure_storage(&value, ctx) {
-            log::error!("Failed to migrate local-control mode to secure storage: {err:#}");
-            return Some(value);
-        }
-        if let Err(err) = Self::clear_from_preferences(Self::preferences_for_setting(ctx)) {
-            log::warn!(
-                "Failed to clear migrated local-control mode from private preferences: {err:#}"
-            );
-        }
-        Some(value)
-    }
-
-    fn write_value_to_secure_storage(
-        new_value: &LocalControlMode,
-        ctx: &AppContext,
-    ) -> Result<bool> {
-        let stored_value_matches = match ctx.secure_storage().read_value(Self::storage_key()) {
-            Ok(stored) => serde_json::from_str::<LocalControlMode>(&stored)
-                .is_ok_and(|stored| stored == *new_value),
-            Err(secure_storage::Error::NotFound) => false,
-            Err(err) => {
-                return Err(anyhow!(err))
-                    .context("Failed to read existing local-control mode from secure storage");
-            }
-        };
-        if stored_value_matches {
-            return Ok(false);
-        }
-        let serialized = serde_json::to_string(new_value)
-            .context("Failed to serialize local-control mode for secure storage")?;
-        ctx.secure_storage()
-            .write_value(Self::storage_key(), &serialized)
-            .context("Failed to write local-control mode to secure storage")?;
-        Ok(true)
-    }
-
-    fn clear_from_secure_storage(ctx: &AppContext) -> Result<()> {
-        match ctx.secure_storage().remove_value(Self::storage_key()) {
-            Ok(()) | Err(secure_storage::Error::NotFound) => Ok(()),
-            Err(err) => {
-                Err(anyhow!(err)).context("Failed to clear local-control mode from secure storage")
-            }
-        }
-    }
-
     fn emit_changed(
         ctx: &mut ModelContext<LocalControlSettings>,
         change_event_reason: settings::ChangeEventReason,
@@ -148,6 +81,15 @@ impl LocalControlModeSetting {
     }
 }
 
+impl SecureSetting for LocalControlModeSetting {
+    fn write_secure_storage_value(
+        storage: &dyn secure_storage::SecureStorage,
+        key: &str,
+        value: &str,
+    ) -> Result<(), secure_storage::Error> {
+        storage.write_value_with_owner_only_fallback(key, value)
+    }
+}
 impl Setting for LocalControlModeSetting {
     type Group = LocalControlSettings;
     type Value = LocalControlMode;
@@ -225,7 +167,7 @@ impl Setting for LocalControlModeSetting {
         new_value: Self::Value,
         ctx: &mut ModelContext<Self::Group>,
     ) -> Result<()> {
-        let changed_in_storage = Self::write_value_to_secure_storage(&new_value, ctx)?;
+        let changed_in_storage = Self::write_to_secure_storage(&new_value, ctx)?;
         if self.value() != &new_value || changed_in_storage {
             self.inner = self.validate(new_value);
             self.is_explicitly_set = true;
@@ -239,9 +181,7 @@ impl Setting for LocalControlModeSetting {
     }
 
     fn new_from_storage(ctx: &mut AppContext) -> Self {
-        let value = Self::read_from_secure_storage(ctx)
-            .or_else(|| Self::migrate_from_private_preferences(ctx));
-        Self::new(value)
+        Self::new(Self::read_from_secure_storage(ctx))
     }
 
     fn is_supported_on_current_platform(&self) -> bool {

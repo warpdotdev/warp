@@ -1,21 +1,21 @@
 //! Settings UI for local scripting and Warp control permissions.
-use super::{
-    settings_page::{
-        render_body_item, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
-        SettingsPageViewHandle, SettingsWidget,
-    },
-    SettingsSection, ToggleState,
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use settings::Setting as _;
+use warpui::elements::{ChildView, Element, MouseStateHandle};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
+
+use super::settings_page::{
+    render_body_item, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget,
 };
+use super::{SettingsSection, ToggleState};
 use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
 use crate::report_if_error;
 use crate::settings::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
 use crate::view_components::{Dropdown, DropdownItem};
-use settings::Setting as _;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use warpui::elements::{ChildView, Element, MouseStateHandle};
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptingSettingsPageAction {
@@ -167,10 +167,7 @@ impl SettingsWidget for LocalControlModeWidget {
             ToggleState::Enabled,
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
-            Some(
-                "Disabled blocks all Warp control. Enabled within Warp is reserved for verified Warp terminals and currently rejects requests. Enabled everywhere also allows scripts and automation from other apps to control Warp."
-                    .to_owned(),
-            ),
+            Some("warpctrl allows for scripting Warp's UI.  Use with care.'".to_owned()),
         )
     }
 }
