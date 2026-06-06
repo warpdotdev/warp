@@ -371,8 +371,10 @@ impl Wsh {
             ];
             let nfds = if agent_fd >= 0 { 4 } else { 3 };
 
+            // Use a short timeout when the agent is running so the spinner animates.
+            let timeout_ms = if matches!(self.mode, Mode::AgentRunning) { 120 } else { -1 };
             let ret = unsafe {
-                libc::poll(pollfds.as_mut_ptr(), nfds as libc::nfds_t, -1)
+                libc::poll(pollfds.as_mut_ptr(), nfds as libc::nfds_t, timeout_ms)
             };
             if ret < 0 {
                 let err = io::Error::last_os_error();
@@ -382,7 +384,8 @@ impl Wsh {
                 return Err(err).context("poll");
             }
 
-            let mut needs_render = false;
+            // Timeout with no events — still need to re-render for spinner.
+            let mut needs_render = ret == 0 && matches!(self.mode, Mode::AgentRunning);
 
             // SIGWINCH
             if pollfds[2].revents & libc::POLLIN != 0 {
