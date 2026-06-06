@@ -246,9 +246,25 @@ fn discovery_record_is_owner_only_on_unix() {
 impl RegisteredInstance {
     fn register_in_dir_for_test(record: InstanceRecord, dir: &Path) -> Result<Self, ControlError> {
         fs::create_dir_all(dir).expect("create dir");
+        #[cfg(unix)]
         set_private_dir_permissions(dir)?;
         let path = record_path(dir, &record.instance_id);
-        write_record(&path, &record)?;
+        let bytes = serde_json::to_vec_pretty(&record).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::Internal,
+                "failed to serialize local-control discovery test record",
+                err.to_string(),
+            )
+        })?;
+        fs::write(&path, bytes).map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::Internal,
+                "failed to write local-control discovery test record",
+                err.to_string(),
+            )
+        })?;
+        #[cfg(unix)]
+        set_private_permissions(&path)?;
         Ok(Self {
             record,
             path,

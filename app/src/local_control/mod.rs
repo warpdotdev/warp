@@ -73,7 +73,9 @@ use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::{Arc, Mutex};
 
-use ::local_control::auth::{CredentialGrant, CredentialRequest, ScopedCredential};
+use ::local_control::auth::CredentialGrant;
+#[cfg(any(unix, test))]
+use ::local_control::auth::{CredentialRequest, ScopedCredential};
 use ::local_control::{
     ActionKind, AuthToken, ControlEndpoint, ControlError, ControlResponse, ErrorCode,
     ErrorResponseEnvelope, InstanceId, InstanceRecord, RegisteredInstance, RequestEnvelope,
@@ -87,12 +89,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 pub use bridge::LocalControlBridge;
+#[cfg(any(unix, test))]
 use chrono::Duration;
-use permissions::{ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version};
+use permissions::ensure_feature_enabled;
+#[cfg(any(unix, test))]
+use permissions::{ensure_action_allowed, ensure_protocol_version};
 #[cfg(unix)]
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+#[cfg(any(unix, test))]
 const MAX_ACTIVE_CREDENTIALS: usize = 128;
 
 /// App-owned authority shared by one instance's broker and HTTP listener.
@@ -428,6 +434,7 @@ fn ensure_peer_uid(stream: &tokio::net::UnixStream, expected_uid: u32) -> Result
     Ok(())
 }
 
+#[cfg(unix)]
 fn serialize_credential_broker_response(
     response: &impl serde::Serialize,
 ) -> Result<Vec<u8>, ControlError> {
@@ -444,6 +451,7 @@ fn serialize_credential_broker_response(
 ///
 /// The bearer secret and its grant are retained only in the running instance's
 /// process-local map; neither is written back into the discovery registry.
+#[cfg(any(unix, test))]
 async fn issue_credential(
     state: &ControlServerState,
     request: CredentialRequest,
@@ -608,6 +616,7 @@ async fn handle_control_request(
     (status, Json(response)).into_response()
 }
 
+#[cfg(any(unix, test))]
 fn insert_credential(
     credentials: &mut HashMap<String, CredentialGrant>,
     secret: String,
