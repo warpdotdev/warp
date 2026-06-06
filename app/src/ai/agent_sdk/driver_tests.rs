@@ -33,7 +33,7 @@ use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::GithubRepo;
 use crate::ai::mcp::parsing::normalize_mcp_json;
-use crate::ai::skills::{SkillManager, SkillPathScope};
+use crate::ai::skills::SkillManager;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 #[test]
@@ -734,7 +734,7 @@ fn split_loading_env_loads_all_global_loads_subset() {
         // with cwd=None returns all registered skills.
         let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
             manager
-                .get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
+                .get_skills_for_working_directory(None, ctx)
                 .into_iter()
                 .map(|s| s.name.clone())
                 .collect::<Vec<_>>()

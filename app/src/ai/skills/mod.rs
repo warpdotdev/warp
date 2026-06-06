@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use warp_core::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use crate::terminal::model::session::SessionType;
 mod telemetry;
 pub use telemetry::{SkillOpenOrigin, SkillTelemetryEvent};
 
@@ -15,38 +13,6 @@ cfg_if::cfg_if! {
 }
 
 pub use ai::skills::SkillReference;
-/// Controls which path-based skills are available to the current session.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SkillPathScope {
-    /// Skills on the local filesystem.
-    Local,
-    /// Skills on the connected remote host, or no path-based skills while disconnected.
-    Remote { host_id: Option<HostId> },
-}
-
-impl SkillPathScope {
-    pub fn for_session_type(session_type: Option<SessionType>) -> Self {
-        match session_type {
-            Some(SessionType::WarpifiedRemote { host_id }) => Self::Remote { host_id },
-            Some(SessionType::Local) | None => Self::Local,
-        }
-    }
-
-    pub(super) fn includes(&self, path: &LocalOrRemotePath) -> bool {
-        match (self, path) {
-            (Self::Local, LocalOrRemotePath::Local(_)) => true,
-            (
-                Self::Remote {
-                    host_id: Some(host_id),
-                },
-                LocalOrRemotePath::Remote(remote_path),
-            ) => remote_path.host_id == *host_id,
-            (Self::Local, LocalOrRemotePath::Remote(_))
-            | (Self::Remote { .. }, LocalOrRemotePath::Local(_))
-            | (Self::Remote { host_id: None }, LocalOrRemotePath::Remote(_)) => false,
-        }
-    }
-}
 
 #[cfg(not(target_family = "wasm"))]
 mod global_skills;

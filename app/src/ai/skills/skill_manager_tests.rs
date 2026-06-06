@@ -107,7 +107,6 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
         let skills_from_frontend = skill_manager_handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(
                 Some(&LocalOrRemotePath::Local(frontend_dir.clone())),
-                SkillPathScope::Local,
                 ctx,
             )
         });
@@ -128,7 +127,6 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
         let skills_from_backend = skill_manager_handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(
                 Some(&LocalOrRemotePath::Local(backend_dir.clone())),
-                SkillPathScope::Local,
                 ctx,
             )
         });
@@ -149,7 +147,6 @@ fn get_skills_for_working_directory_scopes_subdirectory_skills() {
         let skills_from_root = skill_manager_handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(
                 Some(&LocalOrRemotePath::Local(repo.clone())),
-                SkillPathScope::Local,
                 ctx,
             )
         });
@@ -242,7 +239,6 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
         let skills = skill_manager_handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(
                 Some(&LocalOrRemotePath::Local(subdir.clone())),
-                SkillPathScope::Local,
                 ctx,
             )
         });
@@ -349,7 +345,6 @@ fn cloud_environment_skills_always_included() {
         let skills = skill_manager_handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(
                 Some(&LocalOrRemotePath::Local(repo_a.clone())),
-                SkillPathScope::Local,
                 ctx,
             )
         });
@@ -365,7 +360,7 @@ fn cloud_environment_skills_always_included() {
 
         // With no working directory, all skills are still included.
         let skills_none = skill_manager_handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
+            manager.get_skills_for_working_directory(None, ctx)
         });
         let names_none: Vec<&str> = skills_none.iter().map(|s| s.name.as_str()).collect();
         assert!(
@@ -528,7 +523,7 @@ fn make_remote_skill(host_id: &HostId, name: &str) -> ParsedSkill {
 }
 
 #[test]
-fn get_skills_for_working_directory_respects_path_scope() {
+fn get_skills_for_working_directory_respects_location() {
     let same_host_id = HostId::new("same-host".to_string());
     let other_host_id = HostId::new("other-host".to_string());
     let home_dir = LocalOrRemotePath::Local(dirs::home_dir().unwrap());
@@ -609,13 +604,7 @@ fn get_skills_for_working_directory_respects_path_scope() {
         });
 
         let remote_skills = handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(
-                Some(&same_host_dir),
-                SkillPathScope::Remote {
-                    host_id: Some(same_host_id.clone()),
-                },
-                ctx,
-            )
+            manager.get_skills_for_working_directory(Some(&same_host_dir), ctx)
         });
         let remote_names: HashSet<_> = remote_skills
             .iter()
@@ -628,11 +617,7 @@ fn get_skills_for_working_directory_respects_path_scope() {
         assert!(!remote_names.contains("other-host-project"));
 
         let disconnected_remote_skills = handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(
-                Some(&local_project_dir),
-                SkillPathScope::Remote { host_id: None },
-                ctx,
-            )
+            manager.get_skills_for_working_directory(None, ctx)
         });
         let disconnected_remote_names: HashSet<_> = disconnected_remote_skills
             .iter()
@@ -641,11 +626,7 @@ fn get_skills_for_working_directory_respects_path_scope() {
         assert_eq!(disconnected_remote_names, HashSet::from(["bundled"]));
 
         let local_skills = handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(
-                Some(&local_project_dir),
-                SkillPathScope::Local,
-                ctx,
-            )
+            manager.get_skills_for_working_directory(Some(&local_project_dir), ctx)
         });
         let local_names: HashSet<_> = local_skills
             .iter()

@@ -14,7 +14,7 @@ use warp_core::{report_error, safe_warn};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::{SkillDescriptor, SkillPathQuery, SkillPathScope};
+use super::{SkillDescriptor, SkillPathQuery};
 use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
 use crate::ai::skills::skill_utils::unique_skills;
 use crate::keyboard::keybinding_file_path;
@@ -123,17 +123,27 @@ impl SkillManager {
     pub fn get_skills_for_working_directory(
         &self,
         working_directory: Option<&LocalOrRemotePath>,
-        path_scope: SkillPathScope,
         ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
         // Collect skill paths as (dir_path, skill_path) tuples for later deduplication.
         // Home skills use the home directory as their dir_path; project skills use their
         // owning directory.
         let mut skill_paths = Vec::new();
+        let path_matches_location = |path: &LocalOrRemotePath| match (working_directory, path) {
+            (Some(LocalOrRemotePath::Local(_)), LocalOrRemotePath::Local(_)) => true,
+            (
+                Some(LocalOrRemotePath::Remote(working_directory)),
+                LocalOrRemotePath::Remote(path),
+            ) => working_directory.host_id == path.host_id,
+            (None, LocalOrRemotePath::Local(_)) => self.is_cloud_environment,
+            (Some(LocalOrRemotePath::Local(_)), LocalOrRemotePath::Remote(_))
+            | (Some(LocalOrRemotePath::Remote(_)), LocalOrRemotePath::Local(_))
+            | (None, LocalOrRemotePath::Remote(_)) => false,
+        };
 
         if let Some(home_dir) = dirs::home_dir() {
             let home_dir = LocalOrRemotePath::Local(home_dir);
-            if path_scope.includes(&home_dir) {
+            if path_matches_location(&home_dir) {
                 skill_paths.extend(
                     self.home_skill_paths()
                         .into_iter()
@@ -143,19 +153,17 @@ impl SkillManager {
         }
 
         if self.is_cloud_environment {
-            // In cloud environments, all skills allowed by the path scope are in scope
+            // In cloud environments, all skills in the working directory's location are in scope
             // regardless of cwd.
             for (dir, dir_skill_paths) in &self.directory_skills {
-                if is_home_directory(dir) || !path_scope.includes(dir) {
+                if is_home_directory(dir) || !path_matches_location(dir) {
                     continue;
                 }
                 for path in dir_skill_paths {
                     skill_paths.push((dir.clone(), path.clone()));
                 }
             }
-        } else if let Some(working_directory) =
-            working_directory.filter(|working_directory| path_scope.includes(working_directory))
-        {
+        } else if let Some(working_directory) = working_directory {
             let repo_root = repo_metadata::repositories::DetectedRepositories::as_ref(ctx)
                 .get_root_for_path(working_directory);
 

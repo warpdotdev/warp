@@ -3,7 +3,7 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, SingletonEntity};
 
 use super::search_item::SkillSearchItem;
-use crate::ai::skills::{SkillManager, SkillPathScope};
+use crate::ai::skills::SkillManager;
 use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
@@ -32,30 +32,19 @@ impl SyncDataSource for SkillsDataSource {
 
         // Resolve the current working directory from the active window's session.
         #[cfg(not(target_family = "wasm"))]
-        let (cwd, path_scope): (Option<LocalOrRemotePath>, SkillPathScope) = app
+        let cwd: Option<LocalOrRemotePath> = app
             .windows()
             .state()
             .active_window
             .map(|window_id| {
                 let active_session = ActiveSession::as_ref(app);
-                (
-                    active_session.working_directory(window_id).cloned(),
-                    SkillPathScope::for_session_type(
-                        active_session
-                            .session(window_id)
-                            .map(|session| session.session_type()),
-                    ),
-                )
+                active_session.working_directory(window_id).cloned()
             })
-            .unwrap_or((None, SkillPathScope::Local));
+            .unwrap_or(None);
         #[cfg(target_family = "wasm")]
-        let (cwd, path_scope): (Option<LocalOrRemotePath>, SkillPathScope) =
-            (None, SkillPathScope::Local);
-        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(
-            cwd.as_ref(),
-            path_scope,
-            app,
-        );
+        let cwd: Option<LocalOrRemotePath> = None;
+        let skills =
+            SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         let mut results: Vec<QueryResult<Self::Action>> = if query_text.is_empty() {
             // Zero state: show all skills with a uniform high score.

@@ -2,7 +2,7 @@ use ai::skills::{ParsedSkill, SkillProvider, SkillReference};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
-use crate::ai::skills::{SkillDescriptor, SkillPathQuery, SkillPathScope};
+use crate::ai::skills::{SkillDescriptor, SkillPathQuery};
 
 pub struct SkillManager {}
 
@@ -14,7 +14,6 @@ impl SkillManager {
     pub fn get_skills_for_working_directory(
         &self,
         _working_directory: Option<&LocalOrRemotePath>,
-        _path_scope: SkillPathScope,
         _ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
         vec![]
