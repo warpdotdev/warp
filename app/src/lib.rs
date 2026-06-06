@@ -144,6 +144,7 @@ use ai::ambient_agents::scheduled::ScheduledAgentManager;
 use ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
 use auth::auth_manager::AuthManager;
 use auth::auth_state::{AuthState, AuthStateProvider};
@@ -278,7 +279,6 @@ use crate::root_view::{
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
-#[cfg(not(target_family = "wasm"))]
 use crate::server::iap::IapManager;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 pub use crate::server::telemetry::{
@@ -1195,8 +1195,6 @@ pub(crate) fn initialize_app(
         move |ctx| ServerApiProvider::new(auth_state, agent_source, iap_state, ctx)
     });
 
-    #[cfg(not(target_family = "wasm"))]
-    ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
     let server_api = server_api_provider.as_ref(ctx).get();
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
 
@@ -1555,6 +1553,18 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     {
         ctx.add_singleton_model(DirectoryWatcher::new);
+        // Register the skill provider directories as force-included paths so
+        // the gitignore-pruning watch descend filter still watches gitignored
+        // skill directories (e.g. `.agents/skills`) for `Repository`
+        // subscribers (LSP, MCP). Registered before any repository begins
+        // watching so it gates descent on the very first registration.
+        DirectoryWatcher::handle(ctx).update(ctx, |watcher, _| {
+            watcher.register_force_included_paths(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+            );
+        });
         ctx.add_singleton_model(|_| DetectedRepositories::default());
         if let Some(home_dir) = dirs::home_dir() {
             ctx.add_singleton_model(|ctx| HomeDirectoryWatcher::new(home_dir, ctx));
@@ -1580,7 +1590,13 @@ pub(crate) fn initialize_app(
             } else {
                 RepoMetadataModel::new(ctx)
             };
-            model.register_ignored_path_interests(
+            model.register_force_included_paths(
+                ::ai::skills::SKILL_PROVIDER_DEFINITIONS
+                    .iter()
+                    .map(|provider| provider.skills_path.clone()),
+                ctx,
+            );
+            model.set_project_skill_provider_paths(
                 ::ai::skills::SKILL_PROVIDER_DEFINITIONS
                     .iter()
                     .map(|provider| provider.skills_path.clone()),
@@ -1809,11 +1825,9 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
     );
-    if warp_core::features::FeatureFlag::OrchestrationV2.is_enabled() {
-        ctx.add_singleton_model(
-            ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
-        );
-    }
+    ctx.add_singleton_model(
+        ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
+    );
 
     if launch_mode.supports_indexing() {
         ctx.add_singleton_model(RepoOutlines::new);
@@ -1925,6 +1939,17 @@ pub(crate) fn initialize_app(
         ctx.add_singleton_model(system::SystemInfo::new);
     }
 
+    // `IapManager` drives gcloud-based IAP token refresh for staging builds.
+    // Register it after `LocalShellState`: the Manager needs to know where the gcloud
+    // cli lives & thus needs PATH config set by ~/.zshrc et al.
+    //
+    // Registered on all targets (including wasm) so consumers such as the
+    // shared-session viewer network — which compiles and runs on wasm — can
+    // read the singleton without panicking. On wasm `iap_state` is always
+    // `None`, making this an inert no-op: `IapManager::new` early-returns from
+    // its refresh loop and `iap_state()` yields no proxy-auth header.
+    ctx.add_singleton_model(move |ctx| IapManager::new(iap_state, ctx));
+
     // Add a singleton model that holds the current prompt configuration.
     ctx.add_singleton_model(Prompt::new);
 
@@ -2016,7 +2041,7 @@ pub(crate) fn initialize_app(
         };
 
         let codebase_limits = AIRequestUsageModel::as_ref(ctx).codebase_context_limits();
-        let codebase_index_config = CodebaseIndexManagerConfig::new(
+        let mut codebase_index_config = CodebaseIndexManagerConfig::new(
             indices_to_restore,
             codebase_limits.max_indices_allowed,
             codebase_limits.max_files_per_repo,
@@ -2024,6 +2049,9 @@ pub(crate) fn initialize_app(
             server_api_provider.as_ref(ctx).get(),
             launch_mode.supports_indexing(),
         );
+        if matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. }) {
+            codebase_index_config = codebase_index_config.defer_persisted_index_restore();
+        }
         #[cfg(feature = "local_fs")]
         if let Some(snapshot_storage) = daemon_codebase_index_snapshot_storage(launch_mode) {
             return CodebaseIndexManager::new_with_snapshot_storage(
@@ -2037,7 +2065,11 @@ pub(crate) fn initialize_app(
     });
 
     ctx.add_singleton_model(|ctx| {
-        ProjectContextModel::new_from_persisted(persisted_project_rules, ctx)
+        ProjectContextModel::new_from_persisted(
+            persisted_project_rules,
+            read_project_rule_contents,
+            ctx,
+        )
     });
 
     // Index global rules (e.g. ~/.agents/AGENTS.md) on a background task so

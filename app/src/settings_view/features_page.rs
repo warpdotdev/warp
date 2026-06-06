@@ -99,7 +99,7 @@ use crate::terminal::settings::{
     AsyncFindEnabled, MaximumGridSize, ShowTerminalZeroStateBlock, TerminalSettings,
     TerminalSettingsChangedEvent, UseAudibleBell,
 };
-use crate::terminal::{BlockListSettings, SnackbarEnabled};
+use crate::terminal::{BlockListSettings, PreserveInputFocusOnBlockSelection, SnackbarEnabled};
 use crate::undo_close::UndoCloseSettings;
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{
@@ -608,6 +608,15 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ),
     );
 
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "preserve input focus on block selection",
+        builder(SettingsAction::FeaturesPageToggle(
+            FeaturesPageAction::TogglePreserveInputFocusOnBlockSelection,
+        )),
+        context,
+        flags::PRESERVE_INPUT_FOCUS_ON_BLOCK_SELECTION_FLAG,
+    ));
+
     if FeatureFlag::AgentView.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
         toggle_binding_pairs.push(
             ToggleSettingActionPair::new(
@@ -801,6 +810,7 @@ pub enum FeaturesPageAction {
     ToggleOutlineCodebaseSymbolsForAtContextMenu,
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
+    TogglePreserveInputFocusOnBlockSelection,
     ToggleAgentInAppNotifications,
     MakeWarpDefaultTerminal,
     SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
@@ -1307,6 +1317,13 @@ impl FeaturesPageAction {
                     *GeneralSettings::as_ref(ctx).auto_open_code_review_pane_on_first_agent_change,
                 ),
             },
+            Self::TogglePreserveInputFocusOnBlockSelection => {
+                let settings = BlockListSettings::as_ref(ctx);
+                TelemetryEvent::FeaturesPageAction {
+                    action: "TogglePreserveInputFocusOnBlockSelection".to_string(),
+                    value: to_string(*settings.preserve_input_focus_on_block_selection),
+                }
+            }
             Self::SetNotificationToastDuration => TelemetryEvent::FeaturesPageAction {
                 action: "SetNotificationToastDuration".to_string(),
                 value: format!(
@@ -2053,6 +2070,13 @@ impl TypedActionView for FeaturesPageView {
                         .auto_open_code_review_pane_on_first_agent_change
                         .toggle_and_save_value(ctx));
                 })
+            }
+            TogglePreserveInputFocusOnBlockSelection => {
+                BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
+                    report_if_error!(blocklist_settings
+                        .preserve_input_focus_on_block_selection
+                        .toggle_and_save_value(ctx));
+                });
             }
             SetNotificationToastDuration => {
                 let user_input = self
@@ -2886,6 +2910,14 @@ impl FeaturesPageView {
         }
 
         editor_widgets.push(Box::new(TabKeyBehaviorWidget::default()));
+
+        let blocklist_settings = BlockListSettings::as_ref(ctx);
+        if blocklist_settings
+            .preserve_input_focus_on_block_selection
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(PreserveInputFocusOnBlockSelectionWidget::default()));
+        }
 
         let mut terminal_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![];
 
@@ -6406,6 +6438,54 @@ impl SettingsWidget for ShowTerminalInputMessageLineWidget {
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(
                         FeaturesPageAction::ToggleShowTerminalInputMessageLine,
+                    );
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct PreserveInputFocusOnBlockSelectionWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for PreserveInputFocusOnBlockSelectionWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "preserve input focus block selection navigate arrow keys"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Preserve input focus on block selection".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                PreserveInputFocusOnBlockSelection::storage_key(),
+                PreserveInputFocusOnBlockSelection::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*BlockListSettings::as_ref(app).preserve_input_focus_on_block_selection)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(
+                        FeaturesPageAction::TogglePreserveInputFocusOnBlockSelection,
                     );
                 })
                 .finish(),

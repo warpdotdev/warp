@@ -25,6 +25,12 @@ pub enum RepoMetadataError {
     BuildTree(BuildTreeError),
     #[error("Failed to start watcher: {0}")]
     WatcherError(#[from] anyhow::Error),
+    #[error("Repository not indexed")]
+    RepositoryNotIndexed,
+    #[error("Repository indexing in progress")]
+    RepositoryIndexingPending,
+    #[error("Repository indexing failed")]
+    RepositoryIndexingFailed,
 }
 // Re-export the modules
 pub mod entry;
@@ -35,6 +41,7 @@ pub mod remote_model;
 pub mod repositories;
 pub mod repository;
 pub mod repository_identifier;
+pub mod standing_queries;
 mod telemetry;
 pub mod watcher;
 pub mod wrapper_model;
@@ -65,9 +72,12 @@ pub fn is_in_repo(_path: &str, _app: &warpui_core::AppContext) -> bool {
 }
 pub use file_tree_store::FileTreeEntry;
 pub use file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
-pub use local_model::{LocalRepoMetadataModel, RepoContent};
+pub use local_model::{LocalRepoMetadataModel, RepoContent, RepoContents};
 pub use remote_model::RemoteRepoMetadataModel;
 pub use repository_identifier::{RemoteRepositoryIdentifier, RepositoryIdentifier};
+pub use standing_queries::{
+    StandingQueryContent, StandingQueryDefinitions, StandingQueryResults, StandingQueryResultsDelta,
+};
 pub use wrapper_model::{RepoMetadataEvent, RepoMetadataModel};
 
 /// A wrapper around PathBuf that ensures the path is canonicalized.

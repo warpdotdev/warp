@@ -1,0 +1,57 @@
+
+# ======================================================================================
+# Workflow: Stale Requested-Changes PRs
+# ======================================================================================
+# Usage:
+#   - Runs daily and follows up on external-contributor PRs that have an active
+#     requested-changes review and have gone inactive.
+#   - Posts reminder comments at 7, 14, and 26 days of author inactivity, then closes
+#     the PR at 30 days — but only after the day-26 final warning has been posted.
+#   - Inactivity is author-driven: a head-branch push (GitHub-recorded) or a comment by
+#     the PR author resets the timer; maintainer/third-party/bot comments do not.
+#   - Reminder progress is tracked via marker comments authored by github-actions[bot],
+#     so no datastore is needed.
+#
+# Modes (workflow_dispatch `mode` input; scheduled runs use `full`):
+#   - dry-run:        log eligible PRs and intended actions, write nothing.
+#   - reminder-only:  post reminders, never close.
+#   - full:           post reminders and close.
+# ======================================================================================
+
+name: Stale Requested-Changes PRs
+on:
+  schedule:
+    - cron: '7 12 * * *' # 12:07 UTC daily (minute 7 avoids top-of-hour scheduler congestion)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Write mode'
+        type: choice
+        default: full
+        options:
+          - dry-run
+          - reminder-only
+          - full
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  stale-requested-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # Only the follow-up script is needed; skip blob content for speed.
+          sparse-checkout: .github/scripts
+          filter: blob:none
+
+      - name: Follow up on stale requested-changes PRs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const run = require('./.github/scripts/stale-requested-changes-prs.js')
+            await run({ github, context })

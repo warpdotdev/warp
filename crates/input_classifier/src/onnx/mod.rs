@@ -24,12 +24,14 @@ use crate::{
 #[include = "bert_tiny_tokenizer.json"]
 #[cfg_attr(feature = "nld_classifier_v1", include = "bert_tiny_v1.onnx")]
 #[cfg_attr(feature = "nld_classifier_v2", include = "bert_tiny_v2.onnx")]
+#[cfg_attr(feature = "nld_classifier_v3", include = "bert_tiny_v3.onnx")]
 struct Models;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Model {
     BertTinyV1,
     BertTinyV2,
+    BertTinyV3,
 }
 
 impl Model {
@@ -45,12 +47,13 @@ impl Model {
         match self {
             Model::BertTinyV1 => "bert_tiny_v1.onnx",
             Model::BertTinyV2 => "bert_tiny_v2.onnx",
+            Model::BertTinyV3 => "bert_tiny_v3.onnx",
         }
     }
 
     fn tokenizer_path(&self) -> &'static str {
         match self {
-            Model::BertTinyV1 | Model::BertTinyV2 => "bert_tiny_tokenizer.json",
+            Model::BertTinyV1 | Model::BertTinyV2 | Model::BertTinyV3 => "bert_tiny_tokenizer.json",
         }
     }
 }

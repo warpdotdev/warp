@@ -11,6 +11,7 @@ use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
@@ -20,6 +21,9 @@ use warpui::windowing::WindowManager;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
+use super::child_agent::hydration::{
+    decide_remote_child_hydration_action, RemoteChildHydrationAction,
+};
 use super::child_agent::{
     create_hidden_child_agent_conversation, HiddenChildAgentConversationRequest,
     HiddenChildAgentTaskContext,
@@ -34,13 +38,15 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{
-    AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
+    AmbientAgentTaskState,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
+use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -68,6 +74,7 @@ use crate::resource_center::TipsCompleted;
 use crate::search::files::model::FileSearchModel;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::iap::IapManager;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
@@ -106,6 +113,9 @@ fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
     app.add_singleton_model(|_ctx| ServerApiProvider::new_for_test());
+    // Disabled (`None`) IapManager so shared-session viewer code that reads the
+    // singleton doesn't panic in tests; it is an inert no-op.
+    app.add_singleton_model(|ctx| IapManager::new(None, ctx));
     app.add_singleton_model(|ctx| ChangelogModel::new(ServerApiProvider::as_ref(ctx).get()));
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
@@ -160,9 +170,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        app.add_singleton_model(OrchestrationEventStreamer::new);
-    }
+    app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(crate::ai::blocklist::BlocklistAIPermissions::new);
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -340,6 +348,7 @@ fn test_server_conversation_metadata(
             tool_usage_metadata: Default::default(),
         },
         metadata: mock_server_metadata(),
+        creator: None,
         permissions: mock_server_permissions(),
         ambient_agent_task_id: task_id,
         server_conversation_token: ServerConversationToken::new("test-server-token".to_string()),
@@ -831,8 +840,6 @@ fn test_insert_hidden_ambient_child_agent_pane_suppresses_details_auto_open() {
 }
 #[test]
 fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -876,8 +883,6 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
 
 #[test]
 fn test_restored_hidden_child_pane_reapplies_ambient_task_id_to_controller() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -910,8 +915,6 @@ fn test_restored_hidden_child_pane_reapplies_ambient_task_id_to_controller() {
 
 #[test]
 fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -920,6 +923,17 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
             let parent_pane_id = get_newly_created_pane_id(panes, &[]);
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
             let task_id = new_ambient_agent_task_id();
+
+            // Fix B: inject mock cloud task data so the task-backed hydration
+            // path resolves to the live ambient session via
+            // `resolve_open_action` -> `OpenOrAttachAmbientAgentConversation`.
+            // The default mock task has `is_sandbox_running = false` so it
+            // resolves to the fallback path; we leave it at the default to
+            // ensure the pre-Fix-B "attach to existing ambient session +
+            // tombstone" behavior is preserved.
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.insert_task_for_test(ambient_agent_task_for_current_user(task_id));
+            });
 
             let mut child_conversation = AIConversation::new(false, false);
             child_conversation.set_parent_conversation_id(parent_conversation_id);
@@ -945,6 +959,17 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
             );
             assert_eq!(active_conversation_id, Some(child_conversation_id));
 
+            // Fix B: the placeholder's local AIConversationId must remain the
+            // canonical key in `child_agent_panes`. Any in-place hydration
+            // (live attach, transcript merge, or fallback) must preserve this
+            // key so the orchestration pill bar and topology indexes can
+            // still find the pane.
+            assert!(
+                panes.child_agent_panes.contains_key(&child_conversation_id),
+                "placeholder AIConversationId must stay the child_agent_panes key after Fix B \
+                 hydration",
+            );
+
             let terminal_view = panes
                 .terminal_view_from_pane_id(child_pane_id, ctx)
                 .expect("remote child pane should have a terminal view");
@@ -959,10 +984,264 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
     });
 }
 
+/// Fix B: when task data for a restored remote child is NOT yet cached at
+/// `create_hidden_child_agent_pane` time, the placeholder must still be
+/// registered in `child_agent_panes` keyed by its local AIConversationId,
+/// attached to the live ambient session (preserving today's behavior so
+/// streaming runs continue to attach), AND deferred via
+/// `pending_remote_child_hydrations` so the subscription handler can retry
+/// when `TasksUpdated` / `ConversationsLoaded` fires. The pane group must
+/// never produce a worse state than the pre-Fix-B fallback.
+#[test]
+fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let task_id = new_ambient_agent_task_id();
+
+            // Deliberately do NOT inject a task into AgentConversationsModel.
+            // `get_or_async_fetch_task_data` will return `None`, which forces
+            // the hydration to:
+            //   1. enter the existing ambient session in place (live-attach
+            //      preserved per Fix B contract);
+            //   2. register a pending hydration entry so the subscription
+            //      handler can retry once task data lands.
+
+            let mut child_conversation = AIConversation::new(false, false);
+            child_conversation.set_parent_conversation_id(parent_conversation_id);
+            child_conversation.set_task_id(task_id);
+            child_conversation.mark_as_remote_child();
+            let child_conversation_id = child_conversation.id();
+
+            panes.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);
+
+            let child_pane_id = panes
+                .child_agent_panes
+                .get(&child_conversation_id)
+                .copied()
+                .expect("remote child pane must be registered even when task data unavailable");
+
+            // The placeholder local AIConversationId remains the canonical key.
+            assert!(
+                panes.child_agent_panes.contains_key(&child_conversation_id),
+                "placeholder AIConversationId must stay the child_agent_panes key in fallback path",
+            );
+
+            // Live-attach preserved: the ambient agent view model is
+            // configured to view the existing session for `task_id`. This
+            // matches the pre-Fix-B behavior so streaming runs continue to
+            // attach.
+            let (ambient_task_id, _is_agent_running, active_conversation_id) =
+                ambient_child_session_state(panes, child_pane_id, ctx);
+            assert_eq!(
+                ambient_task_id,
+                Some(task_id),
+                "fallback path must still call enter_viewing_existing_session on the placeholder",
+            );
+            assert_eq!(active_conversation_id, Some(child_conversation_id));
+
+            // Fix B: pending hydration is recorded so the subscription handler
+            // can re-run hydration when task data lands. The map value is the
+            // placeholder's local AIConversationId, which must match the
+            // conversation we just restored.
+            let pending_placeholder_id =
+                panes.pending_remote_child_hydrations.get(&task_id).copied().expect(
+                    "task-data-unavailable hydration must register a pending entry keyed by task id",
+                );
+            assert_eq!(
+                pending_placeholder_id, child_conversation_id,
+                "pending hydration must record the placeholder's local AIConversationId",
+            );
+        });
+    });
+}
+
+/// Phase 1 integration coverage: validates that after `BlocklistAIHistoryModel`
+/// restoration (the same code path the disk-load Fix C unblocks), the
+/// orchestration topology is fully wired BEFORE the parent's fullscreen
+/// agent view is entered, AND that entering fullscreen lazily materializes
+/// the hidden child pane keyed by the placeholder local AIConversationId.
+///
+/// This is the integration boundary the user-visible bug lives at:
+///   * pill bar / transcript name resolution must succeed before the
+///     parent fullscreen entry (Fix C eagerly hydrates `conversations_by_id`
+///     so this works on disk-load; this test exercises the equivalent
+///     restore-into-history-model + lazy pane materialization flow).
+///   * the hidden child pane must materialize in `child_agent_panes` keyed
+///     by the placeholder conversation id after parent fullscreen.
+///
+/// The disk-load construction path (`BlocklistAIHistoryModel::new(_, &conversations)`
+/// invoking `initialize_historical_conversations`) is covered by
+/// `test_initialize_historical_conversations_eagerly_hydrates_orchestration_children`
+/// in `app/src/ai/blocklist/history_model_tests.rs`. `agent_display_name_from_id`
+/// resolution for restored children is covered by
+/// `participant_for_restored_child_run_id_resolves_to_agent_name` in
+/// `app/src/ai/blocklist/block/view_impl/orchestration_tests.rs`. The pill
+/// bar data-layer coverage is in
+/// `pill_bar_data_layer_finds_restored_children_before_pane_creation` in
+/// `app/src/ai/blocklist/agent_view/orchestration_pill_bar_tests.rs`. This
+/// test ties those three boundaries together at the PaneGroup integration
+/// layer.
+#[test]
+fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_child_pane() {
+    let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        let (
+            parent_pane_id,
+            parent_conversation_id,
+            parent_run_id,
+            child_conversation_id,
+            child_run_id,
+            child_agent_name,
+        ) = pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = get_newly_created_pane_id(panes, &[]);
+            let parent_terminal_view_id = panes
+                .terminal_view_from_pane_id(parent_pane_id, ctx)
+                .expect("parent pane should have a terminal view")
+                .id();
+
+            let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let parent_run_id = new_ambient_agent_task_id().to_string();
+            let child_run_id = new_ambient_agent_task_id().to_string();
+            let child_agent_name = "Agent 1".to_string();
+
+            // Restore a child conversation into the parent's terminal view. This
+            // is the same code path `RestoredAgentConversations::take_conversations`
+            // feeds into during pane restoration. Fix C ensures the equivalent
+            // wiring happens earlier (at history-model construction) so the data
+            // is also available before any terminal view materializes the parent.
+            let mut child_conversation = AIConversation::new(false, false);
+            child_conversation.set_parent_conversation_id(parent_conversation_id);
+            child_conversation.set_agent_name(child_agent_name.clone());
+            let child_conversation_id = child_conversation.id();
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.restore_conversations(
+                    parent_terminal_view_id,
+                    vec![child_conversation],
+                    ctx,
+                );
+                // Stamp run_ids so orchestration agent_id lookups resolve.
+                history.assign_run_id_for_conversation(
+                    parent_conversation_id,
+                    parent_run_id.clone(),
+                    None,
+                    parent_terminal_view_id,
+                    ctx,
+                );
+                history.assign_run_id_for_conversation(
+                    child_conversation_id,
+                    child_run_id.clone(),
+                    None,
+                    parent_terminal_view_id,
+                    ctx,
+                );
+            });
+
+            (
+                parent_pane_id,
+                parent_conversation_id,
+                parent_run_id,
+                child_conversation_id,
+                child_run_id,
+                child_agent_name,
+            )
+        });
+
+        // BEFORE the parent's fullscreen agent view is entered, the
+        // orchestration data layer must already know:
+        //   (a) the parent → child topology (pill bar source),
+        //   (b) the child's local conversation (with agent name set), and
+        //   (c) the child's run_id → conversation id (transcript name
+        //       resolution source via `conversation_id_for_agent_id`).
+        pane_group.read(&app, |panes, ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+
+            // (a) Topology — direct children index and the transitive walker
+            // used by `OrchestrationPillBar::pill_specs` must both find the
+            // child immediately, even though the hidden child pane has not
+            // been created yet.
+            assert_eq!(
+                history.child_conversation_ids_of(&parent_conversation_id),
+                &[child_conversation_id],
+                "orchestration topology must list the restored child under its parent before any pane materializes",
+            );
+            assert_eq!(
+                descendant_conversation_ids_in_spawn_order(history, parent_conversation_id),
+                vec![child_conversation_id],
+                "pill bar pre-order walker must reach the restored child before any pane materializes",
+            );
+
+            // (b) The child must be hydrated into `conversations_by_id`
+            // with its agent name preserved — this is the data Fix C
+            // eagerly populates on disk-load so the transcript name
+            // resolver finds the display name instead of falling back to
+            // "Unknown agent".
+            let child_conversation = history
+                .conversation(&child_conversation_id)
+                .expect("restored child must be in conversations_by_id before parent fullscreen");
+            assert_eq!(
+                child_conversation.agent_name(),
+                Some(child_agent_name.as_str()),
+                "restored child must retain its display name for transcript / pill bar rendering",
+            );
+
+            // (c) Run-id → conversation lookups (used by `participant_for_agent_id`).
+            assert_eq!(
+                history.conversation_id_for_agent_id(&child_run_id),
+                Some(child_conversation_id),
+                "child run_id must resolve to the restored child conversation",
+            );
+            assert_eq!(
+                history.conversation_id_for_agent_id(&parent_run_id),
+                Some(parent_conversation_id),
+                "parent run_id must resolve to the parent conversation",
+            );
+
+            // Hidden child pane must NOT exist yet — restoration is lazy and
+            // only materializes when the parent's agent view is entered.
+            assert!(
+                !panes.child_agent_panes.contains_key(&child_conversation_id),
+                "hidden child pane must not exist before parent fullscreen entry",
+            );
+        });
+
+        // Enter the parent's fullscreen agent view. This is the trigger for
+        // `restore_missing_child_agent_panes_for_parent`, which is the
+        // PaneGroup-side of the user-visible restart-loop bug.
+        pane_group.update(&mut app, |panes, ctx| {
+            enter_agent_view_for_conversation(panes, parent_pane_id, parent_conversation_id, ctx);
+        });
+
+        // AFTER fullscreen entry, the hidden child pane must materialize in
+        // `child_agent_panes` keyed by the placeholder local AIConversationId.
+        pane_group.read(&app, |panes, _ctx| {
+            let child_pane_id = panes
+                .child_agent_panes
+                .get(&child_conversation_id)
+                .copied()
+                .expect("parent fullscreen entry must materialize the hidden child pane");
+            assert!(
+                panes.has_pane_id(child_pane_id),
+                "materialized child pane must be tracked by the pane group",
+            );
+            assert!(
+                !panes.panes.is_pane_in_tree(child_pane_id),
+                "materialized child pane must remain off-tree (hidden)",
+            );
+        });
+    });
+}
+
 #[test]
 fn test_create_missing_child_agent_panes_restores_remote_child_from_history_model() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -1105,6 +1384,72 @@ fn test_ambient_transcript_restore_uses_generic_viewer_when_handoff_disabled() {
     });
 }
 
+/// Pins the contract that cloud-mode shared-session viewers (the local pane
+/// of a remote orchestration parent) get an `ambient_agent_view_model` so
+/// the snapshot path in `TerminalPane::snapshot` can emit
+/// `LeafContents::AmbientAgent` with the task id preserved. Without this,
+/// the snapshot falls through to an empty `LeafContents::Terminal` and the
+/// pane restores as a stray local terminal on the next launch.
+#[test]
+fn create_shared_session_viewer_with_cloud_mode_populates_ambient_agent_view_model() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let resources = TerminalViewResources {
+                tips_completed: panes.tips_completed.clone(),
+                server_api: panes.server_api.clone(),
+                model_event_sender: panes.model_event_sender.clone(),
+            };
+            let (terminal_view, _terminal_manager) = PaneGroup::create_shared_session_viewer(
+                SessionId::new(),
+                resources,
+                Vector2F::new(800., 600.),
+                false, // enable_orchestration_polling
+                true,  // is_cloud_mode
+                ctx,
+            );
+            assert!(
+                terminal_view.as_ref(ctx).ambient_agent_view_model().is_some(),
+                "cloud-mode shared-session viewer must construct an ambient_agent_view_model so the snapshot path emits LeafContents::AmbientAgent on restart",
+            );
+        });
+    });
+}
+
+/// Pins the existing behavior of the non-cloud-mode branch so callers that
+/// rely on it (e.g. `new_for_shared_session_viewer`, the per-child viewer
+/// path) keep getting a `TerminalView` without an `ambient_agent_view_model`.
+/// Future changes that would flip this default are loud.
+#[test]
+fn create_shared_session_viewer_without_cloud_mode_does_not_populate_ambient_agent_view_model() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let resources = TerminalViewResources {
+                tips_completed: panes.tips_completed.clone(),
+                server_api: panes.server_api.clone(),
+                model_event_sender: panes.model_event_sender.clone(),
+            };
+            let (terminal_view, _terminal_manager) = PaneGroup::create_shared_session_viewer(
+                SessionId::new(),
+                resources,
+                Vector2F::new(800., 600.),
+                false, // enable_orchestration_polling
+                false, // is_cloud_mode
+                ctx,
+            );
+            assert!(
+                terminal_view.as_ref(ctx).ambient_agent_view_model().is_none(),
+                "non-cloud-mode shared-session viewer must not construct an ambient_agent_view_model; existing callers depend on this",
+            );
+        });
+    });
+}
+
 #[test]
 fn test_entering_parent_agent_view_lazily_restores_hidden_child_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -1154,7 +1499,6 @@ fn test_entering_parent_agent_view_lazily_restores_hidden_child_pane() {
 #[test]
 fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -1235,7 +1579,6 @@ fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pan
 #[test]
 fn test_entering_remote_parent_agent_view_lazily_restores_remote_hidden_child_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -1521,7 +1864,6 @@ fn test_ensure_hidden_child_agent_pane_materializes_missing_child_pane() {
 fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id(
 ) {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -2803,4 +3145,178 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
             ctx.emit(Event::OpenPromptEditor);
         });
     });
+}
+
+/// Builds an [`AmbientAgentTask`] tailored for unit-testing
+/// [`decide_remote_child_hydration_action`].
+///
+/// `state`, `is_sandbox_running`, and `session_id` combine to determine the
+/// task's [`AmbientAgentLiveSessionState`]:
+/// - `state == InProgress`, `is_sandbox_running == true`, and a parseable
+///   UUID-shaped `session_id` resolve to
+///   [`AmbientAgentLiveSessionState::Attachable`].
+/// - `state == InProgress`, `is_sandbox_running == true`, and an
+///   unparseable `session_id` resolve to
+///   [`AmbientAgentLiveSessionState::ActiveUnattachable`].
+/// - Any other shape resolves to [`AmbientAgentLiveSessionState::Inactive`].
+///
+/// `conversation_id` populates the server conversation token used by the
+/// `LoadTranscript` branch; pass `None` to exercise `Fallback`.
+///
+/// Note: `session_link` is unconditionally set to `None` in this helper.
+/// `AmbientAgentTask::active_live_session_state` falls back to parsing the
+/// session id out of `session_link` when `session_id` is absent, so a test
+/// that exercises that branch would need a different helper.
+fn hydration_decision_task(
+    state: AmbientAgentTaskState,
+    is_sandbox_running: bool,
+    session_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> AmbientAgentTask {
+    let mut task = ambient_agent_task_for_current_user(new_ambient_agent_task_id());
+    task.state = state;
+    task.is_sandbox_running = is_sandbox_running;
+    task.session_id = session_id.map(str::to_string);
+    task.session_link = None;
+    task.conversation_id = conversation_id.map(str::to_string);
+    task
+}
+
+#[test]
+fn decide_remote_child_hydration_attachable_live_session_chooses_live_attach() {
+    // InProgress + sandbox running + parseable session id -> Attachable.
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::InProgress,
+        true,
+        Some("11111111-1111-1111-1111-111111111111"),
+        Some("server-token-irrelevant-for-attach"),
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Attachable {
+            session_id: "11111111-1111-1111-1111-111111111111".parse().unwrap(),
+        },
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::LiveAttach,
+    );
+}
+
+#[test]
+fn decide_remote_child_hydration_inactive_with_token_loads_transcript() {
+    // Terminal state -> Inactive, server token present -> LoadTranscript.
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::Succeeded,
+        false,
+        None,
+        Some("my-server-token"),
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Inactive,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::LoadTranscript {
+            server_token: ServerConversationToken::new("my-server-token".to_string()),
+            task_is_terminal: true,
+        },
+    );
+}
+
+#[test]
+fn decide_remote_child_hydration_active_unattachable_with_token_loads_transcript() {
+    // InProgress + sandbox running + unparseable session id ->
+    // ActiveUnattachable. With a server token we still prefer LoadTranscript
+    // over Fallback so the user sees the merged transcript instead of a bare
+    // tombstone.
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::InProgress,
+        true,
+        Some("not-a-valid-uuid"),
+        Some("unattachable-server-token"),
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::ActiveUnattachable,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::LoadTranscript {
+            server_token: ServerConversationToken::new("unattachable-server-token".to_string()),
+            task_is_terminal: false,
+        },
+    );
+}
+
+#[test]
+fn decide_remote_child_hydration_inactive_without_token_falls_back() {
+    // Terminal state, no server token -> nothing to attach to and nothing to
+    // load. Terminal => tombstone is appropriate.
+    let task = hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, None);
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::Inactive,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::Fallback {
+            task_is_terminal: true,
+        },
+    );
+}
+
+/// `ActiveUnattachable` + no server token: the run is still in progress but
+/// the client can't attach and has nothing to load. Fallback must carry
+/// `task_is_terminal: false` so the dispatch arm skips the
+/// conversation-ended tombstone.
+#[test]
+fn decide_remote_child_hydration_active_unattachable_without_token_falls_back_non_terminal() {
+    let task = hydration_decision_task(
+        AmbientAgentTaskState::InProgress,
+        true,
+        Some("not-a-valid-uuid"),
+        None,
+    );
+    assert_eq!(
+        task.active_live_session_state(),
+        AmbientAgentLiveSessionState::ActiveUnattachable,
+    );
+
+    assert_eq!(
+        decide_remote_child_hydration_action(&task),
+        RemoteChildHydrationAction::Fallback {
+            task_is_terminal: false,
+        },
+    );
+}
+
+/// An `AmbientAgentTask` whose `conversation_id` is `Some("")` (or
+/// whitespace-only) is treated the same as `None`: the dispatch must not
+/// route to a no-op cloud fetch wrapped in a misleading tombstone. The
+/// `Fallback` arm handles "nothing to attach to, nothing to load"
+/// correctly. Terminal here => tombstone is appropriate.
+#[test]
+fn decide_remote_child_hydration_empty_token_falls_back() {
+    for empty_token in [Some(""), Some("   "), Some("\t\n")] {
+        let task =
+            hydration_decision_task(AmbientAgentTaskState::Succeeded, false, None, empty_token);
+        assert_eq!(
+            task.active_live_session_state(),
+            AmbientAgentLiveSessionState::Inactive,
+            "empty/whitespace token={empty_token:?} should still resolve to Inactive",
+        );
+        assert_eq!(
+            decide_remote_child_hydration_action(&task),
+            RemoteChildHydrationAction::Fallback {
+                task_is_terminal: true,
+            },
+            "empty/whitespace token={empty_token:?} must fall through to Fallback",
+        );
+    }
 }

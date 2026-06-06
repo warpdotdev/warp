@@ -61,7 +61,8 @@ use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
 };
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, AIExecutionProfileAppExt, ActionPermission, WriteToPtyPermission,
+    long_context_pricing_warning_title, AIExecutionProfile, AIExecutionProfileAppExt,
+    ActionPermission, WriteToPtyPermission,
 };
 use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -81,16 +82,19 @@ use crate::settings::{
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
     CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
     IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, PromptSubmissionMode,
-    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
-    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
+    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
+    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
+    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
+    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
+    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
-use crate::view_components::{FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent};
+use crate::view_components::{
+    render_warning_box, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
+    WarningBoxConfig,
+};
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 
 /// Identifies which subpage of the AI settings the user is viewing.
@@ -335,6 +339,35 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     mode.command_palette_description(),
                     builder(SettingsAction::AI(
                         AISettingsPageAction::SetThinkingDisplayMode(mode),
+                    )),
+                    ai_context.clone() & !id!(context_flag),
+                )
+                .with_group(bindings::BindingGroup::WarpAi.as_str())
+            })
+            .collect();
+        app.register_fixed_bindings(mode_bindings);
+    }
+    {
+        use warpui::keymap::FixedBinding;
+
+        let ai_context = context.clone() & id!(flags::IS_ANY_AI_ENABLED);
+        let mode_bindings: Vec<FixedBinding> = OrchestrationMessageDisplayMode::iter()
+            .map(|mode| {
+                let context_flag = match mode {
+                    OrchestrationMessageDisplayMode::ShowAndCollapse => {
+                        flags::ORCHESTRATION_MESSAGE_DISPLAY_SHOW_AND_COLLAPSE
+                    }
+                    OrchestrationMessageDisplayMode::AlwaysShow => {
+                        flags::ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_SHOW
+                    }
+                    OrchestrationMessageDisplayMode::AlwaysCollapse => {
+                        flags::ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_COLLAPSE
+                    }
+                };
+                FixedBinding::empty(
+                    mode.command_palette_description(),
+                    builder(SettingsAction::AI(
+                        AISettingsPageAction::SetOrchestrationMessageDisplayMode(mode),
                     )),
                     ai_context.clone() & !id!(context_flag),
                 )
@@ -646,8 +679,10 @@ pub struct AISettingsPageView {
     context_window_slider_state: SliderStateHandle,
     context_window_editor: ViewHandle<EditorView>,
     last_synced_context_window_editor_value: Option<u32>,
+    dragged_context_window_value: Option<u32>,
 
     thinking_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    orchestration_message_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     default_prompt_submission_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     #[cfg(feature = "local_fs")]
     conversation_layout_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -789,6 +824,17 @@ impl AISettingsPageView {
             thinking_display_mode_dropdown.update(ctx, |dropdown, ctx| {
                 dropdown.set_selected_by_action(
                     AISettingsPageAction::SetThinkingDisplayMode(current_mode),
+                    ctx,
+                );
+            });
+        }
+        let orchestration_message_display_mode_dropdown =
+            OtherAIWidget::create_orchestration_message_display_mode_dropdown(ctx);
+        {
+            let current_mode = AISettings::as_ref(ctx).orchestration_message_display_mode;
+            orchestration_message_display_mode_dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_action(
+                    AISettingsPageAction::SetOrchestrationMessageDisplayMode(current_mode),
                     ctx,
                 );
             });
@@ -1205,6 +1251,18 @@ impl AISettingsPageView {
                         .update(ctx, |dropdown, ctx| {
                             dropdown.set_selected_by_action(
                                 AISettingsPageAction::SetThinkingDisplayMode(current_mode),
+                                ctx,
+                            );
+                        });
+                }
+                AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
+                    let current_mode = AISettings::as_ref(ctx).orchestration_message_display_mode;
+                    me.orchestration_message_display_mode_dropdown
+                        .update(ctx, |dropdown, ctx| {
+                            dropdown.set_selected_by_action(
+                                AISettingsPageAction::SetOrchestrationMessageDisplayMode(
+                                    current_mode,
+                                ),
                                 ctx,
                             );
                         });
@@ -1719,6 +1777,7 @@ impl AISettingsPageView {
             context_window_slider_state,
             context_window_editor,
             last_synced_context_window_editor_value,
+            dragged_context_window_value: None,
             autonomy_dropdown_menu,
             code_read_allowlist_editor,
             code_read_autonomy_dropdown_menu,
@@ -1740,6 +1799,7 @@ impl AISettingsPageView {
             mcp_denylist_dropdown,
             mcp_denylist_mouse_state_handles,
             thinking_display_mode_dropdown,
+            orchestration_message_display_mode_dropdown,
             default_prompt_submission_mode_dropdown,
             #[cfg(feature = "local_fs")]
             conversation_layout_dropdown,
@@ -2256,6 +2316,7 @@ impl AISettingsPageView {
     }
 
     fn sync_context_window_editor(&mut self, ctx: &mut ViewContext<Self>, force: bool) {
+        self.dragged_context_window_value = None;
         let Some(value) = Self::current_context_window_display_value(ctx) else {
             self.last_synced_context_window_editor_value = None;
             self.context_window_slider_state.reset_offset();
@@ -2841,6 +2902,7 @@ pub enum AISettingsPageAction {
     ToggleShowAgentTips,
     ToggleShowOzUpdatesInZeroState,
     SetThinkingDisplayMode(ThinkingDisplayMode),
+    SetOrchestrationMessageDisplayMode(OrchestrationMessageDisplayMode),
     SetPromptSubmissionMode(PromptSubmissionMode),
     AttemptLoginGatedUpgrade,
     RemoveCLIAgentToolbarEnabledCommand(String),
@@ -2899,6 +2961,7 @@ pub enum AISettingsPageAction {
     ToggleAutoToggleRichInput,
     ToggleAutoOpenRichInputOnCLIAgentStart,
     ToggleAutoDismissRichInputAfterSubmit,
+    ToggleSubmitRichInputOnCtrlEnter,
     SetCLIAgentForCommand {
         pattern: String,
         agent: Option<CLIAgent>,
@@ -3177,6 +3240,12 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.submit_on_ctrl_enter.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
             AISettingsPageAction::ToggleUseAgentToolbar => {
                 match AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings
@@ -3293,6 +3362,14 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
+            AISettingsPageAction::SetOrchestrationMessageDisplayMode(mode) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .orchestration_message_display_mode
+                        .set_value(*mode, ctx));
+                });
+                ctx.notify();
+            }
             AISettingsPageAction::SetPromptSubmissionMode(mode) => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
@@ -3359,6 +3436,7 @@ impl TypedActionView for AISettingsPageView {
                     return;
                 }
                 if Self::configurable_context_window(ctx).is_some() {
+                    self.dragged_context_window_value = Some(*value);
                     let formatted = value.to_string();
                     self.context_window_editor.update(ctx, |editor, ctx| {
                         editor.system_reset_buffer_text(&formatted, ctx);
@@ -3367,6 +3445,7 @@ impl TypedActionView for AISettingsPageView {
                 }
             }
             AISettingsPageAction::SetContextWindowSize(value) => {
+                self.dragged_context_window_value = None;
                 if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                     self.sync_context_window_editor(ctx, true);
                     return;
@@ -4808,8 +4887,7 @@ impl AgentsWidget {
 
     /// Renders the context window slider + numeric input row shown below the
     /// base model dropdown. Returns `None` if the active base model does not
-    /// advertise a configurable context window, global AI is disabled, or the
-    /// [`FeatureFlag::ConfigurableContextWindow`] flag is disabled.
+    /// advertise a configurable context window or global AI is disabled.
     fn render_context_window_setting(
         &self,
         view: &AISettingsPageView,
@@ -4817,9 +4895,6 @@ impl AgentsWidget {
         appearance: &Appearance,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        if !FeatureFlag::ConfigurableContextWindow.is_enabled() {
-            return None;
-        }
         if !ai_settings.is_any_ai_enabled(app) {
             return None;
         }
@@ -4919,12 +4994,22 @@ impl AgentsWidget {
         let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(min_label)
-            .with_child(slider)
+            .with_child(Shrinkable::new(1., slider).finish())
             .with_child(max_label)
             .with_child(input_box)
             .finish();
 
-        Some(Flex::column().with_child(label).with_child(row).finish())
+        let mut column = Flex::column().with_child(label).with_child(row);
+        if AISettingsPageView::active_profile_data(app)
+            .should_show_long_context_pricing_warning(view.dragged_context_window_value, app)
+        {
+            column.add_child(render_warning_box(
+                WarningBoxConfig::formatted_title(long_context_pricing_warning_title()),
+                appearance,
+            ));
+        }
+
+        Some(column.finish())
     }
 
     fn render_permissions_section(
@@ -6357,13 +6442,36 @@ impl OtherAIWidget {
             dropdown
         })
     }
+
+    fn create_orchestration_message_display_mode_dropdown(
+        ctx: &mut ViewContext<AISettingsPageView>,
+    ) -> ViewHandle<Dropdown<AISettingsPageAction>> {
+        let items: Vec<DropdownItem<AISettingsPageAction>> =
+            OrchestrationMessageDisplayMode::iter()
+                .map(|mode| {
+                    DropdownItem::new(
+                        mode.display_name(),
+                        AISettingsPageAction::SetOrchestrationMessageDisplayMode(mode),
+                    )
+                })
+                .collect();
+
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            dropdown.add_items(items, ctx);
+            dropdown
+        })
+    }
 }
 
 impl SettingsWidget for OtherAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history"
+        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show orchestration messages child agents collapse expand hide conversation history"
     }
 
     fn render(
@@ -6449,6 +6557,21 @@ impl SettingsWidget for OtherAIWidget {
             &view.thinking_display_mode_dropdown,
         ));
 
+        column.add_child(render_dropdown_item(
+            appearance,
+            "Orchestration message display",
+            Some("Controls whether orchestration messages stay expanded."),
+            None,
+            LocalOnlyIconState::for_setting(
+                OrchestrationMessageDisplayMode::storage_key(),
+                OrchestrationMessageDisplayMode::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
+            &view.orchestration_message_display_mode_dropdown,
+        ));
+
         // TODO: OpenConversationLayoutPreference should not depend on local_fs, but it lives under the external editor settings
         // which does require local_fs. It was a mistake to put it there, but now we keep it there for backward compatibility.
         #[cfg(feature = "local_fs")]
@@ -6487,13 +6610,14 @@ struct CLIAgentWidget {
     auto_toggle_rich_input_info_tooltip: MouseStateHandle,
     auto_open_rich_input_on_cli_agent_start_toggle: SwitchStateHandle,
     auto_dismiss_rich_input_toggle: SwitchStateHandle,
+    submit_on_ctrl_enter_toggle: SwitchStateHandle,
 }
 
 impl SettingsWidget for CLIAgentWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss"
+        "third party cli coding agent claude codex gemini toolbar footer layout chip chips rearrange re-arrange bar command regex auto show rich input dismiss ctrl enter submit newline"
     }
 
     fn render(
@@ -6563,7 +6687,7 @@ impl SettingsWidget for CLIAgentWidget {
             use super::settings_page::AdditionalInfo;
             use crate::settings::{
                 AutoDismissRichInputAfterSubmit, AutoOpenRichInputOnCLIAgentStart,
-                AutoToggleRichInput,
+                AutoToggleRichInput, SubmitRichInputOnCtrlEnter,
             };
 
             if FeatureFlag::CLIAgentRichInput.is_enabled() {
@@ -6620,6 +6744,17 @@ impl SettingsWidget for CLIAgentWidget {
                     *ai_settings.auto_dismiss_rich_input_after_submit,
                     true,
                     self.auto_dismiss_rich_input_toggle.clone(),
+                    &view.local_only_icon_tooltip_states,
+                    app,
+                ));
+
+                // Setting 3: Submit Rich Input with Ctrl+Enter
+                column.add_child(render_ai_setting_toggle::<SubmitRichInputOnCtrlEnter>(
+                    "Submit Rich Input with Ctrl+Enter",
+                    AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter,
+                    *ai_settings.submit_on_ctrl_enter,
+                    true,
+                    self.submit_on_ctrl_enter_toggle.clone(),
                     &view.local_only_icon_tooltip_states,
                     app,
                 ));

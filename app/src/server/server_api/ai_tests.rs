@@ -1,7 +1,7 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 
-use super::super::auth::CLOUD_AGENT_ID_HEADER;
+use super::super::base_client::CLOUD_AGENT_ID_HEADER;
 use super::super::ServerApi;
 use super::{
     build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,

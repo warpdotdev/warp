@@ -248,10 +248,8 @@ impl SlashCommandModel {
 
         let skill_name = possible_command.strip_prefix('/')?;
 
-        let cwd_path = self
-            .active_session
-            .as_ref(ctx)
-            .current_working_directory_location(ctx);
+        let active_session = self.active_session.as_ref(ctx);
+        let cwd_path = active_session.current_working_directory_location(ctx);
         let skills = SkillManager::handle(ctx)
             .as_ref(ctx)
             .get_skills_for_working_directory(cwd_path.as_ref(), ctx);

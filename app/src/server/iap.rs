@@ -6,9 +6,13 @@ use base64::Engine;
 use blocking::unblock;
 use instant::Instant;
 use warp_core::channel::IapConfig;
-use warpui::r#async::Timer;
+use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{Entity, ModelContext, SingletonEntity};
+#[cfg(not(target_family = "wasm"))]
+use websocket::connect_error_http_response;
 
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_shell::LocalShellState;
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, WorkspaceAction};
 
@@ -95,7 +99,12 @@ impl IapState {
 
     pub fn get_cached(&self) -> Option<String> {
         match &*self.inner.read().expect("IAP state lock poisoned") {
-            IapCredentialsState::Loaded(cached) => Some(cached.token.clone()),
+            // Gate on expiry even while `Loaded`: if a proactive refresh is
+            // delayed (e.g. the machine slept across the refresh window), the
+            // token may already be expired, and attaching it would guarantee an
+            // IAP challenge. Returning `None` lets the caller proceed without a
+            // doomed token while the reactive refresh recovers.
+            IapCredentialsState::Loaded(cached) => cached.valid_token(),
             IapCredentialsState::EnvInjected { token } => Some(token.clone()),
             IapCredentialsState::Refreshing { previous }
             | IapCredentialsState::Failed { previous, .. } => {
@@ -103,6 +112,11 @@ impl IapState {
             }
             IapCredentialsState::Missing => None,
         }
+    }
+
+    pub fn proxy_auth_header(&self) -> Option<(&'static str, String)> {
+        self.get_cached()
+            .map(|token| http_client::iap::proxy_auth_header(&token))
     }
 
     pub fn state(&self) -> IapCredentialsState {
@@ -175,6 +189,14 @@ impl IapManager {
         self.state.as_ref().map(|s| s.state())
     }
 
+    /// Returns a handle to the shared IAP credential state, if IAP is active.
+    /// Mirrors how `AuthStateProvider` hands out the `Arc<AuthState>`, letting
+    /// callers read cached credentials (e.g. to build a proxy-auth header) off
+    /// a `ModelContext` without reaching through `ServerApi`.
+    pub fn iap_state(&self) -> Option<Arc<IapState>> {
+        self.state.clone()
+    }
+
     pub fn handle_challenge(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(state) = self.state.as_ref() else {
             return;
@@ -209,9 +231,42 @@ impl IapManager {
         let audiences = state.audiences().to_string();
         let service_account_email = state.service_account_email().to_string();
 
+        // Make `gcloud` findable even when Warp is launched from the macOS GUI
+        // (i.e. in environments without something like `~/.zshrc && WarpDev` happening to init cli path)
+        #[cfg(feature = "local_tty")]
+        let path_future = LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
+            shell_state.get_interactive_path_env_var(ctx)
+        });
+        #[cfg(not(feature = "local_tty"))]
+        let path_future = futures::future::ready(None::<String>);
+
         ctx.spawn(
             async move {
-                unblock(move || fetch_iap_token(&audiences, &service_account_email)).await
+                // Bound the interactive PATH capture. It spawns an interactive
+                // login shell (sourcing rc files), which can hang indefinitely
+                // on a misbehaving startup script. Without this bound the
+                // spawned task would never reach the `GCLOUD_TIMEOUT`-guarded
+                // fetch, stranding the state machine in `Refreshing` and
+                // silently disabling every future refresh and IAP challenge
+                // (both early-return while `Refreshing`). On timeout, fall back
+                // to the ambient PATH so the fetch still runs and the state
+                // machine can make progress (succeed or fail).
+                const PATH_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
+                let path_env = match path_future.with_timeout(PATH_CAPTURE_TIMEOUT).await {
+                    Ok(path_env) => path_env,
+                    Err(_) => {
+                        log::warn!(
+                            "Interactive PATH capture timed out after {}s; \
+                             falling back to ambient PATH for IAP token fetch",
+                            PATH_CAPTURE_TIMEOUT.as_secs()
+                        );
+                        None
+                    }
+                };
+                unblock(move || {
+                    fetch_iap_token(&audiences, &service_account_email, path_env.as_deref())
+                })
+                .await
             },
             move |manager, result, ctx| {
                 let Some(state) = manager.state.as_ref() else {
@@ -298,6 +353,27 @@ impl IapManager {
             stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }
+
+    /// Inspects a websocket *handshake* connect error for an IAP challenge.
+    /// If detected, triggers a refresh so the caller's retry loop can pick up
+    /// a fresh token on the next attempt.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn check_ws_connect_error(&mut self, err: &anyhow::Error, ctx: &mut ModelContext<Self>) {
+        if ws_connect_is_iap_challenge(err) {
+            log::warn!("Received IAP challenge on websocket handshake; triggering refresh");
+            self.handle_challenge(ctx);
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub fn check_ws_connect_error(&mut self, _err: &anyhow::Error, _ctx: &mut ModelContext<Self>) {}
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn ws_connect_is_iap_challenge(err: &anyhow::Error) -> bool {
+    connect_error_http_response(err).is_some_and(|response| {
+        http_client::iap::is_iap_challenge(response.status(), response.headers())
+    })
 }
 
 impl Entity for IapManager {
@@ -309,7 +385,11 @@ impl SingletonEntity for IapManager {}
 /// How long to wait for `auth print-identity-token` command to respond before killing it.
 const GCLOUD_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn fetch_iap_token(audiences: &str, service_account_email: &str) -> Result<CachedToken> {
+fn fetch_iap_token(
+    audiences: &str,
+    service_account_email: &str,
+    path_env: Option<&str>,
+) -> Result<CachedToken> {
     let args = [
         "auth",
         "print-identity-token",
@@ -321,12 +401,18 @@ fn fetch_iap_token(audiences: &str, service_account_email: &str) -> Result<Cache
     ];
     let cmd_display = format!("gcloud {}", args.join(" "));
 
-    let mut child = command::blocking::Command::new("gcloud")
+    let mut cmd = command::blocking::Command::new("gcloud");
+    cmd
         // Prevent gcloud from waiting for interactive input (fail fast instead of hanging)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .args(args)
+        .args(args);
+    // allows warp to resolve `gcloud` cli path
+    if let Some(path_env) = path_env {
+        cmd.env("PATH", path_env);
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|err| anyhow::anyhow!("Failed to spawn `{cmd_display}`: {err}"))?;
 
@@ -394,3 +480,7 @@ fn parse_exp_from_jwt(token: &str) -> Option<u64> {
     let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
     payload.get("exp")?.as_u64()
 }
+
+#[cfg(test)]
+#[path = "iap_tests.rs"]
+mod tests;

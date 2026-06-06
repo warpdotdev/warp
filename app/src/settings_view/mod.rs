@@ -507,9 +507,17 @@ pub mod flags {
     pub const THINKING_DISPLAY_SHOW_AND_COLLAPSE: &str = "Thinking_Display_ShowAndCollapse";
     pub const THINKING_DISPLAY_ALWAYS_SHOW: &str = "Thinking_Display_AlwaysShow";
     pub const THINKING_DISPLAY_NEVER_SHOW: &str = "Thinking_Display_NeverShow";
+    pub const ORCHESTRATION_MESSAGE_DISPLAY_SHOW_AND_COLLAPSE: &str =
+        "Orchestration_Message_Display_ShowAndCollapse";
+    pub const ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_SHOW: &str =
+        "Orchestration_Message_Display_AlwaysShow";
+    pub const ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_COLLAPSE: &str =
+        "Orchestration_Message_Display_AlwaysCollapse";
     pub const PROMPT_SUBMISSION_INTERRUPT: &str = "Prompt_Submission_Interrupt";
     pub const PROMPT_SUBMISSION_QUEUE: &str = "Prompt_Submission_Queue";
     pub const SHOW_TERMINAL_INPUT_MESSAGE_LINE_FLAG: &str = "Show_Terminal_Input_Message_Line";
+    pub const PRESERVE_INPUT_FOCUS_ON_BLOCK_SELECTION_FLAG: &str =
+        "Preserve_Input_Focus_On_Block_Selection";
     pub const SLASH_COMMANDS_IN_TERMINAL_FLAG: &str = "Slash_Commands_In_Terminal";
     pub const AT_CONTEXT_MENU_IN_TERMINAL_FLAG: &str = "At_Context_Menu_In_Terminal";
     pub const OUTLINE_CODEBASE_SYMBOLS_FOR_AT_CONTEXT_MENU_FLAG: &str =
