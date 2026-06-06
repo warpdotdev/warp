@@ -1,5 +1,5 @@
 pub mod app;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod mac;
@@ -14,7 +14,7 @@ pub mod current {
     cfg_if::cfg_if! {
         if #[cfg(target_family = "wasm")] {
             pub use super::wasm::*;
-        } else if #[cfg(target_os = "linux")] {
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             pub use super::linux::*;
         } else if #[cfg(target_os = "macos")] {
             pub use super::mac::*;
@@ -26,9 +26,8 @@ pub mod current {
     }
 }
 
-pub use warpui_core::platform::*;
-
 pub use app::AppBuilder;
+pub use warpui_core::platform::*;
 
 /// Returns whether the current device is a mobile device with touch input.
 ///

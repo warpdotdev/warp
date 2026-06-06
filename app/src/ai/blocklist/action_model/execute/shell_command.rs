@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use chrono::{DateTime, Local};
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
 use futures::{select, FutureExt};
@@ -15,9 +16,10 @@ use warp_util::path::ShellFamily;
 use warpui::r#async::{Spawnable, Timer};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::{
-    AIAgentActionId, AIAgentActionType, AIAgentPtyWriteMode, ReadShellCommandOutputResult,
-    RequestCommandOutputResult, ShellCommandDelay, ShellCommandError,
+    AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentPtyWriteMode,
+    ReadShellCommandOutputResult, RequestCommandOutputResult, ShellCommandDelay, ShellCommandError,
     TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
 use crate::ai::blocklist::permissions::CommandExecutionPermission;
@@ -27,18 +29,11 @@ use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::{
     formatted_terminal_contents_for_input, Block, BlockId, CURSOR_MARKER,
 };
+use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::{
-    ai::agent::AIAgentActionResultType,
-    terminal::{
-        model::session::active_session::ActiveSession,
-        model_events::{ModelEvent, ModelEventDispatcher},
-        TerminalModel,
-    },
-};
+use crate::terminal::TerminalModel;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
-
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -291,12 +286,16 @@ impl ShellCommandExecutor {
                 if block.finished() {
                     let output: String = block.output_with_secrets_unobfuscated();
                     let exit_code = block.exit_code();
+                    let start_ts = block.start_ts().cloned();
+                    let completed_ts = block.completed_ts().cloned();
                     return ActionExecution::Sync(
                         AIAgentActionResultType::WriteToLongRunningShellCommand(
                             WriteToLongRunningShellCommandResult::CommandFinished {
                                 block_id: block.id().clone(),
                                 output,
                                 exit_code,
+                                start_ts,
+                                completed_ts,
                             },
                         ),
                     );
@@ -344,12 +343,16 @@ impl ShellCommandExecutor {
                     let command = block.command_with_secrets_unobfuscated(false);
                     let output: String = block.output_with_secrets_unobfuscated();
                     let exit_code = block.exit_code();
+                    let start_ts = block.start_ts().cloned();
+                    let completed_ts = block.completed_ts().cloned();
                     return ActionExecution::Sync(AIAgentActionResultType::ReadShellCommandOutput(
                         ReadShellCommandOutputResult::CommandFinished {
                             command,
                             block_id: block_id.clone(),
                             output,
                             exit_code,
+                            start_ts,
+                            completed_ts,
                         },
                     ));
                 }
@@ -435,6 +438,8 @@ impl ShellCommandExecutor {
                                                 block_id: block.id().clone(),
                                                 output: block.output_with_secrets_unobfuscated(),
                                                 exit_code: block.exit_code(),
+                                                start_ts: block.start_ts().cloned(),
+                                                completed_ts: block.completed_ts().cloned(),
                                             }
                                         } else {
                                             let grid_contents = if model.is_alt_screen_active() {
@@ -577,6 +582,8 @@ impl ShellCommandExecutor {
                             block_id: block.id().clone(),
                             output: block.output_with_secrets_unobfuscated(),
                             exit_code: block.exit_code(),
+                            start_ts: block.start_ts().cloned(),
+                            completed_ts: block.completed_ts().cloned(),
                         }
                     } else {
                         let grid_contents = if model.is_alt_screen_active() {
@@ -693,11 +700,15 @@ fn action_result_for_requested_command(
             block_id,
             output,
             exit_code,
+            start_ts,
+            completed_ts,
         } => AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
             command,
             block_id,
             output,
             exit_code,
+            start_ts,
+            completed_ts,
         }),
         ActionResult::LongRunningCommandSnapshot {
             block_id,
@@ -731,11 +742,15 @@ fn action_result_for_write_to_long_running_shell_command(
             block_id,
             output,
             exit_code,
+            start_ts,
+            completed_ts,
         } => AIAgentActionResultType::WriteToLongRunningShellCommand(
             WriteToLongRunningShellCommandResult::CommandFinished {
                 block_id,
                 output,
                 exit_code,
+                start_ts,
+                completed_ts,
             },
         ),
         ActionResult::LongRunningCommandSnapshot {
@@ -772,12 +787,16 @@ fn action_result_for_read_shell_command_output(
             output,
             exit_code,
             block_id,
+            start_ts,
+            completed_ts,
         } => AIAgentActionResultType::ReadShellCommandOutput(
             ReadShellCommandOutputResult::CommandFinished {
                 command,
                 block_id,
                 output,
                 exit_code,
+                start_ts,
+                completed_ts,
             },
         ),
         ActionResult::LongRunningCommandSnapshot {
@@ -814,11 +833,15 @@ fn action_result_for_transfer_shell_command_control_to_user(
             block_id,
             output,
             exit_code,
+            start_ts,
+            completed_ts,
         } => AIAgentActionResultType::TransferShellCommandControlToUser(
             TransferShellCommandControlToUserResult::CommandFinished {
                 block_id,
                 output,
                 exit_code,
+                start_ts,
+                completed_ts,
             },
         ),
         ActionResult::LongRunningCommandSnapshot {
@@ -882,6 +905,8 @@ enum ActionResult {
         block_id: BlockId,
         output: String,
         exit_code: ExitCode,
+        start_ts: Option<DateTime<Local>>,
+        completed_ts: Option<DateTime<Local>>,
     },
     LongRunningCommandSnapshot {
         block_id: BlockId,
@@ -893,3 +918,7 @@ enum ActionResult {
     Cancelled,
     BlockNotFound,
 }
+
+#[cfg(test)]
+#[path = "shell_command_tests.rs"]
+mod tests;

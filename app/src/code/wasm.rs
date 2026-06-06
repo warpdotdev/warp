@@ -1,18 +1,18 @@
 use std::path::{Path, PathBuf};
 
+use ai::diff_validation::DiffDelta;
 use warp_util::path::LineAndColumnArg;
+use warpui::elements::{DraggableState, Empty, MouseStateHandle};
 use warpui::{
-    elements::{DraggableState, Empty, MouseStateHandle},
     AppContext, Element, Entity, ModelHandle, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use super::{editor_management::CodeSource, local_code_editor::LocalCodeEditorView};
-use crate::pane_group::{
-    focus_state::PaneFocusHandle,
-    pane::view::{HeaderContent, HeaderRenderContext},
-    BackingView, CodePane, PaneConfiguration, PaneEvent,
-};
-use ai::diff_validation::DiffDelta;
+use super::buffer_location::LocalOrRemotePath;
+use super::editor_management::CodeSource;
+use super::local_code_editor::LocalCodeEditorView;
+use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view::{HeaderContent, HeaderRenderContext};
+use crate::pane_group::{BackingView, CodePane, PaneConfiguration, PaneEvent};
 
 // Keybinding constants - exported so AI document view can reuse
 pub const SAVE_FILE_BINDING_NAME: &str = "code_view:save";
@@ -40,11 +40,11 @@ pub enum CodeViewAction {
 pub enum CodeViewEvent {
     Pane(PaneEvent),
     TabChanged {
-        file_path: Option<PathBuf>,
+        location: Option<LocalOrRemotePath>,
         tab_index: usize,
     },
     FileOpened {
-        file_path: PathBuf,
+        location: LocalOrRemotePath,
         tab_index: usize,
     },
     RunTabConfigSkill {
@@ -82,15 +82,24 @@ struct TabDataMouseStateHandles {
 #[allow(unused)]
 #[derive(Clone)]
 pub struct TabData {
-    path: Option<PathBuf>,
+    location: Option<LocalOrRemotePath>,
     editor_view: ViewHandle<LocalCodeEditorView>,
     mouse_state_handles: TabDataMouseStateHandles,
     drag_position: Option<TabBarDragPosition>,
 }
 
 impl TabData {
-    pub fn path(&self) -> Option<PathBuf> {
-        self.path.clone()
+    /// Returns the file location (local or remote), if any.
+    pub fn location(&self) -> Option<&LocalOrRemotePath> {
+        self.location.as_ref()
+    }
+
+    /// Returns the local filesystem path, if this tab is backed by a local file.
+    /// Returns `None` for remote files and untitled tabs.
+    pub fn local_path(&self) -> Option<PathBuf> {
+        self.location
+            .as_ref()
+            .and_then(|loc| PathBuf::try_from(loc.clone()).ok())
     }
 }
 
@@ -131,11 +140,11 @@ impl CodeView {
 
     pub fn open_or_focus_existing(
         &mut self,
-        path: Option<PathBuf>,
+        location: Option<LocalOrRemotePath>,
         line_col: Option<LineAndColumnArg>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if let Some(path) = path {
+        if let Some(path) = location.and_then(|loc| PathBuf::try_from(loc).ok()) {
             self.open_local(None, path, line_col, ctx);
         }
     }

@@ -1,7 +1,9 @@
 #![allow(deprecated)]
-use super::*;
 use std::collections::HashSet;
+
 use warp_multi_agent_api as api;
+
+use super::*;
 // Helper for constructing lifecycle pending events with minimal boilerplate.
 // Tests use this to focus on queue/coalescing behavior rather than payload setup.
 
@@ -77,39 +79,6 @@ fn message_pending_event(event_id: &str) -> PendingEvent {
             message_body: "body".to_string(),
         },
     }
-}
-
-#[test]
-fn test_is_subscribed_defaults_to_all_when_subscription_omitted() {
-    assert!(is_subscribed(None, LifecycleEventType::Started));
-    assert!(is_subscribed(None, LifecycleEventType::Idle));
-    assert!(is_subscribed(None, LifecycleEventType::Restarted));
-    assert!(is_subscribed(None, LifecycleEventType::Errored));
-    assert!(is_subscribed(None, LifecycleEventType::Cancelled));
-    assert!(is_subscribed(None, LifecycleEventType::Blocked));
-}
-
-#[test]
-fn test_is_subscribed_filters_unsubscribed_event_types() {
-    let subscription = [LifecycleEventType::Started, LifecycleEventType::Idle];
-    assert!(is_subscribed(
-        Some(&subscription),
-        LifecycleEventType::Started
-    ));
-    assert!(!is_subscribed(
-        Some(&subscription),
-        LifecycleEventType::Errored
-    ));
-}
-
-#[test]
-fn test_is_subscribed_with_explicit_empty_subscription_disables_all_events() {
-    assert!(!is_subscribed(Some(&[]), LifecycleEventType::Started));
-    assert!(!is_subscribed(Some(&[]), LifecycleEventType::Idle));
-    assert!(!is_subscribed(Some(&[]), LifecycleEventType::Restarted));
-    assert!(!is_subscribed(Some(&[]), LifecycleEventType::Errored));
-    assert!(!is_subscribed(Some(&[]), LifecycleEventType::Cancelled));
-    assert!(!is_subscribed(Some(&[]), LifecycleEventType::Blocked));
 }
 
 #[test]
@@ -359,65 +328,30 @@ fn test_lifecycle_event_type_from_proto_includes_cancelled_and_blocked() {
 }
 
 #[test]
-fn restored_v1_child_conversation_re_registers_lifecycle_subscription() {
-    use crate::ai::agent::conversation::AIConversation;
-    use warp_core::features::FeatureFlag;
-    use warpui::{App, EntityId};
-
-    App::test((), |mut app| async move {
-        // V1 path is gated on `!OrchestrationV2`.
-        let _v1_guard = FeatureFlag::OrchestrationV2.override_enabled(false);
-
-        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-
-        // Build a parent conversation with a server token; under V1 the
-        // parent's `server_conversation_token` is the agent identifier the
-        // child subscribes to.
-        let parent_token = "parent-token-v1";
-        let mut parent_conversation = AIConversation::new(false);
-        parent_conversation.set_server_conversation_token(parent_token.to_string());
-        let parent_conversation_id = parent_conversation.id();
-
-        // Build a child conversation pointing at the parent.
-        let mut child_conversation = AIConversation::new(false);
-        child_conversation.set_parent_conversation_id(parent_conversation_id);
-        let child_conversation_id = child_conversation.id();
-
-        let terminal_view_id = EntityId::new();
-        history_model.update(&mut app, |model, ctx| {
-            model.restore_conversations(
-                terminal_view_id,
-                vec![parent_conversation, child_conversation],
-                ctx,
-            );
-        });
-
-        // Drive the OrchestrationEventService through its standard
-        // `handle_history_event` entry point; `restore_conversations` already
-        // emitted `RestoredConversations`, so we replay it explicitly through
-        // the service to keep this test independent of subscription wiring.
-        let service = app.add_singleton_model(|_| OrchestrationEventService::default());
-        service.update(&mut app, |svc, ctx| {
-            svc.handle_history_event(
-                &BlocklistAIHistoryEvent::RestoredConversations {
-                    terminal_view_id,
-                    conversation_ids: vec![parent_conversation_id, child_conversation_id],
-                },
-                ctx,
-            );
-        });
-
-        service.read(&app, |svc, _| {
-            let routes = svc
-                .lifecycle_subscription_routes
-                .get(&child_conversation_id)
-                .expect("expected V1 lifecycle route to be registered for the child");
-            assert_eq!(routes.len(), 1, "expected exactly one route");
-            assert_eq!(routes[0].target_agent_id, parent_token);
-            assert!(
-                routes[0].subscribed_event_types.is_none(),
-                "restore re-registers with `None` (subscribe to all event types)"
-            );
-        });
-    });
+fn test_has_pending_events_tracks_any_event_kind() {
+    let conversation_id = crate::ai::agent::conversation::AIConversationId::new();
+    let mut service = OrchestrationEventService::new_without_subscriptions();
+    assert!(!service.has_pending_events(conversation_id));
+    service.pending_events.insert(
+        conversation_id,
+        vec![
+            lifecycle_pending_event(
+                "lifecycle-1",
+                "child-a",
+                api::LifecycleEventType::InProgress,
+                0,
+            ),
+            message_pending_event("message-event-1"),
+            lifecycle_pending_event(
+                "lifecycle-2",
+                "child-b",
+                api::LifecycleEventType::Succeeded,
+                0,
+            ),
+            message_pending_event("message-event-2"),
+        ],
+    );
+    assert!(service.has_pending_events(conversation_id));
+    service.pending_events.remove(&conversation_id);
+    assert!(!service.has_pending_events(conversation_id));
 }

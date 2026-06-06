@@ -1,59 +1,51 @@
-use super::{
-    flags,
-    settings_page::{
-        render_body_item, render_customer_type_badge, AdditionalInfo, LocalOnlyIconState,
-        MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
-        HEADER_PADDING,
-    },
-    SettingsAction, SettingsSection, ToggleSettingActionPair,
-};
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
-use crate::send_telemetry_from_ctx;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{
-    appearance::Appearance,
-    auth::{auth_state::AuthState, auth_view_modal::AuthViewVariant},
-    report_if_error,
-    settings::cloud_preferences::CloudPreferencesSettings,
-    TelemetryEvent,
-};
-use crate::{auth::auth_manager::AuthManager, server::ids::ServerId};
-use crate::{auth::auth_manager::LoginGatedFeature, workspaces::workspace::CustomerType};
-use crate::{workspace::WorkspaceAction, workspaces::update_manager::TeamUpdateManager};
+use std::sync::{Arc, Mutex};
+
 use ::settings::{Setting, ToggleableSetting};
 use lazy_static::lazy_static;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::sync::{Arc, Mutex};
+use warp_core::channel::ChannelState;
+use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
-use warp_core::{channel::ChannelState, context_flag::ContextFlag};
-use warpui::{
-    assets::asset_cache::AssetSource,
-    elements::{Border, Empty, MainAxisAlignment, MainAxisSize},
-    id,
-    platform::Cursor,
-    ui_components::switch::SwitchStateHandle,
+use warpui::assets::asset_cache::AssetSource;
+use warpui::elements::{
+    Align, Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Element, Empty, Flex, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
+    Radius, Shrinkable, Text,
 };
+use warpui::fonts::Weight;
+use warpui::keymap::ContextPredicate;
+use warpui::platform::Cursor;
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Flex,
-        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    Action, AppContext,
+    id, Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View,
+    ViewContext, ViewHandle,
 };
-use warpui::{
-    elements::{CacheOption, Image},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
+
+use super::settings_page::{
+    render_body_item, render_customer_type_badge, AdditionalInfo, LocalOnlyIconState, MatchData,
+    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
+    HEADER_PADDING,
 };
-use warpui::{fonts::Weight, keymap::ContextPredicate};
-use warpui::{
-    Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
-};
+use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
+use crate::appearance::Appearance;
+use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
+use crate::auth::auth_state::AuthState;
+use crate::auth::auth_view_modal::AuthViewVariant;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::autoupdate::{self, AutoupdateStage, AutoupdateState};
+#[cfg(not(target_family = "wasm"))]
+use crate::server::iap::{IapCredentialsState, IapManager, IapManagerEvent};
+use crate::server::ids::ServerId;
+use crate::settings::cloud_preferences::CloudPreferencesSettings;
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::CustomerType;
+use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 
 const PHOTO_SIZE: f32 = 40.;
 const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";
@@ -132,6 +124,8 @@ pub enum MainPageAction {
     },
     SignupAnonymousUser,
     OpenUrl(String),
+    #[cfg(not(target_family = "wasm"))]
+    RefreshIapCredentials,
 }
 
 impl MainPageAction {
@@ -239,6 +233,11 @@ impl TypedActionView for MainSettingsPageView {
             MainPageAction::OpenUrl(url) => {
                 ctx.open_url(url);
             }
+            #[cfg(not(target_family = "wasm"))]
+            MainPageAction::RefreshIapCredentials => {
+                IapManager::handle(ctx).update(ctx, |manager, ctx| manager.start_refresh(ctx));
+                ctx.notify();
+            }
         }
     }
 }
@@ -280,6 +279,17 @@ impl MainSettingsPageView {
         widgets.push(Box::new(SettingsSyncWidget::default()));
 
         widgets.push(Box::new(EarnRewardsWidget::default()));
+
+        #[cfg(not(target_family = "wasm"))]
+        if IapManager::as_ref(ctx).is_enabled() {
+            widgets.push(Box::new(IapCredentialsWidget::default()));
+            let iap_manager_handle = IapManager::handle(ctx);
+            ctx.subscribe_to_model(&iap_manager_handle, |_, _, e, ctx| {
+                match e {
+                    IapManagerEvent::StateChanged => ctx.notify(),
+                };
+            })
+        }
 
         if ChannelState::app_version().is_some() {
             widgets.push(Box::new(VersionInfoWidget::default()));
@@ -1059,6 +1069,120 @@ impl LogoutWidget {
                 ctx.dispatch_typed_action(WorkspaceAction::LogOut);
             })
             .finish()
+    }
+}
+
+/// Widget displaying IAP credential state and a refresh button. Only
+/// visible on staging channels where IAP is active.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct IapCredentialsWidget {
+    refresh_button_mouse_state: MouseStateHandle,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl SettingsWidget for IapCredentialsWidget {
+    type View = MainSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "iap staging gcloud proxy credentials"
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        // `is_enabled()` gates widget registration in `MainSettingsPageView::new`,
+        // so `state()` should be `Some` here; bail out defensively though.
+        let Some(state) = IapManager::as_ref(app).state() else {
+            return Empty::new().finish();
+        };
+        let ansi_red: ColorU = appearance.theme().terminal_colors().bright.red.into();
+        let disabled: ColorU = appearance.theme().disabled_ui_text_color().into();
+        let active: ColorU = appearance.theme().active_ui_text_color().into();
+        let (status_text, status_color): (String, ColorU) = match &state {
+            IapCredentialsState::Missing => ("Not yet loaded".to_string(), disabled),
+            IapCredentialsState::Refreshing { .. } => ("Refreshing…".to_string(), active),
+            IapCredentialsState::Loaded(cached) => {
+                let remaining = cached
+                    .expires_at
+                    .saturating_duration_since(instant::Instant::now());
+                let mins = remaining.as_secs() / 60;
+                (format!("Loaded (refreshes in ~{mins}m)"), active)
+            }
+            IapCredentialsState::Failed { message, .. } => (format!("Failed: {message}"), ansi_red),
+            IapCredentialsState::EnvInjected { .. } => {
+                ("Using injected token (WARP_IAP_TOKEN)".to_string(), active)
+            }
+        };
+
+        let is_refreshing = matches!(state, IapCredentialsState::Refreshing { .. });
+
+        let label = Align::new(
+            Text::new_inline(
+                "Staging IAP credentials".to_string(),
+                appearance.ui_font_family(),
+                REGULAR_TEXT_FONT_SIZE,
+            )
+            .with_color(appearance.theme().active_ui_text_color().into())
+            .finish(),
+        )
+        .left()
+        .finish();
+
+        let status = Container::new(
+            appearance
+                .ui_builder()
+                .paragraph(status_text)
+                .with_style(UiComponentStyles {
+                    font_color: Some(status_color),
+                    font_size: Some(REGULAR_TEXT_FONT_SIZE),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        )
+        .with_margin_top(4.)
+        .finish();
+
+        let refresh_button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Secondary,
+                self.refresh_button_mouse_state.clone(),
+            )
+            .with_text_label(if is_refreshing {
+                "Refreshing…".into()
+            } else {
+                "Refresh".into()
+            })
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                padding: Some(Coords::uniform(6.).left(16.).right(16.)),
+                ..Default::default()
+            })
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(MainPageAction::RefreshIapCredentials);
+            })
+            .finish();
+
+        let button_row = Container::new(Align::new(refresh_button).left().finish())
+            .with_margin_top(8.)
+            .finish();
+
+        Container::new(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(label)
+                .with_child(status)
+                .with_child(button_row)
+                .finish(),
+        )
+        .with_margin_top(VERTICAL_MARGIN)
+        .finish()
     }
 }
 

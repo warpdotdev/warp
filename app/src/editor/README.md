@@ -44,7 +44,7 @@ The input box supports the multiple selections we are used to in VSCode. So our 
 
 A `Selection` has a `start` anchor and an `end` anchor to denote its start and end position.
 
-Selections and cursors are closely intertwined—whereever there is a selection, there is a cursor. **A cursor on its own is just an empty selection where `start==end`.** As such, there is always at least one `Selection`, with the first selection being the cursor.
+Selections and cursors are closely intertwined—wherever there is a selection, there is a cursor. **A cursor on its own is just an empty selection where `start==end`.** As such, there is always at least one `Selection`, with the first selection being the cursor.
 
 ### Anchors
 

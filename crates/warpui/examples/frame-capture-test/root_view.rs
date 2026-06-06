@@ -1,16 +1,16 @@
-use image::ImageEncoder;
-use pathfinder_color::ColorU;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use warpui::SingletonEntity as _;
+
+use image::ImageEncoder;
+use pathfinder_color::ColorU;
+use warpui::elements::{
+    Align, ConstrainedBox, Container, DispatchEventResult, EventHandler, Padding, ParentElement,
+    Rect, Stack, Text,
+};
+use warpui::fonts::{Cache as FontCache, FamilyId};
+use warpui::platform::CapturedFrame;
 use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, DispatchEventResult, EventHandler, Padding,
-        ParentElement, Rect, Stack, Text,
-    },
-    fonts::{Cache as FontCache, FamilyId},
-    platform::CapturedFrame,
-    AppContext, Element, Entity, TypedActionView, View, ViewContext,
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
 };
 
 #[derive(Clone, Debug)]

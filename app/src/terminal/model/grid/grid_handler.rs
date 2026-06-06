@@ -13,56 +13,46 @@ mod resize;
 mod secrets;
 
 use std::borrow::Cow;
-use std::cmp::max;
+use std::cmp::{max, min, Ordering};
 use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::num::NonZeroUsize;
 use std::ops::{Range, RangeInclusive};
-use std::{
-    cmp::{min, Ordering},
-    mem,
-};
 
 use bounded_vec_deque::BoundedVecDeque;
+use filtering::FilterState;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use string_offset::ByteOffset;
+use unicode_general_category::{get_general_category, GeneralCategory};
 use unicode_width::UnicodeWidthChar;
 use urlocator::{UrlLocation, UrlLocator};
 use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::{SemanticSelection, SMART_SELECT_MATCH_WINDOW_LIMIT};
 use warp_core::{safe_assert, safe_assert_eq};
-use warp_terminal::model::grid::CellType;
-use warp_terminal::model::grid::FlatStorage;
+use warp_terminal::model::grid::{CellType, FlatStorage};
 pub use warp_terminal::model::TermMode;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::path::CleanPathResult;
 use warpui::color::ColorU;
 
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
-use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
-use crate::terminal::model::char_or_str::{CharOrStr, PushCharOrStr};
-use crate::terminal::model::grid::{Dimensions, GridStorage};
-use crate::terminal::model::image_map::ImageMap;
-use crate::terminal::model::index::{IndexRange, Point, VisibleRow};
-use crate::terminal::model::secrets::{ObfuscateSecrets, SecretMap};
-use crate::terminal::SizeInfo;
-use crate::util::extensions::TrimStringExt;
-
-use crate::terminal::model::grid::RespectDisplayedOutput;
-use crate::terminal::model::secrets::RespectObfuscatedSecrets;
-use crate::terminal::model::terminal_model::RangeInModel;
-use crate::terminal::model::{
-    find::{Match, RegexDFAs},
-    index::Direction,
-};
-use crate::terminal::model::{Secret, SecretHandle};
-
 use super::displayed_output::DisplayedOutput;
 use super::grapheme_cursor::{self, GraphemeCursor};
 use super::row::Row;
 use super::{ConvertToAbsolute as _, Cursor, SelectionCursor};
-use filtering::FilterState;
-use string_offset::ByteOffset;
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{self, Color, CursorStyle, Handler, NamedColor};
+use crate::terminal::model::cell::{Cell, Flags, LineLength, DEFAULT_CHAR};
+use crate::terminal::model::char_or_str::{CharOrStr, PushCharOrStr};
+use crate::terminal::model::find::{Match, RegexDFAs};
+use crate::terminal::model::grid::{Dimensions, GridStorage, RespectDisplayedOutput};
+use crate::terminal::model::image_map::ImageMap;
+use crate::terminal::model::index::{Direction, IndexRange, Point, VisibleRow};
+use crate::terminal::model::secrets::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretMap};
+use crate::terminal::model::terminal_model::RangeInModel;
+use crate::terminal::model::{Secret, SecretHandle};
+use crate::terminal::SizeInfo;
+use crate::util::extensions::TrimStringExt;
 
 /// Used to match equal brackets, when performing a bracket-pair selection.
 const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
@@ -89,13 +79,47 @@ const BG_SGR_PARAM: u8 = 48;
 
 lazy_static! {
     pub static ref FILE_LINK_SEPARATORS: HashSet<char> =
-        HashSet::from(['\0', '\t', ' ', '(', ')', ':', '\\', ',', '"', '\'', '[', ']', '{', '}', '<', '>', ';', '|', '`', '=']);
+        HashSet::from([
+            '\0', '\t', ' ', '(', ')', ':', '\\', ',', '"', '\'', '[', ']', '{', '}', '<', '>',
+            ';', '|', '`', '=',
+            // Box-drawing characters used by tree-style directory listers.
+            '│', '├', '└', '─', '┬', '┴', '┼', '║', '╠', '╚', '═', '╦', '╩', '╬',
+        ]);
 
     /// The set of characters where, if we encounter them, we have a high degree of confidence that
     /// we're not in a valid URL. Other characters (e.g. '%') might be used in such a way that they
     /// result in invalid URLs, but we don't halt detection if we find them.
     /// See https://datatracker.ietf.org/doc/html/rfc3986 for more details.
     static ref URL_SEPARATORS: HashSet<char> = HashSet::from([' ', '<', '>', '"', '{', '}', '|', '\\', '^', '`']);
+}
+
+/// Returns true when `c` should terminate a clickable file path.
+///
+/// Beyond the explicit set in [`FILE_LINK_SEPARATORS`] (ASCII punctuation
+/// plus the box-drawing glyphs used by tree-style listers), any non-ASCII
+/// Unicode whitespace or punctuation also acts as a boundary. This lets paths
+/// preceded by CJK / full-width punctuation such as `：` (U+FF1A) or `（`
+/// (U+FF08) be detected when no ASCII whitespace separates them. Connectors
+/// (`Pc`) and dashes (`Pd`) are excluded since they commonly appear inside
+/// identifiers and filenames.
+pub fn is_file_link_separator(c: char) -> bool {
+    if FILE_LINK_SEPARATORS.contains(&c) {
+        return true;
+    }
+    if c.is_ascii() {
+        return false;
+    }
+    if c.is_whitespace() {
+        return true;
+    }
+    matches!(
+        get_general_category(c),
+        GeneralCategory::OpenPunctuation
+            | GeneralCategory::ClosePunctuation
+            | GeneralCategory::InitialPunctuation
+            | GeneralCategory::FinalPunctuation
+            | GeneralCategory::OtherPunctuation
+    )
 }
 
 /// Represents a range of cells with information on their combined content and total
@@ -108,9 +132,7 @@ struct Fragment {
 
 impl Fragment {
     fn has_separator(&self) -> bool {
-        self.content
-            .chars()
-            .any(|c| FILE_LINK_SEPARATORS.contains(&c))
+        self.content.chars().any(is_file_link_separator)
     }
 }
 
@@ -305,6 +327,18 @@ enum StorageRow {
     FlatStorage(usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Controls whether full-grid operations on a primary-screen grid preserve the old visible rows as
+/// scrollback or treat them as a mutable redraw surface.
+pub(in crate::terminal) enum FullGridClearBehavior {
+    /// Reset visible cells in place for full-grid clears and resizes, avoiding scrollback growth
+    /// during TUI-style redraws on the primary grid.
+    Clear,
+    /// Preserve normal primary-grid behavior where full-grid clears and resizes move visible rows
+    /// into scrollback.
+    Scroll,
+}
+
 /// An implementation of `ansi::Handler` that writes to a `Grid`.
 #[derive(Clone)]
 pub struct GridHandler {
@@ -343,6 +377,16 @@ pub struct GridHandler {
     /// `bottommost_visible_content_row` via backward scan. Set by the owning
     /// `BlockGrid` when `trim_trailing_blank_rows` is active.
     track_content_length: bool,
+
+    full_grid_clear_behavior: FullGridClearBehavior,
+
+    /// Accumulates dirty row ranges for find operations.
+    ///
+    /// Unlike `dirty_cells_range` in `ansi_handler_state` which is reset after each byte
+    /// processing pass, this field accumulates dirty rows until find explicitly consumes them.
+    /// This allows find to be updated less frequently than byte processing while still
+    /// knowing exactly which rows have changed.
+    find_dirty_rows_range: Option<RangeInclusive<usize>>,
 }
 
 impl GridHandler {
@@ -391,6 +435,8 @@ impl GridHandler {
             marked_text: None,
             bottommost_visible_content_row: None,
             track_content_length: false,
+            full_grid_clear_behavior: FullGridClearBehavior::Scroll,
+            find_dirty_rows_range: None,
         }
     }
 
@@ -439,6 +485,10 @@ impl GridHandler {
             // back to the full max_cursor_point-based height.
             self.bottommost_visible_content_row = self.bottommost_visible_content_row_backward();
         }
+    }
+
+    pub(in crate::terminal) fn enable_full_grid_clear_behavior(&mut self) {
+        self.full_grid_clear_behavior = FullGridClearBehavior::Clear;
     }
 
     pub(crate) fn set_supports_emoji_presentation_selector(
@@ -517,6 +567,8 @@ impl GridHandler {
             marked_text: None,
             bottommost_visible_content_row: None,
             track_content_length: false,
+            full_grid_clear_behavior: FullGridClearBehavior::Scroll,
+            find_dirty_rows_range: None,
         };
 
         // Scan the full grid for secrets.  This is less performant than
@@ -1056,7 +1108,7 @@ impl GridHandler {
     /// Words are separated by the file link separators.
     pub fn fragment_boundary_at_point(&self, point: &Point) -> FragmentBoundary {
         fn is_at_boundary(cell: &Cell) -> bool {
-            FILE_LINK_SEPARATORS.contains(&cell.c)
+            is_file_link_separator(cell.c)
         }
 
         // Start by scanning backward.
@@ -1215,7 +1267,7 @@ impl GridHandler {
                 .content
                 .chars()
                 .next()
-                .map(|c| FILE_LINK_SEPARATORS.contains(&c))
+                .map(is_file_link_separator)
                 .unwrap_or(false),
             None => true,
         };
@@ -1232,7 +1284,7 @@ impl GridHandler {
         let mut possible_paths = Vec::new();
 
         for prefix_chunk in prefix_chunks.into_iter().rev() {
-            // Preppend a new fragment to left.
+            // Prepend a new fragment to left.
             left = format!("{}{}", prefix_chunk.content, left);
             left_width += prefix_chunk.total_cell_width;
 
@@ -1395,7 +1447,7 @@ impl GridHandler {
             {
                 // If is a separator, we push the last fragment to the vector and push
                 // the separator as its own fragment.
-                if FILE_LINK_SEPARATORS.contains(&cell.c) {
+                if is_file_link_separator(cell.c) {
                     if !last_fragment.is_empty() {
                         let mut fragment_text = String::new();
                         mem::swap(&mut fragment_text, &mut last_fragment);
@@ -1411,7 +1463,7 @@ impl GridHandler {
 
                     fragments.push(Fragment {
                         content: cell.c.into(),
-                        total_cell_width: 1,
+                        total_cell_width: UnicodeWidthChar::width(cell.c).unwrap_or(1),
                     });
                 // Otherwise we append the current cell to the last fragment
                 } else {
@@ -1561,6 +1613,40 @@ impl GridHandler {
         let range_start = min(dirty_cells_range.start, cursor_point);
         let range_end = max(dirty_cells_range.end, cursor_point);
         *dirty_cells_range = range_start..range_end;
+
+        // Also update the find dirty rows range.
+        self.update_find_dirty_rows_range(cursor_point.row);
+    }
+
+    /// Updates the find dirty rows range to include the given row.
+    ///
+    /// This accumulates dirty rows across multiple byte processing passes
+    /// until find explicitly consumes them.
+    fn update_find_dirty_rows_range(&mut self, row: usize) {
+        self.find_dirty_rows_range = Some(match &self.find_dirty_rows_range {
+            Some(existing) => {
+                let start = min(*existing.start(), row);
+                let end = max(*existing.end(), row);
+                start..=end
+            }
+            None => row..=row,
+        });
+    }
+
+    /// Returns the accumulated dirty row range for find operations, if any.
+    ///
+    /// Unlike `dirty_cells_range()`, this range accumulates across multiple byte
+    /// processing passes until explicitly consumed with `take_find_dirty_rows_range()`.
+    pub fn find_dirty_rows_range(&self) -> Option<RangeInclusive<usize>> {
+        self.find_dirty_rows_range.clone()
+    }
+
+    /// Returns and clears the accumulated dirty row range for find operations.
+    ///
+    /// This should be called when find has processed the dirty range and no longer
+    /// needs to track those rows as dirty.
+    pub fn take_find_dirty_rows_range(&mut self) -> Option<RangeInclusive<usize>> {
+        self.find_dirty_rows_range.take()
     }
 
     fn reset_dirty_cells_range_to_cursor_point(&mut self) {
@@ -1976,7 +2062,15 @@ impl GridHandler {
         self.regex_iter(end, start, Direction::Left, dfas)
     }
 
-    fn find_in_range<'a>(&'a self, dfas: &'a RegexDFAs, start: Point, end: Point) -> RegexIter<'a> {
+    /// Find matches in a specific range of the grid.
+    ///
+    /// This is used by async find to scan chunks of a grid without scanning the entire grid.
+    pub(in crate::terminal) fn find_in_range<'a>(
+        &'a self,
+        dfas: &'a RegexDFAs,
+        start: Point,
+        end: Point,
+    ) -> RegexIter<'a> {
         self.regex_iter(end, start, Direction::Left, dfas)
     }
 
@@ -2649,5 +2743,5 @@ impl Dimensions for GridHandler {
 }
 
 #[cfg(test)]
-#[path = "grid_handler_test.rs"]
+#[path = "grid_handler_tests.rs"]
 mod tests;

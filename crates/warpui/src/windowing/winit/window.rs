@@ -1,17 +1,15 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod x11;
 
 #[cfg(windows)]
 mod windows_wm;
 
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::LazyLock;
-use std::{
-    cell::{Cell, OnceCell, RefCell},
-    rc::Rc,
-};
 
 use anyhow::{Context as _, Result};
 use itertools::Itertools;
@@ -21,42 +19,33 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use wgpu::rwh::HasDisplayHandle;
 use wgpu::{AdapterInfo, CompositeAlphaMode};
-use winit::dpi::PhysicalPosition;
+#[cfg(windows)]
+use windows::Win32::Graphics::Dwm;
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 use winit::error::ExternalError;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy, OwnedDisplayHandle};
 #[cfg(not(target_family = "wasm"))]
 use winit::monitor::MonitorHandle;
 #[cfg(windows)]
 use winit::platform::windows::{BackdropType, WindowExtWindows};
-use winit::window::{CursorIcon, ResizeDirection, UserAttentionType, WindowLevel};
-use winit::{
-    dpi::{LogicalPosition, LogicalSize, PhysicalSize, Position, Size},
-    window::Fullscreen,
-};
+use winit::window::{CursorIcon, Fullscreen, ResizeDirection, UserAttentionType, WindowLevel};
 
+use super::app::CustomEvent;
+#[cfg(windows)]
+use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
 #[cfg(not(target_family = "wasm"))]
 use crate::platform::WindowBounds;
 use crate::platform::{
     self, Cursor, FullscreenState, GraphicsBackend, TerminationMode, WindowFocusBehavior,
     WindowOptions, WindowStyle,
 };
-use crate::rendering::{
-    wgpu::{
-        adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
-        Resources,
-    },
-    GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected,
+use crate::rendering::wgpu::{
+    adapter_has_rendering_offset_bug, from_wgpu_backend, renderer, to_wgpu_backend, Renderer,
+    Resources,
 };
+use crate::rendering::{GPUPowerPreference, GlyphConfig, OnGPUDeviceSelected};
 use crate::windowing::WindowCallbacks;
-use crate::{fonts, geometry, Scene};
-use crate::{DisplayId, DisplayIdx, OptionalPlatformWindow, WindowId};
-
-use super::app::CustomEvent;
-
-#[cfg(windows)]
-use super::windows::{get_system_caption_button_bounds, set_window_attribute, WindowAttributeErr};
-#[cfg(windows)]
-use windows::Win32::Graphics::Dwm;
+use crate::{fonts, geometry, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId};
 
 /// The inner margin from the edges of the window within which the mouse can drag to resize the
 /// window. Note that this value is a logical size, not a physical size. It can be converted to a
@@ -67,20 +56,11 @@ const DRAG_RESIZE_MARGIN: f32 = 4.0;
 #[cfg(windows)]
 const IDI_ICON: u16 = 0x101;
 
-cfg_if::cfg_if! {
-    if #[cfg(any(test, feature = "integration_tests"))] {
-        /// The window cannot be resized smaller than this.
-        /// TODO(CORE-1891) Instead of being hard-coded, this should be configurable by the user via
-        /// [`crate::platform::WindowOptions`].
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(124., 34.);
-    } else {
-        #[cfg_attr(target_family = "wasm", allow(dead_code))]
-        pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> =
-            LogicalSize::new(480., 192.);
-    }
-}
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+pub(in crate::windowing::winit) const MIN_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(
+    crate::windowing::MIN_WINDOW_WIDTH as f64,
+    crate::windowing::MIN_WINDOW_HEIGHT as f64,
+);
 
 lazy_static! {
     static ref DEFAULT_WINDOW_SIZE: Vector2F = Vector2F::new(1280., 800.);
@@ -89,12 +69,51 @@ lazy_static! {
 pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
     event_loop_proxy: EventLoopProxy<CustomEvent>,
+    window_ordering: Mutex<WindowOrderingState>,
     /// We assume this won't change throughout the life of the Warp process.
     os_window_manager_name: OnceCell<Option<String>>,
     /// This is a client for talking to the Xorg server directly instead of through winit.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     x11_manager: Option<x11::X11Manager>,
     display_handle: OwnedDisplayHandle,
+}
+
+/// Manually-tracked window z-ordering. Winit has no native z-order API, so
+/// `WindowManager` keeps this list in sync from its create / focus / hide /
+/// remove callbacks and exposes it via `ordered_window_ids()`.
+#[derive(Default)]
+struct WindowOrderingState {
+    front_to_back_window_ids: Vec<WindowId>,
+    window_styles: HashMap<WindowId, WindowStyle>,
+}
+
+impl WindowOrderingState {
+    fn note_window_created(&mut self, window_id: WindowId, style: WindowStyle) {
+        self.window_styles.insert(window_id, style);
+        if style != WindowStyle::NotStealFocus {
+            self.move_to_front(window_id);
+        }
+    }
+
+    fn move_to_front(&mut self, window_id: WindowId) {
+        self.front_to_back_window_ids.retain(|id| *id != window_id);
+        self.front_to_back_window_ids.insert(0, window_id);
+    }
+
+    fn note_window_hidden(&mut self, window_id: WindowId) {
+        self.front_to_back_window_ids.retain(|id| *id != window_id);
+    }
+
+    fn note_window_removed(&mut self, window_id: WindowId) {
+        self.note_window_hidden(window_id);
+        self.window_styles.remove(&window_id);
+    }
+
+    fn has_positioned_no_focus_window(&self) -> bool {
+        self.front_to_back_window_ids
+            .iter()
+            .any(|id| self.window_styles.get(id) == Some(&WindowStyle::PositionedNoFocus))
+    }
 }
 
 impl WindowManager {
@@ -105,8 +124,9 @@ impl WindowManager {
         Self {
             windows: Default::default(),
             event_loop_proxy,
+            window_ordering: Default::default(),
             os_window_manager_name: Default::default(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             x11_manager: match x11::X11Manager::new() {
                 Ok(x11_manager) => Some(x11_manager),
                 Err(err) => {
@@ -125,7 +145,7 @@ impl WindowManager {
     /// space. All our app's windows must be on the same screen, and hence will have the same scale
     /// factor. For more in-depth explanation:
     /// https://github.com/warpdotdev/warp-internal/pull/8431#discussion_r1460629912
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn get_x11_backing_scale_factor(&self) -> f32 {
         use crate::platform::WindowContext;
 
@@ -144,12 +164,16 @@ impl platform::WindowManager for WindowManager {
         window_options: WindowOptions,
         callbacks: WindowCallbacks,
     ) -> Result<()> {
+        let style = window_options.style;
         self.event_loop_proxy.send_event(CustomEvent::OpenWindow {
             window_id,
             window_options,
         })?;
         self.windows
             .insert(window_id, Rc::new(super::window::Window::new(callbacks)));
+        self.window_ordering
+            .lock()
+            .note_window_created(window_id, style);
         Ok(())
     }
 
@@ -162,6 +186,7 @@ impl platform::WindowManager for WindowManager {
 
     fn remove_window(&mut self, window_id: WindowId) {
         self.windows.remove(&window_id);
+        self.window_ordering.lock().note_window_removed(window_id);
     }
 
     fn active_window_id(&self) -> Option<WindowId> {
@@ -216,6 +241,10 @@ impl platform::WindowManager for WindowManager {
             }
         }
 
+        if let Some(window_id) = next_active_window {
+            self.window_ordering.lock().move_to_front(window_id);
+        }
+
         next_active_window
     }
 
@@ -224,6 +253,7 @@ impl platform::WindowManager for WindowManager {
         if let Some(window) = self.windows.get(&window_id) {
             window.focus();
         }
+        self.window_ordering.lock().move_to_front(window_id);
     }
 
     fn hide_app(&self) {
@@ -236,6 +266,7 @@ impl platform::WindowManager for WindowManager {
         if let Some(window) = self.windows.get(&window_id) {
             window.set_visible(false);
         }
+        self.window_ordering.lock().note_window_hidden(window_id);
     }
 
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF) {
@@ -283,7 +314,7 @@ impl platform::WindowManager for WindowManager {
 
     fn active_display_bounds(&self) -> RectF {
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
+            if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 self.x11_manager
                     .as_ref()
                     .and_then(|x11_manager| match x11_manager.get_active_monitor() {
@@ -305,7 +336,7 @@ impl platform::WindowManager for WindowManager {
 
     fn active_display_id(&self) -> DisplayId {
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
+            if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 self.x11_manager
                     .as_ref()
                     .and_then(|x11_manager| match x11_manager.get_active_monitor() {
@@ -330,7 +361,7 @@ impl platform::WindowManager for WindowManager {
         // never invalidates the cache. We need to drop down to X11 directly to ensure we read a
         // fresh value.
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
+            if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 self.x11_manager
                     .as_ref()
                     .and_then(|x11_manager| x11_manager.list_monitor_bounds().ok())
@@ -347,7 +378,7 @@ impl platform::WindowManager for WindowManager {
 
     fn bounds_for_display_idx(&self, display_idx: DisplayIdx) -> Option<RectF> {
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
+            if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                 let idx = match display_idx {
                     DisplayIdx::Primary => 0,
                     DisplayIdx::External(idx) => idx + 1,
@@ -388,11 +419,34 @@ impl platform::WindowManager for WindowManager {
             .unwrap_or(false)
     }
 
+    fn ordered_window_ids(&self) -> Vec<WindowId> {
+        let mut window_ordering = self.window_ordering.lock();
+        // Winit has no native z-order API, so we maintain this list manually.
+        // Prune windows that have since been hidden.
+        window_ordering
+            .front_to_back_window_ids
+            .retain(|window_id| {
+                self.windows
+                    .get(window_id)
+                    .is_some_and(|window| window.is_visible())
+            });
+        // Keep the list current by promoting the focused window to the front.
+        // Skip when a PositionedNoFocus (drag preview) window is present: it
+        // was moved to the front on creation and must stay there so that
+        // `cross_window_attach_target` can find it at index 0.
+        if !window_ordering.has_positioned_no_focus_window() {
+            if let Some(active_window_id) = self.active_window_id() {
+                window_ordering.move_to_front(active_window_id);
+            }
+        }
+        window_ordering.front_to_back_window_ids.clone()
+    }
+
     fn os_window_manager_name(&self) -> Option<String> {
         self.os_window_manager_name
             .get_or_init(|| {
                 cfg_if::cfg_if! {
-                    if #[cfg(target_os = "linux")] {
+                    if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
                         get_os_window_manager_name_internal(self.x11_manager.as_ref())
                     } else {
                         None
@@ -403,12 +457,12 @@ impl platform::WindowManager for WindowManager {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub fn get_os_window_manager_name() -> Option<String> {
     get_os_window_manager_name_internal(x11::X11Manager::new().ok().as_ref())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn get_os_window_manager_name_internal(x11_manager: Option<&x11::X11Manager>) -> Option<String> {
     super::linux::look_for_wayland_compositor()
         .or_else(|| x11_manager.and_then(|manager| manager.os_window_manager_name().ok()))
@@ -416,7 +470,7 @@ fn get_os_window_manager_name_internal(x11_manager: Option<&x11::X11Manager>) ->
 
 fn is_tiling_window_manager(name: &str) -> bool {
     cfg_if::cfg_if! {
-        if #[cfg(target_os = "linux")] {
+        if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             super::linux::is_tiling_window_manager(name)
         } else {
             let _ = name;
@@ -428,7 +482,7 @@ fn is_tiling_window_manager(name: &str) -> bool {
 /// Some additional state we need to track in memory for integration tests.
 struct IntegrationTestAppState {
     /// A list of window IDs representing the order of visible windows, with
-    /// the frontmost window at the end of the list.
+    /// the frontmost window at the start of the list.
     window_id_stack: Vec<WindowId>,
 }
 
@@ -461,12 +515,13 @@ impl platform::WindowManager for IntegrationTestWindowManager {
         window_options: WindowOptions,
         callbacks: WindowCallbacks,
     ) -> Result<()> {
-        let window_will_be_focused = window_options.style != platform::WindowStyle::NotStealFocus;
+        let window_should_be_tracked = window_options.style != platform::WindowStyle::NotStealFocus;
         self.window_manager
             .open_window(window_id, window_options, callbacks)?;
-        if window_will_be_focused {
+        if window_should_be_tracked {
             let mut app_state = self.app_state.lock();
-            app_state.window_id_stack.push(window_id);
+            app_state.window_id_stack.retain(|id| *id != window_id);
+            app_state.window_id_stack.insert(0, window_id);
         }
         Ok(())
     }
@@ -481,7 +536,7 @@ impl platform::WindowManager for IntegrationTestWindowManager {
 
     fn active_window_id(&self) -> Option<WindowId> {
         self.app_is_active()
-            .then(|| self.app_state.lock().window_id_stack.last().cloned())
+            .then(|| self.app_state.lock().window_id_stack.first().cloned())
             .flatten()
     }
 
@@ -507,7 +562,7 @@ impl platform::WindowManager for IntegrationTestWindowManager {
 
         // Move the window to the top of the stack.
         app_state.window_id_stack.retain(|id| *id != window_id);
-        app_state.window_id_stack.push(window_id);
+        app_state.window_id_stack.insert(0, window_id);
     }
 
     fn hide_app(&self) {
@@ -582,6 +637,10 @@ impl platform::WindowManager for IntegrationTestWindowManager {
     fn is_tiling_window_manager(&self) -> bool {
         self.window_manager.is_tiling_window_manager()
     }
+
+    fn ordered_window_ids(&self) -> Vec<WindowId> {
+        self.app_state.lock().window_id_stack.clone()
+    }
 }
 
 fn window_level_for_style(style: WindowStyle) -> WindowLevel {
@@ -614,7 +673,7 @@ struct Inner {
     window: Arc<winit::window::Window>,
     #[cfg(windows)]
     is_cloaked: bool,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     gpu_power_preference: GPUPowerPreference,
     backend_preference: Option<wgpu::Backend>,
     rendering_resources: Option<RenderingResources>,
@@ -838,7 +897,7 @@ impl Window {
     }
 
     /// Drops the window's renderer and all associated resources.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     pub fn drop_renderer(&self, display_handle: Box<dyn wgpu::wgt::WgpuHasDisplayHandle>) {
         let mut inner = self.inner.borrow_mut();
         let Some(inner) = inner.as_mut() else {
@@ -855,7 +914,7 @@ impl Window {
     }
 
     /// Recreates the window's renderer and all associated resources.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
     pub fn recreate_renderer(&self, downrank_non_nvidia_vulkan_adapters: bool) {
         let mut inner = self.inner.borrow_mut();
         let Some(inner) = inner.as_mut() else {
@@ -1080,15 +1139,13 @@ impl Window {
     pub fn focus(&self) {
         if let Some(Inner { window, level, .. }) = self.inner.borrow().as_ref() {
             // Winit is a bit quirky here. Trying to focus a window which isn't visible will not
-            // make it visible. So, call `focus_window` if the window is visible, otherwise make it
-            // visible.
+            // make it visible. So, make it visible first if needed, then explicitly focus it.
             if window.is_visible().unwrap_or(true) {
                 window.set_minimized(false);
-                window.focus_window();
             } else {
-                // Setting visible to `true` will also focus it.
                 window.set_visible(true);
             }
+            window.focus_window();
             window.set_window_level(*level);
         }
     }
@@ -1186,8 +1243,7 @@ fn create_window(
     _window_class: &Option<String>,
     _tiling_window_manager: bool,
 ) -> Result<winit::window::Window> {
-    use winit::platform::web::WindowAttributesExtWebSys;
-    use winit::platform::web::WindowExtWebSys;
+    use winit::platform::web::{WindowAttributesExtWebSys, WindowExtWebSys};
 
     use crate::platform::current::add_prevent_default_listener;
 
@@ -1338,7 +1394,7 @@ fn create_window(
         FullscreenState::Normal => {}
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     if let Some(window_class) = _window_class.as_deref() {
         use winit::platform::x11::{WindowAttributesExtX11, WindowType};
 
@@ -1386,7 +1442,10 @@ fn create_window(
 
             // When launching a window from windows file explorer, it isn't given focus. We're considering
             // this a winit quirk and forcing it to be focused.
-            if window_options.style != WindowStyle::NotStealFocus {
+            if !matches!(
+                window_options.style,
+                WindowStyle::NotStealFocus | WindowStyle::PositionedNoFocus
+            ) {
                 window.focus_window();
             }
 

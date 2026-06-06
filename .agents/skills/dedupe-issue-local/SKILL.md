@@ -1,10 +1,10 @@
 ---
 name: dedupe-issue-local
 specializes: dedupe-issue
-description: Repo-specific dedupe guidance for warp-external. Only the categories declared overridable by the core dedupe-issue skill may be specialized here.
+description: Repo-specific dedupe guidance for warp. Only the categories declared overridable by the core dedupe-issue skill may be specialized here.
 ---
 
-# Repo-specific dedupe guidance for `warp-external`
+# Repo-specific dedupe guidance for `warp`
 
 This file is a companion to the core `dedupe-issue` skill. It does not
 redefine the duplicate-detection algorithm, the similarity thresholds,

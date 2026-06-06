@@ -13,9 +13,6 @@
 #   - EXECUTABLE_PATH: The path to the compiled executable we want to install.
 #   - BINARY_NAME: The name that the compiled executable should have on the target machine.
 #   - ARTIFACT: Which artifact to build: app or cli.
-#   - FEATURES: Comma-separated cargo features used to build the main binary.
-#                Used to invoke the settings schema generator with the same
-#                feature set so cargo can reuse compiled artifacts.
 
 set -e
 
@@ -47,8 +44,4 @@ if [[ "$ARTIFACT" == "app" ]]; then
 fi
 
 # Prepare the bundled resources directory.
-#
-# Pass FEATURES through so the settings schema generator builds with the same
-# feature set as the main binary; otherwise cargo will recompile any
-# dependencies whose enabled features differ.
-"$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "${TARGET_DIR}/${OPT_DIR}/resources" "$RELEASE_CHANNEL" "$CARGO_PROFILE" "$FEATURES"
+"$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "${TARGET_DIR}/${OPT_DIR}/resources" "$RELEASE_CHANNEL" "$CARGO_PROFILE"

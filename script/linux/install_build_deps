@@ -4,6 +4,8 @@
 
 set -e
 
+. "$PWD/script/warp_sudo"
+
 # Define some control sequences for text formatting.
 red="\033[0;31m"
 reset="\033[0m"
@@ -40,7 +42,7 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
     # Required by script/presubmit's clang-format check on C/C++/Obj-C sources.
     clang-format
   )
-  sudo apt-get install -y "${PACKAGES[@]}"
+  warp_sudo apt-get install -y "${PACKAGES[@]}"
 
   # Install a modern version of protoc. The apt 'protobuf-compiler' package on
   # Ubuntu 20.04 ships protoc 3.6.1, which is too old for proto3 'optional'
@@ -53,7 +55,7 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
   esac
   curl -fsSL -o /tmp/protoc.zip \
     "https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP}"
-  sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
+  warp_sudo unzip -o /tmp/protoc.zip -d /usr/local bin/protoc 'include/*'
   rm /tmp/protoc.zip
 else
   echo -e "⚠️  ${red}Unknown Linux distribution; necessary build dependencies may not be installed!${reset}"

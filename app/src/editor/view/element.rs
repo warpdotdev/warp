@@ -1,68 +1,57 @@
+use std::collections::HashMap;
+use std::ops::Range;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use std::{cmp, mem};
+
+use instant::Instant;
+use itertools::Itertools;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use smallvec::SmallVec;
+use vim::vim::{MotionType, VimMode};
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
+use warp_util::user_input::UserInput;
+use warpui::elements::{
+    AfterLayoutContext, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Element, Event, EventContext, Flex, LayoutContext, PaintContext, ParentElement, Point, Radius,
+    SizeConstraint, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+};
+use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
+use warpui::keymap::Keystroke;
+use warpui::platform::keyboard::KeyCode;
+use warpui::text_layout::{
+    self, ComputeBaselinePositionArgs, LayoutCache, DEFAULT_TOP_BOTTOM_RATIO,
+};
+use warpui::text_selection_utils::{
+    calculate_tick_width, create_newline_tick_rect, selection_crosses_newline_row_based,
+    NewlineTickParams,
+};
+use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, SingletonEntity, TaskId, ViewHandle};
+
 use super::super::soft_wrap::{
     ClampDirection, DisplayPointAndClampDirection, FrameLayouts, SoftWrapPoint, SoftWrapState,
 };
 use super::model::MarkedTextState;
-use super::snapshot::VOICE_INPUT_ICON_CURSOR_GAP;
+use super::snapshot::{ViewSnapshot, VOICE_INPUT_ICON_CURSOR_GAP};
 use super::{
-    position_id_for_cached_point, snapshot::ViewSnapshot, CursorColors, DisplayPoint,
-    DrawableSelection, EditorAction, ScrollState, SelectAction,
+    position_id_for_cached_point, position_id_for_cursor, CursorColors, DisplayPoint,
+    DrawableSelection, EditorAction, LocalDrawableSelectionData, ReplicaId, ScrollState,
+    SelectAction,
 };
-use super::{position_id_for_cursor, LocalDrawableSelectionData, ReplicaId};
 use crate::appearance::Appearance;
 use crate::editor::accept_autosuggestion_keybinding_view::{
     AcceptAutosuggestionKeybinding, AUTOSUGGESTION_HINT_MINIMUM_HEIGHT,
 };
 use crate::editor::autosuggestion_ignore_view::AutosuggestionIgnore;
 use crate::editor::position_id_for_first_cursor;
+use crate::editor::view::AutosuggestionLocation;
 use crate::settings::CursorDisplayType;
+use crate::themes::theme::Fill;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
-use itertools::Itertools;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
-use vim::vim::{MotionType, VimMode};
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
-use warp_util::user_input::UserInput;
-use warpui::event::KeyState;
-use warpui::text_selection_utils::{
-    calculate_tick_width, create_newline_tick_rect, selection_crosses_newline_row_based,
-    NewlineTickParams,
-};
-use warpui::ViewHandle;
-use warpui::{event::ModifiersState, text_layout::ComputeBaselinePositionArgs};
-
-use crate::editor::view::AutosuggestionLocation;
-use crate::themes::theme::Fill;
-use smallvec::SmallVec;
-use std::collections::HashMap;
-use std::{
-    cmp, mem,
-    ops::Range,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
-use warpui::{
-    elements::{
-        AfterLayoutContext, CornerRadius, Element, Event, EventContext, LayoutContext,
-        PaintContext, Point, SizeConstraint,
-    },
-    event::DispatchedEvent,
-    keymap::Keystroke,
-    text_layout::{self, LayoutCache, DEFAULT_TOP_BOTTOM_RATIO},
-    ui_components::components::UiComponent,
-    AppContext, SingletonEntity, TaskId,
-};
-
-use warpui::elements::{
-    ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, ParentElement, Text,
-};
-use warpui::platform::keyboard::KeyCode;
-
-use instant::Instant;
-use warpui::elements::{Radius, DEFAULT_UI_LINE_HEIGHT_RATIO};
 
 // Similar to the terminal::model::ansi::CursorShape, this Editor Element has different cursor
 // shapes. However, this element doesn't implement all the same variants, so we don't share that
@@ -1018,7 +1007,7 @@ impl EditorElement {
                         }
                         MarkedTextState::Inactive => selection.end.column() as usize,
                     };
-                    // Use baseline position to get to bottom of text line, then substract the font size to
+                    // Use baseline position to get to bottom of text line, then subtract the font size to
                     // get to top of text. We have the multipliers of default line height ratio and top bottom ratio
                     // to get to the "correct" spot above the normal characters within a font.
                     // Note that we don't want to start from top of line (don't want
@@ -2222,7 +2211,7 @@ struct LayoutState {
     // Will hold either the suggestion text or placeholder text or empty vector, if neither exist.
     // Suggestion text should take precedence.
     placeholder_suggestion_text_line_layouts: Vec<Arc<text_layout::Line>>,
-    // This contains the shorcut icon that shows new users how to accept the autosuggestion.
+    // This contains the shortcut icon that shows new users how to accept the autosuggestion.
     max_visible_line_width: f32,
     /// True if the `autoscroll_vertically` function on the editor view returns true
     /// and the soft wrap setting is off.

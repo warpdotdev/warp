@@ -3,10 +3,15 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use settings::macros::{define_settings_group, maybe_define_setting, register_settings_events};
+use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warp_core::features::FeatureFlag;
 use warp_core::report_if_error;
+use warp_graphql::mutations::update_user_settings::UpdateUserSettingsInput;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
+use super::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::auth::auth_state::AuthState;
 use crate::auth::AuthStateProvider;
@@ -18,15 +23,6 @@ use crate::server::server_api::auth::MockAuthClient;
 use crate::server::server_api::auth::{AuthClient, SyncedUserSettings};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::safe_mode_settings::SafeModeSettings;
-
-use settings::{
-    macros::{define_settings_group, maybe_define_setting, register_settings_events},
-    RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
-};
-
-use serde::{Deserialize, Serialize};
-
-use super::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::workspaces::workspace::EnterpriseSecretRegex;
 
 pub trait RegexDisplayInfo {
@@ -679,7 +675,14 @@ impl PrivacySettings {
             let snapshot = self.get_snapshot(ctx);
             let _ = ctx.spawn(
                 async move {
-                    let result = auth_client.update_user_settings(snapshot).await;
+                    let result = auth_client
+                        .update_user_settings(UpdateUserSettingsInput {
+                            telemetry_enabled: Some(snapshot.is_telemetry_enabled()),
+                            crash_reporting_enabled: Some(snapshot.is_crash_reporting_enabled()),
+                            cloud_conversation_storage_enabled: snapshot
+                                .cloud_conversation_storage_enabled(),
+                        })
+                        .await;
                     if let Err(err) = result {
                         report_error!(
                             err.context("Failed to update server with local privacy settings.")

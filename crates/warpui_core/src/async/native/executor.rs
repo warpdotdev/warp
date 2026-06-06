@@ -1,22 +1,17 @@
-use std::{
-    marker::PhantomData,
-    pin::Pin,
-    rc::Rc,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
-};
+use std::marker::PhantomData;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use async_executor::LocalExecutor;
-use futures::{
-    future::{BoxFuture, LocalBoxFuture},
-    Future, FutureExt,
-};
+use futures::future::{BoxFuture, LocalBoxFuture};
+use futures::{Future, FutureExt};
 use futures_util::future::{AbortHandle, Abortable};
 
-use crate::{platform, r#async::executor::Error};
+use crate::platform;
+use crate::r#async::executor::Error;
 
 pub type ForegroundTask = async_task::Task<()>;
 

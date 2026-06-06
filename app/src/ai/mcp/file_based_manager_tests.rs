@@ -1,20 +1,21 @@
-use super::{FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
-use crate::ai::mcp::FileMCPWatcher;
-use crate::ai::mcp::ParsedTemplatableMCPServerResult;
-use crate::auth::AuthStateProvider;
-use crate::settings::{AISettings, FocusedTerminalInfo};
-use crate::warp_managed_paths_watcher::{warp_data_dir, WarpManagedPathsWatcher};
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use repo_metadata::{
-    repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
-};
-use settings::Setting as _;
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
+use repo_metadata::RepoMetadataModel;
+use settings::Setting as _;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warpui::{App, Entity, ModelHandle, SingletonEntity as _};
 use watcher::HomeDirectoryWatcher;
+
+use super::{CloudEnvMcpScanServer, FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
+use crate::ai::mcp::{FileMCPWatcher, ParsedTemplatableMCPServerResult};
+use crate::auth::AuthStateProvider;
+use crate::settings::{AISettings, FocusedTerminalInfo};
+use crate::warp_managed_paths_watcher::{warp_managed_mcp_config_path, WarpManagedPathsWatcher};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 // Helper to initialize dependencies and return FileBasedMCPManager handle
 fn setup_app(app: &mut App) -> warpui::ModelHandle<FileBasedMCPManager> {
@@ -42,6 +43,14 @@ fn parse_mcp_json(json: &str) -> Vec<ParsedTemplatableMCPServerResult> {
 struct ManagerEvents {
     spawned_uuids: Vec<Uuid>,
     despawned_uuids: Vec<Uuid>,
+    scan_completions: Vec<ScanCompletion>,
+}
+
+#[derive(Clone, Debug)]
+struct ScanCompletion {
+    repo_path: PathBuf,
+    detected_servers: Vec<CloudEnvMcpScanServer>,
+    wait_server_uuids: Vec<Uuid>,
 }
 
 impl Entity for ManagerEvents {
@@ -63,8 +72,18 @@ fn subscribe_events(
                 me.despawned_uuids
                     .extend(installation_uuids.iter().copied());
             }
-            FileBasedMCPManagerEvent::PurgeCredentials { .. }
-            | FileBasedMCPManagerEvent::CloudEnvMcpScanComplete { .. } => {}
+            FileBasedMCPManagerEvent::PurgeCredentials { .. } => {}
+            FileBasedMCPManagerEvent::CloudEnvMcpScanComplete {
+                repo_path,
+                detected_servers,
+                wait_server_uuids,
+            } => {
+                me.scan_completions.push(ScanCompletion {
+                    repo_path: repo_path.clone(),
+                    detected_servers: detected_servers.clone(),
+                    wait_server_uuids: wait_server_uuids.clone(),
+                });
+            }
         });
     });
     events
@@ -255,28 +274,37 @@ fn test_update_file_based_servers_removes_unreferenced_servers() {
     });
 }
 
-/// A globally-scoped Warp installation always auto-spawns, regardless of the
-/// `file_based_mcp_enabled` toggle.
+/// A Warp-global installation detected from the managed `~/.warp*/.mcp.json`
+/// watcher uses the home directory as its logical root and still always
+/// auto-spawns.
 #[test]
-fn test_global_warp_server_always_spawns() {
+fn test_global_warp_server_from_managed_home_root_always_spawns() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-    let warp_root = warp_data_dir();
+    let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
+        return;
+    };
     let parsed = parse_mcp_json(r#"{"global-warp": {"command": "npx", "args": ["warp"]}}"#);
 
     App::test((), |mut app| async move {
         let manager = setup_app(&mut app);
         let events = subscribe_events(&mut app, &manager);
 
-        // Toggle is off by default; global Warp server should still spawn.
+        // Toggle is off by default; the watcher-produced Warp root should still
+        // be classified as the global Warp config and auto-spawn.
         manager.update(&mut app, |m, ctx| {
-            m.apply_parsed_servers(warp_root.clone(), MCPProvider::Warp, parsed, ctx);
+            m.apply_parsed_servers(
+                warp_mcp_config_path.root_path.clone(),
+                MCPProvider::Warp,
+                parsed,
+                ctx,
+            );
         });
 
         events.update(&mut app, |e, _| {
             assert_eq!(
                 e.spawned_uuids.len(),
                 1,
-                "Global Warp server should auto-spawn regardless of toggle"
+                "Managed Warp MCP config should auto-spawn regardless of toggle"
             );
         });
 
@@ -287,13 +315,12 @@ fn test_global_warp_server_always_spawns() {
         events.update(&mut app, |e, _| {
             assert!(
                 e.despawned_uuids.is_empty(),
-                "Global Warp server should never be despawned by toggle changes, got: {:?}",
+                "Managed Warp MCP config should never be despawned by toggle changes, got: {:?}",
                 e.despawned_uuids
             );
         });
     });
 }
-
 /// A globally-scoped non-Warp installation only auto-spawns when the toggle is on.
 #[test]
 fn test_global_non_warp_server_respects_toggle() {
@@ -400,6 +427,77 @@ fn test_project_scoped_servers_never_auto_spawn() {
                 e.despawned_uuids.is_empty(),
                 "Toggle flip must not despawn project-scoped servers, got: {:?}",
                 e.despawned_uuids
+            );
+        });
+    });
+}
+
+#[test]
+fn test_project_scoped_cloud_scan_has_detected_servers_but_empty_wait_set() {
+    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
+    let repo_path = PathBuf::from("/tmp/warp-test-cloud-repo");
+    let claude_parsed =
+        parse_mcp_json(r#"{"proj-claude": {"command": "npx", "args": ["proj-claude"]}}"#);
+    let warp_parsed = parse_mcp_json(r#"{"proj-warp": {"command": "npx", "args": ["proj-warp"]}}"#);
+
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let events = subscribe_events(&mut app, &manager);
+
+        manager.update(&mut app, |m, ctx| {
+            m.apply_parsed_servers(repo_path.clone(), MCPProvider::Claude, claude_parsed, ctx);
+            m.apply_parsed_servers(repo_path.clone(), MCPProvider::Warp, warp_parsed, ctx);
+            m.handle_cloud_environment_scan_complete(&repo_path, ctx);
+        });
+
+        events.update(&mut app, |e, _| {
+            assert_eq!(e.scan_completions.len(), 1);
+            let scan = &e.scan_completions[0];
+            assert_eq!(scan.repo_path, repo_path);
+            assert_eq!(scan.detected_servers.len(), 2);
+            assert!(
+                scan.wait_server_uuids.is_empty(),
+                "Project-scoped servers must not be included in the AgentDriver wait set, got: {:?}",
+                scan.wait_server_uuids
+            );
+            assert!(
+                scan.detected_servers
+                    .iter()
+                    .all(|server| !server.auto_start_eligible),
+                "Project-scoped servers should not be auto-start eligible: {:?}",
+                scan.detected_servers
+            );
+        });
+    });
+}
+
+#[test]
+fn test_auto_started_cloud_scan_uuids_are_in_wait_set() {
+    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
+    let Some(warp_mcp_config_path) = warp_managed_mcp_config_path() else {
+        return;
+    };
+    let root_path = warp_mcp_config_path.root_path;
+    let parsed = parse_mcp_json(r#"{"global-warp": {"command": "npx", "args": ["warp"]}}"#);
+
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let events = subscribe_events(&mut app, &manager);
+
+        manager.update(&mut app, |m, ctx| {
+            m.apply_parsed_servers(root_path.clone(), MCPProvider::Warp, parsed, ctx);
+            m.handle_cloud_environment_scan_complete(&root_path, ctx);
+        });
+
+        events.update(&mut app, |e, _| {
+            assert_eq!(e.spawned_uuids.len(), 1);
+            assert_eq!(e.scan_completions.len(), 1);
+            let scan = &e.scan_completions[0];
+            assert_eq!(scan.detected_servers.len(), 1);
+            assert_eq!(scan.wait_server_uuids, e.spawned_uuids);
+            assert!(
+                scan.detected_servers[0].auto_start_eligible,
+                "Global Warp server should be auto-start eligible"
             );
         });
     });

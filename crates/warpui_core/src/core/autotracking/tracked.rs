@@ -1,7 +1,8 @@
-use super::{track_read, track_update};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use super::{track_read, track_update};
 
 /// An autotracked value type
 ///

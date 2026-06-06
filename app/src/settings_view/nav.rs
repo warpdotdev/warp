@@ -1,18 +1,12 @@
+use pathfinder_geometry::vector::vec2f;
+use warpui::elements::{Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle};
+use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+
+use super::settings_page::{MatchData, NAV_ITEM_LEFT_MARGIN};
+use super::SettingsSection;
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;
-use pathfinder_geometry::vector::vec2f;
-use warpui::{
-    elements::{Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle},
-    ui_components::{
-        button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
-        components::{Coords, UiComponent, UiComponentStyles},
-    },
-};
-
-use super::{
-    settings_page::{MatchData, NAV_ITEM_LEFT_MARGIN},
-    SettingsSection,
-};
 
 /// The font size for subpage items inside an umbrella.
 const SUBPAGE_FONT_SIZE: f32 = 10.;

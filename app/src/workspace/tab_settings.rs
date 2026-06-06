@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
-};
+use settings::macros::define_settings_group;
+use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 use warp_core::ui::theme::AnsiColorIdentifier;
 
 #[derive(
@@ -268,6 +267,10 @@ impl HeaderToolbarChipSelection {
             Self::Default => HeaderToolbarItemKind::default_right(),
             Self::Custom { right, .. } => right.clone(),
         }
+    }
+
+    pub fn contains_item(&self, item: &super::header_toolbar_item::HeaderToolbarItemKind) -> bool {
+        self.left_items().contains(item) || self.right_items().contains(item)
     }
 }
 

@@ -1,18 +1,15 @@
-use pathfinder_geometry::rect::RectF;
-use std::{
-    collections::VecDeque,
-    fmt::{Display, Formatter},
-};
+use std::collections::VecDeque;
+use std::fmt::{Display, Formatter};
 
-use crate::{
-    geometry,
-    platform::{self, FullscreenState, TerminationMode, WindowFocusBehavior},
-    scene::{CornerRadius, Radius},
-    windowing, DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow,
-    SingletonEntity, WindowId,
-};
+use pathfinder_geometry::rect::RectF;
 
 use super::WindowCallbacks;
+use crate::platform::{self, FullscreenState, TerminationMode, WindowFocusBehavior};
+use crate::scene::{CornerRadius, Radius};
+use crate::{
+    geometry, windowing, DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow,
+    SingletonEntity, WindowId,
+};
 
 /// Description of the current stage in the lifecycle of the app.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -92,6 +89,14 @@ impl WindowManager {
 
     pub fn set_window_bounds(&self, window_id: WindowId, bound: RectF) {
         self.platform.set_window_bounds(window_id, bound)
+    }
+
+    /// Sets the per-window opacity, where `1.0` is fully opaque and `0.0` is fully
+    /// transparent. Cheap alternative to `hide_window` for cases where the window
+    /// only needs to disappear visually (e.g. tab drag preview) without changing
+    /// focus, key state, or z-order.
+    pub fn set_window_alpha(&self, window_id: WindowId, alpha: f32) {
+        self.platform.set_window_alpha(window_id, alpha)
     }
 
     pub fn cancel_synthetic_drag(&self, window_id: WindowId) {

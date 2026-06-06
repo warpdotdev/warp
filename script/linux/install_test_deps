@@ -4,6 +4,8 @@
 
 set -e
 
+. "$PWD/script/warp_sudo"
+
 # Define some control sequences for text formatting.
 red="\033[0;31m"
 reset="\033[0m"
@@ -23,15 +25,15 @@ if [[ "$(source /etc/os-release; echo $ID $ID_LIKE)" = *"debian"* ]]; then
     # We run vim in some integration tests to test the altscreen.
     vim
   )
-  sudo apt-get install -y "${PACKAGES[@]}"
+  warp_sudo apt-get install -y "${PACKAGES[@]}"
 
   # If gcloud is not already installed, install it so that we can run SSH integration tests.
   if [[ ! -x "$(command -v gcloud)" ]]; then
     echo "⬇️  Installing the gcloud CLI..."
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
-    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
-    sudo apt-get update -y
-    sudo apt-get install google-cloud-cli -y
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] http://packages.cloud.google.com/apt cloud-sdk main" | warp_sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | warp_sudo gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg
+    warp_sudo apt-get update -y
+    warp_sudo apt-get install google-cloud-cli -y
   fi
 else
   echo -e "⚠️  ${red}Unknown Linux distribution; necessary test dependencies may not be installed!${reset}"

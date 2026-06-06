@@ -16,6 +16,7 @@ use base64::Engine as _;
 use bounded_vec_deque::BoundedVecDeque;
 use pathfinder_geometry::vector::Vector2F;
 use rand::Rng;
+use tab_stops::TabStops;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
@@ -24,6 +25,7 @@ use warp_terminal::model::grid::cell;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::image_cache::{resize_dimensions, FitType};
 
+use super::{AbsolutePoint, FullGridClearBehavior, GridHandler, PerformResetGridChecks, TermMode};
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::event::Event;
 use crate::terminal::event_listener::ChannelEventListener;
@@ -43,10 +45,6 @@ use crate::terminal::model::kitty::{
 use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::{ClipboardType, SizeInfo};
-
-use super::{AbsolutePoint, GridHandler, PerformResetGridChecks, TermMode};
-
-use tab_stops::TabStops;
 
 const MAX_IMAGE_CELL_HEIGHT: u32 = 255;
 
@@ -410,7 +408,7 @@ impl ansi::Handler for GridHandler {
                 // the version `Pv` is higher than the `xterm` version when the SGR_MOUSE support
                 // was introduced[2] - version 277.
                 //
-                // Since we didn't want to claim xterm functionalities that we haven't yet implemnted in
+                // Since we didn't want to claim xterm functionalities that we haven't yet implemented in
                 // Warp, rather than passing the higher `Pv` value, we decided to use one of the
                 // hardcoded ones. `0;95;0` is set what iTerm2 sends.
 
@@ -848,6 +846,8 @@ impl ansi::Handler for GridHandler {
             ansi::ClearMode::All => {
                 if self.ansi_handler_state.is_alt_screen {
                     self.grid.region_mut(..).each(|cell| *cell = bg.into());
+                } else if self.full_grid_clear_behavior == FullGridClearBehavior::Clear {
+                    self.clear_visible_rows_in_place(bg);
                 } else {
                     self.clear_viewport();
                 }
@@ -1227,7 +1227,7 @@ impl ansi::Handler for GridHandler {
         self.maybe_scan_dirty_cells_for_secrets();
 
         if self.finished && self.num_lines_truncated() > 0 {
-            // Occassionally upon finishing the grid there are truncated rows that we have
+            // Occasionally upon finishing the grid there are truncated rows that we have
             // not yet accounted for.
             self.refilter_lines();
         } else {
@@ -1699,6 +1699,31 @@ impl GridHandler {
         for i in positions..self.visible_rows() {
             self.grid[i].reset(&template);
         }
+    }
+
+    fn clear_visible_rows_in_place(&mut self, bg: Color) {
+        self.grid.region_mut(..).each(|cell| *cell = bg.into());
+        let visible_start_row = self.history_size();
+        let visible_end_row = visible_start_row + self.visible_rows();
+        if visible_start_row < visible_end_row {
+            self.images.evict_image_ids_between_points_with_type(
+                AbsolutePoint::from_point(Point::new(visible_start_row, 0), self),
+                AbsolutePoint::from_point(Point::new(visible_end_row - 1, usize::MAX), self),
+                vec![ImageType::ITerm, ImageType::Kitty],
+            );
+            if self.columns() > 0 {
+                self.clear_secrets_in_range(
+                    Point::new(visible_start_row, 0)
+                        ..=Point::new(visible_end_row - 1, self.columns() - 1),
+                );
+            }
+        }
+        self.clear_displayed_rows_and_filter_matches();
+        if self.track_content_length {
+            self.bottommost_visible_content_row = self.bottommost_visible_content_row_backward();
+        }
+        self.ansi_handler_state.dirty_cells_range =
+            Point::new(visible_start_row, 0)..Point::new(visible_end_row, 0);
     }
 
     pub(in crate::terminal::model) fn disable_reset_grid_checks(&mut self) {

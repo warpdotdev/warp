@@ -243,7 +243,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         }
 
         # Clean up any completed warp jobs so they do not show up on the user's 'get-job'
-        # comands
+        # commands
         Warp-Clean-CompletedThread
 
         # Remove any instance of the 'Warp-Run-GeneratorCommand' call from the user's history
@@ -288,7 +288,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # 2. We need to make sure that we are calling the Application git, and not
     #    an alias or cmdlet named Git
     #
-    # NOTE: Inlining this call in the function has a weird side effect of outputing
+    # NOTE: Inlining this call in the function has a weird side effect of outputting
     #    an escape sequence '^[i'. Since it made it more convenient to have a wrapper
     #    function anyway, I have not investigated this, but in case someone is working
     #    on this in the future, beware attempting to inline this function.
@@ -386,7 +386,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         Warp-Disable-PSPrediction
     }
 
-    # Force use of the Inline PredictionViewStyle. The ListView style can occassionally cause some
+    # Force use of the Inline PredictionViewStyle. The ListView style can occasionally cause some
     # flickering when using Warp and it doesn't matter what the value of this setting is because
     # Warp has its own input editor.
     function Warp-Disable-PSPrediction {

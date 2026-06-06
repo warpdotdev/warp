@@ -80,8 +80,10 @@ const clientMutations = [
 const clientQueries = [
   'cloudObject',
   'codebaseContextConfig',
+  'freeAvailableModels',
   'getRelevantFragments',
   'rerankFragments',
+  'harnessAuthSecrets',
   'listWarpDevImages',
   'pricingInfo',
   'managedSecrets',
@@ -97,6 +99,7 @@ const clientQueries = [
   'getIntegrationsUsingEnvironment',
   'scheduledAgentHistory',
   'task',
+  'taskGitCredentials',
   'taskSecrets',
   'listAIConversations',
   'suggestCloudEnvironmentImage'

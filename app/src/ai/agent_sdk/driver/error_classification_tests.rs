@@ -99,6 +99,35 @@ fn environment_not_found_is_failed_with_resource_not_found() {
     );
 }
 
+#[test]
+fn conversation_harness_mismatch_is_failed_with_env_setup() {
+    let (state, update) = classify_driver_error(&AgentDriverError::ConversationHarnessMismatch {
+        conversation_id: "conv-123".into(),
+        expected: "claude".into(),
+        got: "oz".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    assert!(update.message.contains("conv-123"));
+    assert!(update.message.contains("--harness claude"));
+}
+
+#[test]
+fn conversation_resume_state_missing_is_failed_with_resource_not_found() {
+    let (state, update) =
+        classify_driver_error(&AgentDriverError::ConversationResumeStateMissing {
+            harness: "claude".into(),
+            conversation_id: "conv-123".into(),
+        });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::ResourceNotFound));
+    assert!(update.message.contains("conv-123"));
+    assert!(update.message.contains("claude"));
+}
+
 // --- ShareSessionFailed variants ---
 
 #[test]
@@ -152,4 +181,42 @@ fn conversation_blocked_is_blocked() {
     });
     assert_eq!(state, AgentTaskState::Blocked);
     assert!(update.message.contains("rm -rf /"));
+}
+
+// --- Harness auth preflight errors ---
+
+#[test]
+fn harness_auth_check_failed_is_failed_with_auth_required() {
+    let (state, update) = classify_driver_error(&AgentDriverError::HarnessAuthCheckFailed {
+        harness: "claude".into(),
+        detail: "exit code 1".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AuthenticationRequired)
+    );
+    assert!(update.message.contains("authentication check failed"));
+    assert!(update.message.contains("claude"));
+}
+
+// --- Runtime failure detection ---
+
+#[test]
+fn harness_runtime_failure_detected_is_failed_with_auth_required() {
+    let (state, update) = classify_driver_error(&AgentDriverError::HarnessRuntimeFailureDetected {
+        harness: "claude".into(),
+        pattern: "credit balance is too low".into(),
+        excerpt: "Error: Your credit balance is too low to make this request.".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AuthenticationRequired)
+    );
+    // The user-visible message must surface both the matched pattern and
+    // the excerpt so on-call/users have actionable context.
+    assert!(update.message.contains("claude"));
+    assert!(update.message.contains("credit balance is too low"));
+    assert!(update.message.contains("Your credit balance is too low"));
 }

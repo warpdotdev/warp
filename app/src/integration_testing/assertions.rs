@@ -1,17 +1,17 @@
-use crate::{
-    cloud_object::{
-        model::persistence::CloudModel, CloudObjectEventEntrypoint, CloudObjectLocation, Space,
-    },
-    network::{NetworkStatus, NetworkStatusKind},
-    server::{
-        cloud_objects::{listener::Listener, update_manager::UpdateManager},
-        ids::ClientId,
-    },
-    util::bindings::keybinding_name_to_display_string,
-    workflows::workflow::Workflow,
-    workspaces::{team::Team, user_workspaces::UserWorkspaces, workspace::Workspace},
-};
-use warpui::{async_assert, async_assert_eq, integration::TestStep, SingletonEntity};
+use warpui::integration::TestStep;
+use warpui::{async_assert, async_assert_eq, SingletonEntity};
+
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectEventEntrypoint, CloudObjectLocation, Space};
+use crate::network::{NetworkStatus, NetworkStatusKind};
+use crate::server::cloud_objects::listener::Listener;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::ClientId;
+use crate::util::bindings::keybinding_name_to_display_string;
+use crate::workflows::workflow::Workflow;
+use crate::workspaces::team::Team;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 
 fn set_and_assert_network_status(status: NetworkStatusKind) -> TestStep {
     TestStep::new("Set and assert network status")
@@ -67,6 +67,7 @@ pub fn join_a_workspace() -> TestStep {
                     teams: teams.clone(),
                     billing_metadata: Default::default(),
                     bonus_grants_purchased_this_month: Default::default(),
+                    billing_cycle_usage: None,
                     has_billing_history: false,
                     settings: Default::default(),
                     invite_code: Default::default(),

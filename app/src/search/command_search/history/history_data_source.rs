@@ -1,7 +1,9 @@
-use futures_lite::future::yield_now;
 use std::sync::Arc;
+
+use futures_lite::future::yield_now;
 use warpui::{AppContext, SingletonEntity};
 
+use super::HistorySearchItem;
 use crate::search::async_snapshot_data_source::AsyncSnapshotDataSource;
 use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::data_source::{Query, QueryResult};
@@ -10,8 +12,6 @@ use crate::settings::AISettings;
 use crate::terminal;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::HistoryEntry;
-
-use super::HistorySearchItem;
 
 pub(crate) struct HistorySnapshot {
     commands: Arc<[Arc<HistoryEntry>]>,

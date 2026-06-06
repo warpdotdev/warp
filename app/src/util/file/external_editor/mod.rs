@@ -1,4 +1,4 @@
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
@@ -40,10 +40,10 @@ pub const SUPPORTED_EDITORS: &[Editor] = &[
     Editor::Sublime3,
     #[cfg(target_os = "macos")]
     Editor::Sublime4,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", any(target_os = "linux", target_os = "freebsd")))]
     // Zed is available on macos and linux
     Editor::Zed,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", any(target_os = "linux", target_os = "freebsd")))]
     // Zed Preview is available on macos and linux
     Editor::ZedPreview,
     Editor::GoLand,
@@ -311,7 +311,7 @@ pub fn open_file_path_with_editor(
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
             mac::open_file_path_with_line_and_col(line_column_number, editor, &full_path, ctx);
-        } else if #[cfg(target_os = "linux")] {
+        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
             linux::open_file_path_with_line_and_col(line_column_number, editor, &full_path, ctx);
         } else if #[cfg(windows)]{
             windows::open_file_path_with_line_and_col(line_column_number, editor, &full_path, ctx);
@@ -322,5 +322,5 @@ pub fn open_file_path_with_editor(
 }
 
 #[cfg(test)]
-#[path = "mod_test.rs"]
+#[path = "mod_tests.rs"]
 mod tests;

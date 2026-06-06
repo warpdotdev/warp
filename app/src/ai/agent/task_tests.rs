@@ -1,5 +1,11 @@
 use std::collections::HashSet;
 
+use ai::skills::SkillPathOrigin;
+use chrono::Local;
+use prost_types::FieldMask;
+use warp_multi_agent_api as api;
+
+use super::{ExtractMessagesError, Task, TaskMessageContext};
 use crate::ai::agent::{
     AIAgentActionType, AIAgentExchange, AIAgentOutput, AIAgentOutputMessageType,
     AIAgentOutputStatus, MessageId, Shared,
@@ -8,11 +14,6 @@ use crate::ai::llms::LLMId;
 use crate::test_util::ai_agent_tasks::{
     create_api_subtask, create_api_task, create_message, create_subagent_tool_call_message,
 };
-use chrono::Local;
-use prost_types::FieldMask;
-use warp_multi_agent_api as api;
-
-use super::{ExtractMessagesError, Task};
 
 /// Creates a Task backed by server data from the given api::Task.
 fn create_server_task(api_task: api::Task) -> Task {
@@ -113,8 +114,11 @@ fn test_upsert_message_adds_start_agent_prompt_to_output() {
             "run tests",
         ),
         exchange_id,
-        None,
-        None,
+        TaskMessageContext {
+            current_todo_list: None,
+            active_code_review: None,
+            skill_path_origin: &SkillPathOrigin::Local,
+        },
         FieldMask {
             paths: vec!["message.tool_call".to_string()],
         },

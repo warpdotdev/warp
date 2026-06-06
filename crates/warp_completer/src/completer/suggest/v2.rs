@@ -2,11 +2,11 @@
 //! JS-compatible command signatures struct (crate::signatures::CommandSignature).
 use std::collections::HashMap;
 
+use super::{CompleterOptions, CompletionContext, MatchedSuggestion, SuggestionTypeName};
 use crate::completer::engine::{self, CompletionLocation};
 use crate::completer::LocationType;
-use crate::{parsers::ClassifiedCommand, signatures::Command};
-
-use super::{CompleterOptions, CompletionContext, MatchedSuggestion, SuggestionTypeName};
+use crate::parsers::ClassifiedCommand;
+use crate::signatures::Command;
 
 /// Returns a map of `SuggestionType` to vectors of `MatchedSuggestion`s for `input`.
 ///

@@ -1,10 +1,9 @@
-use std::{
-    collections::{HashMap, HashSet},
-    ops::Range,
-};
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+
+use handlebars::parser::{ParsedArgumentResult, ParsedArgumentsIterator};
 
 use crate::workflows::workflow::Argument;
-use handlebars::parser::{ParsedArgumentResult, ParsedArgumentsIterator};
 
 /// Represents arguments for workflow to be viewed and edited in ArgumentsEditorView.
 ///
@@ -201,5 +200,5 @@ impl ArgumentsState {
 }
 
 #[cfg(test)]
-#[path = "arguments_test.rs"]
+#[path = "arguments_tests.rs"]
 mod tests;

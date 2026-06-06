@@ -5,21 +5,20 @@
 //!
 //! For an example of basic usage, refer to the selectable UI sample.
 
-use super::SelectionFragment;
+use std::ops::Range;
+use std::sync::{Arc, Mutex};
+
+use lazy_static::lazy_static;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use string_offset::ByteOffset;
+
 use super::{
     AfterLayoutContext, AppContext, ColorU, Element, Event, EventContext, LayoutContext,
-    PaintContext, Point, SizeConstraint,
+    PaintContext, Point, SelectionFragment, SizeConstraint,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType};
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-
-use lazy_static::lazy_static;
-use std::ops::Range;
-use std::sync::Arc;
-use std::sync::Mutex;
-use string_offset::ByteOffset;
 
 /// A function that, given some content and a double-click index offset in that content,
 /// returns the resulting smart selection range.
@@ -671,6 +670,15 @@ impl Element for SelectableArea {
             if handled {
                 return true;
             }
+        }
+        if matches!(
+            event.raw_event(),
+            Event::LeftMouseDown { .. } | Event::RightMouseDown { .. }
+        ) && self
+            .z_index()
+            .is_some_and(|z_index| event.at_z_index(z_index, ctx).is_none())
+        {
+            return false;
         }
 
         match event.raw_event() {

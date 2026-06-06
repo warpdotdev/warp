@@ -6,7 +6,7 @@
 # destination directory. It is used by macOS and Linux build scripts.
 #
 # Usage:
-#   prepare_bundled_resources <destination_directory> [channel] [cargo_profile] [cargo_features] [cargo_target]
+#   prepare_bundled_resources <destination_directory> [channel] [cargo_profile]
 #
 # Arguments:
 #   destination_directory:  The directory where resources should be installed.
@@ -17,44 +17,29 @@
 #   cargo_profile:          (Optional) Cargo build profile to use when
 #                           generating the settings schema. Reusing the same
 #                           profile as the main build avoids recompiling deps.
-#   cargo_features:         (Optional) Comma-separated cargo features to
-#                           enable when generating the settings schema.
-#                           Should match the features used to build the main
-#                           binary so that cargo can reuse the existing
-#                           compilation artifacts (otherwise dependencies
-#                           gated behind those features will be recompiled).
-#                           Also ensures that feature-gated settings are
-#                           included in the generated schema.
-#   cargo_target:           (Optional) Rust target triple to pass via
-#                           --target. Should match the target used to build
-#                           the main binary, for the same reason as
-#                           cargo_features.
-#                           NOTE: only set this when the target can be
-#                           executed on the build host (e.g. when not
-#                           cross-compiling, or when running through a
-#                           supported emulator like Rosetta). `cargo run`
-#                           will attempt to execute the resulting binary,
-#                           and a binary built for an unrunnable target
-#                           will fail at this step.
 #
 # Environment variables:
 #   SKIP_SETTINGS_SCHEMA: Set to "1" to skip generating the JSON settings
 #                         schema. By default the schema is always generated
 #                         so that production bundles never accidentally omit it.
+#   SETTINGS_SCHEMA_CACHE: Path to a cache file for the generated schema.
+#                          When set, the first invocation generates the schema
+#                          and saves a copy to this path; subsequent invocations
+#                          copy from the cache instead of regenerating. This
+#                          avoids redundant compilations when bundling multiple
+#                          package formats for the same channel.
 
 set -e
 
-if [ $# -lt 1 ] || [ $# -gt 5 ]; then
-  echo "Error: Expected 1-5 arguments but received $#" >&2
-  echo "Usage: $0 <destination_directory> [channel] [cargo_profile] [cargo_features] [cargo_target]" >&2
+if [ $# -lt 1 ] || [ $# -gt 3 ]; then
+  echo "Error: Expected 1-3 arguments but received $#" >&2
+  echo "Usage: $0 <destination_directory> [channel] [cargo_profile]" >&2
   exit 1
 fi
 
 DEST_DIR="$1"
 CHANNEL="${2:-}"
 CARGO_PROFILE="${3:-}"
-CARGO_FEATURES="${4:-}"
-CARGO_TARGET="${5:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RESOURCES_SRC="$REPO_ROOT/resources"
@@ -145,29 +130,30 @@ fi
 # Generate settings JSON schema unless explicitly skipped.
 if [ "${SKIP_SETTINGS_SCHEMA:-}" != "1" ]; then
   SCHEMA_OUTPUT="$DEST_DIR/settings_schema.json"
-  echo "Generating settings schema at $SCHEMA_OUTPUT"
 
-  # Pass the same package, profile, features, and target as the main build
-  # so that cargo can reuse compilation artifacts (rather than recompiling
-  # any dependencies whose enabled features differ).  Also ensures that
-  # feature-gated settings are included in the generated schema.
-  SCHEMA_CMD=(cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -p warp)
-  if [ -n "$CARGO_PROFILE" ]; then
-    SCHEMA_CMD+=(--profile "$CARGO_PROFILE")
-  fi
-  if [ -n "$CARGO_FEATURES" ]; then
-    SCHEMA_CMD+=(--features "$CARGO_FEATURES")
-  fi
-  if [ -n "$CARGO_TARGET" ]; then
-    SCHEMA_CMD+=(--target "$CARGO_TARGET")
-  fi
-  SCHEMA_CMD+=(--bin generate_settings_schema --)
-  if [ -n "$CHANNEL" ]; then
-    SCHEMA_CMD+=(--channel "$CHANNEL")
-  fi
-  SCHEMA_CMD+=("$SCHEMA_OUTPUT")
+  if [ -n "${SETTINGS_SCHEMA_CACHE:-}" ] && [ -f "$SETTINGS_SCHEMA_CACHE" ]; then
+    echo "Copying cached settings schema to $SCHEMA_OUTPUT"
+    cp "$SETTINGS_SCHEMA_CACHE" "$SCHEMA_OUTPUT"
+  else
+    echo "Generating settings schema at $SCHEMA_OUTPUT"
 
-  "${SCHEMA_CMD[@]}"
+    SCHEMA_CMD=(cargo run)
+    if [ -n "$CARGO_PROFILE" ]; then
+      SCHEMA_CMD+=(--profile "$CARGO_PROFILE")
+    fi
+    SCHEMA_CMD+=(--manifest-path "$REPO_ROOT/Cargo.toml" --bin generate_settings_schema --)
+    if [ -n "$CHANNEL" ]; then
+      SCHEMA_CMD+=(--channel "$CHANNEL")
+    fi
+    SCHEMA_CMD+=("$SCHEMA_OUTPUT")
+
+    "${SCHEMA_CMD[@]}"
+
+    if [ -n "${SETTINGS_SCHEMA_CACHE:-}" ]; then
+      echo "Caching settings schema at $SETTINGS_SCHEMA_CACHE"
+      cp "$SCHEMA_OUTPUT" "$SETTINGS_SCHEMA_CACHE"
+    fi
+  fi
 fi
 
 echo "Successfully prepared bundled resources in $DEST_DIR"

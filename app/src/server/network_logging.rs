@@ -5,7 +5,6 @@ use chrono::{DateTime, FixedOffset};
 use enclose::enclose;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::server::datetime_ext::DateTimeExt;
 use crate::server::server_api::ServerApiProvider;
 
 /// Maximum number of network log items retained in memory. Matches the
@@ -101,7 +100,7 @@ pub(super) fn init<'a>(
                 if let Err(e) = tx.try_send(NetworkLogItem::request(
                     request,
                     serialized_payload.clone(),
-                    DateTime::now(),
+                    chrono::Local::now().fixed_offset(),
                 )) {
                     log::error!(
                         "Error sending request from http client to logging task: {e}"
@@ -112,7 +111,7 @@ pub(super) fn init<'a>(
 
         client.set_after_response_fn(Box::new(enclose!((tx) move |response| {
             if !tx.is_closed() {
-                if let Err(e) = tx.try_send(NetworkLogItem::response(response, DateTime::now())) {
+                if let Err(e) = tx.try_send(NetworkLogItem::response(response, chrono::Local::now().fixed_offset())) {
                     log::error!("Error sending request from http client to logging task: {e}");
                 }
             }

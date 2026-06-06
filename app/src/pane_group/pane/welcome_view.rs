@@ -10,17 +10,17 @@ use warpui::elements::{
 };
 use warpui::keymap::EditableBinding;
 use warpui::platform::FilePickerConfiguration;
-use warpui::ViewHandle;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext, WindowId,
+    ViewContext, ViewHandle, WindowId,
 };
 
 use crate::code_review::diff_state::GitDeltaPreference;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::pane_group::focus_state::PaneFocusHandle;
+use crate::pane_group::pane::view;
 use crate::pane_group::{
-    pane::view, BackingView, NewTerminalOptions, PaneConfiguration, PaneEvent, PanesLayout,
+    BackingView, NewTerminalOptions, PaneConfiguration, PaneEvent, PanesLayout,
 };
 use crate::projects::ProjectManagementModel;
 use crate::search::binding_source::BindingSource;

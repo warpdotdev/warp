@@ -1,4 +1,4 @@
-use warpui::color::ColorU;
+use warpui_core::color::ColorU;
 
 use self::contrast::{high_enough_contrast, pick_constrasting_color, MinimumAllowedContrast};
 
@@ -78,7 +78,7 @@ pub fn darken(c: ColorU) -> ColorU {
 
 /// Finds a ligher version of the given color using LIGHTEN_COLORU_SHADE_FACTOR form factor.
 pub fn lighten(c: ColorU) -> ColorU {
-    // aplying the shade factor only to the difference between 255 and channel
+    // applying the shade factor only to the difference between 255 and channel
     // (doing so to the actual channel value could produce incorrect results
     // since channels are capped at 255 value).
     let r = ((OPAQUE - c.r) as f32 * LIGHTEN_COLORU_SHADE_FACTOR).ceil() as u8;

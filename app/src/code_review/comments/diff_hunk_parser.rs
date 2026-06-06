@@ -4,13 +4,10 @@ use ai::agent::action::CommentSide;
 use num_traits::SaturatingSub;
 use warp_editor::render::model::LineCount;
 
-use crate::{
-    code::editor::line::EditorLineLocation,
-    code_review::{
-        comments::LineDiffContent,
-        diff_state::{DiffLineType, DiffStateModel},
-    },
-};
+use crate::code::editor::line::EditorLineLocation;
+use crate::code_review::comments::LineDiffContent;
+use crate::code_review::diff_state::DiffLineType;
+use crate::util::git::parse_unified_diff_header;
 
 #[derive(Debug)]
 pub(crate) enum DiffHunkParseError {
@@ -89,7 +86,7 @@ fn get_diff_line_from_diff_hunk(
     let diff_hunk_header = parsed_lines
         .first()
         .ok_or(DiffHunkParseError::EmptyHunk)
-        .and_then(|line| DiffStateModel::parse_unified_diff_header(line).map_err(Into::into))?;
+        .and_then(|line| parse_unified_diff_header(line).map_err(Into::into))?;
 
     let mut index_in_file = match side {
         CommentSide::Left => diff_hunk_header.old_start_line,

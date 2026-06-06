@@ -92,30 +92,35 @@ if ("$CHANNEL" -eq 'local') {
     $WARP_BIN = 'warp'
     $BINARY_NAME = 'warp.exe'
     $APP_NAME = 'WarpLocal'
-    $FEATURES = "$FEATURES,nld_improvements"
 } elseif ("$CHANNEL" -eq 'dev') {
     $WARP_BIN = 'dev'
     $BINARY_NAME = 'dev.exe'
     $APP_NAME = 'WarpDev'
-    $FEATURES = "$FEATURES,agent_mode_debug,nld_improvements"
+    $FEATURES = "$FEATURES,agent_mode_debug"
 } elseif ("$CHANNEL" -eq 'preview') {
     $WARP_BIN = 'preview'
     $BINARY_NAME = 'preview.exe'
     $APP_NAME = 'WarpPreview'
-    $FEATURES = "$FEATURES,preview_channel,nld_improvements"
+    $FEATURES = "$FEATURES,preview_channel"
 } elseif ("$CHANNEL" -eq 'stable') {
     $WARP_BIN = 'stable'
     $BINARY_NAME = 'warp.exe'
     $APP_NAME = 'Warp'
-    # TODO(vorporeal): Remove this once we get tests passing with this default enabled.
-    $FEATURES = "$FEATURES,nld_improvements"
 } elseif ("$CHANNEL" -eq 'oss') {
     $WARP_BIN = 'warp-oss'
     $BINARY_NAME = 'warp-oss.exe'
     $APP_NAME = 'WarpOss'
     # The OSS channel does not ship Sentry, so drop the crash_reporting feature
     # (which would otherwise pull in the Sentry SDK as a dependency).
-    $FEATURES = 'release_bundle,gui,nld_improvements'
+    $FEATURES = 'release_bundle,gui'
+}
+
+if (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
+    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
+} elseif ("$CHANNEL" -eq 'preview') {
+    $FEATURES = "$FEATURES,nld_classifier_v2,nld_heuristic_v2"
+} else {
+    $FEATURES = "$FEATURES,nld_classifier_v1,nld_heuristic_v1"
 }
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
@@ -180,23 +185,7 @@ Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 # Prepare bundled resources
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
 Write-Output "Preparing bundled resources..."
-# Only forward --target to the schema generator when the build target is
-# runnable on the host; otherwise `cargo run` would try to execute a
-# cross-compiled binary (e.g. aarch64-pc-windows-msvc on an x64 runner)
-# and fail.
-if ($env:PROCESSOR_ARCHITECTURE -eq 'AMD64') {
-    $HOST_TARGET = 'x86_64-pc-windows-msvc'
-} elseif ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
-    $HOST_TARGET = 'aarch64-pc-windows-msvc'
-} else {
-    $HOST_TARGET = ''
-}
-if ($PLATFORM_TARGET -eq $HOST_TARGET) {
-    $SCHEMA_CARGO_TARGET = $PLATFORM_TARGET
-} else {
-    $SCHEMA_CARGO_TARGET = ''
-}
-& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE" -CargoFeatures "$FEATURES" -CargoTarget "$SCHEMA_CARGO_TARGET"
+& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
 if (-Not $?) {
     Write-Error "Failed to prepare bundled resources"
     exit 1

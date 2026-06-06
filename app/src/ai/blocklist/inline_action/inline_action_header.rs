@@ -1,26 +1,23 @@
-use pathfinder_color::ColorU;
 use std::borrow::Cow;
 use std::rc::Rc;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors};
-use warpui::{
-    elements::{
-        Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
-        EventHandler, Expanded, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
-        MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, SizeConstraintCondition,
-        SizeConstraintSwitch, Text,
-    },
-    fonts::FamilyId,
-    platform::Cursor,
-    AppContext, Element, EventContext, SingletonEntity,
-};
 
-use crate::{
-    ai::blocklist::inline_action::inline_action_icons::icon_size,
-    ui_components::blended_colors,
-    view_components::compactible_action_button::{
-        render_compact_and_regular_button_rows, render_expansion_icon,
-        RenderCompactibleActionButton,
-    },
+use pathfinder_color::ColorU;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult,
+    EventHandler, Expanded, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch, Text,
+};
+use warpui::fonts::FamilyId;
+use warpui::platform::Cursor;
+use warpui::{AppContext, Element, EventContext, SingletonEntity};
+
+use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
+use crate::ui_components::blended_colors;
+use crate::view_components::compactible_action_button::{
+    render_compact_and_regular_button_rows, render_expansion_icon, RenderCompactibleActionButton,
 };
 
 /// Same padding constants as the original for consistency

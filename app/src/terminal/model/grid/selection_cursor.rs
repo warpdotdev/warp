@@ -1,8 +1,8 @@
 use warp_terminal::model::grid::CellType;
 
+use super::grid_handler::GridHandler;
+use super::{CursorDirection, CursorState, Dimensions as _};
 use crate::terminal::model::index::Point;
-
-use super::{grid_handler::GridHandler, CursorDirection, CursorState, Dimensions as _};
 
 /// A structure to help with movement of the cursor for keyboard-driven
 /// text selection.

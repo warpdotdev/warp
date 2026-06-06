@@ -7,7 +7,7 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    reviewers:
+    assignees:
       - "warpdotdev/tech-leads"
     registries:
       - github-private
@@ -17,7 +17,7 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    reviewers:
+    assignees:
       - "warpdotdev/tech-leads"
     cooldown:
       # Don't update to any action release that is less than two weeks old.

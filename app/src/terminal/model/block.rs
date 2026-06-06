@@ -1,81 +1,69 @@
 mod interaction_mode;
 mod serialized_block;
 
-pub use interaction_mode::*;
-pub use serialized_block::*;
-use warp_core::features::FeatureFlag;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::io;
+use std::iter::DoubleEndedIterator;
+use std::num::NonZeroUsize;
+use std::ops::{Range, RangeInclusive};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
+use chrono::{DateTime, Duration, FixedOffset, Local};
+use enum_iterator::all;
+use hex;
+use instant::Instant;
+pub use interaction_mode::*;
+use lazy_static::lazy_static;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::Vector2F;
+pub use serialized_block::*;
+use warp_core::command::ExitCode;
+use warp_core::features::FeatureFlag;
+use warp_terminal::model::grid::Dimensions as _;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warp_util::path::user_friendly_path;
+use warpui::r#async::executor::Background;
+use warpui::record_trace_event;
+use warpui::units::{IntoLines, Lines};
+
+use super::bootstrap::BootstrapStage;
+use super::find::RegexDFAs;
 use super::grid::grid_handler::{GridHandler, PerformResetGridChecks};
 use super::grid::{Cursor, RespectDisplayedOutput};
-use super::header_grid::HeaderGrid;
-use super::header_grid::PromptEndPoint;
+use super::header_grid::{HeaderGrid, PromptEndPoint};
 use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::secrets::RespectObfuscatedSecrets;
 use super::selection::ScrollDelta;
 use super::session::{command_executor, Sessions};
 pub use super::BlockId;
-use super::{bootstrap::BootstrapStage, find::RegexDFAs};
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::blocklist::agent_view::{AgentViewDisplayMode, AgentViewState};
-use crate::{
-    ai::agent::redaction::redact_secrets,
-    context_chips::prompt_snapshot::PromptSnapshot,
-    server::{block::DisplaySetting, ids::SyncId},
-    terminal::{
-        block_filter::BlockFilterQuery,
-        block_list_element::GridType,
-        event::{
-            BlockCompletedEvent, BlockLatencyData, BlockMetadataReceivedEvent, BlockType, Event,
-            UserBlockCompleted,
-        },
-        event_listener::ChannelEventListener,
-        model::{
-            ansi::{self, PrecmdValue, PreexecValue, Processor},
-            blockgrid::BlockGrid,
-            grid::grid_handler::TermMode,
-            index::{Point, VisibleRow},
-            iterm_image::ITermImage,
-            secrets::ObfuscateSecrets,
-            session::SessionId,
-            terminal_model::{BlockIndex, WithinBlock},
-            GridStorage,
-        },
-        shell::ShellType,
-        view::WithinBlockBanner,
-        BlockPadding, ShellHost, SizeInfo,
-    },
+use crate::context_chips::prompt_snapshot::PromptSnapshot;
+use crate::server::block::DisplaySetting;
+use crate::server::ids::SyncId;
+use crate::terminal::block_filter::BlockFilterQuery;
+use crate::terminal::block_list_element::GridType;
+use crate::terminal::event::{
+    BlockCompletedEvent, BlockLatencyData, BlockMetadataReceivedEvent, BlockType,
+    BlockWorkingDirectoryUpdatedEvent, Event, UserBlockCompleted,
 };
-
-use chrono::{DateTime, Duration, FixedOffset, Local};
-use hex;
-use instant::Instant;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::Vector2F;
-use warp_core::command::ExitCode;
-use warp_terminal::model::grid::Dimensions as _;
-use warp_util::path::user_friendly_path;
-use warpui::units::{IntoLines, Lines};
-use warpui::{r#async::executor::Background, record_trace_event};
-
-use enum_iterator::all;
-use lazy_static::lazy_static;
-use std::collections::HashMap;
-use std::ops::Range;
-use std::{
-    borrow::Cow,
-    collections::HashSet,
-    io,
-    iter::DoubleEndedIterator,
-    num::NonZeroUsize,
-    ops::RangeInclusive,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::model::ansi::{self, PrecmdValue, PreexecValue, Processor};
+use crate::terminal::model::blockgrid::BlockGrid;
+use crate::terminal::model::grid::grid_handler::TermMode;
+use crate::terminal::model::index::{Point, VisibleRow};
+use crate::terminal::model::iterm_image::ITermImage;
+use crate::terminal::model::secrets::ObfuscateSecrets;
+use crate::terminal::model::session::SessionId;
+use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
+use crate::terminal::model::GridStorage;
+use crate::terminal::shell::ShellType;
+use crate::terminal::view::WithinBlockBanner;
+use crate::terminal::{BlockPadding, ShellHost, SizeInfo};
 
 pub const LONG_RUNNING_COMMAND_DURATION_MS: u64 = 50;
 pub const LONG_RUNNING_BOTTOM_PADDING_LINES: f32 = 0.2;
@@ -376,7 +364,7 @@ pub struct Block {
     /// this is None.
     cloud_workflow_id: Option<SyncId>,
 
-    /// If the command inluded an env var invocation. If not this will be None.
+    /// If the command included an env var invocation. If not this will be None.
     cloud_env_var_collection_id: Option<SyncId>,
 
     /// The last time this block was painted (i.e.: visible in the window),
@@ -399,6 +387,9 @@ pub struct Block {
     /// If `true`, the output grid should not be rendered.
     should_hide_output_grid: bool,
 
+    /// If `true`, the prompt+command grid should not be rendered.
+    should_hide_command_grid: bool,
+
     /// [`Self::linefeed`] may discard some linefeeds at the beginning of the prompt. Doing so will
     /// alter the row numbers for [`Self::goto`] and [`Self::goto_line`] when ConPTY is involved. We
     /// track the count of discarded newlines here in order to correct the row number.
@@ -420,6 +411,8 @@ pub struct Block {
     ///
     /// This is used for debugging UI shown in the block header on dogfood builds.
     nld_overridden: bool,
+
+    visible_bootstrap_block_event_sent: bool,
 }
 
 #[cfg(debug_assertions)]
@@ -1007,6 +1000,7 @@ impl Block {
             has_received_user_input: false,
             hidden: false,
             should_hide_output_grid: false,
+            should_hide_command_grid: false,
             leading_linefeeds_ignored: 0,
             is_ai_ugc_telemetry_enabled,
             restored_block_was_local: None,
@@ -1016,6 +1010,7 @@ impl Block {
             },
             nld_overridden: false,
             is_oz_environment_startup_command: false,
+            visible_bootstrap_block_event_sent: false,
         }
     }
 
@@ -1102,6 +1097,10 @@ impl Block {
         self.output_grid.set_trim_trailing_blank_rows(trim);
     }
 
+    pub(in crate::terminal) fn enable_full_grid_clear_behavior(&mut self) {
+        self.output_grid.enable_full_grid_clear_behavior();
+    }
+
     pub fn set_restored_block_was_local(&mut self, was_local: bool) {
         debug_assert!(
             self.bootstrap_stage == BootstrapStage::RestoreBlocks,
@@ -1180,13 +1179,6 @@ impl Block {
             self.start_ts = Some(Local::now());
         }
 
-        // If we are in script execution stage and the shell starts a new block,
-        // this means we have a visible bootstrap block.
-        if self.bootstrap_stage() == BootstrapStage::ScriptExecution {
-            self.event_proxy
-                .send_terminal_event(Event::VisibleBootstrapBlock);
-        }
-
         self.header_grid.start_command_grid();
         self.wakeup_after_delay();
     }
@@ -1241,7 +1233,7 @@ impl Block {
         self.wakeup_after_delay();
     }
 
-    fn disable_reset_grid_checks(&mut self) {
+    pub(super) fn disable_reset_grid_checks(&mut self) {
         self.header_grid.disable_reset_grid_checks();
         self.output_grid.disable_reset_grid_checks();
     }
@@ -1485,8 +1477,16 @@ impl Block {
         self.should_hide_output_grid = should_hide;
     }
 
-    /// Returns true iff this block should be used as a scrollback block
-    /// in a shared session context. Note the active block is included in scrollback to get the active prompt.
+    pub fn should_hide_command_grid(&self) -> bool {
+        self.should_hide_command_grid
+    }
+
+    pub fn set_should_hide_command_grid(&mut self, should_hide: bool) {
+        self.should_hide_command_grid = should_hide;
+    }
+
+    /// Returns true iff this block should be used as a scrollback block in a shared session context.
+    /// The active block is included when it is eligible so viewers can restore the active prompt.
     pub fn is_scrollback_block_for_shared_session(
         &self,
         agent_view_state: &AgentViewState,
@@ -1511,9 +1511,11 @@ impl Block {
             Lines::zero()
         } else {
             self.block_banner_height()
-                + self.padding_top()
-                + self.prompt_and_command_height()
-                + self.padding_middle()
+                + if self.should_hide_command_grid {
+                    Lines::zero()
+                } else {
+                    self.padding_top() + self.prompt_and_command_height() + self.padding_middle()
+                }
                 + if self.should_hide_output_grid {
                     Lines::zero()
                 } else {
@@ -1706,9 +1708,18 @@ impl Block {
         self.state == BlockState::Executing
     }
 
+    fn is_empty_pre_bootstrap_block(&self) -> bool {
+        !self.bootstrap_stage.is_done()
+            && self.command_should_show_as_empty_when_finished()
+            && self.output_grid.should_show_as_empty_when_finished()
+    }
+
     /// Whether a command is long running.
     /// We use this to determine whether to hide the input box.
     pub fn is_active_and_long_running(&self) -> bool {
+        if self.is_empty_pre_bootstrap_block() {
+            return false;
+        }
         // Use the command grid start time by default (which should be earlier)
         // than the output grid start time.  If for some reason there isn't a
         // command grid start time, then fall back to the start time of the output
@@ -1932,11 +1943,20 @@ impl Block {
         self.bootstrap_stage
     }
 
+    pub(super) fn should_emit_visible_bootstrap_block_event(&self) -> bool {
+        self.bootstrap_stage == BootstrapStage::ScriptExecution
+            && !self.visible_bootstrap_block_event_sent
+    }
+
+    pub(super) fn mark_visible_bootstrap_block_event_sent(&mut self) {
+        self.visible_bootstrap_block_event_sent = true;
+    }
+
     /// Returns the ENTIRE HEIGHT of the prompt and command (no padding top or middle included).
     /// In the case of combined grid: for Warp prompt, this includes the height of both the Warp prompt
     /// AND combined grid; for PS1, this is just the combined grid (PS1 is included there).
     pub fn prompt_and_command_height(&self) -> Lines {
-        if !self.ready_to_render() {
+        if !self.ready_to_render() || self.should_hide_command_grid {
             Lines::zero()
         } else if self.header_grid.honor_ps1 {
             // No padding between prompt and command in the case of PS1 (combined grid).
@@ -2443,7 +2463,19 @@ impl Block {
     }
 
     pub fn formatted_duration_string(&self) -> Option<String> {
-        self.duration().map(Self::format_duration)
+        self.duration()
+            .or_else(|| self.elapsed_duration_whole_secs())
+            .map(Self::format_duration)
+    }
+
+    /// Returns true if this block's formatted duration string is a live elapsed counter
+    /// (i.e. `formatted_duration_string()` will return a value derived from `elapsed_duration()`
+    /// rather than the final `duration()`).
+    ///
+    /// This is kept in lock-step with `elapsed_duration()` so the view layer can decide
+    /// whether to wrap the duration in a periodically-repainting element.
+    pub fn is_duration_live(&self) -> bool {
+        self.elapsed_duration_whole_secs().is_some()
     }
 
     pub fn format_duration(duration: Duration) -> String {
@@ -2662,6 +2694,30 @@ impl Block {
                 let duration = end.signed_duration_since(start);
                 (duration > Duration::zero()).then_some(duration)
             })
+    }
+
+    /// Returns the elapsed duration since the command started executing, rounded down
+    /// to the nearest second.
+    ///
+    /// Returns `Some` only when the block is actively executing (has `start_ts`,
+    /// no `completed_ts`, and `is_executing()`). Rounding to whole seconds keeps the
+    /// formatted duration string stable between one-second repaint ticks so that
+    /// unrelated `ctx.notify` calls (e.g. when the user interacts with the block)
+    /// don't cause the counter to flicker sub-second values.
+    pub fn elapsed_duration_whole_secs(&self) -> Option<Duration> {
+        self.elapsed_duration_whole_secs_at(Local::now())
+    }
+
+    /// Testable helper behind `elapsed_duration()` that takes an explicit `now`.
+    fn elapsed_duration_whole_secs_at(&self, now: DateTime<Local>) -> Option<Duration> {
+        if self.completed_ts.is_some() || !self.is_executing() {
+            return None;
+        }
+        self.start_ts.and_then(|start| {
+            let elapsed = now.signed_duration_since(start);
+            let whole_secs = elapsed.num_seconds();
+            (whole_secs > 0).then(|| Duration::seconds(whole_secs))
+        })
     }
 
     pub fn git_branch(&self) -> Option<&String> {
@@ -3211,6 +3267,36 @@ impl ansi::Handler for Block {
         delegate!(self.text_area_size_chars(writer));
     }
 
+    fn set_current_working_directory(&mut self, path: String) {
+        if self.pwd.as_deref() == Some(path.as_str()) {
+            return;
+        }
+        self.pwd = Some(path);
+        // Use a dedicated event variant rather than `BlockMetadataReceived`
+        // because the latter is implicitly contracted to fire once per block
+        // (at precmd) and a number of subscribers rely on that — see e.g.
+        // the requested-command finish detector in
+        // `ai/blocklist/action_model/execute/shell_command.rs`. Subscribers
+        // that genuinely care about CWD changes opt in by also listening to
+        // `BlockWorkingDirectoryUpdated`.
+        self.event_proxy
+            .send_terminal_event(Event::BlockWorkingDirectoryUpdated(
+                BlockWorkingDirectoryUpdatedEvent {
+                    block_metadata: self.metadata(),
+                    block_index: self.block_index,
+                    // Preserve the block's in-band status so listeners can keep
+                    // applying the same in-band guard they apply to precmd-driven
+                    // metadata updates (e.g. skipping repo-detection / chip
+                    // refreshes for in-band command blocks).
+                    is_for_in_band_command: self.is_for_in_band_command,
+                    is_done_bootstrapping: matches!(
+                        self.bootstrap_stage,
+                        BootstrapStage::PostBootstrapPrecmd
+                    ),
+                },
+            ));
+    }
+
     fn precmd(&mut self, data: PrecmdValue) {
         record_trace_event!("command_execution:block:precmd");
         let is_after_in_band_command = data.was_sent_after_in_band_command();
@@ -3323,5 +3409,5 @@ impl ansi::Handler for Block {
 }
 
 #[cfg(test)]
-#[path = "block_test.rs"]
+#[path = "block_tests.rs"]
 mod tests;

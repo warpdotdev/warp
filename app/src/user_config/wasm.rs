@@ -3,6 +3,7 @@ use std::path::Path;
 use warpui::ModelContext;
 
 use crate::launch_configs::launch_config::LaunchConfig;
+use crate::tab_configs::{TabConfig, TabConfigError};
 use crate::themes::theme::WarpThemeConfig;
 use crate::workflows::workflow::Workflow;
 
@@ -37,5 +38,12 @@ pub fn load_workflows(_workflow_path: &Path) -> Vec<Workflow> {
 pub fn load_launch_configs(_launch_config_path: &Path) -> Vec<LaunchConfig> {
     // There's no local filesystem for wasm, so we'll never be able to retrieve
     // launch configs from any path.
+    Default::default()
+}
+
+/// Loads all tab configs relative to the `tab_config_path`.
+pub(crate) fn load_tab_configs(_tab_config_path: &Path) -> (Vec<TabConfig>, Vec<TabConfigError>) {
+    // There's no local filesystem for wasm, so we'll never be able to retrieve
+    // tab configs from any path.
     Default::default()
 }

@@ -1,36 +1,38 @@
-use itertools::Itertools;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+use itertools::Itertools;
+use ui_components::lightbox::{LightboxImage, LightboxImageSource};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warpui::assets::asset_cache::AssetSource;
-use warpui::App;
+use warpui::elements::{Empty, MouseStateHandle};
+use warpui::{App, Element};
 
 #[cfg(feature = "local_fs")]
 use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
 use super::{
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
-    inline_image_source_label, lightbox_trigger_for_section, query_prefix_highlight_len,
+    image_tooltip_handles_for_group, inline_image_source_label,
+    is_supported_blocklist_image_source, lightbox_trigger_for_section, query_prefix_highlight_len,
     render_scrollable_collapsible_content, text_sections_with_indices, CollapsibleElementState,
     CollapsibleExpansionState, VisualMarkdownLightboxCollection,
 };
-use crate::{
-    ai::agent::{
-        AIAgentInput, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
-        AgentOutputMermaidDiagram, MessageId, UserQueryMode,
-    },
-    features::FeatureFlag,
-    search::slash_command_menu::static_commands::commands,
+use crate::ai::agent::{
+    AIAgentInput, AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout,
+    AgentOutputMermaidDiagram, MessageId, UserQueryMode,
 };
-use ui_components::lightbox::{LightboxImage, LightboxImageSource};
-use warpui::{elements::Empty, Element};
+use crate::features::FeatureFlag;
+use crate::search::slash_command_menu::static_commands::commands;
 
 #[test]
 fn query_prefix_highlight_len_highlights_invoke_skill_inputs() {
     let input = AIAgentInput::InvokeSkill {
         context: Arc::new([]),
         skill: ParsedSkill {
-            path: PathBuf::from("/tmp/.agents/skills/review-pr/SKILL.md"),
+            path: LocalOrRemotePath::Local(PathBuf::from("/tmp/.agents/skills/review-pr/SKILL.md")),
             name: "review-pr".to_string(),
             description: "Review a pull request.".to_string(),
             content: String::new(),
@@ -124,6 +126,17 @@ fn text_sections_with_indices_preserve_image_section_alignment_after_empty_text_
         .collect_vec();
 
     assert_eq!(rendered_image_indices, vec![2, 4]);
+}
+
+#[test]
+fn image_tooltip_handles_for_group_uses_available_handles_only() {
+    let handles = [MouseStateHandle::default(), MouseStateHandle::default()];
+
+    assert_eq!(image_tooltip_handles_for_group(&handles, 0, 1).len(), 1);
+    assert_eq!(image_tooltip_handles_for_group(&handles, 1, 4).len(), 1);
+    assert_eq!(image_tooltip_handles_for_group(&handles, 2, 1).len(), 0);
+    assert_eq!(image_tooltip_handles_for_group(&handles, 3, 1).len(), 0);
+    assert_eq!(image_tooltip_handles_for_group(&[], 1, 1).len(), 0);
 }
 
 #[test]
@@ -291,4 +304,44 @@ fn blocklist_image_asset_source_uses_cached_resolution_when_available() {
         Some(AssetSource::LocalFile { path }) => assert_eq!(path, cached_path),
         other => panic!("expected cached local file asset source, got {other:?}"),
     }
+}
+
+/// `is_supported_blocklist_image_source` should accept the same image extensions
+/// that `warp_util::file_type::is_binary_file` recognises (plus `svg`, which is
+/// text/XML and not in `is_binary_file`). Until #9395 / this fix landed the
+/// blocklist list was only `jpg | jpeg | png | gif | webp | svg`, so inline
+/// references to local `.bmp` / `.tiff` / `.tif` / `.ico` images failed the
+/// support check and silently rendered as plain text.
+#[test]
+fn is_supported_blocklist_image_source_covers_common_local_formats() {
+    for source in [
+        "diagram.jpg",
+        "diagram.jpeg",
+        "diagram.png",
+        "diagram.gif",
+        "diagram.bmp",
+        "diagram.tiff",
+        "diagram.tif",
+        "diagram.webp",
+        "diagram.ico",
+        "diagram.svg",
+    ] {
+        assert!(
+            is_supported_blocklist_image_source(source),
+            "{source} should be a supported local image source"
+        );
+    }
+    // Case-insensitive on the extension.
+    assert!(is_supported_blocklist_image_source("PHOTO.PNG"));
+    assert!(is_supported_blocklist_image_source("scan.TIFF"));
+    // HTTP / HTTPS sources are intentionally rejected regardless of extension.
+    assert!(!is_supported_blocklist_image_source(
+        "http://example.com/x.png"
+    ));
+    assert!(!is_supported_blocklist_image_source(
+        "https://example.com/x.png"
+    ));
+    // Non-image extensions stay rejected.
+    assert!(!is_supported_blocklist_image_source("doc.pdf"));
+    assert!(!is_supported_blocklist_image_source("notes.md"));
 }

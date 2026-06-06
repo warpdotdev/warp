@@ -4,21 +4,21 @@ pub mod manager;
 pub mod schema;
 
 // Re-export commonly used types and traits
-pub use macros::SettingSection;
-pub use manager::SettingsManager;
+use std::fmt::Debug;
+use std::ops::Deref;
 
 // Re-export crates used by macro expansions in downstream crates.
 #[doc(hidden)]
 pub use inventory as _inventory;
+pub use macros::SettingSection;
+pub use manager::SettingsManager;
 #[doc(hidden)]
 pub use schemars as _schemars;
 #[doc(hidden)]
 pub use settings_value as _settings_value;
 pub use settings_value::SettingsValue;
-
-use std::fmt::Debug;
-use std::ops::Deref;
-use std::sync::atomic::{AtomicBool, Ordering};
+// Re-export warpui_core for use by macros.
+pub use warpui_core;
 
 /// Extracts the storage key (last segment after the final `.`) from a toml_path.
 ///
@@ -59,31 +59,11 @@ pub const fn toml_path_hierarchy(path: &str) -> Option<&str> {
 }
 
 use anyhow::{Context, Result};
-use serde::{Serialize, de::DeserializeOwned};
-use warpui::{AppContext, Entity, ModelContext};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use warp_features::FeatureFlag;
+use warpui_core::{AppContext, Entity, ModelContext};
 use warpui_extras::user_preferences::UserPreferences;
-
-/// Whether the TOML-backed settings file is active.
-///
-/// Set once during startup via [`set_settings_file_enabled`]. When `false`,
-/// public settings fall back to the private (platform-native) backend so
-/// that all settings share a single instance.
-static SETTINGS_FILE_ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Records whether the TOML-backed settings file feature is active.
-///
-/// Call this once during startup after checking `FeatureFlag::SettingsFile`.
-/// The value is read by [`Setting::preferences_for_setting`] and
-/// [`SettingsManager::read_local_setting_value`] to decide which backend
-/// to use for public settings.
-pub fn set_settings_file_enabled(enabled: bool) {
-    SETTINGS_FILE_ENABLED.store(enabled, Ordering::Relaxed);
-}
-
-/// Returns whether the TOML-backed settings file is currently active.
-pub fn is_settings_file_enabled() -> bool {
-    SETTINGS_FILE_ENABLED.load(Ordering::Relaxed)
-}
 
 /// A newtype wrapper for the public preferences backend.
 ///
@@ -122,11 +102,11 @@ impl PublicPreferences {
     }
 }
 
-impl warpui::Entity for PublicPreferences {
+impl warpui_core::Entity for PublicPreferences {
     type Event = ();
 }
 
-impl warpui::SingletonEntity for PublicPreferences {}
+impl warpui_core::SingletonEntity for PublicPreferences {}
 
 /// A newtype wrapper for the private preferences backend.
 ///
@@ -150,11 +130,11 @@ impl Deref for PrivatePreferences {
     }
 }
 
-impl warpui::Entity for PrivatePreferences {
+impl warpui_core::Entity for PrivatePreferences {
     type Event = ();
 }
 
-impl warpui::SingletonEntity for PrivatePreferences {}
+impl warpui_core::SingletonEntity for PrivatePreferences {}
 
 /// An enum representing the different platforms a setting could apply to.
 #[derive(Debug, Clone)]
@@ -204,7 +184,10 @@ impl SupportedPlatforms {
                 cfg!(all(not(target_family = "wasm"), target_os = "macos"))
             }
             SupportedPlatforms::LINUX => {
-                cfg!(all(not(target_family = "wasm"), target_os = "linux"))
+                cfg!(all(
+                    not(target_family = "wasm"),
+                    any(target_os = "linux", target_os = "freebsd")
+                ))
             }
             SupportedPlatforms::WINDOWS => {
                 cfg!(all(not(target_family = "wasm"), target_os = "windows"))
@@ -370,7 +353,7 @@ pub trait Setting {
     fn set_value_from_cloud_sync(
         &mut self,
         new_value: Self::Value,
-        ctx: &mut warpui::ModelContext<Self::Group>,
+        ctx: &mut warpui_core::ModelContext<Self::Group>,
     ) -> anyhow::Result<()>;
 
     /// Sets the value of the setting persisting it to storage.
@@ -386,7 +369,7 @@ pub trait Setting {
     /// Sets the value of the setting to its default and persists it to storage.
     fn set_value_to_default(
         &mut self,
-        ctx: &mut warpui::ModelContext<Self::Group>,
+        ctx: &mut warpui_core::ModelContext<Self::Group>,
     ) -> anyhow::Result<()> {
         self.set_value(Self::default_value(), ctx)
     }
@@ -396,11 +379,11 @@ pub trait Setting {
     /// Private settings use the platform-native store; public settings use
     /// the main preferences backend (which may be the TOML settings file).
     fn preferences_for_setting(ctx: &AppContext) -> &dyn UserPreferences {
-        use warpui::SingletonEntity;
+        use warpui_core::SingletonEntity;
 
         if Self::is_private() {
             <PrivatePreferences as SingletonEntity>::as_ref(ctx).deref()
-        } else if is_settings_file_enabled() {
+        } else if FeatureFlag::SettingsFile.is_enabled() {
             <PublicPreferences as SingletonEntity>::as_ref(ctx).as_preferences()
         } else {
             // When the settings file is disabled, fall back to the private

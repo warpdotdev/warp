@@ -1,18 +1,15 @@
-use std::{
-    cmp::{max, min},
-    ops::{Range, RangeInclusive},
-    sync::Arc,
-};
+use std::cmp::{max, min};
+use std::ops::{Range, RangeInclusive};
+use std::sync::Arc;
 
 use itertools::Itertools as _;
 
-use crate::terminal::model::{
-    find::RegexDFAs,
-    grid::displayed_output::{DisplaySource, DisplayedOutput, DisplayedRows},
-    index::Point,
-};
-
 use super::GridHandler;
+use crate::terminal::model::find::RegexDFAs;
+use crate::terminal::model::grid::displayed_output::{
+    DisplaySource, DisplayedOutput, DisplayedRows,
+};
+use crate::terminal::model::index::Point;
 
 /// Structure that represents a filter applied to a block's output.
 #[derive(Clone, Debug)]
@@ -779,7 +776,7 @@ impl GridHandler {
         }
     }
 
-    /// Makes manual adjustments to the index we are starting a replacment from
+    /// Makes manual adjustments to the index we are starting a replacement from
     /// depending on the dirty range position. Adjustments may be necessary if
     /// there are context lines or if the dirty range falls in the middle of a
     /// displayed range.
@@ -912,7 +909,7 @@ impl GridHandler {
         replace_start_idx
     }
 
-    /// Makes manual adjustments to the index we are ending a replacment on
+    /// Makes manual adjustments to the index we are ending a replacement on
     /// depending on the dirty range position. Adjustments may be necessary if
     /// there are context lines or if the dirty range falls in the middle of a
     /// displayed range.

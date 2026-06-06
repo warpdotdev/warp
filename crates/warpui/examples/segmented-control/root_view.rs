@@ -8,8 +8,10 @@ use warpui::ui_components::components::{Coords, UiComponentStyles};
 use warpui::ui_components::segmented_control::{
     LabelConfig, RenderableOptionConfig, SegmentedControl, SegmentedControlEvent,
 };
-use warpui::SingletonEntity as _;
-use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode {

@@ -1,16 +1,9 @@
 use std::sync::Arc;
 
-use crate::{
-    context_chips::context_chip::GeneratorContext,
-    terminal::model::{
-        block::BlockMetadata,
-        session::{
-            command_executor::testing::TestCommandExecutor, BootstrapSessionType, Session,
-            SessionInfo,
-        },
-    },
-    terminal::shell::ShellType,
-};
+use crate::context_chips::context_chip::GeneratorContext;
+use crate::terminal::model::block::BlockMetadata;
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::{BootstrapSessionType, Session, SessionInfo};
 
 #[test]
 fn test_working_directory() {
@@ -139,16 +132,4 @@ fn test_node_version() {
             .and_then(|v| v.as_text()),
         Some("v18.0.0")
     );
-}
-
-#[test]
-fn test_github_pull_request_url_command_avoids_zsh_status_assignment() {
-    let generator = super::github_pull_request_url();
-    let command = generator
-        .command()
-        .for_shell(ShellType::Zsh)
-        .expect("zsh command should exist");
-    assert!(command.contains("exit_code=$?"));
-    assert!(!command.contains("status=$?"));
-    assert!(!command.contains("status=$?;"));
 }

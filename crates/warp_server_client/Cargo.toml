@@ -7,28 +7,47 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-test-util = []
+integration_tests = ["warp_server_auth/integration_tests"]
+skip_login = ["warp_server_auth/skip_login"]
+test-util = ["cloud_object_client/test-util", "cloud_objects/test-util", "dep:mockall"]
 
 [dependencies]
 anyhow.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
 bincode.workspace = true
 chrono.workspace = true
+cloud_object_client.workspace = true
+cloud_object_models.workspace = true
+cloud_objects.workspace = true
 cynic.workspace = true
 derivative.workspace = true
+firebase.workspace = true
+http.workspace = true
+http_client.workspace = true
+instant.workspace = true
 itertools.workspace = true
 lasso.workspace = true
 log.workspace = true
+mockall = { workspace = true, optional = true }
+oauth2.workspace = true
 pathfinder_geometry.workspace = true
-persistence.workspace = true
 schemars = { version = "1", features = ["uuid1"] }
 serde.workspace = true
 settings_value.workspace = true
 session-sharing-protocol.workspace = true
 thiserror.workspace = true
+url.workspace = true
 uuid.workspace = true
 warp_core.workspace = true
 warp_graphql.workspace = true
+warp_server_auth.workspace = true
 warpui_core.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 diesel = { workspace = true, features = ["sqlite", "chrono"] }
+
+[dev-dependencies]
+futures.workspace = true
+mockall.workspace = true
+warp_server_auth = { workspace = true, features = ["test-util"] }

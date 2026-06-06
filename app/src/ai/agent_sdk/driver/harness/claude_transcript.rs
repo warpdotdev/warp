@@ -24,6 +24,7 @@ use serde_json::Value;
 use uuid::Uuid;
 use warp_core::safe_warn;
 
+use super::json_utils::entries_to_jsonl;
 use crate::ai::agent::conversation::AIConversationId;
 
 /// JSON envelope sent to the server representing a complete Claude Code session.
@@ -83,9 +84,21 @@ pub(crate) fn claude_config_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         return Ok(PathBuf::from(dir));
     }
-    dirs::home_dir()
+    home_dir_for_claude_config()
         .map(|h| h.join(".claude"))
         .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
+}
+
+/// In tests on Windows, `dirs::home_dir()` ignores `HOME`, so we check it
+/// manually so that tests can override the home directory.
+pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(home) = std::env::var_os("HOME") {
+        if !home.is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    dirs::home_dir()
 }
 
 /// Assemble a [`ClaudeTranscriptEnvelope`] from the Claude config directory.
@@ -243,7 +256,7 @@ pub(crate) fn write_session_index_entry(
     let index_path = config_root.join(SESSIONS_INDEX_FILENAME);
 
     // Read the existing index if present. Missing or malformed files are treated as empty —
-    // we'd rather clobber an unparseable file than fail the whole resume.
+    // we'd rather clobber an unparsable file than fail the whole resume.
     let mut index: serde_json::Map<String, Value> = match std::fs::read_to_string(&index_path) {
         Ok(content) => match serde_json::from_str::<Value>(&content) {
             Ok(Value::Object(map)) => map,
@@ -291,16 +304,6 @@ pub(crate) fn write_session_index_entry(
     )
     .with_context(|| format!("Failed to write {}", index_path.display()))?;
     Ok(())
-}
-
-/// Serialize a slice of JSON values as a JSONL byte string (one value per line).
-fn entries_to_jsonl(entries: &[Value]) -> Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    for entry in entries {
-        serde_json::to_writer(&mut buf, entry)?;
-        buf.push(b'\n');
-    }
-    Ok(buf)
 }
 
 /// Read a JSONL file, returning one parsed [`Value`] per non-blank line.

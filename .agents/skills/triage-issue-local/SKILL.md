@@ -1,10 +1,10 @@
 ---
 name: triage-issue-local
 specializes: triage-issue
-description: Repo-specific triage guidance for warp-external. Only the categories declared overridable by the core triage-issue skill may be specialized here.
+description: Repo-specific triage guidance for warp. Only the categories declared overridable by the core triage-issue skill may be specialized here.
 ---
 
-# Repo-specific triage guidance for `warp-external`
+# Repo-specific triage guidance for `warp`
 
 This file is a companion to the core `triage-issue` skill. It does not
 redefine the triage output schema, safety rules, or follow-up-question
@@ -13,7 +13,7 @@ marks as overridable.
 
 ## Heuristics
 
-- `warp-external` is the public-facing Warp desktop client repository. Treat public issue reports as potentially incomplete and avoid asking for secrets, tokens, private workspace names, private repository names, or account identifiers in the public issue thread.
+- `warp` is the public-facing Warp desktop client repository. Treat public issue reports as potentially incomplete and avoid asking for secrets, tokens, private workspace names, private repository names, or account identifiers in the public issue thread.
 - Distinguish the user's observed Warp behavior from their guesses about Rust modules, UI components, server behavior, feature flags, or product intent.
 - For issue reports that mention another terminal, editor, shell, or CLI tool, identify whether the problem is Warp-specific or generally reproducible outside Warp before assigning Warp ownership.
 - When the issue includes screenshots, videos, logs, stack traces, or command output, use them as primary evidence and ask follow-up questions only for missing details that cannot be inferred from that evidence.
@@ -27,6 +27,8 @@ Ask **at most 2 follow-up questions** per triage response. Each question must be
 ## Label taxonomy
 
 The label taxonomy for this repository is managed in `.github/issue-triage/config.json`. Prefer labels from that configuration, especially the `area:*`, `os:*`, `repro:*`, `accessibility`, `needs-info`, `duplicate`, and primary issue-type labels. Do not invent new labels unless the prompt explicitly allows it.
+
+Evaluate `ready-to-implement` during triage instead of relying on issue-template defaults. For bug reports, apply `ready-to-implement` only when the issue is reproducible from the provided evidence or straightforward local verification and the likely fix appears narrow enough to implement without a product spec, design mocks, or substantial investigation. If the bug is not reproducible, lacks a clear fix path, requires product/design decisions, or needs deeper technical discovery, omit `ready-to-implement` and prefer `needs-info`, `ready-to-spec`, `needs-mocks`, or the appropriate `repro:*` label.
 
 Use area labels based on the user's reported surface:
 

@@ -1,27 +1,22 @@
-use crate::app_state;
-use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::Vector2F;
 use std::collections::HashSet;
 use std::{fmt, iter, mem};
+
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
+use warp_core::features::FeatureFlag;
 use warpui::elements::{
-    ChildAnchor, Container, DispatchEventResult, Empty, OffsetPositioning, ParentAnchor,
-    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, SavePosition,
-    Stack,
+    ChildAnchor, ConstrainedBox, Container, DispatchEventResult, Element, Empty, EventHandler,
+    Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, PositionedElementAnchor, PositionedElementOffsetBounds, Rect, SavePosition,
+    Shrinkable, Stack,
 };
-use warpui::AppContext;
-use warpui::{
-    elements::{
-        ConstrainedBox, Element, EventHandler, Flex, Hoverable, MouseStateHandle, ParentElement,
-        Rect, Shrinkable,
-    },
-    platform::Cursor,
-    EntityId, ViewContext,
-};
+use warpui::platform::Cursor;
+use warpui::{AppContext, EntityId, ViewContext};
 
 use super::{ActivationReason, PaneGroup, PaneId};
+use crate::app_state;
 use crate::pane_group::{get_minimum_pane_size, DraggedBorder, PaneGroupAction};
 use crate::themes::theme::WarpTheme;
-use warp_core::features::FeatureFlag;
 
 #[cfg(test)]
 #[path = "tree_tests.rs"]
@@ -217,9 +212,9 @@ impl PaneData {
     }
 
     pub fn visible_pane_count(&self) -> usize {
-        let total_panes = self.pane_ids().len();
-        let hidden_count = self.num_hidden_panes();
-        total_panes.saturating_sub(hidden_count)
+        // Use `visible_pane_ids` directly; subtracting hidden count would
+        // double-count temporary-replacement originals (hidden but off-tree).
+        self.visible_pane_ids().len()
     }
 
     pub fn has_horizontal_split(&self) -> bool {
@@ -324,6 +319,11 @@ impl PaneData {
         }
     }
 
+    /// Returns true if `id` is hidden as a child agent pane.
+    pub fn is_pane_hidden_for_child_agent(&self, id: PaneId) -> bool {
+        pane_hidden_for_child_agent(&self.hidden_panes, &id)
+    }
+
     pub fn toggle_pane_visibility_for_job(&mut self, id: PaneId) -> bool {
         if pane_hidden_for_job(&self.hidden_panes, &id) {
             self.show_pane_for_job(id);
@@ -372,6 +372,21 @@ impl PaneData {
         self.hidden_panes.iter().find_map(|hidden_pane| {
             matches!(hidden_pane.reason, HiddenPaneReason::TemporaryReplacement(id) if id == replacement_pane_id)
                 .then_some(hidden_pane.pane_id)
+        })
+    }
+
+    /// Inverse of [`Self::original_pane_for_replacement`]: given a pane
+    /// currently swapped out as a temporary replacement's original,
+    /// return the replacement that took its slot.
+    pub fn replacement_pane_for_original(&self, original_pane_id: PaneId) -> Option<PaneId> {
+        self.hidden_panes.iter().find_map(|hidden_pane| {
+            if hidden_pane.pane_id != original_pane_id {
+                return None;
+            }
+            match hidden_pane.reason {
+                HiddenPaneReason::TemporaryReplacement(replacement_id) => Some(replacement_id),
+                _ => None,
+            }
         })
     }
 
@@ -484,6 +499,11 @@ impl PaneData {
             .any(|hidden_pane| hidden_pane.pane_id == *pane_id)
     }
 
+    /// Returns true if `pane_id` is currently a leaf in the layout tree.
+    pub fn is_pane_in_tree(&self, pane_id: PaneId) -> bool {
+        self.root.contains_pane(pane_id)
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -506,6 +526,10 @@ impl PaneData {
         ctx: &mut ViewContext<PaneGroup>,
     ) {
         self.root.adjust_pane_size(border_id, delta, ctx);
+    }
+
+    pub fn reset_pane_sizes(&mut self, border_id: EntityId) -> bool {
+        self.root.reset_pane_sizes(border_id)
     }
 
     pub fn adjust_pane_size_by_id(
@@ -736,6 +760,13 @@ impl PaneNode {
         }
     }
 
+    pub fn reset_pane_sizes(&mut self, border_id: EntityId) -> bool {
+        match self {
+            PaneNode::Leaf(_) => false,
+            PaneNode::Branch(branch) => branch.reset_pane_sizes(border_id),
+        }
+    }
+
     /// The boolean value returned here indicates whether a resizing needs to
     /// be handled at a parent branch. For a leaf node, if the pane's id does not match,
     /// we returns false as its parent branch does not need to handle the resize.
@@ -825,7 +856,7 @@ impl PaneNode {
         }
     }
 
-    fn contains_pane(&self, pane_id: PaneId) -> bool {
+    pub(crate) fn contains_pane(&self, pane_id: PaneId) -> bool {
         match self {
             PaneNode::Leaf(id) => *id == pane_id,
             PaneNode::Branch(branch) => branch.contains_pane(pane_id),
@@ -1156,6 +1187,23 @@ impl PaneBranch {
         false
     }
 
+    pub fn reset_pane_sizes(&mut self, border_id: EntityId) -> bool {
+        if self.dividers.iter().any(|divider| divider.id == border_id) {
+            for (flex, _) in &mut self.nodes {
+                *flex = DEFAULT_FLEX_SIZE;
+            }
+            return true;
+        }
+
+        for (_, node) in &mut self.nodes {
+            if node.reset_pane_sizes(border_id) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     // Get the size of a branch by recursively adding the size of its children.
     pub fn size(&self, ctx: &mut ViewContext<PaneGroup>) -> Vector2F {
         match self.axis {
@@ -1352,6 +1400,23 @@ fn create_divider_placeholder(direction: SplitDirection, position_id: &str) -> B
     SavePosition::new(placeholder, position_id).finish()
 }
 
+fn divider_mouse_down_action(
+    mouse_state: &MouseStateHandle,
+    border_id: EntityId,
+    direction: SplitDirection,
+    position: Vector2F,
+) -> PaneGroupAction {
+    if mouse_state.lock().unwrap().click_count() == Some(2) {
+        PaneGroupAction::ResetPaneSizes(border_id)
+    } else {
+        PaneGroupAction::StartResizing(DraggedBorder {
+            border_id,
+            direction,
+            previous_mouse_location: position,
+        })
+    }
+}
+
 fn create_divider(
     direction: SplitDirection,
     item: &Divider,
@@ -1369,21 +1434,19 @@ fn create_divider(
     };
 
     let border_id = item.id;
+    let mouse_state = item.mouse_state.clone();
 
-    Hoverable::new(item.mouse_state.clone(), |_| {
-        EventHandler::new(match direction {
-            SplitDirection::Horizontal => divider.with_width(get_divider_thickness()).finish(),
-            SplitDirection::Vertical => divider.with_height(get_divider_thickness()).finish(),
-        })
-        .on_left_mouse_down(move |ctx, _, position| {
-            ctx.dispatch_typed_action(PaneGroupAction::StartResizing(DraggedBorder {
-                border_id,
-                direction,
-                previous_mouse_location: position,
-            }));
-            DispatchEventResult::StopPropagation
-        })
-        .finish()
+    Hoverable::new(item.mouse_state.clone(), |_| match direction {
+        SplitDirection::Horizontal => divider.with_width(get_divider_thickness()).finish(),
+        SplitDirection::Vertical => divider.with_height(get_divider_thickness()).finish(),
+    })
+    .on_mouse_down(move |ctx, _, position| {
+        ctx.dispatch_typed_action(divider_mouse_down_action(
+            &mouse_state,
+            border_id,
+            direction,
+            position,
+        ));
     })
     .with_cursor(cursor_shape)
     .with_propagate_drag()
@@ -1407,31 +1470,28 @@ fn create_minimalist_divider(
     };
 
     let border_id = item.id;
-    let hoverable = Hoverable::new(item.mouse_state.clone(), |_| {
-        let container = match direction {
-            SplitDirection::Horizontal => {
-                Container::new(divider.with_width(get_divider_thickness()).finish())
-                    .with_padding_left(DIVIDER_RESIZE_PADDING)
-                    .with_padding_right(DIVIDER_RESIZE_PADDING)
-                    .finish()
-            }
-            SplitDirection::Vertical => {
-                Container::new(divider.with_height(get_divider_thickness()).finish())
-                    .with_padding_top(DIVIDER_RESIZE_PADDING)
-                    .with_padding_bottom(DIVIDER_RESIZE_PADDING)
-                    .finish()
-            }
-        };
-        EventHandler::new(container)
-            .on_left_mouse_down(move |ctx, _, position| {
-                ctx.dispatch_typed_action(PaneGroupAction::StartResizing(DraggedBorder {
-                    border_id,
-                    direction,
-                    previous_mouse_location: position,
-                }));
-                DispatchEventResult::StopPropagation
-            })
-            .finish()
+    let mouse_state = item.mouse_state.clone();
+    let hoverable = Hoverable::new(item.mouse_state.clone(), |_| match direction {
+        SplitDirection::Horizontal => {
+            Container::new(divider.with_width(get_divider_thickness()).finish())
+                .with_padding_left(DIVIDER_RESIZE_PADDING)
+                .with_padding_right(DIVIDER_RESIZE_PADDING)
+                .finish()
+        }
+        SplitDirection::Vertical => {
+            Container::new(divider.with_height(get_divider_thickness()).finish())
+                .with_padding_top(DIVIDER_RESIZE_PADDING)
+                .with_padding_bottom(DIVIDER_RESIZE_PADDING)
+                .finish()
+        }
+    })
+    .on_mouse_down(move |ctx, _, position| {
+        ctx.dispatch_typed_action(divider_mouse_down_action(
+            &mouse_state,
+            border_id,
+            direction,
+            position,
+        ));
     })
     .with_cursor(cursor_shape)
     .with_propagate_drag();

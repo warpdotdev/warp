@@ -1,10 +1,10 @@
 use std::fmt;
-
 use std::ops::Range;
 use std::path::PathBuf;
 
 use ai::skills::SkillReference;
 use command_corrections::Correction;
+pub use onboarding::OnboardingIntention;
 use pathfinder_geometry::vector::Vector2F;
 use session_sharing_protocol::common::Role;
 use session_sharing_protocol::sharer::RoleUpdateReason;
@@ -13,36 +13,6 @@ use warpui::elements::HyperlinkUrl;
 use warpui::event::ModifiersState;
 use warpui::units::Lines;
 use warpui::EntityId;
-
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
-use crate::ai::blocklist::codebase_index_speedbump_banner::CodebaseIndexSpeedbumpBannerAction;
-use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::server::telemetry::{AgentModeRewindEntrypoint, PaletteSource, ToggleBlockFilterSource};
-use crate::terminal::available_shells::AvailableShell;
-use crate::terminal::model::completions::ShellCompletion;
-use crate::terminal::shared_session::SharedSessionActionSource;
-use crate::terminal::ssh::error::SshErrorBlockAction;
-use crate::terminal::view::inline_banner::AgentModeSetupSpeedbumpBannerAction;
-use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
-use crate::terminal::view::RichContentSecretTooltipInfo;
-use crate::workflows::workflow::Workflow;
-use crate::{
-    server::ids::SyncId,
-    terminal::{
-        block_list_element::{
-            BlockHoverAction, BlockListMenuSource, BlockSelectAction, BlockTextSelectAction,
-        },
-        block_list_viewport::OverhangingBlock,
-        model::{
-            index::Point,
-            mouse::MouseState,
-            selection::{SelectAction, SelectionDirection},
-            terminal_model::{BlockIndex, WithinModel},
-            SecretHandle,
-        },
-    },
-};
 
 use super::inline_banner::{
     AnonymousUserLoginBannerAction, AwsBedrockLoginBannerAction, AwsCliNotInstalledBannerAction,
@@ -53,8 +23,29 @@ use super::{
     NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, RichContentLink,
     SSHBannerAction, TerminalEditor,
 };
-
-pub use onboarding::OnboardingIntention;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::blocklist::codebase_index_speedbump_banner::CodebaseIndexSpeedbumpBannerAction;
+use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
+use crate::server::ids::SyncId;
+use crate::server::telemetry::{AgentModeRewindEntrypoint, PaletteSource, ToggleBlockFilterSource};
+use crate::terminal::available_shells::AvailableShell;
+use crate::terminal::block_list_element::{
+    BlockHoverAction, BlockListMenuSource, BlockSelectAction, BlockTextSelectAction,
+};
+use crate::terminal::block_list_viewport::OverhangingBlock;
+use crate::terminal::model::completions::ShellCompletion;
+use crate::terminal::model::index::Point;
+use crate::terminal::model::mouse::MouseState;
+use crate::terminal::model::selection::{SelectAction, SelectionDirection};
+use crate::terminal::model::terminal_model::{BlockIndex, WithinModel};
+use crate::terminal::model::SecretHandle;
+use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::ssh::error::SshErrorBlockAction;
+use crate::terminal::view::inline_banner::AgentModeSetupSpeedbumpBannerAction;
+use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
+use crate::terminal::view::RichContentSecretTooltipInfo;
+use crate::workflows::workflow::Workflow;
 
 /// Version of the agent onboarding flow (non-legacy).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +171,7 @@ pub enum TerminalAction {
     SelectPriorBlock,
     SelectBookmarkDown,
     SelectBookmarkUp,
+    JumpToLatestAgentMessage,
     BookmarkSelectedBlock,
     ScrollToBottomOfSelectedBlocks,
     ScrollToTopOfSelectedBlocks,
@@ -222,7 +214,7 @@ pub enum TerminalAction {
     },
     InputContextMenuItem(InputContextMenuAction),
     /// Open the menu on the specified [`crate::ai::blocklist::AIBlock`] that lists the blocks that
-    /// were attached to the query in the specifed [`crate::ai::blocklist::AIAgentExchange`] which
+    /// were attached to the query in the specified [`crate::ai::blocklist::AIAgentExchange`] which
     /// is part of the specified [`crate::ai::blocklist::AIConversation`].
     OpenAIBlockAttachedBlocksMenu {
         ai_block_view_id: EntityId,
@@ -362,6 +354,11 @@ pub enum TerminalAction {
     DeleteAttachment {
         index: usize,
     },
+    /// Opens a pending input attachment image in the workspace lightbox before
+    /// the attachment has been submitted with a user query.
+    OpenAttachmentLightbox {
+        index: usize,
+    },
     WriteCodebaseIndex,
     ToggleAutoexecuteMode,
     ToggleQueueNextPrompt,
@@ -412,7 +409,7 @@ pub enum TerminalAction {
     EnterCloudAgentView,
     StartNewAgentConversation,
     /// Toggle the cloud mode conversation details panel
-    ToggleCloudModeDetailsPanel,
+    ToggleConversationDetailsPanel,
     /// Cancel the ambient agent task while it's loading
     CancelAmbientAgentTask,
     OpenInlineHistoryMenu,
@@ -433,11 +430,40 @@ pub enum TerminalAction {
     SwitchAgentViewToConversation {
         conversation_id: AIConversationId,
     },
+    /// Open a child agent conversation in a separate pane (split off from
+    /// the orchestrator). Dispatched from the orchestration pill bar's
+    /// 3-dot overflow menu ("Open in new pane"). For child agents that have
+    /// a hidden pane in `child_agent_panes` this reveals the existing pane;
+    /// for already-visible panes it focuses the existing pane.
+    OpenChildAgentInNewPane {
+        conversation_id: AIConversationId,
+    },
+    /// Open a child agent conversation in a separate tab. V2-of-V2 stub:
+    /// dispatched from the orchestration pill bar's 3-dot overflow menu
+    /// ("Open in new tab"). For now this falls back to the same path as
+    /// `OpenChildAgentInNewPane` until tab-level routing is wired through.
+    OpenChildAgentInNewTab {
+        conversation_id: AIConversationId,
+    },
+    /// Stop a child agent conversation: cancel the in-flight ambient task
+    /// (if any) and the local conversation's controller. The conversation
+    /// itself stays alive so the user can still navigate to it. Dispatched
+    /// from the orchestration pill bar's 3-dot overflow menu ("Stop agent").
+    StopAgentConversation {
+        conversation_id: AIConversationId,
+    },
+    /// Kill a child agent conversation: stop it if running, best-effort cancel
+    /// any backing cloud task, then remove the conversation from local history.
+    /// Dispatched from the orchestration pill bar's 3-dot overflow menu
+    /// ("Kill agent").
+    KillAgentConversation {
+        conversation_id: AIConversationId,
+    },
     /// Toggle PTY recording for this session.
     ToggleSessionRecording,
-    /// Open the rich input editor for composing a prompt to send to a CLI agent.
+    /// Toggle the rich input editor for composing a prompt to send to a CLI agent.
     /// Triggered by Ctrl-G when a CLI agent is detected, or from the footer button.
-    OpenCLIAgentRichInput,
+    ToggleCLIAgentRichInput,
 }
 
 // Manually implementing Debug to avoid leaking sensitive information in logs
@@ -509,6 +535,7 @@ impl fmt::Debug for TerminalAction {
             ReinputCommandsWithSudo => f.write_str("ReinputCommandsWithSudo"),
             ClearBuffer => f.write_str("ClearBuffer"),
             SelectBookmarkUp => f.write_str("SelectBookmarkUp"),
+            JumpToLatestAgentMessage => f.write_str("JumpToLatestAgentMessage"),
             SelectBookmarkDown => f.write_str("SelectBookmarkDown"),
             Focus => f.write_str("Focus"),
             FocusInputAndClearSelection => f.write_str("FocusInputAndClearSelection"),
@@ -653,6 +680,9 @@ impl fmt::Debug for TerminalAction {
             LoadAgentModeConversation => write!(f, "LoadAgentModeConversation"),
             ShowWarpifySettings => write!(f, "ShowWarpifySettings"),
             DeleteAttachment { index } => write!(f, "DeleteAttachment({index:?})"),
+            OpenAttachmentLightbox { index } => {
+                write!(f, "OpenAttachmentLightbox({index:?})")
+            }
             WriteCodebaseIndex => write!(f, "PersistCodebaseIndex"),
             ToggleAutoexecuteMode => write!(f, "ToggleAutoexecuteMode"),
             ToggleQueueNextPrompt => write!(f, "ToggleQueueNextPrompt"),
@@ -701,7 +731,7 @@ impl fmt::Debug for TerminalAction {
             ExitAgentView => write!(f, "ExitAgentView"),
             EnterCloudAgentView => write!(f, "EnterCloudAgentView"),
             StartNewAgentConversation => write!(f, "StartNewAgentConversation"),
-            ToggleCloudModeDetailsPanel => write!(f, "ToggleCloudModeDetailsPanel"),
+            ToggleConversationDetailsPanel => write!(f, "ToggleConversationDetailsPanel"),
             CancelAmbientAgentTask => write!(f, "CancelAmbientAgentTask"),
             OpenInlineHistoryMenu => write!(f, "OpenInlineHistoryMenu"),
             OpenModelSelector => write!(f, "OpenModelSelector"),
@@ -711,8 +741,12 @@ impl fmt::Debug for TerminalAction {
             ToggleUsageFooter => write!(f, "ToggleUsageFooter"),
             RevealChildAgent { .. } => write!(f, "RevealChildAgent"),
             SwitchAgentViewToConversation { .. } => write!(f, "SwitchAgentViewToConversation"),
+            OpenChildAgentInNewPane { .. } => write!(f, "OpenChildAgentInNewPane"),
+            OpenChildAgentInNewTab { .. } => write!(f, "OpenChildAgentInNewTab"),
+            StopAgentConversation { .. } => write!(f, "StopAgentConversation"),
+            KillAgentConversation { .. } => write!(f, "KillAgentConversation"),
             ToggleSessionRecording => write!(f, "ToggleSessionRecording"),
-            OpenCLIAgentRichInput => write!(f, "OpenCLIAgentRichInput"),
+            ToggleCLIAgentRichInput => write!(f, "ToggleCLIAgentRichInput"),
         }
     }
 }

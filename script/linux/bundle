@@ -195,7 +195,14 @@ fi
 if [[ "$ARTIFACT" == "cli" ]]; then
   FEATURES="$FEATURES,standalone"
 elif [[ "$ARTIFACT" == "app" ]]; then
-  FEATURES="$FEATURES,gui,nld_improvements"
+  FEATURES="$FEATURES,gui"
+  if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" ]]; then
+    FEATURES="$FEATURES,nld_classifier_v3,nld_heuristic_v2"
+  elif [[ "$RELEASE_CHANNEL" == "preview" ]]; then
+    FEATURES="$FEATURES,nld_classifier_v2,nld_heuristic_v2"
+  else
+    FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
+  fi
 fi
 
 BUNDLE_ID="dev.warp.$APP_NAME"
@@ -240,7 +247,7 @@ fi
 if [[ "$ARTIFACT" == "cli" ]]; then
   echo "Preparing CLI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE" "$FEATURES"
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
 fi
 
 
@@ -269,8 +276,7 @@ export \
   APPIMAGE_NAME \
   BUILD_ARCH \
   ARTIFACT \
-  CARGO_PROFILE \
-  FEATURES
+  CARGO_PROFILE
 
 # Build the AppImage bundle.
 if [[ ${PACKAGES[@]} =~ "appimage" ]]; then
