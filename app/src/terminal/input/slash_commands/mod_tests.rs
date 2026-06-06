@@ -1,10 +1,5 @@
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::{commands, Availability};
-
-use super::{
-    normalize_rename_conversation_title, RenameConversationTitleError,
-    RENAME_CONVERSATION_TITLE_MAX_CHARS,
-};
 const BASELINE_AVAILABILITY: Availability = Availability::AGENT_VIEW
     .union(Availability::AI_ENABLED)
     .union(Availability::NO_LRC_CONTROL);
@@ -35,41 +30,6 @@ fn cloud_mode_v2_commands_are_active_only_in_cloud_mode_v2_context() {
     assert!(commands::PLAN.is_active(cloud_mode_v2_context));
     assert!(commands::MODEL.is_active(cloud_mode_v2_context));
     assert!(commands::HARNESS.is_active(cloud_mode_v2_context));
-}
-
-#[test]
-fn rename_conversation_title_validation_trims_and_preserves_internal_whitespace() {
-    assert_eq!(
-        normalize_rename_conversation_title(Some("  New   title  ")).as_deref(),
-        Ok("New   title"),
-    );
-}
-
-#[test]
-fn rename_conversation_title_validation_rejects_missing_or_whitespace_only_title() {
-    assert_eq!(
-        normalize_rename_conversation_title(None),
-        Err(RenameConversationTitleError::Missing),
-    );
-    assert_eq!(
-        normalize_rename_conversation_title(Some("   \t\n")),
-        Err(RenameConversationTitleError::Missing),
-    );
-}
-
-#[test]
-fn rename_conversation_title_validation_counts_unicode_scalars_for_limit() {
-    let accepted = "🦀".repeat(RENAME_CONVERSATION_TITLE_MAX_CHARS);
-    let rejected = "🦀".repeat(RENAME_CONVERSATION_TITLE_MAX_CHARS + 1);
-
-    assert_eq!(
-        normalize_rename_conversation_title(Some(&accepted)).as_deref(),
-        Ok(accepted.as_str()),
-    );
-    assert_eq!(
-        normalize_rename_conversation_title(Some(&rejected)),
-        Err(RenameConversationTitleError::TooLong),
-    );
 }
 
 #[cfg(all(feature = "local_fs", windows))]

@@ -591,6 +591,8 @@ pub enum ConversationUpdateKind {
     },
     /// Conversation metadata or capabilities changed.
     MetadataChanged,
+    /// Conversation title changed.
+    TitleChanged,
 }
 
 impl Entity for AgentConversationsModel {
@@ -1536,31 +1538,22 @@ impl AgentConversationsModel {
                     conversation_id: *conversation_id,
                 });
             }
-            BlocklistAIHistoryEvent::UpdatedConversationMetadata {
-                conversation_id, ..
+            BlocklistAIHistoryEvent::UpdatedConversationTitle {
+                conversation_id,
+                title,
+                ..
             } => {
                 let history_model = BlocklistAIHistoryModel::as_ref(ctx);
-                let title = history_model
-                    .conversation(conversation_id)
-                    .and_then(|conversation| conversation.title())
-                    .or_else(|| {
-                        history_model
-                            .get_conversation_metadata(conversation_id)
-                            .map(|metadata| metadata.title.clone())
-                    });
-
-                if let Some(title) = title {
-                    for task in self.tasks.values_mut() {
-                        if entry::conversation_id_shadowed_by_task(task, history_model)
-                            == Some(*conversation_id)
-                        {
-                            task.title = title.clone();
-                        }
+                for task in self.tasks.values_mut() {
+                    if entry::conversation_id_shadowed_by_task(task, history_model)
+                        == Some(*conversation_id)
+                    {
+                        task.title = title.clone();
                     }
                 }
 
                 ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
-                    kind: ConversationUpdateKind::MetadataChanged,
+                    kind: ConversationUpdateKind::TitleChanged,
                 });
             }
 
@@ -1578,7 +1571,8 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
-            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } => {}
 
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 ctx.emit(AgentConversationsModelEvent::ConversationUpdated {

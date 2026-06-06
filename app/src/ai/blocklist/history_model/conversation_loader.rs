@@ -644,7 +644,8 @@ impl BlocklistAIHistoryModel {
                     return None;
                 }
 
-                // Derive the title from the root task description, falling back to initial_query.
+                // We derive the title from the description of the root task,
+                // falling back to initial_query if the description is empty
                 let title = root_task
                     .map(|task| task.description.clone())
                     .filter(|desc| !desc.is_empty())

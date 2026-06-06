@@ -523,7 +523,6 @@ impl BlocklistAIHistoryModel {
         let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) else {
             return;
         };
-        metadata.title = conversation.title().unwrap_or_default();
 
         metadata.server_conversation_token = conversation.server_conversation_token().cloned();
         if metadata.server_conversation_token.is_some() {
@@ -535,34 +534,42 @@ impl BlocklistAIHistoryModel {
         }
     }
 
-    /// Applies a server-confirmed title to the local root task description.
+    /// Applies a server-confirmed conversation title locally.
     pub fn rename_conversation_after_server_success(
         &mut self,
         conversation_id: AIConversationId,
         title: String,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<(), UpdateHistoryError> {
+    ) {
         let terminal_view_id = self.terminal_view_id_for_conversation(&conversation_id);
-        {
-            let conversation = self
-                .conversations_by_id
-                .get_mut(&conversation_id)
-                .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
-            conversation.update_root_task_description(title.clone(), ctx);
+
+        let mut updated = false;
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.update_conversation_title(title.clone(), ctx);
+            updated = true;
+        } else {
+            log::warn!(
+                "rename_conversation_after_server_success called for missing conversation {conversation_id:?}"
+            );
         }
 
         if let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) {
             metadata.title = title.clone();
             if let Some(server_metadata) = metadata.server_conversation_metadata.as_mut() {
-                server_metadata.title = title;
+                server_metadata.title = title.clone();
             }
+            updated = true;
         }
 
-        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+        if !updated {
+            return;
+        }
+
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationTitle {
             terminal_view_id,
             conversation_id,
+            title,
         });
-        Ok(())
     }
     pub fn mark_conversation_as_remote_child(
         &mut self,
@@ -2694,6 +2701,13 @@ pub enum BlocklistAIHistoryEvent {
         conversation_id: AIConversationId,
     },
 
+    /// Emitted when a conversation title changes.
+    UpdatedConversationTitle {
+        terminal_view_id: Option<EntityId>,
+        conversation_id: AIConversationId,
+        title: String,
+    },
+
     /// Emitted when conversation artifacts are updated (plans, PRs, etc.)
     UpdatedConversationArtifacts {
         terminal_view_id: EntityId,
@@ -2821,6 +2835,9 @@ impl BlocklistAIHistoryEvent {
             } => Some(*terminal_view_id),
             // UpdatedConversationMetadata can have None when updating historical-only conversations
             BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                terminal_view_id, ..
+            }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle {
                 terminal_view_id, ..
             } => *terminal_view_id,
             // NewConversationRequestComplete is executor-scoped and has no

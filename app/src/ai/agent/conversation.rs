@@ -1456,29 +1456,31 @@ impl AIConversation {
     }
 
     /// Get the title of the given conversation.
-    /// Priority: auto-generated task description > initial query > fallback_display_title.
+    /// Priority: task description > initial query > fallback_display_title.
     pub fn title(&self) -> Option<String> {
         self.task_store
             .root_task()
             .and_then(|task| {
-                (!task.description().is_empty())
-                    .then(|| task.description().to_owned())
-                    .or_else(|| self.initial_query())
+                if task.description().is_empty() {
+                    self.initial_query()
+                } else {
+                    Some(task.description().to_owned())
+                }
             })
             .or_else(|| self.fallback_display_title.clone())
     }
 
-    /// Updates the canonical root-task title and persists the conversation.
-    pub fn update_root_task_description(
+    /// Updates the conversation title and persists the conversation.
+    pub fn update_conversation_title(
         &mut self,
-        description: String,
+        title: String,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        let description_for_metadata = description.clone();
+        let title_for_metadata = title.clone();
         self.task_store
-            .modify_root_task(|root_task| root_task.update_description(description));
+            .modify_root_task(|root_task| root_task.update_description(title));
         if let Some(metadata) = self.server_metadata.as_mut() {
-            metadata.title = description_for_metadata;
+            metadata.title = title_for_metadata;
         }
         self.write_updated_conversation_state(ctx);
     }

@@ -357,20 +357,19 @@ fn updated_conversation_metadata_refreshes_selected_conversation_pane_title() {
                 "Original title"
             );
 
-            BlocklistAIHistoryModel::handle(ctx)
-                .update(ctx, |history, ctx| {
-                    history.rename_conversation_after_server_success(
-                        conversation_id,
-                        "Renamed title".to_string(),
-                        ctx,
-                    )
-                })
-                .expect("rename should update local conversation");
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.rename_conversation_after_server_success(
+                    conversation_id,
+                    "Renamed title".to_string(),
+                    ctx,
+                )
+            });
             view.handle_ai_history_model_event(
                 BlocklistAIHistoryModel::handle(ctx),
-                &BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                &BlocklistAIHistoryEvent::UpdatedConversationTitle {
                     terminal_view_id: Some(view.view_id),
                     conversation_id,
+                    title: "Renamed title".to_string(),
                 },
                 ctx,
             );

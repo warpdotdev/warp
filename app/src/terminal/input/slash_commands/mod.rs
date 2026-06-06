@@ -149,25 +149,7 @@ fn open_file_command_path(
     (file_path, parsed_path.line_and_column_num)
 }
 
-const RENAME_CONVERSATION_TITLE_MAX_CHARS: usize = 500;
-
-#[derive(Debug, PartialEq, Eq)]
-enum RenameConversationTitleError {
-    Missing,
-    TooLong,
-}
-
-fn normalize_rename_conversation_title(
-    argument: Option<&str>,
-) -> Result<String, RenameConversationTitleError> {
-    let Some(title) = argument.map(str::trim).filter(|title| !title.is_empty()) else {
-        return Err(RenameConversationTitleError::Missing);
-    };
-    if title.chars().count() > RENAME_CONVERSATION_TITLE_MAX_CHARS {
-        return Err(RenameConversationTitleError::TooLong);
-    }
-    Ok(title.to_owned())
-}
+const CONVERSATION_TITLE_MAX_CHARS: usize = 500;
 
 impl Input {
     fn is_slash_command_available(&self, command: &StaticCommand, ctx: &AppContext) -> bool {
@@ -526,26 +508,27 @@ impl Input {
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
             }
             rename_conversation if command.name == commands::RENAME_CONVERSATION.name => {
-                let title = match normalize_rename_conversation_title(argument.map(String::as_str))
-                {
-                    Ok(title) => title,
-                    Err(RenameConversationTitleError::Missing) => {
-                        show_error_toast(
-                            "Please provide a title after /rename-conversation".to_owned(),
-                            ctx,
-                        );
-                        return true;
-                    }
-                    Err(RenameConversationTitleError::TooLong) => {
-                        show_error_toast(
-                                format!(
-                                    "Conversation title must be {RENAME_CONVERSATION_TITLE_MAX_CHARS} characters or fewer",
-                                ),
-                                ctx,
-                            );
-                        return true;
-                    }
+                let Some(title) = argument
+                    .map(|title| title.trim())
+                    .filter(|title| !title.is_empty())
+                else {
+                    show_error_toast(
+                        "Please provide a title after /rename-conversation".to_owned(),
+                        ctx,
+                    );
+                    return true;
                 };
+
+                if title.chars().count() > CONVERSATION_TITLE_MAX_CHARS {
+                    show_error_toast(
+                        format!(
+                            "Conversation title must be {CONVERSATION_TITLE_MAX_CHARS} characters or fewer",
+                        ),
+                        ctx,
+                    );
+                    return true;
+                }
+                let title = title.to_owned();
 
                 let Some(conversation_id) = self
                     .ai_context_model
@@ -570,7 +553,8 @@ impl Input {
                     })
                 else {
                     show_error_toast(
-                        "Cannot rename conversation until it has synced with the server".to_owned(),
+                        "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again."
+                            .to_owned(),
                         ctx,
                     );
                     return true;
@@ -585,44 +569,27 @@ impl Input {
                     },
                     move |_input, result, ctx| match result {
                         Ok(response) => {
-                            let renamed = BlocklistAIHistoryModel::handle(ctx).update(
-                                ctx,
-                                |history, ctx| {
-                                    history.rename_conversation_after_server_success(
-                                        conversation_id,
-                                        response.title,
-                                        ctx,
-                                    )
-                                },
-                            );
-                            match renamed {
-                                Ok(()) => {
-                                    let window_id = ctx.window_id();
-                                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                                        toast_stack.add_ephemeral_toast(
-                                            DismissibleToast::default(
-                                                "Conversation renamed".to_owned(),
-                                            ),
-                                            window_id,
-                                            ctx,
-                                        );
-                                    });
-                                }
-                                Err(e) => {
-                                    show_error_toast(
-                                        format!(
-                                            "Conversation was renamed, but the local title could not be updated: {e}",
-                                        ),
-                                        ctx,
-                                    );
-                                }
-                            }
+                            let title = response.title;
+                            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                                history.rename_conversation_after_server_success(
+                                    conversation_id,
+                                    title.clone(),
+                                    ctx,
+                                );
+                            });
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::success(format!(
+                                        "Conversation renamed to {title}",
+                                    )),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
                         }
                         Err(e) => {
-                            show_error_toast(
-                                format!("Failed to rename conversation: {e}"),
-                                ctx,
-                            );
+                            show_error_toast(format!("Failed to rename conversation: {e}"), ctx);
                         }
                     },
                 );

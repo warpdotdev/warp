@@ -42,7 +42,11 @@ impl ConversationListViewModel {
                 // Status changes don't affect the set of IDs (status is read
                 // at render time via get_item_by_id); just signal a re-render.
                 AgentConversationsModelEvent::ConversationUpdated { kind } => {
-                    if matches!(kind, ConversationUpdateKind::MetadataChanged) {
+                    if matches!(
+                        kind,
+                        ConversationUpdateKind::MetadataChanged
+                            | ConversationUpdateKind::TitleChanged
+                    ) {
                         me.refresh_cached_items(ctx);
                     } else {
                         ctx.emit(ConversationListViewModelEvent);

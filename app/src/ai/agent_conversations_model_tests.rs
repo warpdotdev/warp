@@ -201,7 +201,7 @@ fn test_same_bucket_re_emission_emits_status_set_with_equal_filters() {
 }
 
 #[test]
-fn test_metadata_update_refreshes_shadowing_task_title() {
+fn test_title_update_refreshes_shadowing_task_title() {
     App::test((), |mut app| async move {
         let _interactive_management_guard =
             FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
@@ -240,13 +240,11 @@ fn test_metadata_update_refreshes_shadowing_task_title() {
 
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model
-                .rename_conversation_after_server_success(
-                    conversation_id,
-                    "Renamed conversation".to_string(),
-                    ctx,
-                )
-                .expect("conversation should rename locally");
+            model.rename_conversation_after_server_success(
+                conversation_id,
+                "Renamed conversation".to_string(),
+                ctx,
+            );
         });
 
         agent_model.update(&mut app, |model, _| {
@@ -258,18 +256,16 @@ fn test_metadata_update_refreshes_shadowing_task_title() {
 
         agent_model.update(&mut app, |model, ctx| {
             model.handle_history_event(
-                &BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                &BlocklistAIHistoryEvent::UpdatedConversationTitle {
                     terminal_view_id: Some(terminal_view_id),
                     conversation_id,
+                    title: "Renamed conversation".to_string(),
                 },
                 ctx,
             );
         });
 
-        assert_eq!(
-            *captured.lock(),
-            Some(ConversationUpdateKind::MetadataChanged)
-        );
+        assert_eq!(*captured.lock(), Some(ConversationUpdateKind::TitleChanged));
         agent_model.read(&app, |model, ctx| {
             let task_id: AmbientAgentTaskId = task_id.parse().unwrap();
             assert_eq!(

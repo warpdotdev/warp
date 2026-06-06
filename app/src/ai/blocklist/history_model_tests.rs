@@ -211,13 +211,11 @@ fn rename_conversation_after_server_success_updates_title_and_cached_metadata() 
             model
                 .all_conversations_metadata
                 .insert(conversation_id, metadata);
-            model
-                .rename_conversation_after_server_success(
-                    conversation_id,
-                    "Manual title".to_string(),
-                    ctx,
-                )
-                .expect("rename should update loaded conversation");
+            model.rename_conversation_after_server_success(
+                conversation_id,
+                "Manual title".to_string(),
+                ctx,
+            );
         });
 
         history_model.read(&app, |model, _| {
