@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::supported_servers::LSPServerType;
+
 /// A single validation error against a single descriptor entry. `entry_name`
 /// is `None` for entries that fail before a `name` could be parsed (e.g. an
 /// entry missing the `name` field).
@@ -39,6 +41,20 @@ pub enum LspDescriptorErrorKind {
         pattern: String,
         feature: &'static str,
     },
+    /// `name` violates the character/length/format constraints (1–64 chars
+    /// from `[A-Za-z0-9._-]`, not `.`/`..`, no leading `.`/`-`). `reason`
+    /// names the specific rule that failed.
+    InvalidName { reason: &'static str },
+    /// `name` collides, case-insensitively, with a built-in server's binary
+    /// display name (the string the footer's "Enable {name}" button shows).
+    ReservedName,
+    /// `command`, after leading-`~` expansion, is neither an absolute path nor
+    /// a bare name (no `/` or `\`), so it would resolve against the spawned
+    /// process's cwd.
+    UnsafeCommandPath {
+        command: String,
+        reason: &'static str,
+    },
 }
 
 impl fmt::Display for LspDescriptorError {
@@ -69,6 +85,16 @@ impl fmt::Display for LspDescriptorError {
                 f,
                 "{entry_label}: glob `{pattern}` uses unsupported feature `{feature}` (not allowed in v1)",
             ),
+            LspDescriptorErrorKind::InvalidName { reason } => {
+                write!(f, "{entry_label}: invalid `name`: {reason}")
+            }
+            LspDescriptorErrorKind::ReservedName => write!(
+                f,
+                "{entry_label}: `name` is reserved for a built-in language server",
+            ),
+            LspDescriptorErrorKind::UnsafeCommandPath { command, reason } => {
+                write!(f, "{entry_label}: unsafe `command` `{command}`: {reason}")
+            }
         }
     }
 }
@@ -101,6 +127,107 @@ pub fn check_supported_glob_features(pattern: &str) -> Option<LspDescriptorError
         }
     }
     None
+}
+
+/// Maximum length of a descriptor `name`, in characters.
+const MAX_NAME_LEN: usize = 64;
+
+/// Returns `Some(InvalidName)` if `name` violates the constraints: 1–64
+/// characters from `[A-Za-z0-9._-]`, not `.` or `..`, and not starting with
+/// `.` or `-`. Returns `None` for an acceptable name.
+pub fn check_name(name: &str) -> Option<LspDescriptorErrorKind> {
+    if name.is_empty() {
+        return Some(LspDescriptorErrorKind::InvalidName {
+            reason: "must not be empty",
+        });
+    }
+    if name.chars().count() > MAX_NAME_LEN {
+        return Some(LspDescriptorErrorKind::InvalidName {
+            reason: "must be at most 64 characters",
+        });
+    }
+    if name == "." || name == ".." {
+        return Some(LspDescriptorErrorKind::InvalidName {
+            reason: "must not be `.` or `..`",
+        });
+    }
+    if name.starts_with('.') || name.starts_with('-') {
+        return Some(LspDescriptorErrorKind::InvalidName {
+            reason: "must not start with `.` or `-`",
+        });
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return Some(LspDescriptorErrorKind::InvalidName {
+            reason: "must contain only ASCII letters, digits, `.`, `_`, or `-`",
+        });
+    }
+    None
+}
+
+/// Returns `true` if `name` collides, case-insensitively, with a built-in
+/// server's binary display name. Sourced from `LSPServerType::binary_name()`
+/// so adding a built-in extends the reservation automatically.
+pub fn is_reserved_name(name: &str) -> bool {
+    LSPServerType::all().any(|server| name.eq_ignore_ascii_case(server.binary_name()))
+}
+
+/// Returns `Some(UnsafeCommandPath)` if `command` is none of: home-rooted
+/// (`~` / `~/...`, which expands to the absolute home directory at launch), an
+/// absolute path, or a bare name (no `/` or `\`). Relative paths with
+/// separators would resolve against the spawned process's cwd (the workspace
+/// root), so they are rejected at settings load. Only the literal form is
+/// checked; the post-substitution command is not revalidated.
+pub fn check_command(command: &str) -> Option<LspDescriptorErrorKind> {
+    if is_home_rooted(command) || is_absolute_command(command) || is_bare_name(command) {
+        None
+    } else {
+        Some(LspDescriptorErrorKind::UnsafeCommandPath {
+            command: command.to_string(),
+            reason: "must be an absolute path or a bare command name (no path separators)",
+        })
+    }
+}
+
+/// A leading `~` or `~/` expands to the (always absolute) home directory at
+/// launch, so it satisfies the absolute-path requirement without resolving
+/// the home directory here. Other-user forms (`~someuser`) are not recognized.
+fn is_home_rooted(command: &str) -> bool {
+    command == "~" || command.starts_with("~/")
+}
+
+/// A bare command name has no path separators and is resolved against `PATH`
+/// by the OS process loader. `\` is treated as a separator on every platform
+/// so that Windows relative forms are rejected even when validated on Unix.
+fn is_bare_name(command: &str) -> bool {
+    !command.contains('/') && !command.contains('\\')
+}
+
+/// Platform-specific absolute-path check, matching the OS whose loader will
+/// run the command: on Unix a leading `/`; on Windows a drive-letter root
+/// (`C:\`/`C:/`) or a UNC path. A leading `/`/`\` without a drive is
+/// deliberately *not* absolute on Windows — it is current-drive-relative.
+fn is_absolute_command(command: &str) -> bool {
+    if cfg!(windows) {
+        is_windows_absolute(command)
+    } else {
+        command.starts_with('/')
+    }
+}
+
+/// Windows absolute forms: a UNC path (`\\server\share` / `//server/share`)
+/// or a drive-letter root (`C:\` / `C:/`).
+fn is_windows_absolute(command: &str) -> bool {
+    if command.starts_with("\\\\") || command.starts_with("//") {
+        return true;
+    }
+    let bytes = command.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
 }
 
 #[cfg(test)]

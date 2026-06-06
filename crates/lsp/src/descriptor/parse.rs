@@ -11,7 +11,10 @@ use std::collections::{BTreeMap, HashSet};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::validate::{check_supported_glob_features, LspDescriptorError, LspDescriptorErrorKind};
+use super::validate::{
+    check_command, check_name, check_supported_glob_features, is_reserved_name, LspDescriptorError,
+    LspDescriptorErrorKind,
+};
 use super::{LspFiletypePattern, LspServerDescriptor};
 
 /// Result of parsing the `[[editor.language_servers]]` array.
@@ -39,12 +42,13 @@ pub fn parse_entries(entries: &[Value]) -> LspParseResult {
         }
     }
 
-    // Dedupe by `name`, preserving the first-seen entry and reporting later
-    // ones as errors.
+    // Dedupe by `name`, case-insensitively, preserving the first-seen entry
+    // and reporting later ones as errors. Case folding mirrors the reserved-
+    // name and footer-label rules so `ruby-lsp` and `Ruby-LSP` collide.
     let mut seen_names: HashSet<String> = HashSet::new();
     let mut deduped: Vec<LspServerDescriptor> = Vec::with_capacity(descriptors.len());
     for descriptor in descriptors {
-        if seen_names.insert(descriptor.name.clone()) {
+        if seen_names.insert(descriptor.name.to_ascii_lowercase()) {
             deduped.push(descriptor);
         } else {
             errors.push(LspDescriptorError {
@@ -93,6 +97,21 @@ fn parse_single(value: &Value) -> Result<LspServerDescriptor, Vec<LspDescriptorE
         }
     };
 
+    // Name constraints and reserved-name check (invariants 1, 2, 23). The name
+    // is present, so record any violation and keep collecting so every problem
+    // with the entry surfaces at once.
+    if let Some(kind) = check_name(&name) {
+        errors.push(LspDescriptorError {
+            entry_name: Some(name.clone()),
+            kind,
+        });
+    } else if is_reserved_name(&name) {
+        errors.push(LspDescriptorError {
+            entry_name: Some(name.clone()),
+            kind: LspDescriptorErrorKind::ReservedName,
+        });
+    }
+
     let command = match raw.command.as_deref() {
         Some(c) if !c.trim().is_empty() => c.to_string(),
         _ => {
@@ -103,6 +122,16 @@ fn parse_single(value: &Value) -> Result<LspServerDescriptor, Vec<LspDescriptorE
             return Err(errors);
         }
     };
+
+    // Command trust boundary (invariants 1, 23): the literal command must be
+    // absolute or a bare PATH-resolved name; relative-with-separators forms are
+    // cwd-dependent and rejected.
+    if let Some(kind) = check_command(&command) {
+        errors.push(LspDescriptorError {
+            entry_name: Some(name.clone()),
+            kind,
+        });
+    }
 
     let mut filetypes: Vec<LspFiletypePattern> = Vec::new();
     for raw_pattern in &raw.filetypes {

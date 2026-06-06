@@ -337,3 +337,72 @@ fn one_bad_entry_does_not_drop_others() {
     assert_eq!(names, vec!["good", "also-good"]);
     assert_eq!(result.errors.len(), 1);
 }
+
+#[test]
+fn invalid_name_rejects_entry() {
+    let entries = vec![json!({
+        "name": "has space",
+        "command": "ruby-lsp",
+        "filetypes": [{ "pattern": "*.rb" }],
+    })];
+    let result = parse_entries(&entries);
+    assert!(result.descriptors.is_empty());
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::InvalidName { .. })));
+}
+
+#[test]
+fn reserved_name_rejects_entry_case_insensitively() {
+    let entries = vec![json!({
+        "name": "Rust-Analyzer",
+        "command": "rust-analyzer",
+        "filetypes": [{ "pattern": "*.rs" }],
+    })];
+    let result = parse_entries(&entries);
+    assert!(result.descriptors.is_empty());
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::ReservedName)));
+}
+
+#[test]
+fn unsafe_command_rejects_entry() {
+    let entries = vec![json!({
+        "name": "ruby-lsp",
+        "command": "./server",
+        "filetypes": [{ "pattern": "*.rb" }],
+    })];
+    let result = parse_entries(&entries);
+    assert!(result.descriptors.is_empty());
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::UnsafeCommandPath { .. })));
+}
+
+#[test]
+fn duplicate_name_is_case_insensitive() {
+    let entries = vec![
+        json!({
+            "name": "ruby-lsp",
+            "command": "ruby-lsp",
+            "filetypes": [{ "pattern": "*.rb" }],
+        }),
+        json!({
+            "name": "Ruby-LSP",
+            "command": "ruby-lsp",
+            "filetypes": [{ "pattern": "*.rake" }],
+        }),
+    ];
+    let result = parse_entries(&entries);
+    // First in source order wins; the case-variant is a duplicate.
+    assert_eq!(result.descriptors.len(), 1);
+    assert_eq!(result.descriptors[0].name, "ruby-lsp");
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| matches!(e.kind, LspDescriptorErrorKind::DuplicateName)));
+}
