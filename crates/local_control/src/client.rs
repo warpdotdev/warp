@@ -38,6 +38,7 @@ use crate::protocol::{
 };
 
 /// Requests an action-scoped credential and sends one authenticated control request.
+#[cfg(not(target_family = "wasm"))]
 pub fn send_request(
     instance: &InstanceRecord,
     request: &RequestEnvelope,
@@ -91,6 +92,22 @@ pub fn send_request(
     ))
 }
 
+/// Fails closed on platforms without a native local-control HTTP transport.
+#[cfg(target_family = "wasm")]
+pub fn send_request(
+    instance: &InstanceRecord,
+    request: &RequestEnvelope,
+) -> Result<ResponseEnvelope, ControlError> {
+    request_credential(
+        instance,
+        request.action.kind,
+        InvocationContext::OutsideWarp,
+    )?;
+    Err(ControlError::new(
+        ErrorCode::LocalControlDisabled,
+        "outside-Warp local control requires a native HTTP transport",
+    ))
+}
 #[cfg(unix)]
 /// Resolves the selected instance's validated broker path and requests a credential.
 fn request_credential_over_owner_ipc(

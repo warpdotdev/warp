@@ -30,6 +30,8 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+#[cfg(windows)]
+use command::blocking::Command;
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{ActionMetadata, ControlError, ErrorCode, PROTOCOL_VERSION};
@@ -330,13 +332,17 @@ fn is_pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn is_pid_alive(pid: u32) -> bool {
-    std::process::Command::new("tasklist")
+    Command::new("tasklist")
         .args(["/FI", &format!("PID eq {pid}"), "/NH"])
         .output()
         .map(|o| !String::from_utf8_lossy(&o.stdout).contains("No tasks"))
         .unwrap_or(true)
+}
+#[cfg(all(not(unix), not(windows)))]
+fn is_pid_alive(_: u32) -> bool {
+    false
 }
 
 fn record_path(dir: &Path, instance_id: &InstanceId) -> PathBuf {
@@ -382,6 +388,7 @@ fn set_private_permissions(_path: &Path) -> Result<(), ControlError> {
     ))
 }
 
+#[cfg(unix)]
 fn permissions_error(operation: &str, error: std::io::Error) -> ControlError {
     ControlError::with_details(
         ErrorCode::Internal,
