@@ -269,6 +269,22 @@ impl LspServerModel {
         }
     }
 
+    /// Resolves the LSP `languageId` for `path`: built-ins via the
+    /// `LanguageId` map, customs via the descriptor's filetype matcher.
+    /// `None` if no rule claims the path.
+    fn language_id_for_path(&self, path: &Path) -> Option<String> {
+        match &self.config {
+            LspServerConfigKind::BuiltIn(_) => {
+                LanguageId::from_path(path).map(|id| id.lsp_language_identifier().to_owned())
+            }
+            LspServerConfigKind::Custom(c) => crate::descriptor::matcher::match_descriptor(
+                std::slice::from_ref(c.descriptor()),
+                path,
+            )
+            .map(|matched| matched.language_id),
+        }
+    }
+
     /// Returns the initial workspace path for this server.
     pub fn initial_workspace(&self) -> &Path {
         self.config.initial_workspace()
@@ -541,10 +557,16 @@ impl LspServerModel {
         initial_version: usize,
     ) -> Result<impl Future<Output = Result<()>>> {
         let service = self.service()?;
+        let language_id = self.language_id_for_path(&path).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not determine language ID for file: {}",
+                path.display()
+            )
+        })?;
         Ok(async move {
             service
                 .text_document()
-                .did_open(&path, content, initial_version)
+                .did_open(&path, content, initial_version, language_id)
                 .await
         })
     }

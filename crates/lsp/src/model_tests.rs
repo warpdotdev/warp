@@ -28,7 +28,20 @@ fn built_in_model(server_type: LSPServerType) -> LspServerModel {
 /// the settings layer uses), not the never-matches placeholder produced
 /// by direct serde deserialization.
 fn custom_model(name: &str, filetypes: &[&str]) -> LspServerModel {
-    let filetype_entries: Vec<_> = filetypes.iter().map(|p| json!({ "pattern": p })).collect();
+    let pairs: Vec<(&str, Option<&str>)> = filetypes.iter().map(|p| (*p, None)).collect();
+    custom_model_with_filetypes(name, &pairs)
+}
+
+/// Like [`custom_model`] but allows an explicit `language_id` override per
+/// filetype pattern (`None` exercises the default-derivation path).
+fn custom_model_with_filetypes(name: &str, filetypes: &[(&str, Option<&str>)]) -> LspServerModel {
+    let filetype_entries: Vec<_> = filetypes
+        .iter()
+        .map(|(pattern, language_id)| match language_id {
+            Some(id) => json!({ "pattern": pattern, "language_id": id }),
+            None => json!({ "pattern": pattern }),
+        })
+        .collect();
     let entries = vec![json!({
         "name": name,
         "command": name,
@@ -85,4 +98,73 @@ fn supports_path_custom_matches_literal_basename() {
     let model = custom_model("solargraph", &["Gemfile"]);
     assert!(model.supports_path(Path::new("/tmp/repo/Gemfile")));
     assert!(!model.supports_path(Path::new("/tmp/repo/Gemfile.lock")));
+}
+
+#[test]
+fn language_id_for_path_resolution() {
+    // (model, path, expected languageId, case description)
+    let cases: Vec<(LspServerModel, &str, Option<&str>, &str)> = vec![
+        (
+            built_in_model(LSPServerType::RustAnalyzer),
+            "/tmp/workspace/src/main.rs",
+            Some("rust"),
+            "built-in via LanguageId map",
+        ),
+        (
+            built_in_model(LSPServerType::RustAnalyzer),
+            "/tmp/workspace/foo.rb",
+            None,
+            "built-in: extension it doesn't claim",
+        ),
+        (
+            custom_model("ruby-lsp", &["*.rb"]),
+            "/tmp/repo/Foo.RB",
+            Some("rb"),
+            "custom: no built-in mapping, defaults to lowercase extension",
+        ),
+        (
+            custom_model("dockerfile-lsp", &["Dockerfile"]),
+            "/tmp/repo/Dockerfile",
+            Some("Dockerfile"),
+            "custom: basename when no extension",
+        ),
+        (
+            custom_model("ruby-lsp", &["*.rb"]),
+            "/tmp/repo/foo.py",
+            None,
+            "custom: no filetype matches",
+        ),
+        (
+            custom_model_with_filetypes("ruby-lsp", &[("*.rb", Some("ruby"))]),
+            "/tmp/repo/foo.rb",
+            Some("ruby"),
+            "custom: explicit language_id wins",
+        ),
+    ];
+    for (model, path, expected, desc) in cases {
+        assert_eq!(
+            model.language_id_for_path(Path::new(path)).as_deref(),
+            expected,
+            "{desc} ({path})"
+        );
+    }
+}
+
+#[test]
+fn language_id_for_path_custom_resolves_per_file_in_multi_filetype_descriptor() {
+    let model = custom_model_with_filetypes(
+        "ts-ls",
+        &[
+            ("*.ts", Some("typescript")),
+            ("*.tsx", Some("typescriptreact")),
+        ],
+    );
+    assert_eq!(
+        model.language_id_for_path(Path::new("/tmp/repo/a.ts")),
+        Some("typescript".to_string())
+    );
+    assert_eq!(
+        model.language_id_for_path(Path::new("/tmp/repo/b.tsx")),
+        Some("typescriptreact".to_string())
+    );
 }

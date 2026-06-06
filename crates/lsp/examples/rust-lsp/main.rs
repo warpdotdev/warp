@@ -159,7 +159,7 @@ async fn async_main(executor: Arc<Background>, workspace_root: PathBuf) -> anyho
 
     lsp_service
         .text_document()
-        .did_open(&test_file, file_content.clone(), 0)
+        .did_open(&test_file, file_content.clone(), 0, "rust".to_string())
         .await?;
 
     println!("Running first goto-definition call");
