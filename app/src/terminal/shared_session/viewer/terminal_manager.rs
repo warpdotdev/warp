@@ -101,7 +101,7 @@ pub struct TerminalManager {
     /// agent run. Lazily created in `JoinedSuccessfully` on the first
     /// ambient session join. `Arc<FairMutex<Option<...>>>` matches
     /// `current_network` so the network-event closure can write into it
-    /// without `&mut self`. Behind `FeatureFlag::OrchestrationViewerPillBar`.
+    /// without `&mut self`.
     orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
     /// `true` for the root viewer pane of an orchestrator, `false` for
     /// per-child viewer panes. Skipping polling on children avoids
@@ -175,8 +175,8 @@ impl TerminalManager {
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
-        is_cloud_mode: bool,
         enable_orchestration_polling: bool,
+        is_cloud_mode: bool,
         ctx: &mut AppContext,
     ) -> Self {
         // Create all the necessary channels we need for communication.
@@ -298,20 +298,28 @@ impl TerminalManager {
 
     /// Create a new terminal manager for viewing a shared session. See
     /// [`Self::enable_orchestration_polling`] for the meaning of the flag.
+    ///
+    /// `is_cloud_mode` controls whether the resulting `TerminalView` is
+    /// constructed with an `ambient_agent_view_model`. This must be `true` for
+    /// shared-session viewers that represent the local pane of a cloud
+    /// orchestration parent agent, so the snapshot/restore path can emit a
+    /// `LeafContents::AmbientAgent` rather than falling through to an empty
+    /// terminal pane.
     pub fn new(
         session_id: SessionId,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
         enable_orchestration_polling: bool,
+        is_cloud_mode: bool,
         ctx: &mut AppContext,
     ) -> Self {
         let mut terminal_manager = Self::new_internal(
             resources,
             initial_size,
             window_id,
-            false,
             enable_orchestration_polling,
+            is_cloud_mode,
             ctx,
         );
 
@@ -338,8 +346,8 @@ impl TerminalManager {
             resources,
             initial_size,
             window_id,
-            true,
             enable_orchestration_polling,
+            true, // is_cloud_mode
             ctx,
         )
     }
@@ -789,7 +797,6 @@ impl TerminalManager {
                 }
 
                 if enable_orchestration_polling
-                    && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
                     && orchestration_viewer_model.lock().is_none()
                 {
                     if let Some(task_id) = ambient_task_id {
@@ -1087,17 +1094,16 @@ impl TerminalManager {
                     // In cloud-mode startup (before the first exchange), shared-session input
                     // sync reflects environment setup commands. Skip applying remote edits so
                     // the visible input isn't populated with setup-command text.
-                    if FeatureFlag::CloudModeSetupV2.is_enabled()
-                        && {
-                            let model = view.model.lock();
-                            is_cloud_agent_pre_first_exchange(
-                                view.ambient_agent_view_model(),
-                                view.agent_view_controller(),
-                                &model,
-                                ctx,
-                            )
-                        }
-                    {
+                    let skip_during_setup = FeatureFlag::CloudModeSetupV2.is_enabled() && {
+                        let model = view.model.lock();
+                        is_cloud_agent_pre_first_exchange(
+                            view.ambient_agent_view_model(),
+                            view.agent_view_controller(),
+                            &model,
+                            ctx,
+                        )
+                    };
+                    if skip_during_setup {
                         return;
                     }
                     view.apply_viewer_shared_session_input_update(block_id, operations.clone(), ctx);

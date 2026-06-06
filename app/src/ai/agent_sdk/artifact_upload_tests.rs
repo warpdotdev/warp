@@ -44,6 +44,7 @@ fn create_conversation_metadata(
             tool_usage_metadata: Default::default(),
         },
         metadata: create_mock_server_metadata(),
+        creator: None,
         permissions: ServerPermissions::mock_personal(),
         ambient_agent_task_id: ambient_task_id.map(|task_id| task_id.parse().unwrap()),
         server_conversation_token: ServerConversationToken::new(conversation_id.to_string()),

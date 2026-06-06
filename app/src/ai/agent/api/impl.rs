@@ -68,13 +68,7 @@ pub async fn generate_multi_agent_output(
                 base: params.model.into(),
                 cli_agent: params.cli_agent_model.into(),
                 computer_use_agent: params.computer_use_model.into(),
-                base_model_context_window_limit: if FeatureFlag::ConfigurableContextWindow
-                    .is_enabled()
-                {
-                    params.context_window_limit.unwrap_or(0)
-                } else {
-                    0
-                },
+                base_model_context_window_limit: params.context_window_limit.unwrap_or(0),
                 ..Default::default()
             }),
             rules_enabled: params.is_memory_enabled,
@@ -106,8 +100,7 @@ pub async fn generate_multi_agent_output(
                 FeatureFlag::SummarizationViaMessageReplacement.is_enabled(),
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
-            supports_orchestration_v2: params.orchestration_enabled
-                && FeatureFlag::OrchestrationV2.is_enabled(),
+            supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
             custom_model_providers: params.custom_model_providers,
         }),
         metadata: Some(api::request::Metadata {
@@ -169,6 +162,10 @@ fn api_keys_with_warp_credit_fallback_setting(
         }),
         None => None,
     }
+}
+
+fn supports_orchestration_v2(orchestration_enabled: bool) -> bool {
+    orchestration_enabled
 }
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     let mut supported_tools = vec![
@@ -235,18 +232,7 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     }
 
     if params.orchestration_enabled {
-        // Always advertise the legacy start-agent tool so the server
-        // can fall back to it when its own orchestrate flag is off.
-        // When RunAgents is also enabled, advertise it alongside.
-        supported_tools.push(if FeatureFlag::OrchestrationV2.is_enabled() {
-            api::ToolType::StartAgentV2
-        } else {
-            api::ToolType::StartAgent
-        });
-        if FeatureFlag::RunAgentsTool.is_enabled() && FeatureFlag::OrchestrationV2.is_enabled() {
-            supported_tools.push(api::ToolType::RunAgents);
-        }
-        supported_tools.push(api::ToolType::SendMessageToAgent);
+        supported_tools.extend([api::ToolType::RunAgents, api::ToolType::SendMessageToAgent]);
     }
 
     if FeatureFlag::AskUserQuestion.is_enabled() && params.ask_user_question_enabled {

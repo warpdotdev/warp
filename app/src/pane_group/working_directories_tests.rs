@@ -425,7 +425,7 @@ fn shared_diff_state_model_survives_when_other_pane_group_still_references_repo(
         // Open the shared diff state model.
         let initial_id = working_directories_handle.update(&mut app, |model, ctx| {
             model
-                .get_or_create_diff_state_model(local(&canonical_repo), ctx)
+                .get_or_create_diff_state_model(local(&canonical_repo), None, ctx)
                 .expect("local diff state model must be created")
                 .id()
         });
@@ -444,7 +444,7 @@ fn shared_diff_state_model_survives_when_other_pane_group_still_references_repo(
         // Re-fetching should return the SAME cached model (no re-creation).
         let after_id = working_directories_handle.update(&mut app, |model, ctx| {
             model
-                .get_or_create_diff_state_model(local(&canonical_repo), ctx)
+                .get_or_create_diff_state_model(local(&canonical_repo), None, ctx)
                 .expect("local diff state model must still be present")
                 .id()
         });
@@ -482,7 +482,7 @@ fn diff_state_model_is_dropped_when_no_pane_group_references_repo() {
 
         let initial_id = working_directories_handle.update(&mut app, |model, ctx| {
             model
-                .get_or_create_diff_state_model(local(&canonical_repo), ctx)
+                .get_or_create_diff_state_model(local(&canonical_repo), None, ctx)
                 .expect("local diff state model must be created")
                 .id()
         });
@@ -494,7 +494,7 @@ fn diff_state_model_is_dropped_when_no_pane_group_references_repo() {
 
         let after_id = working_directories_handle.update(&mut app, |model, ctx| {
             model
-                .get_or_create_diff_state_model(local(&canonical_repo), ctx)
+                .get_or_create_diff_state_model(local(&canonical_repo), None, ctx)
                 .expect("local diff state model must be re-created")
                 .id()
         });
@@ -540,7 +540,7 @@ fn remove_pane_group_does_not_drop_diff_state_model_shared_with_other_pane_group
 
         let initial_id = working_directories_handle.update(&mut app, |model, ctx| {
             model
-                .get_or_create_diff_state_model(local(&canonical_repo), ctx)
+                .get_or_create_diff_state_model(local(&canonical_repo), None, ctx)
                 .expect("local diff state model must be created")
                 .id()
         });
@@ -552,7 +552,7 @@ fn remove_pane_group_does_not_drop_diff_state_model_shared_with_other_pane_group
 
         let after_id = working_directories_handle.update(&mut app, |model, ctx| {
             model
-                .get_or_create_diff_state_model(local(&canonical_repo), ctx)
+                .get_or_create_diff_state_model(local(&canonical_repo), None, ctx)
                 .expect("local diff state model must still be present")
                 .id()
         });

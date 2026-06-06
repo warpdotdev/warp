@@ -3837,7 +3837,7 @@ dependencies = [
 [[package]]
 name = "dagre_rust"
 version = "0.0.5"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775746cd86bdeec29cb96ba278fd08c9074"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=40cecf2be376e47e15053eadbfb782a531777420#40cecf2be376e47e15053eadbfb782a531777420"
 dependencies = [
  "graphlib_rust",
  "ordered_hashmap",
@@ -7907,16 +7907,31 @@ dependencies = [
 name = "mcp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-channel",
+ "async-trait",
+ "cfg-if",
+ "cloud_object_models",
  "futures",
  "http 1.4.0",
+ "log",
+ "oauth2",
  "pin-project-lite",
  "reqwest",
  "rmcp",
+ "serde",
  "serde_json",
+ "simple_logger",
  "sse-stream",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "url",
+ "uuid",
+ "warp_core",
+ "warpui",
+ "warpui_extras",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -7990,7 +8005,7 @@ dependencies = [
 [[package]]
 name = "mermaid_to_svg"
 version = "0.1.0"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=81551775746cd86bdeec29cb96ba278fd08c9074#81551775746cd86bdeec29cb96ba278fd08c9074"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=40cecf2be376e47e15053eadbfb782a531777420#40cecf2be376e47e15053eadbfb782a531777420"
 dependencies = [
  "dagre_rust",
  "graphlib_rust",
@@ -11861,15 +11876,15 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.145"
+version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
  "itoa",
  "memchr",
- "ryu",
  "serde",
  "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -12029,7 +12044,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=9e437df5be3c318999a9c94dba1826ebb33ad679#9e437df5be3c318999a9c94dba1826ebb33ad679"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d#c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d"
 dependencies = [
  "byte-unit",
  "serde",
@@ -13198,7 +13213,7 @@ dependencies = [
 [[package]]
 name = "tink-core"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "digest 0.10.7",
  "hkdf",
@@ -13227,7 +13242,7 @@ dependencies = [
 [[package]]
 name = "tink-hybrid"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "p256",
  "tink-aead",
@@ -13267,7 +13282,7 @@ dependencies = [
 [[package]]
 name = "tink-proto"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "base64 0.22.1",
  "prost 0.14.3",
@@ -15136,21 +15151,33 @@ name = "warp_server_client"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "async-trait",
+ "bincode",
  "chrono",
  "cloud_object_client",
  "cloud_object_models",
  "cloud_objects",
  "cynic",
  "derivative",
+ "diesel",
+ "firebase",
+ "futures",
+ "http 1.4.0",
+ "http_client",
+ "instant",
  "itertools 0.14.0",
  "lasso",
  "log",
+ "mockall",
+ "oauth2",
  "pathfinder_geometry",
  "schemars",
  "serde",
  "session-sharing-protocol",
  "settings_value",
  "thiserror 2.0.17",
+ "url",
  "uuid",
  "warp_core",
  "warp_graphql",
@@ -17106,6 +17133,12 @@ dependencies = [
  "memchr",
  "typed-path 0.12.2",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zopfli"

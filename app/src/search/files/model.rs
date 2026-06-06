@@ -57,6 +57,7 @@ impl FileSearchModel {
                     }
                 }
                 RepoMetadataEvent::FileTreeEntryUpdated { .. }
+                | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
                 | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                 | RepoMetadataEvent::IncrementalUpdateReady { .. } => {}
             },
@@ -148,11 +149,14 @@ impl FileSearchModel {
             Some(LocalOrRemotePath::Remote(ref remote_path)) => {
                 let id = RepositoryIdentifier::Remote(remote_path.clone());
                 let repo_metadata = RepoMetadataModel::as_ref(app);
-                let Some(contents) =
-                    repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app)
-                else {
-                    return Vec::new();
-                };
+                // Truncated results (capped at the repo metadata budget) are
+                // intentionally used as-is to return partial matches rather
+                // than nothing.
+                let contents =
+                    match repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app) {
+                        Ok(repo_contents) => repo_contents.contents,
+                        Err(_) => return Vec::new(),
+                    };
                 let root_std_path = &remote_path.path;
                 contents
                     .iter()
@@ -253,11 +257,14 @@ impl FileSearchModel {
                 let Some(id) = RepositoryIdentifier::try_local(local_path) else {
                     return Vec::new();
                 };
-                let Some(contents) =
-                    repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app)
-                else {
-                    return Vec::new();
-                };
+                // Truncated results (capped at the repo metadata budget) are
+                // intentionally used as-is to return partial matches rather
+                // than nothing.
+                let contents =
+                    match repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app) {
+                        Ok(repo_contents) => repo_contents.contents,
+                        Err(_) => return Vec::new(),
+                    };
                 contents
                     .iter()
                     .filter_map(|content| match content {
@@ -294,11 +301,14 @@ impl FileSearchModel {
             }
             LocalOrRemotePath::Remote(remote_path) => {
                 let id = RepositoryIdentifier::Remote(remote_path.clone());
-                let Some(contents) =
-                    repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app)
-                else {
-                    return Vec::new();
-                };
+                // Truncated results (capped at the repo metadata budget) are
+                // intentionally used as-is to return partial matches rather
+                // than nothing.
+                let contents =
+                    match repo_metadata.get_repo_contents(&id, GetContentsArgs::default(), app) {
+                        Ok(repo_contents) => repo_contents.contents,
+                        Err(_) => return Vec::new(),
+                    };
                 let root_std_path = &remote_path.path;
                 contents
                     .iter()

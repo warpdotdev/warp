@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;
 
+use warp_cli::agent::Harness;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
 
@@ -48,6 +49,29 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
 fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
     SpawnAgentRequest {
         prompt: Some(prompt.to_owned()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: None,
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    }
+}
+
+/// A promptless cloud spawn request (`prompt: None`), modeling an empty-prompt
+/// local-to-cloud handoff where the agent skips its initial turn.
+fn promptless_cloud_spawn_request() -> SpawnAgentRequest {
+    SpawnAgentRequest {
+        prompt: None,
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
@@ -334,6 +358,85 @@ fn cloud_setup_enter_queues_followup_input_when_v2_is_enabled() {
 }
 
 #[test]
+fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
+    // Third-party (non-Oz) harness runs don't support prompt queueing, so an enter during
+    // setup must not queue the follow-up. It falls through to being blocked, leaving the
+    // typed text in the buffer (same observable outcome as the V2-disabled path).
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+        let _agent_harness = FeatureFlag::AgentHarness.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+            view.ambient_agent_view_model()
+                .expect("cloud terminal should have an ambient model")
+                .update(ctx, |model, ctx| {
+                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.set_harness(Harness::Claude, ctx);
+                });
+
+            view.input.update(ctx, |input, ctx| {
+                input.replace_buffer_content("do not queue this", ctx);
+                input.input_enter(ctx);
+            });
+
+            assert!(QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .is_empty());
+            assert_eq!(view.input.as_ref(ctx).buffer_text(ctx), "do not queue this");
+        });
+    });
+}
+
+#[test]
+fn cloud_setup_enter_queues_followup_while_setup_commands_run() {
+    // Once the cloud session starts, the run is `AgentRunning` while environment setup
+    // commands execute (still pre-first-exchange). Submitting in this window must queue the
+    // follow-up, not send it as a live prompt the sharer would drop.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let task_id = AmbientAgentTaskId::from_str("123e4567-e89b-12d3-a456-426614174000")
+            .expect("valid task id");
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            enter_cloud_setup_with_conversation(view, ctx);
+            view.ambient_agent_view_model()
+                .expect("cloud terminal should have an ambient model")
+                .update(ctx, |model, ctx| {
+                    // Session has started: the run moves to AgentRunning.
+                    model.enter_viewing_existing_session(task_id, ctx);
+                });
+            // Environment setup commands are running (pre-first-exchange).
+            view.model
+                .lock()
+                .block_list_mut()
+                .set_is_executing_oz_environment_startup_commands(true);
+
+            view.input.update(ctx, |input, ctx| {
+                input.replace_buffer_content("queue during setup", ctx);
+                input.input_enter(ctx);
+            });
+
+            let queued_rows = queue_texts(view, ctx);
+            assert!(queued_rows.iter().any(|(text, origin)| {
+                text == "queue during setup" && *origin == QueuedQueryOrigin::AutoQueueToggle
+            }));
+            assert!(view.input.as_ref(ctx).buffer_text(ctx).is_empty());
+        });
+    });
+}
+
+#[test]
 fn cloud_setup_enter_remains_blocked_when_v2_is_disabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -446,6 +549,133 @@ fn terminal_cloud_status_transition_drains_once_through_cloud_followup_input_eve
             followup_events.borrow().as_slice(),
             ["queued cloud follow up"]
         );
+    });
+}
+
+#[test]
+fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
+    // A promptless handoff run (`request.prompt == None`) never fires a first
+    // turn, so the normal completion drain never runs. When the cloud setup
+    // phase completes, the prompt the user queued during setup must be sent to
+    // the live shared session (viewer path -> `Event::SendAgentPrompt`).
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+            view.ambient_agent_view_model()
+                .expect("cloud terminal should have an ambient model")
+                .update(ctx, |model, ctx| {
+                    model.spawn_agent_with_request(promptless_cloud_spawn_request(), ctx);
+                });
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(
+                    conversation_id,
+                    QueuedQuery::new(
+                        "queued during setup".to_owned(),
+                        QueuedQueryOrigin::AutoQueueToggle,
+                    ),
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        let sent_prompts = Rc::new(RefCell::new(Vec::<String>::new()));
+        let input = terminal.read(&app, |view, _| view.input.clone());
+        let sent_prompts_for_subscription = sent_prompts.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &InputEvent, _| {
+                if let InputEvent::SendAgentPrompt { prompt, .. } = event {
+                    sent_prompts_for_subscription
+                        .borrow_mut()
+                        .push(prompt.clone());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.maybe_drain_queue_after_promptless_setup(ctx);
+        });
+
+        assert_eq!(sent_prompts.borrow().as_slice(), ["queued during setup"]);
+        terminal.read(&app, |_, ctx| {
+            assert!(QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .is_empty());
+        });
+    });
+}
+
+#[test]
+fn promptless_setup_complete_with_initial_prompt_does_not_drain_queue() {
+    // A run that carried an initial prompt (`request.prompt == Some(..)`) runs a
+    // first turn and drains its queue on completion, so the setup-complete
+    // marker must NOT drain it early.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _cloud_mode_setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _queued_prompts_v2 = FeatureFlag::QueuedPromptsV2.override_enabled(true);
+
+        let terminal = add_window_with_cloud_mode_terminal(&mut app);
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id = enter_cloud_setup_with_conversation(view, ctx);
+            view.ambient_agent_view_model()
+                .expect("cloud terminal should have an ambient model")
+                .update(ctx, |model, ctx| {
+                    model.spawn_agent_with_request(cloud_spawn_request("initial prompt"), ctx);
+                });
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(
+                    conversation_id,
+                    QueuedQuery::new(
+                        "queued during setup".to_owned(),
+                        QueuedQueryOrigin::AutoQueueToggle,
+                    ),
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        // The `DispatchedAgent` subscription enqueues the non-empty initial
+        // prompt as an `InitialCloudMode` row once the spawn update flushes, so
+        // the queue holds both that row and the prompt queued during setup.
+        // Snapshot the queue before the drain to assert the drain leaves it
+        // untouched.
+        let queue_before = terminal.read(&app, |_, ctx| {
+            QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .iter()
+                .map(|q| q.text().to_owned())
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            queue_before.iter().any(|t| t == "queued during setup"),
+            "setup-queued prompt should be present before the drain"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.maybe_drain_queue_after_promptless_setup(ctx);
+        });
+
+        // The initial-prompt run is not promptless, so the drain is a no-op:
+        // the queue is identical before and after.
+        terminal.read(&app, |_, ctx| {
+            let queue_after = QueuedQueryModel::as_ref(ctx)
+                .queue(conversation_id)
+                .iter()
+                .map(|q| q.text().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(queue_after, queue_before);
+        });
     });
 }
 
@@ -772,9 +1002,16 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
             let input = terminal.read(&app, |view, _| view.input.clone());
             input.read(&app, |input, _| input.suggestions_mode_model().clone())
         };
+        let cli_subagent_controller =
+            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
         let panel = terminal.update(&mut app, |_, ctx| {
             ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model, ctx)
+                QueuedPromptsPanelView::new(
+                    terminal_view_id,
+                    suggestions_mode_model,
+                    cli_subagent_controller,
+                    ctx,
+                )
             })
         });
 
@@ -826,9 +1063,16 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
             let input = terminal.read(&app, |view, _| view.input.clone());
             input.read(&app, |input, _| input.suggestions_mode_model().clone())
         };
+        let cli_subagent_controller =
+            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
         let panel = terminal.update(&mut app, |_, ctx| {
             ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(terminal_view_id, suggestions_mode_model, ctx)
+                QueuedPromptsPanelView::new(
+                    terminal_view_id,
+                    suggestions_mode_model,
+                    cli_subagent_controller,
+                    ctx,
+                )
             })
         });
 

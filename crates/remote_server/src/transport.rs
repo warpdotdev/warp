@@ -158,6 +158,10 @@ pub struct Connection {
     /// `event_rx` so the failure sender on the client doesn't keep the
     /// lifecycle event channel alive.
     pub failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
+    /// Receiver for host-scoped responses whose `request_id` was not in
+    /// this client's `pending_requests`. The manager drains this to match
+    /// against its `pending_host_requests`.
+    pub host_response_rx: async_channel::Receiver<crate::proto::ServerMessage>,
     /// The subprocess whose stdio backs the client (e.g.
     /// `ssh … remote-server-proxy`). Spawned with `kill_on_drop(true)`
     /// by the transport, so dropping this `Child` sends SIGKILL to the

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use warp_core::SessionId;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, ModelContext, ModelHandle};
@@ -25,6 +26,50 @@ pub use local::LocalDiffStateModel;
 
 mod remote;
 pub use remote::RemoteDiffStateModel;
+
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+mod error;
+pub(crate) use error::DiffStateError;
+
+/// Identifies the host of a [`DiffStateModel`] so failure telemetry can be
+/// attributed to where the model actually ran. This is more specific than the
+/// local/remote split already encoded by `is_local`: a [`LocalDiffStateModel`]
+/// can be instantiated on the user's client (`ClientLocal`) or on a remote
+/// daemon (`RemoteDaemon`) serving subscribers, and only the host knows which.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub enum BackendOrigin {
+    /// `LocalDiffStateModel` running on the user's client against local files.
+    #[serde(rename = "client_local")]
+    ClientLocal,
+    /// `RemoteDiffStateModel` running on the user's client; talks to a daemon.
+    #[serde(rename = "client_remote")]
+    ClientRemote,
+    /// `LocalDiffStateModel` running on a remote daemon, serving subscribers.
+    #[serde(rename = "remote_daemon")]
+    RemoteDaemon,
+}
+
+/// Identifies the diff-state operation that produced a [`DiffStateError`]
+/// on the `LoadDiffFailed` telemetry path. Carried alongside the error so
+/// failures can be sliced by originating operation — every operation shares
+/// the same failure pool, so the error variant alone doesn't reveal where
+/// it came from.
+///
+/// Metadata-load failures are reported through a dedicated
+/// `LoadMetadataFailed` event and therefore don't need a variant here.
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
+pub enum DiffOperation {
+    /// Per-file diff refresh triggered by the file-invalidation queue.
+    #[serde(rename = "file_invalidation")]
+    FileInvalidation,
+    /// Full repo-wide diff snapshot load.
+    #[serde(rename = "diff_load")]
+    DiffLoad,
+    /// Client-side reaction to a remote daemon's diff-state response.
+    #[serde(rename = "remote_diff")]
+    RemoteDiff,
+}
 
 // -- Shared types ──────────────────────────────────────────────────────
 
@@ -349,20 +394,27 @@ impl DiffStateModel {
     /// to the inner model so it can forward events.
     pub fn new_local(path: PathBuf, ctx: &mut ModelContext<Self>) -> Self {
         let repo_path = Some(path.display().to_string());
-        let local = ctx.add_model(|ctx| LocalDiffStateModel::new(repo_path, ctx));
+        let local = ctx
+            .add_model(|ctx| LocalDiffStateModel::new(repo_path, BackendOrigin::ClientLocal, ctx));
         ctx.subscribe_to_model(&local, Self::forward_event);
         Self::Local(local)
     }
 
-    /// Creates a new remote-backed `DiffStateModel`. The model is
-    /// session-agnostic and is keyed by `(host_id, repo, mode)`; the
-    /// `RemoteServerManager` resolves a connected session for the host at
-    /// every outbound RPC, so the wrapper does not need to thread a
-    /// `SessionId` through. Callers must ensure a session for the host is
-    /// connected before constructing.
-    pub fn new_remote(remote_path: RemotePath, ctx: &mut ModelContext<Self>) -> Self {
-        let remote =
-            ctx.add_model(|ctx| RemoteDiffStateModel::new(remote_path, DiffMode::default(), ctx));
+    /// Creates a new remote-backed `DiffStateModel`. The model is keyed by
+    /// `(host_id, repo, mode)` and shared across sessions viewing the same
+    /// repo. `preferred_session` is the session that opened this review (when
+    /// known): `GetDiffState` is session-scoped, so the manager dispatches it
+    /// over that session when it's connected and falls back to any connected
+    /// session for the host otherwise. Callers must ensure a session for the
+    /// host is connected before constructing.
+    pub fn new_remote(
+        remote_path: RemotePath,
+        preferred_session: Option<SessionId>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        let remote = ctx.add_model(|ctx| {
+            RemoteDiffStateModel::new(remote_path, DiffMode::default(), preferred_session, ctx)
+        });
         ctx.subscribe_to_model(&remote, Self::forward_event);
         Self::Remote(remote)
     }
@@ -482,11 +534,16 @@ impl DiffStateModel {
 
     // ── Unified write API ─────────────────────────────────────────────
 
+    /// `preferred_session` is the session that triggered this call (the
+    /// session showing the review). It's forwarded per-call to the remote
+    /// model so the `GetDiffState` RPC rides that session; the local backend
+    /// ignores it. The remote model never caches it.
     pub(crate) fn set_diff_mode(
         &self,
         mode: DiffMode,
         should_fetch_base: bool,
         track_load_duration: bool,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
@@ -497,7 +554,7 @@ impl DiffStateModel {
             }
             Self::Remote(model) => {
                 model.update(ctx, |model, ctx| {
-                    model.set_diff_mode(mode, track_load_duration, ctx);
+                    model.set_diff_mode(mode, track_load_duration, preferred_session, ctx);
                 });
             }
         }
@@ -506,6 +563,7 @@ impl DiffStateModel {
     pub(crate) fn set_diff_mode_and_fetch_base(
         &self,
         mode: DiffMode,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
@@ -516,7 +574,7 @@ impl DiffStateModel {
             }
             Self::Remote(model) => {
                 model.update(ctx, |model, ctx| {
-                    model.set_diff_mode(mode, true, ctx);
+                    model.set_diff_mode(mode, true, preferred_session, ctx);
                 });
             }
         }
@@ -526,6 +584,7 @@ impl DiffStateModel {
         &self,
         should_fetch_base: bool,
         track_load_duration: bool,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
@@ -536,7 +595,7 @@ impl DiffStateModel {
             }
             Self::Remote(remote) => {
                 remote.update(ctx, |remote, ctx| {
-                    remote.fetch_fresh_snapshot(track_load_duration, ctx);
+                    remote.fetch_fresh_snapshot(track_load_duration, preferred_session, ctx);
                 });
             }
         }

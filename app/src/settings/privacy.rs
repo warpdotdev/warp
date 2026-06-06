@@ -8,6 +8,7 @@ use settings::macros::{define_settings_group, maybe_define_setting, register_set
 use settings::{RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud};
 use warp_core::features::FeatureFlag;
 use warp_core::report_if_error;
+use warp_graphql::mutations::update_user_settings::UpdateUserSettingsInput;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
 use super::cloud_preferences_syncer::CloudPreferencesSyncer;
@@ -674,7 +675,14 @@ impl PrivacySettings {
             let snapshot = self.get_snapshot(ctx);
             let _ = ctx.spawn(
                 async move {
-                    let result = auth_client.update_user_settings(snapshot).await;
+                    let result = auth_client
+                        .update_user_settings(UpdateUserSettingsInput {
+                            telemetry_enabled: Some(snapshot.is_telemetry_enabled()),
+                            crash_reporting_enabled: Some(snapshot.is_crash_reporting_enabled()),
+                            cloud_conversation_storage_enabled: snapshot
+                                .cloud_conversation_storage_enabled(),
+                        })
+                        .await;
                     if let Err(err) = result {
                         report_error!(
                             err.context("Failed to update server with local privacy settings.")

@@ -280,6 +280,7 @@ fn server_conversation_metadata(
             tool_usage_metadata: Default::default(),
         },
         metadata: server_metadata(creator_uid),
+        creator: None,
         permissions: server_permissions(permissions_fixture),
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(CONVERSATION_TOKEN.to_string()),

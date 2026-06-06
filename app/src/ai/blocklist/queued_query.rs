@@ -132,7 +132,6 @@ pub enum QueuedQueryEvent {
     },
     EditCommitted {
         conversation_id: AIConversationId,
-        #[allow(dead_code)]
         query_id: QueuedQueryId,
     },
     EditCancelled {

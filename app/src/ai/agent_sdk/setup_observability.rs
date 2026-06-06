@@ -88,7 +88,7 @@ impl SetupClientEventReporter {
             .detach();
     }
 
-    pub(crate) async fn post_timeline_event(&self, event: SetupTimelineEvent) {
+    pub(crate) async fn post_timeline_event(&self, event: OzRunTimelineEvent) {
         let Some(run_id) = self.run_id else {
             return;
         };
@@ -140,13 +140,15 @@ impl SetupClientEventReporter {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum SetupTimelineEvent {
+pub(crate) enum OzRunTimelineEvent {
+    AgentStarted,
     WorkerContainerReady,
 }
 
-impl SetupTimelineEvent {
+impl OzRunTimelineEvent {
     fn as_event_name(self) -> &'static str {
         match self {
+            Self::AgentStarted => "agent_started",
             Self::WorkerContainerReady => "worker_container_ready",
         }
     }

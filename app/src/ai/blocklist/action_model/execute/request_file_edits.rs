@@ -29,8 +29,8 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType,
-    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, RequestFileEditsResult,
-    UpdatedFileContext,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, AnyFileContent, FileContext,
+    FileLocations, RequestFileEditsResult, UpdatedFileContext,
 };
 use crate::ai::blocklist::inline_action::code_diff_view::{
     CodeDiffView, CodeDiffViewEvent, DiffSessionType, FileDiff,
@@ -40,6 +40,7 @@ use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
 use crate::{safe_warn, BlocklistAIHistoryModel};
+const APPLY_DIFF_RESULT_CONTEXT_LINES: usize = 10;
 
 pub struct RequestFileEditsExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -224,35 +225,12 @@ impl RequestFileEditsExecutor {
                 // This avoids re-reading files from disk or the remote server.
                 let content_map: HashMap<String, String> = file_contents.iter().cloned().collect();
 
-                let mut file_edited_map = HashMap::new();
-                for (file_location, was_edited) in updated_files.iter() {
-                    file_edited_map.insert(file_location.name.clone(), *was_edited);
-                }
-
                 let _ = result_tx.send(RequestFileEditsResult::Success {
                     diff: diff.unified_diff.clone(),
-                    updated_files: updated_files
-                        .iter()
-                        .map(|(file_location, was_edited)| {
-                            let content = content_map
-                                .get(&file_location.name)
-                                .cloned()
-                                .unwrap_or_default();
-                            let line_count = content.lines().count();
-                            UpdatedFileContext {
-                                was_edited_by_user: *was_edited,
-                                file_context: crate::ai::agent::FileContext {
-                                    file_name: file_location.name.clone(),
-                                    content: crate::ai::agent::AnyFileContent::StringContent(
-                                        content,
-                                    ),
-                                    line_range: None,
-                                    last_modified: None,
-                                    line_count,
-                                },
-                            }
-                        })
-                        .collect(),
+                    updated_files: updated_file_contexts_from_editor_buffers(
+                        updated_files,
+                        &content_map,
+                    ),
                     deleted_files: deleted_files.clone(),
                     lines_added: diff.lines_added,
                     lines_removed: diff.lines_removed,
@@ -433,6 +411,76 @@ impl RequestFileEditsExecutor {
     }
 }
 
+fn updated_file_contexts_from_editor_buffers(
+    updated_files: &[(FileLocations, bool)],
+    content_map: &HashMap<String, String>,
+) -> Vec<UpdatedFileContext> {
+    updated_files
+        .iter()
+        .flat_map(|(file_location, was_edited)| {
+            let content = content_map
+                .get(&file_location.name)
+                .cloned()
+                .unwrap_or_default();
+            let line_count = content.lines().count();
+
+            let mut file_location = file_location.clone();
+            file_location.expand_surrounding_context(APPLY_DIFF_RESULT_CONTEXT_LINES);
+            clamp_to_file_context_range_start(&mut file_location);
+
+            if file_location.lines.is_empty() {
+                return vec![UpdatedFileContext {
+                    was_edited_by_user: *was_edited,
+                    file_context: FileContext {
+                        file_name: file_location.name,
+                        content: AnyFileContent::StringContent(content),
+                        line_range: None,
+                        last_modified: None,
+                        line_count,
+                    },
+                }];
+            }
+
+            let lines = content.lines().collect_vec();
+            file_location
+                .lines
+                .into_iter()
+                .map(|range| {
+                    let start = range.start.saturating_sub(1).min(lines.len());
+                    let end = range.end.saturating_sub(1).min(lines.len());
+                    let fragment = if start >= end {
+                        String::new()
+                    } else {
+                        lines[start..end].join("\n")
+                    };
+
+                    UpdatedFileContext {
+                        was_edited_by_user: *was_edited,
+                        file_context: FileContext {
+                            file_name: file_location.name.clone(),
+                            content: AnyFileContent::StringContent(fragment),
+                            line_range: Some(range),
+                            last_modified: None,
+                            line_count,
+                        },
+                    }
+                })
+                .collect_vec()
+        })
+        .collect()
+}
+
+fn clamp_to_file_context_range_start(file_location: &mut FileLocations) {
+    for range in &mut file_location.lines {
+        range.start = range.start.max(1);
+        range.end = range.end.max(range.start);
+    }
+}
+
 impl Entity for RequestFileEditsExecutor {
     type Event = ();
 }
+
+#[cfg(test)]
+#[path = "request_file_edits_tests.rs"]
+mod tests;

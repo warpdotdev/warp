@@ -150,7 +150,6 @@ use crate::server::graphql::schema::{
 };
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId, ToServerId};
-use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApi;
 use crate::server::sync_queue::SerializedModel;
 use crate::settings::Preference;
@@ -688,7 +687,7 @@ impl ObjectClient for ServerApi {
 
         let subscription = GetWarpDriveUpdates::build(());
 
-        start_graphql_streaming_operation(
+        let result = start_graphql_streaming_operation(
             &ChannelState::ws_server_url(),
             init_payload,
             subscription,
@@ -700,8 +699,18 @@ impl ObjectClient for ServerApi {
             },
             message_sender,
             stream_ready_sender,
+            self.iap_state
+                .as_ref()
+                .and_then(|state| state.proxy_auth_header())
+                .into_iter()
+                .collect(),
         )
-        .await
+        .await;
+
+        if let Err(err) = &result {
+            self.report_ws_iap_challenge(err);
+        }
+        result
     }
 
     async fn fetch_changed_objects(

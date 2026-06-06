@@ -390,9 +390,7 @@ fn test_toolbar_command_map_matched_agent() {
 }
 
 #[test]
-fn orchestration_v2_enables_orchestration_when_ai_is_enabled() {
-    let _orchestration_v2_flag = FeatureFlag::OrchestrationV2.override_enabled(true);
-
+fn orchestration_is_enabled_when_ai_is_enabled() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         add_ai_enablement_dependencies_for_test(&mut app);
@@ -403,19 +401,6 @@ fn orchestration_v2_enables_orchestration_when_ai_is_enabled() {
     });
 }
 
-#[test]
-fn orchestration_v2_disabled_disables_orchestration() {
-    let _orchestration_v2_flag = FeatureFlag::OrchestrationV2.override_enabled(false);
-
-    App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        add_ai_enablement_dependencies_for_test(&mut app);
-
-        AISettings::handle(&app).read(&app, |settings, ctx| {
-            assert!(!settings.is_orchestration_enabled(ctx));
-        });
-    });
-}
 #[test]
 fn test_should_display_quota_reset_banner_with_empty_history() {
     App::test((), |mut app| async move {

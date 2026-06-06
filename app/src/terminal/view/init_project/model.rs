@@ -6,7 +6,6 @@ use enum_iterator::Sequence;
 use lsp::supported_servers::LSPServerType;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
-#[cfg(not(target_family = "wasm"))]
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{Entity, ModelContext, SingletonEntity as _};
 
@@ -187,7 +186,7 @@ impl InitProjectModel {
             && !*CodeSettings::as_ref(ctx).auto_indexing_enabled;
 
         let has_pending_project_scoped_rules = ProjectContextModel::as_ref(ctx)
-            .find_applicable_project_rules(path)
+            .find_applicable_project_rules(&LocalOrRemotePath::Local(path.to_path_buf()))
             .is_none();
 
         has_pending_codebase_context || has_pending_project_scoped_rules
