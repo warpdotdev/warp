@@ -121,8 +121,7 @@ impl SyncDataSource for SkillSelectorDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let cwd = self.get_current_working_directory(app);
         let cli_agent_providers = self.active_cli_agent_providers(app);
-        let skills =
-            SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
+        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         // Filter out bundled skills when in open mode, since they cannot be opened.
         // When CLI agent input is open, filter to skills that exist in a supported

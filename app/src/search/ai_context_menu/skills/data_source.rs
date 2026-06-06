@@ -43,8 +43,7 @@ impl SyncDataSource for SkillsDataSource {
             .unwrap_or(None);
         #[cfg(target_family = "wasm")]
         let cwd: Option<LocalOrRemotePath> = None;
-        let skills =
-            SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
+        let skills = SkillManager::as_ref(app).get_skills_for_working_directory(cwd.as_ref(), app);
 
         let mut results: Vec<QueryResult<Self::Action>> = if query_text.is_empty() {
             // Zero state: show all skills with a uniform high score.
