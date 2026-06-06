@@ -1,15 +1,47 @@
 //! Blocking client helpers used by the standalone `warpctrl` CLI.
+//!
+//! Authentication is a two-transport flow:
+//!
+//! 1. Discovery supplies instance metadata, an exact `127.0.0.1` control
+//!    endpoint, and an instance-bound credential-broker socket reference. It
+//!    never supplies a bearer credential.
+//! 2. Before using either reference, the client validates that the endpoint is
+//!    loopback and that the broker filename is derived from the selected
+//!    instance ID.
+//! 3. The client requests a credential for one action and invocation context
+//!    over the owner-only broker socket. On Unix, the server authenticates the
+//!    connecting process through kernel-reported peer credentials before
+//!    issuing a short-lived, action-scoped credential.
+//! 4. The client keeps that credential in memory and presents it as a bearer
+//!    token only to the selected instance's loopback HTTP endpoint. The running
+//!    Warp app revalidates the credential, current settings, action scope, and
+//!    request before dispatch.
+//!
+//! Client-side validation prevents accidental use of inconsistent discovery
+//! authority, but it is not the authorization boundary. The broker and running
+//! app enforce authorization, and credentials must never be written to
+//! discovery records, logs, or command output.
+#[cfg(unix)]
+use std::io::{Read as _, Write as _};
+#[cfg(unix)]
+use std::net::Shutdown;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::path::Path;
+
 use crate::auth::{CredentialRequest, ScopedCredential};
 use crate::discovery::{ControlEndpoint, InstanceRecord};
 use crate::protocol::{
-    ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope, ExecutionContextProof,
-    InvocationContext, RequestEnvelope, ResponseEnvelope,
+    Action, ActionKind, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope,
+    ExecutionContextProof, InvocationContext, RequestEnvelope, ResponseEnvelope,
 };
 const TERMINAL_PROOF_ID_ENV: &str = "WARPCTRL_TERMINAL_PROOF_ID";
 const TERMINAL_SESSION_ID_ENV: &str = "WARPCTRL_TERMINAL_SESSION_ID";
 const TERMINAL_PROOF_SECRET_ENV: &str = "WARPCTRL_TERMINAL_PROOF_SECRET";
 const CONTROL_PORT_ENV: &str = "WARPCTRL_CONTROL_PORT";
 
+/// Requests an action-scoped credential and sends one authenticated control request.
 pub fn send_request(
     instance: &InstanceRecord,
     request: &RequestEnvelope,
@@ -54,37 +86,22 @@ pub fn send_request(
         text,
     ))
 }
-
 fn control_endpoint_for_context(
     instance: &InstanceRecord,
     invocation_context: InvocationContext,
 ) -> Result<ControlEndpoint, ControlError> {
-    if let Some(endpoint) = &instance.endpoint {
-        return Ok(endpoint.clone());
+    match invocation_context {
+        InvocationContext::InsideWarp => control_endpoint_from_environment(),
+        InvocationContext::OutsideWarp => {
+            instance.validate_local_control_authority()?;
+            instance.endpoint.clone().ok_or_else(|| {
+                ControlError::new(
+                    ErrorCode::LocalControlDisabled,
+                    "outside-Warp local control endpoint is disabled for this instance",
+                )
+            })
+        }
     }
-    if invocation_context == InvocationContext::InsideWarp {
-        return control_endpoint_from_environment();
-    }
-    Err(ControlError::new(
-        ErrorCode::LocalControlDisabled,
-        "outside-Warp local control endpoint is disabled for this instance",
-    ))
-}
-
-fn credential_endpoint_for_context(
-    instance: &InstanceRecord,
-    invocation_context: InvocationContext,
-) -> Result<ControlEndpoint, ControlError> {
-    if let Some(credential_broker) = &instance.credential_broker {
-        return Ok(credential_broker.endpoint.clone());
-    }
-    if invocation_context == InvocationContext::InsideWarp {
-        return control_endpoint_from_environment();
-    }
-    Err(ControlError::new(
-        ErrorCode::LocalControlDisabled,
-        "outside-Warp local control credential broker is disabled for this instance",
-    ))
 }
 
 fn control_endpoint_from_environment() -> Result<ControlEndpoint, ControlError> {
@@ -116,7 +133,103 @@ pub fn invocation_context_from_environment() -> (InvocationContext, Option<Execu
         _ => (InvocationContext::OutsideWarp, None),
     }
 }
+/// Requests a proof-verified credential from the app-injected inside-Warp endpoint.
+fn request_credential_over_http(
+    endpoint: &ControlEndpoint,
+    request: &CredentialRequest,
+) -> Result<String, ControlError> {
+    let response = reqwest::blocking::Client::new()
+        .post(endpoint.credential_url())
+        .json(request)
+        .send()
+        .map_err(|err| {
+            ControlError::with_details(
+                ErrorCode::TransportUnavailable,
+                "failed to request inside-Warp local-control credential",
+                err.to_string(),
+            )
+        })?;
+    response.text().map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to read local-control credential response",
+            err.to_string(),
+        )
+    })
+}
 
+#[cfg(unix)]
+/// Resolves the selected instance's validated broker path and requests a credential.
+fn request_credential_over_owner_ipc(
+    instance: &InstanceRecord,
+    request: &CredentialRequest,
+) -> Result<String, ControlError> {
+    let path = instance.broker_socket_path()?;
+    request_credential_over_socket(&path, request)
+}
+
+#[cfg(unix)]
+/// Exchanges one credential request and response over an owner-authenticated socket.
+///
+/// Shutting down the write half delimits the JSON request so the broker can
+/// read it to EOF before returning either a scoped credential or a structured
+/// error response.
+fn request_credential_over_socket(
+    path: &Path,
+    request: &CredentialRequest,
+) -> Result<String, ControlError> {
+    let mut stream = UnixStream::connect(path).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to connect to the owner-authenticated local-control credential broker",
+            err.to_string(),
+        )
+    })?;
+    let request = serde_json::to_vec(request).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::InvalidRequest,
+            "failed to serialize local-control credential request",
+            err.to_string(),
+        )
+    })?;
+    stream.write_all(&request).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to write local-control credential request",
+            err.to_string(),
+        )
+    })?;
+    stream.shutdown(Shutdown::Write).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to finish local-control credential request",
+            err.to_string(),
+        )
+    })?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(|err| {
+        ControlError::with_details(
+            ErrorCode::TransportUnavailable,
+            "failed to read local-control credential response",
+            err.to_string(),
+        )
+    })?;
+    Ok(response)
+}
+
+#[cfg(not(unix))]
+/// Fails closed on platforms without an owner-authenticated broker transport.
+fn request_credential_over_owner_ipc(
+    _instance: &InstanceRecord,
+    _request: &CredentialRequest,
+) -> Result<String, ControlError> {
+    Err(ControlError::new(
+        ErrorCode::LocalControlDisabled,
+        "outside-Warp local control requires an owner-authenticated credential broker",
+    ))
+}
+
+/// Requests and decodes a short-lived credential for one action and invocation context.
 pub fn request_credential(
     instance: &InstanceRecord,
     action: crate::protocol::ActionKind,
@@ -131,29 +244,17 @@ pub fn request_credential_with_proof(
     invocation_context: InvocationContext,
     execution_context_proof: Option<ExecutionContextProof>,
 ) -> Result<ScopedCredential, ControlError> {
-    let credential_endpoint = credential_endpoint_for_context(instance, invocation_context)?;
-    let client = reqwest::blocking::Client::new();
     let mut request = CredentialRequest::new(action, invocation_context);
     request.execution_context_proof = execution_context_proof;
-    let response = client
-        .post(credential_endpoint.credential_url())
-        .json(&request)
-        .send()
-        .map_err(|err| {
-            ControlError::with_details(
-                ErrorCode::TransportUnavailable,
-                "failed to request local-control credential",
-                err.to_string(),
-            )
-        })?;
-    let status = response.status();
-    let text = response.text().map_err(|err| {
-        ControlError::with_details(
-            ErrorCode::TransportUnavailable,
-            "failed to read local-control credential response",
-            err.to_string(),
-        )
-    })?;
+    let text = match invocation_context {
+        InvocationContext::InsideWarp => {
+            request_credential_over_http(&control_endpoint_from_environment()?, &request)?
+        }
+        InvocationContext::OutsideWarp => {
+            instance.validate_local_control_authority()?;
+            request_credential_over_owner_ipc(instance, &request)?
+        }
+    };
     if let Ok(credential) = serde_json::from_str::<ScopedCredential>(&text) {
         return Ok(credential);
     }
@@ -162,7 +263,42 @@ pub fn request_credential_with_proof(
     }
     Err(ControlError::with_details(
         ErrorCode::TransportUnavailable,
-        format!("local-control credential request failed with HTTP {status}"),
+        "local-control credential broker returned an invalid response",
         text,
     ))
 }
+
+/// Authenticates an app-ping request and verifies the selected instance is live.
+pub fn probe_instance(instance: &InstanceRecord) -> Result<(), ControlError> {
+    let response = send_request(
+        instance,
+        &RequestEnvelope::new(Action::new(ActionKind::AppPing)),
+    )?;
+    validate_probe_response(instance, response)
+}
+
+/// Rejects a health response that does not prove the selected instance identity.
+fn validate_probe_response(
+    instance: &InstanceRecord,
+    response: ResponseEnvelope,
+) -> Result<(), ControlError> {
+    let ControlResponse::Ok { data } = response.response else {
+        return Err(ControlError::new(
+            ErrorCode::TransportUnavailable,
+            "local-control health probe returned an error response",
+        ));
+    };
+    if data.get("instance_id").and_then(serde_json::Value::as_str)
+        != Some(instance.instance_id.0.as_str())
+    {
+        return Err(ControlError::new(
+            ErrorCode::TransportUnavailable,
+            "local-control health probe returned a different instance identity",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

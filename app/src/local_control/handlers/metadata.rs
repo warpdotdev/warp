@@ -22,7 +22,6 @@ struct InstanceResponse<'a> {
     pid: u32,
     channel: String,
     app_id: String,
-    app_version: Option<&'static str>,
     protocol_version: u32,
     actions: Vec<ActionMetadata>,
 }
@@ -57,7 +56,6 @@ struct VersionResponse<'a> {
     protocol_version: u32,
     channel: String,
     app_id: String,
-    app_version: Option<&'static str>,
 }
 
 pub(crate) fn instance(
@@ -69,7 +67,6 @@ pub(crate) fn instance(
         pid: std::process::id(),
         channel: ChannelState::channel().to_string(),
         app_id: ChannelState::app_id().to_string(),
-        app_version: ChannelState::app_version(),
         protocol_version: PROTOCOL_VERSION,
         actions: ActionKind::implemented_metadata(),
     })
@@ -91,7 +88,6 @@ pub(crate) fn version(instance_id: &Option<InstanceId>) -> Result<serde_json::Va
         protocol_version: PROTOCOL_VERSION,
         channel: ChannelState::channel().to_string(),
         app_id: ChannelState::app_id().to_string(),
-        app_version: ChannelState::app_version(),
     })
 }
 

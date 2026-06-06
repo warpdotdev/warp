@@ -12,7 +12,7 @@ use ai::agent::action_result::{
     RequestComputerUseResult, SendMessageToAgentResult, StartAgentResult, StartAgentVersion,
     UseComputerResult,
 };
-use ai::skills::ParsedSkill;
+use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
 use persistence::model::AgentConversationData;
 use warp_core::command::ExitCode;
@@ -468,7 +468,10 @@ impl ConvertToExchanges for &api::Task {
                 }
                 api::message::Message::InvokeSkill(invoke_skill) => {
                     if let Some(api_skill) = invoke_skill.skill.clone() {
-                        if let Ok(parsed_skill) = ParsedSkill::try_from(api_skill) {
+                        if let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
+                            api_skill,
+                            &SkillPathOrigin::RestoredDisplayOnly,
+                        ) {
                             let user_query = invoke_skill
                                 .user_query
                                 .clone()
@@ -531,6 +534,7 @@ impl ConvertToExchanges for &api::Task {
                         // TODO(alokedesai): Support persistence for the code review state.
                         active_code_review: None,
                         task_id: &TaskId::new(api_message.task_id.clone()),
+                        skill_path_origin: &SkillPathOrigin::Unavailable,
                     })
                 {
                     current_outputs.push(output_msg);

@@ -6,10 +6,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use cfg_if::cfg_if;
 use chrono::{DateTime, Utc};
+pub use cloud_object_models::{
+    AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
+    DEFAULT_COMMAND_EXECUTION_DENYLIST,
+};
 use indexmap::IndexMap;
-use lazy_static::lazy_static;
 use regex::Regex;
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
@@ -22,10 +24,8 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warpui::platform::keyboard::KeyCode;
 use warpui::platform::OperatingSystem;
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, UpdateModel};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
 
-use crate::ai::agent::conversation::AIConversation;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::report_if_error;
@@ -395,6 +395,67 @@ impl ThinkingDisplayMode {
     }
 }
 
+/// Controls what happens when a user submits a new prompt while the agent is
+/// still responding to an earlier prompt.
+///
+/// This is the *default* used when a conversation has no explicit auto-queue
+/// override. Per-conversation overrides live on `QueuedQueryModel` and take
+/// precedence over this setting.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Default behavior when submitting a new prompt while the agent is still responding.",
+    rename_all = "snake_case"
+)]
+pub enum PromptSubmissionMode {
+    /// Cancel the in-flight response and submit the new prompt immediately
+    /// (default).
+    #[default]
+    Interrupt,
+    /// Hold the new prompt until the in-flight response finishes, then submit.
+    Queue,
+}
+
+settings::macros::implement_setting_for_enum!(
+    PromptSubmissionMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "agents.warp_agent.other.default_prompt_submission_mode",
+    description: "Default behavior when submitting a new prompt while the agent is still responding.",
+    feature_flag: FeatureFlag::QueueSlashCommand,
+);
+
+impl PromptSubmissionMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Interrupt response",
+            PromptSubmissionMode::Queue => "Queue until response finishes",
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            PromptSubmissionMode::Interrupt => "Set default prompt submission: interrupt response",
+            PromptSubmissionMode::Queue => {
+                "Set default prompt submission: queue until response finishes"
+            }
+        }
+    }
+}
+
 /// Tracks the state of the quota reset banner
 #[derive(
     Debug,
@@ -483,148 +544,6 @@ pub enum AgentModeCodingPermissionsType {
     /// The specific filepaths are backed by the
     /// [`AISettings::agent_mode_coding_file_read_allowlist`] setting.
     AllowReadingSpecificFiles,
-}
-
-/// Predicate types to match commands that can be executed by Agent Mode.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-enum AgentModeCommandExecutionPredicateType {
-    /// A regex with start (`^`) and end (`$`) anchors.
-    ///
-    /// We want regex rules to apply to the entire cmd string so we anchor them
-    /// (there isn't any efficient way to apply to the entire cmd string at match-time).
-    #[serde(with = "serde_regex")]
-    AnchoredRegex(Regex),
-}
-
-impl AgentModeCommandExecutionPredicateType {
-    fn new_regex(regex: &str) -> Result<Self, regex::Error> {
-        // Redundant anchors aren't a problem so we can unconditionally add them.
-        let anchored_regex = Regex::new(&format!("^{regex}$"))?;
-        Ok(Self::AnchoredRegex(anchored_regex))
-    }
-
-    fn matches(&self, cmd: &str) -> bool {
-        match self {
-            Self::AnchoredRegex(regex) => regex.is_match(cmd),
-        }
-    }
-}
-
-impl PartialEq for AgentModeCommandExecutionPredicateType {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::AnchoredRegex(a), Self::AnchoredRegex(b)) => {
-                // Indexing should be safe since they're guaranteed to have at least
-                // the anchors around them.
-                let a_unanchored = &a.as_str()[1..a.as_str().len() - 1];
-                let b_unanchored = &b.as_str()[1..b.as_str().len() - 1];
-                a_unanchored == b_unanchored
-            }
-        }
-    }
-}
-
-impl std::fmt::Display for AgentModeCommandExecutionPredicateType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::AnchoredRegex(regex) => {
-                write!(f, "{}", &regex.as_str()[1..regex.as_str().len() - 1])
-            }
-        }
-    }
-}
-
-/// A wrapper around [`AgentModeCommandExecutionPredicateType`] to enforce
-/// the use of the provided constructors rather than direct construction of the variants.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(transparent)]
-pub struct AgentModeCommandExecutionPredicate(AgentModeCommandExecutionPredicateType);
-
-impl schemars::JsonSchema for AgentModeCommandExecutionPredicate {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("AgentModeCommandExecutionPredicate")
-    }
-
-    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        // In the settings file, predicates are serialized as plain regex strings.
-        gen.subschema_for::<String>()
-    }
-}
-
-impl AgentModeCommandExecutionPredicate {
-    pub fn new_regex(regex: &str) -> Result<Self, regex::Error> {
-        Ok(Self(AgentModeCommandExecutionPredicateType::new_regex(
-            regex,
-        )?))
-    }
-
-    pub fn matches(&self, cmd: &str) -> bool {
-        self.0.matches(cmd)
-    }
-}
-
-impl std::fmt::Display for AgentModeCommandExecutionPredicate {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl settings_value::SettingsValue for AgentModeCommandExecutionPredicate {
-    fn to_file_value(&self) -> serde_json::Value {
-        serde_json::Value::String(self.to_string())
-    }
-
-    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
-        value.as_str().and_then(|s| Self::new_regex(s).ok())
-    }
-}
-
-lazy_static! {
-    // Matches optional args / options for a top-level command.
-    static ref OPTIONAL_ARGS_REGEX: Regex = Regex::new(r"(\s.*)?").expect("Can parse optional args regex");
-}
-
-cfg_if! {
-    // Compiling the regexes for the default command execution allowlist/denylist can be slow
-    // in an unoptimized build, so we use empty lists in unit tests.
-    if #[cfg(test)] {
-        lazy_static! {
-            pub static ref DEFAULT_COMMAND_EXECUTION_ALLOWLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
-            pub static ref DEFAULT_COMMAND_EXECUTION_DENYLIST: Vec<AgentModeCommandExecutionPredicate> = vec![];
-        }
-    } else {
-        lazy_static! {
-            pub static ref DEFAULT_COMMAND_EXECUTION_ALLOWLIST: Vec<AgentModeCommandExecutionPredicate> = vec![
-                AgentModeCommandExecutionPredicate::new_regex(&format!("cat{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default cat rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("echo{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default echo rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex("find .*").expect("Can parse default find rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("grep{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default grep rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("ls{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default ls rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex("which .*").expect("Can parse default which rule into regex"),
-            ];
-
-            pub static ref DEFAULT_COMMAND_EXECUTION_DENYLIST: Vec<AgentModeCommandExecutionPredicate> = vec![
-                AgentModeCommandExecutionPredicate::new_regex(&format!("bash{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default bash rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("fish{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default fish rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("pwsh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default pwsh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("sh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default sh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("zsh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default zsh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("curl{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default curl rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("eval{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default eval rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("exec{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default exec rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("source{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default source rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("wget{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default wget rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("dig{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default dig rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("nslookup{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default nslookup rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("host{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default host rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("ssh{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default ssh rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("scp{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default scp rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("rsync{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default rsync rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("telnet{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default telnet rule into regex"),
-                AgentModeCommandExecutionPredicate::new_regex(&format!("rm{}", OPTIONAL_ARGS_REGEX.as_str())).expect("Can parse default rm rule into regex"),
-            ];
-        }
-    }
 }
 
 /// Maps custom toolbar command regex patterns to CLI agent names.
@@ -1218,16 +1137,6 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.should_show_oz_updates_in_zero_state",
         description: "Whether the \"What's new\" section is shown in the agent view.",
     }
-    // Controls whether Warp's built-in feedback skill is available to the Warp Agent.
-    feedback_bundled_skill_enabled: FeedbackBundledSkillEnabled {
-        type: bool,
-        default: true,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: false,
-        toml_path: "agents.warp_agent.other.feedback_bundled_skill_enabled",
-        description: "Whether Warp's built-in feedback skill is available to the Warp Agent.",
-    }
 
     // Whether or not the user has enabled fallback to Warp credits for user-provided models.
     can_use_warp_credits_for_fallback: CanUseWarpCreditsForFallback {
@@ -1301,6 +1210,18 @@ define_settings_group!(AISettings, settings: [
         description: "Whether CLI agent Rich Input automatically closes after the user submits a prompt.",
     }
 
+    // When enabled, the Rich Input editor submits on Ctrl+Enter instead of Enter.
+    // Enter inserts a newline; Ctrl+Enter submits.
+    submit_on_ctrl_enter: SubmitRichInputOnCtrlEnter {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.third_party.submit_on_ctrl_enter",
+        description: "When enabled, the Rich Input editor submits on Ctrl+Enter instead of Enter. Enter inserts a newline.",
+    }
+
     // Maps custom toolbar command regex patterns to specific CLI agents.
     // Keys are regex patterns matched against the full command string.
     // Values are serialized CLIAgent names (empty string = any agent).
@@ -1338,16 +1259,6 @@ define_settings_group!(AISettings, settings: [
     // We kept the same setting key so that users who already dismissed the callout on an
     // older client don't see it again.
     ftu_model_callout_dismissed: FtuModelCalloutDismissed {
-        type: bool,
-        default: false,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-        private: true,
-    }
-
-    // Tracks whether we've done the one-time auto-open of the conversation list for discoverability.
-    // Once set to true, the conversation list visibility will be restored from workspace state.
-    has_auto_opened_conversation_list: HasAutoOpenedConversationList {
         type: bool,
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
@@ -1410,6 +1321,11 @@ define_settings_group!(AISettings, settings: [
 
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
+
+    // Default behavior when the user submits a new prompt while the agent is still
+    // responding. Per-conversation overrides live on `QueuedQueryModel`; this
+    // setting is the fallback used when a conversation has no explicit override.
+    default_prompt_submission_mode: PromptSubmissionMode,
 
     // Whether agent-executed shell commands should be included in command history
     // (up-arrow, Ctrl-R search, inline history menu).
@@ -1690,7 +1606,7 @@ impl AISettings {
     }
 
     pub fn is_orchestration_enabled(&self, app: &warpui::AppContext) -> bool {
-        FeatureFlag::OrchestrationV2.is_enabled() && self.is_any_ai_enabled(app)
+        self.is_any_ai_enabled(app)
     }
 
     /// Returns true when local-to-cloud handoff is effectively enabled.
@@ -1715,45 +1631,8 @@ impl AISettings {
             crate::workspaces::workspace::AdminEnablementSetting::Disable
         )
     }
-    pub fn is_cloud_handoff_enabled_for_conversation(
-        &self,
-        conversation: Option<&AIConversation>,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled(app)
-            && !conversation
-                .is_some_and(|conversation| is_orchestration_conversation(conversation, app))
-    }
-
-    pub fn is_cloud_handoff_enabled_for_terminal_view(
-        &self,
-        terminal_view_id: EntityId,
-        app: &warpui::AppContext,
-    ) -> bool {
-        let active_conversation =
-            BlocklistAIHistoryModel::as_ref(app).active_conversation(terminal_view_id);
-        self.is_cloud_handoff_enabled_for_conversation(active_conversation, app)
-    }
-
     pub fn is_ampersand_handoff_enabled(&self, app: &warpui::AppContext) -> bool {
         self.is_cloud_handoff_enabled(app) && !*self.should_force_disable_ampersand_handoff
-    }
-    pub fn is_ampersand_handoff_enabled_for_conversation(
-        &self,
-        conversation: Option<&AIConversation>,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled_for_conversation(conversation, app)
-            && !*self.should_force_disable_ampersand_handoff
-    }
-
-    pub fn is_ampersand_handoff_enabled_for_terminal_view(
-        &self,
-        terminal_view_id: EntityId,
-        app: &warpui::AppContext,
-    ) -> bool {
-        self.is_cloud_handoff_enabled_for_terminal_view(terminal_view_id, app)
-            && !*self.should_force_disable_ampersand_handoff
     }
 
     pub fn is_auto_handoff_on_sleep_enabled(&self, app: &warpui::AppContext) -> bool {
@@ -2050,12 +1929,6 @@ impl AISettings {
     }
 }
 
-fn is_orchestration_conversation(conversation: &AIConversation, app: &AppContext) -> bool {
-    conversation.has_parent_agent()
-        || !BlocklistAIHistoryModel::as_ref(app)
-            .child_conversation_ids_of(&conversation.id())
-            .is_empty()
-}
 /// Singleton model that caches compiled regexes for the `cli_agent_footer_enabled_commands`
 /// setting. Each entry pairs a compiled regex with the CLI agent it maps to.
 pub struct CompiledCommandsForCodingAgentToolbar {

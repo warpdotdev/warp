@@ -15,6 +15,7 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
 use warp_completer::signatures::CommandRegistry;
+use warp_core::r#async::debounce;
 use warp_editor::content::anchor::Anchor;
 use warp_editor::content::buffer::{Buffer, BufferEvent, EditOrigin};
 use warp_editor::content::mermaid_diagram::mermaid_asset_source;
@@ -46,7 +47,6 @@ use super::view::EditorViewAction;
 use super::{rich_text_styles, NotebookWorkflow};
 use crate::appearance::Appearance;
 use crate::completer::SessionAgnosticContext;
-use crate::debounce::debounce;
 use crate::drive::workflows::arguments::ArgumentsState;
 use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
@@ -195,7 +195,7 @@ impl NotebookCommand {
             dropdown.set_rich_items(
                 CodeBlockType::all().map(|code_block_type| {
                     let mut item = MenuItemFields::new(code_block_type.to_string())
-                        .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        .with_on_select_action(DropdownAction::select_action_and_close(
                             EditorViewAction::CodeBlockTypeSelectedAtOffset {
                                 code_block_type: code_block_type.clone(),
                                 start_anchor: start.clone(),

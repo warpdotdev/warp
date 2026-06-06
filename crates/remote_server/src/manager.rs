@@ -6,6 +6,7 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 
+use futures::channel::oneshot;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
 #[cfg(not(target_family = "wasm"))]
@@ -14,8 +15,8 @@ use warp_core::SessionId;
 use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
-use warpui::r#async::FutureExt as _;
-use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
+use warpui_core::r#async::FutureExt as _;
+use warpui_core::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 use crate::auth::RemoteServerAuthContext;
 #[cfg(not(target_family = "wasm"))]
@@ -47,6 +48,13 @@ pub const MAX_RECONNECT_ATTEMPTS: u32 = 2;
 /// Delay between reconnection attempts.
 #[cfg(not(target_family = "wasm"))]
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+/// Timeout for host-scoped requests. Matches the client's prior
+/// `REQUEST_TIMEOUT` (these requests used it before host-scoped lifecycle
+/// moved to the manager). If the daemon accepts a request but never responds,
+/// the manager fails the caller and aborts the request after this elapses so
+/// `pending_host_requests` doesn't leak.
+#[cfg(not(target_family = "wasm"))]
+const HOST_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// Brief timeout for awaiting a child process's exit status after a
 /// connection failure. Gives the SSH subprocess time to report its exit
 /// code and signal status before we give up and report `None`.
@@ -70,6 +78,7 @@ struct InitializeHandshake {
     host_id: HostId,
     event_rx: async_channel::Receiver<ClientEvent>,
     failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
+    host_response_rx: async_channel::Receiver<crate::proto::ServerMessage>,
 }
 
 /// Error from [`RemoteServerManager::run_connect_and_handshake`] that
@@ -153,30 +162,33 @@ impl RemoteCodebaseIndexUpdateOperation {
         }
     }
 
-    async fn send(
+    fn to_proto_message(
         self,
-        client: Arc<RemoteServerClient>,
         repo_path: String,
         auth_token: String,
-    ) -> Result<RemoteCodebaseIndexStatus, crate::client::ClientError> {
+    ) -> crate::proto::host_scoped_request::Message {
+        use crate::proto::host_scoped_request::Message;
         match self {
-            Self::IndexNewRepo {
-                is_auto_index: true,
+            Self::IndexNewRepo { .. } => Message::IndexCodebase(crate::proto::IndexCodebase {
+                repo_path,
+                auth_token,
+            }),
+            Self::Sync { is_full_sync } => {
+                let mode = if is_full_sync {
+                    crate::proto::CodebaseResyncMode::Full
+                } else {
+                    crate::proto::CodebaseResyncMode::Incremental
+                };
+                Message::ResyncCodebase(crate::proto::ResyncCodebase {
+                    repo_path,
+                    auth_token,
+                    mode: mode.into(),
+                })
             }
-            | Self::IndexNewRepo {
-                is_auto_index: false,
-            } => client.index_codebase(repo_path, auth_token).await,
-            Self::Sync {
-                is_full_sync: false,
-            } => {
-                client
-                    .trigger_codebase_incremental_sync(repo_path, auth_token)
-                    .await
-            }
-            Self::Sync { is_full_sync: true } => {
-                client.resync_codebase(repo_path, auth_token).await
-            }
-            Self::Drop => client.drop_codebase_index(repo_path, auth_token).await,
+            Self::Drop => Message::DropCodebaseIndex(crate::proto::DropCodebaseIndex {
+                repo_path,
+                auth_token,
+            }),
         }
     }
 }
@@ -209,11 +221,7 @@ impl RemoteServerErrorKind {
             ClientError::Timeout(_) => Self::Timeout,
             ClientError::Disconnected | ClientError::ResponseChannelClosed => Self::Disconnected,
             ClientError::ServerError { .. } => Self::ServerError,
-            ClientError::Protocol(_)
-            | ClientError::UnexpectedResponse
-            | ClientError::FileOperationFailed(_)
-            | ClientError::FragmentMetadataLookup { .. }
-            | ClientError::DiscardFailed(_) => Self::Other,
+            ClientError::Protocol(_) | ClientError::UnexpectedResponse => Self::Other,
         }
     }
 }
@@ -258,6 +266,8 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
             "codebase_index_statuses_snapshot"
         }
         ClientEvent::CodebaseIndexStatusUpdated { .. } => "codebase_index_status_updated",
+        ClientEvent::HostScopedWriteFailed { .. } => "host_scoped_write_failed",
+        ClientEvent::HostScopedDecodeFailed { .. } => "host_scoped_decode_failed",
         ClientEvent::BufferUpdated { .. } => "buffer_updated",
         ClientEvent::BufferConflictDetected { .. } => "buffer_conflict_detected",
         ClientEvent::DiffStateSnapshotReceived { .. } => "diff_state_snapshot",
@@ -624,6 +634,282 @@ impl RemoteServerManagerEvent {
     }
 }
 
+/// Error type for host-scoped requests dispatched via
+/// [`RemoteServerManager::send_host_request`].
+#[derive(Debug, thiserror::Error)]
+pub enum HostRequestError {
+    /// All sessions for the host disconnected before the request completed.
+    #[error("all sessions disconnected")]
+    AllSessionsDisconnected,
+    /// The request timed out.
+    #[error("host request timed out")]
+    Timeout,
+    /// The server returned an error response.
+    #[error("server error ({code:?}): {message}")]
+    ServerError {
+        code: crate::proto::ErrorCode,
+        message: String,
+    },
+    /// The server replied with a variant that didn't match the request, or
+    /// an empty result where one was required.
+    #[error("unexpected response")]
+    UnexpectedResponse,
+    /// The request was delivered and answered, but the server reported a
+    /// domain-level failure (e.g. a file could not be written). Carries the
+    /// server-provided message verbatim so callers can surface it directly.
+    #[error("{0}")]
+    OperationFailed(String),
+}
+
+impl From<crate::client::ClientError> for HostRequestError {
+    fn from(err: crate::client::ClientError) -> Self {
+        use crate::client::ClientError;
+        match err {
+            ClientError::Disconnected | ClientError::ResponseChannelClosed => {
+                Self::AllSessionsDisconnected
+            }
+            ClientError::Timeout(_) => Self::Timeout,
+            ClientError::ServerError { code, message } => Self::ServerError { code, message },
+            ClientError::Protocol(_) | ClientError::UnexpectedResponse => Self::UnexpectedResponse,
+        }
+    }
+}
+
+/// Tracks an in-flight host-scoped request on the manager.
+struct PendingHostRequest {
+    host_id: HostId,
+    /// The session this request was most recently queued on. If that client's
+    /// writer reports that the request failed before reaching the daemon, the
+    /// manager retries the same request ID on another connected session for
+    /// the host. Only read off-wasm (the writer-failure retry path is
+    /// gated out on wasm), so it's write-only there.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    dispatched_session_id: SessionId,
+    /// Original host-scoped message, including request ID, retained so a
+    /// writer failure before daemon receipt can be retried through a sibling
+    /// connection without changing the caller-visible request lifecycle.
+    /// Only read off-wasm (see `dispatched_session_id`).
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    msg: crate::proto::ClientMessage,
+    /// Oneshot sender to resolve the caller's future with the raw
+    /// `ServerMessage`. The caller parses the response variant.
+    result_tx: oneshot::Sender<Result<crate::proto::ServerMessage, HostRequestError>>,
+    /// Aborts this request's timeout timer. `Some` when a timeout was armed
+    /// (always off-wasm), `None` on wasm. Cancelling it when the request
+    /// resolves early stops the timer task immediately, so the number of live
+    /// timer tasks tracks *in-flight* requests rather than growing with every
+    /// request ever sent (a burst of requests doesn't accumulate timers that
+    /// each linger until the full timeout elapses).
+    timeout_abort: Option<futures::future::AbortHandle>,
+}
+
+impl PendingHostRequest {
+    /// Cancels this request's timeout timer, if one was armed. Called when the
+    /// request resolves before the timeout fires (response arrived or all
+    /// sessions disconnected).
+    fn cancel_timeout(&self) {
+        if let Some(abort) = &self.timeout_abort {
+            abort.abort();
+        }
+    }
+}
+
+/// Handle for dispatching host-scoped requests from async contexts.
+///
+/// Pure-async callers (e.g. `execute_remote_codebase_search`) don't have
+/// direct access to `&mut RemoteServerManager`. This handle wraps a
+/// `ModelSpawner` so the async function can bounce each request to the
+/// main thread for registration in `pending_host_requests`, then await
+/// the response on the background thread.
+///
+/// Obtain via [`RemoteServerManager::host_request_handle`].
+pub struct HostRequestHandle {
+    spawner: ModelSpawner<RemoteServerManager>,
+    host_id: HostId,
+}
+
+impl HostRequestHandle {
+    /// Sends a host-scoped request and awaits the raw `ServerMessage`.
+    ///
+    /// Bounces to the main thread to call `send_host_request`, then
+    /// awaits the response on the caller's thread.
+    pub async fn send(
+        &self,
+        inner: crate::proto::host_scoped_request::Message,
+    ) -> Result<crate::proto::ServerMessage, HostRequestError> {
+        let host_id = self.host_id.clone();
+        let request_id = crate::protocol::RequestId::new();
+        let msg = crate::proto::ClientMessage::host_scoped(request_id.to_string(), inner);
+        let rx = self
+            .spawner
+            .spawn(move |me, _ctx| me.send_host_request(&host_id, msg))
+            .await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)?;
+        rx.await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)?
+    }
+
+    // ── Typed host-scoped requests ──────────────────────────────────
+    //
+    // These mirror the request inputs and response shapes of the former
+    // `RemoteServerClient` methods so call sites never construct
+    // `host_scoped_request::Message` wrappers or match on
+    // `server_message::Message` themselves. Each one wraps the inner request,
+    // dispatches via [`Self::send`], and extracts the matching response
+    // variant.
+
+    /// Writes content to a file on the remote host, creating parent
+    /// directories if they don't exist.
+    pub async fn write_file(&self, path: String, content: String) -> Result<(), HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::WriteFile(
+                crate::proto::WriteFile { path, content },
+            ))
+            .await?;
+        crate::host_response::write_file_result(&msg).map_err(HostRequestError::OperationFailed)
+    }
+
+    /// Deletes a file on the remote host.
+    pub async fn delete_file(&self, path: String) -> Result<(), HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::DeleteFile(
+                crate::proto::DeleteFile { path },
+            ))
+            .await?;
+        crate::host_response::delete_file_result(&msg).map_err(HostRequestError::OperationFailed)
+    }
+
+    /// Saves a remote buffer to disk on the host.
+    pub async fn save_buffer(&self, path: String) -> Result<(), HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::SaveBuffer(
+                crate::proto::SaveBuffer { path },
+            ))
+            .await?;
+        crate::host_response::save_buffer_result(&msg).map_err(HostRequestError::OperationFailed)
+    }
+
+    /// Opens a buffer on the remote host for bidirectional syncing.
+    ///
+    /// When `force_reload` is true, the server discards any in-memory buffer
+    /// state and re-reads the file from disk.
+    pub async fn open_buffer(
+        &self,
+        path: String,
+        force_reload: bool,
+    ) -> Result<crate::proto::OpenBufferResponse, HostRequestError> {
+        // `OpenBuffer` is session-scoped: the daemon binds the buffer
+        // subscription to the connection the request arrives on, so it must be
+        // sent over a specific connected session (not the host-scoped failover
+        // path) and resolved through that connection's request/response
+        // correlation. We grab a connected client on the main thread, then
+        // await the round-trip on the caller's thread.
+        let host_id = self.host_id.clone();
+        let client = self
+            .spawner
+            .spawn(move |me, _ctx| me.client_for_host(&host_id).cloned())
+            .await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)?
+            .ok_or(HostRequestError::AllSessionsDisconnected)?;
+        Ok(client.open_buffer(path, force_reload).await?)
+    }
+
+    /// Batch-reads one or more files from the remote host with full context
+    /// (line ranges, binary/image support, metadata, size limits).
+    ///
+    /// Per-file failures are reported in `ReadFileContextResponse::failed_files`
+    /// rather than as a top-level error; this only returns `Err` for transport
+    /// or unexpected-response failures.
+    pub async fn read_file_context(
+        &self,
+        request: crate::proto::ReadFileContextRequest,
+    ) -> Result<crate::proto::ReadFileContextResponse, HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::ReadFileContext(
+                request,
+            ))
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::ReadFileContextResponse(resp)) => Ok(resp),
+            other => {
+                log::error!("Unexpected response variant for ReadFileContext: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Maps backend content hashes to server-local fragment metadata for a
+    /// synced repo snapshot.
+    pub async fn get_fragment_metadata_from_hash(
+        &self,
+        repo_path: String,
+        root_hash: String,
+        content_hashes: Vec<String>,
+    ) -> Result<crate::proto::GetFragmentMetadataFromHashSuccess, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::GetFragmentMetadataFromHash(
+                    crate::proto::GetFragmentMetadataFromHash {
+                        repo_path,
+                        root_hash,
+                        content_hashes,
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GetFragmentMetadataFromHashResponse(
+                resp,
+            )) => match resp.result {
+                Some(crate::proto::get_fragment_metadata_from_hash_response::Result::Success(
+                    success,
+                )) => Ok(success),
+                Some(crate::proto::get_fragment_metadata_from_hash_response::Result::Error(
+                    error,
+                )) => Err(HostRequestError::OperationFailed(error.message)),
+                None => Err(HostRequestError::UnexpectedResponse),
+            },
+            other => {
+                log::error!(
+                    "Unexpected response variant for GetFragmentMetadataFromHash: {other:?}"
+                );
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Asks the remote daemon to gather and upload a handoff snapshot for the
+    /// given paths.
+    pub async fn upload_handoff_snapshot(
+        &self,
+        paths: Vec<StandardizedPath>,
+    ) -> Result<crate::proto::UploadHandoffSnapshotResponse, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::UploadHandoffSnapshot(
+                    crate::proto::UploadHandoffSnapshot {
+                        paths: paths.into_iter().map(|p| p.to_string()).collect(),
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::UploadHandoffSnapshotResponse(resp)) => {
+                Ok(resp)
+            }
+            other => {
+                log::error!("Unexpected response variant for UploadHandoffSnapshot: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Returns the `HostId` this handle targets.
+    pub fn host_id(&self) -> &HostId {
+        &self.host_id
+    }
+}
+
 /// Cached navigation state per session. Stores the last requested path
 /// (for dedup) and the result from the last successful response (so dedup
 /// returns a meaningful value instead of `None`).
@@ -683,6 +969,16 @@ pub struct RemoteServerManager {
     session_platforms: HashMap<SessionId, RemotePlatform>,
     /// Last client-resolved codebase index limits sent to remote daemons.
     codebase_index_limits: Option<CodebaseIndexLimits>,
+    /// In-flight host-scoped requests, keyed by protocol `RequestId`.
+    /// Resolved when a matching response arrives on any session's
+    /// `host_response_rx`, or failed when all sessions for the host
+    /// disconnect.
+    pending_host_requests: HashMap<crate::protocol::RequestId, PendingHostRequest>,
+    /// Background executor used to schedule host-scoped request timeouts.
+    /// Only used off-wasm (timers and detached tasks aren't available on
+    /// wasm), so the field is allowed to be dead there.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    executor: Arc<warpui_core::r#async::executor::Background>,
 }
 
 impl Entity for RemoteServerManager {
@@ -703,6 +999,8 @@ impl RemoteServerManager {
             auth_context: None,
             session_platforms: HashMap::new(),
             codebase_index_limits: None,
+            pending_host_requests: HashMap::new(),
+            executor: ctx.background_executor().clone(),
         }
     }
 
@@ -720,6 +1018,28 @@ impl RemoteServerManager {
             .map(|(_, client)| client)
     }
 
+    /// Returns an owned client for `host_id`, preferring `preferred_session`
+    /// when it is still connected and otherwise falling back to any connected
+    /// session for the host.
+    ///
+    /// Used for session-scoped requests issued by host-scoped callers (diff
+    /// state / buffers): routing over the session that actually needs the
+    /// result means closing an *unrelated* session can't disturb it, while the
+    /// fallback keeps things working when no specific session is available or
+    /// the preferred one has dropped.
+    fn client_for_host_preferring(
+        &self,
+        host_id: &HostId,
+        preferred_session: Option<SessionId>,
+    ) -> Option<Arc<RemoteServerClient>> {
+        if let Some(session_id) = preferred_session {
+            if let Some(client) = self.client_for_session(session_id) {
+                return Some(client.clone());
+            }
+        }
+        self.client_for_host(host_id).cloned()
+    }
+
     /// Returns the [`SessionId`] of an arbitrary currently-connected session
     /// for the given host, if any.
     pub fn find_connected_session(&self, host_id: &HostId) -> Option<SessionId> {
@@ -735,11 +1055,323 @@ impl RemoteServerManager {
         &self,
         host_id: &HostId,
     ) -> Option<(SessionId, &Arc<RemoteServerClient>)> {
+        self.any_connected_session_for_host_excluding(host_id, None)
+    }
+
+    /// Returns an arbitrary connected `(session_id, client)` pair for the
+    /// given host, excluding `excluded_session_id` if provided.
+    fn any_connected_session_for_host_excluding(
+        &self,
+        host_id: &HostId,
+        excluded_session_id: Option<SessionId>,
+    ) -> Option<(SessionId, &Arc<RemoteServerClient>)> {
         let sessions = self.host_to_sessions.get(host_id)?;
-        sessions
+        sessions.iter().copied().find_map(|sid| {
+            (Some(sid) != excluded_session_id)
+                .then(|| self.client_for_session(sid).map(|client| (sid, client)))
+                .flatten()
+        })
+    }
+
+    /// Queues a host-scoped request on a connected session for `host_id`.
+    ///
+    /// Returns the session that accepted the message into its outbound queue.
+    /// `exclude_session_id` is used when retrying after that session's writer
+    /// reported that the request did not reach the daemon.
+    fn dispatch_host_scoped_request(
+        &self,
+        host_id: &HostId,
+        msg: &crate::proto::ClientMessage,
+        exclude_session_id: Option<SessionId>,
+    ) -> Option<SessionId> {
+        let sessions = self.host_to_sessions.get(host_id)?;
+        let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
+        for session_id in sessions.iter().copied() {
+            if Some(session_id) == exclude_session_id {
+                continue;
+            }
+            let Some(client) = self.client_for_session(session_id) else {
+                continue;
+            };
+            match client.send_host_scoped(msg.clone()) {
+                Ok(()) => return Some(session_id),
+                Err(err) => {
+                    log::warn!(
+                        "Host-scoped request dispatch failed on session {session_id:?}: \
+                         host={host_id} request_id={request_id} error={err}"
+                    );
+                }
+            }
+        }
+        None
+    }
+
+    /// Sends a host-scoped request to any connected session for the given host.
+    ///
+    /// The caller constructs the `ClientMessage` (already wrapped in
+    /// `HostScopedRequest`). The manager dispatches it via
+    /// `client.send_host_scoped()` and, on success, registers the request in
+    /// `pending_host_requests`. The response arrives asynchronously on the
+    /// `host_response_rx` channel and is matched by `request_id`.
+    ///
+    /// Returns a `oneshot::Receiver` that resolves with the raw `ServerMessage`
+    /// on success, or `HostRequestError` on failure (all sessions disconnected,
+    /// timeout, or server error).
+    ///
+    /// If dispatch fails immediately (the chosen client's outbound channel is
+    /// closed because its writer task already exited), the returned receiver
+    /// resolves with `HostRequestError::AllSessionsDisconnected` and no entry
+    /// is registered in `pending_host_requests`.
+    pub fn send_host_request(
+        &mut self,
+        host_id: &HostId,
+        msg: crate::proto::ClientMessage,
+    ) -> oneshot::Receiver<Result<crate::proto::ServerMessage, HostRequestError>> {
+        // A oneshot stores the sent value in its shared state, so resolving
+        // `result_tx` before `result_rx` is awaited is fine: the caller's
+        // `.await` sees the value immediately. This lets the early-return
+        // failure paths below resolve the receiver and hand it back.
+        let (result_tx, result_rx) = oneshot::channel();
+
+        let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
+
+        // Dispatch before registering the pending entry. If the outbound
+        // channel is already closed (the writer task exited after the
+        // connection dropped), fail the caller now instead of registering a
+        // request that can never be matched — which would otherwise leak in
+        // `pending_host_requests` and hang the caller forever.
+        //
+        // This is race-free: host responses are drained on the main thread by
+        // the `spawn_stream_local` handler in `mark_session_connected`, which
+        // cannot run until this synchronous `&mut self` method returns. So the
+        // insert below always happens before any matching response is matched.
+        let Some(dispatched_session_id) = self.dispatch_host_scoped_request(host_id, &msg, None)
+        else {
+            log::warn!(
+                "Host-scoped request dispatch failed (outbound channel closed): \
+                 host={host_id} request_id={request_id}"
+            );
+            let _ = result_tx.send(Err(HostRequestError::AllSessionsDisconnected));
+            return result_rx;
+        };
+
+        // Arm a timeout so a request the daemon accepts but never answers
+        // doesn't hang the caller forever (and leak the pending entry). The
+        // returned handle is stored on the pending entry so we can cancel the
+        // timer the instant the request resolves, rather than letting every
+        // request's timer task linger until the full timeout elapses.
+        let timeout_abort = self.schedule_host_request_timeout(request_id.clone(), host_id.clone());
+
+        self.pending_host_requests.insert(
+            request_id,
+            PendingHostRequest {
+                host_id: host_id.clone(),
+                dispatched_session_id,
+                msg,
+                result_tx,
+                timeout_abort,
+            },
+        );
+
+        result_rx
+    }
+
+    /// Schedules a delayed [`Self::timeout_host_request`] for a pending
+    /// host-scoped request. After [`HOST_REQUEST_TIMEOUT`] elapses the manager
+    /// fails the request if it is still pending.
+    ///
+    /// Unlike the client's `send_request_internal`, which owns its `.await`
+    /// and can wrap it in `FutureExt::with_timeout`, the manager only
+    /// *registers* the request and hands the `oneshot::Receiver` back to the
+    /// caller (often awaited on another thread via [`HostRequestHandle`]), so
+    /// there's no manager-owned await to wrap. The timeout also has to do
+    /// manager-side cleanup that `with_timeout` on the caller can't: remove the
+    /// `pending_host_requests` entry and send an `Abort`. A dropped receiver
+    /// alone would leak the entry until disconnect and never notify the daemon.
+    ///
+    /// Returns an [`AbortHandle`](futures::future::AbortHandle) the caller
+    /// stores on the pending entry and aborts when the request resolves, so
+    /// the timer task is cancelled immediately instead of sleeping out the
+    /// full timeout. (A detached `BackgroundTask` can't be cancelled by
+    /// dropping it — tokio detaches rather than aborts — so we drive
+    /// cancellation through the abort handle.)
+    #[cfg(not(target_family = "wasm"))]
+    fn schedule_host_request_timeout(
+        &self,
+        request_id: crate::protocol::RequestId,
+        host_id: HostId,
+    ) -> Option<futures::future::AbortHandle> {
+        let spawner = self.spawner.clone();
+        let (task, abort_handle) = self.executor.spawn_abortable(async move {
+            async_io::Timer::after(HOST_REQUEST_TIMEOUT).await;
+            let _ = spawner
+                .spawn(move |me, _ctx| me.timeout_host_request(request_id, host_id))
+                .await;
+        });
+        task.detach();
+        Some(abort_handle)
+    }
+
+    /// No-op on wasm: timers and detached background tasks aren't available,
+    /// and the SSH-backed remote server isn't used there.
+    #[cfg(target_family = "wasm")]
+    fn schedule_host_request_timeout(
+        &self,
+        _request_id: crate::protocol::RequestId,
+        _host_id: HostId,
+    ) -> Option<futures::future::AbortHandle> {
+        None
+    }
+
+    /// Fails a host-scoped request that is still pending after
+    /// [`HOST_REQUEST_TIMEOUT`]. If the request already completed (response
+    /// arrived, or it was failed by a disconnect), this is a no-op. Otherwise
+    /// it removes the pending entry, sends an `Abort` to the host so the daemon
+    /// can stop work, and resolves the caller with `HostRequestError::Timeout`.
+    ///
+    /// Only compiled off-wasm, where [`Self::schedule_host_request_timeout`]
+    /// arms the timer; the wasm scheduler is a no-op so nothing calls this and
+    /// it (along with `HOST_REQUEST_TIMEOUT`) isn't compiled there.
+    #[cfg(not(target_family = "wasm"))]
+    fn timeout_host_request(&mut self, request_id: crate::protocol::RequestId, host_id: HostId) {
+        let Some(pending) = self.pending_host_requests.remove(&request_id) else {
+            // Already resolved by a response or a disconnect.
+            return;
+        };
+        log::warn!(
+            "Host-scoped request timed out after {HOST_REQUEST_TIMEOUT:?}: \
+             host={host_id} request_id={request_id}"
+        );
+        // Best-effort abort so the daemon can stop work. The connection may
+        // already be gone, in which case this is a no-op.
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.abort_request(&request_id);
+        }
+        let _ = pending.result_tx.send(Err(HostRequestError::Timeout));
+    }
+
+    /// Convenience wrapper: constructs a `ClientMessage::host_scoped` from
+    /// the inner message and dispatches via [`Self::send_host_request`].
+    ///
+    /// Prefer this over raw `send_host_request` when the caller doesn't
+    /// need to control the `RequestId`.
+    pub fn send_host_scoped_request(
+        &mut self,
+        host_id: &HostId,
+        inner: crate::proto::host_scoped_request::Message,
+    ) -> oneshot::Receiver<Result<crate::proto::ServerMessage, HostRequestError>> {
+        let request_id = crate::protocol::RequestId::new();
+        let msg = crate::proto::ClientMessage::host_scoped(request_id.to_string(), inner);
+        self.send_host_request(host_id, msg)
+    }
+
+    /// Creates a [`HostRequestHandle`] for dispatching host-scoped requests
+    /// from async contexts that don't have `&mut self` access.
+    pub fn host_request_handle(&self, host_id: &HostId) -> HostRequestHandle {
+        HostRequestHandle {
+            spawner: self.spawner.clone(),
+            host_id: host_id.clone(),
+        }
+    }
+
+    /// Fail all pending host requests for hosts that no longer have any
+    /// connected sessions. Called after the host-to-sessions index is
+    /// updated during disconnect/deregister.
+    fn fail_pending_host_requests_for_disconnected_hosts(&mut self) {
+        let orphaned: Vec<crate::protocol::RequestId> = self
+            .pending_host_requests
             .iter()
-            .copied()
-            .find_map(|sid| self.client_for_session(sid).map(|client| (sid, client)))
+            .filter(|(_, pending)| !self.host_to_sessions.contains_key(&pending.host_id))
+            .map(|(rid, _)| rid.clone())
+            .collect();
+        for rid in orphaned {
+            if let Some(pending) = self.pending_host_requests.remove(&rid) {
+                pending.cancel_timeout();
+                log::info!(
+                    "Failing pending host request {rid} — no sessions remain \
+                     for host={}",
+                    pending.host_id
+                );
+                let _ = pending
+                    .result_tx
+                    .send(Err(HostRequestError::AllSessionsDisconnected));
+            }
+        }
+    }
+
+    /// Fails a pending host-scoped request whose response arrived but could
+    /// not be decoded. The daemon already produced a reply, so this is
+    /// terminal — unlike a write failure, retrying wouldn't help. Resolving
+    /// the caller now avoids waiting out the request timeout.
+    ///
+    /// Only compiled off-wasm: the sole caller is `forward_client_event`,
+    /// which is itself gated out on wasm.
+    #[cfg(not(target_family = "wasm"))]
+    fn fail_host_request_decode_error(&mut self, request_id: crate::protocol::RequestId) {
+        if let Some(pending) = self.pending_host_requests.remove(&request_id) {
+            pending.cancel_timeout();
+            log::warn!(
+                "Failing host request {request_id} — server response could not be \
+                 decoded (host={})",
+                pending.host_id
+            );
+            let _ = pending
+                .result_tx
+                .send(Err(HostRequestError::UnexpectedResponse));
+        }
+    }
+
+    /// Handles a client writer failure for a host-scoped request that was
+    /// queued on `session_id` but did not reach the daemon. Retries the same
+    /// request ID through another connected session for the host if possible;
+    /// otherwise fails the caller immediately instead of waiting for timeout.
+    ///
+    /// Only compiled off-wasm: the sole caller is `forward_client_event`,
+    /// which is itself gated out on wasm.
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_host_scoped_write_failed(
+        &mut self,
+        session_id: SessionId,
+        request_id: crate::protocol::RequestId,
+    ) {
+        let Some(mut pending) = self.pending_host_requests.remove(&request_id) else {
+            log::debug!(
+                "Ignoring host-scoped write failure for non-pending request: \
+                 session={session_id:?} request_id={request_id}"
+            );
+            return;
+        };
+
+        if pending.dispatched_session_id != session_id {
+            // Stale failure from an earlier dispatch attempt; the request has
+            // already been retried elsewhere.
+            self.pending_host_requests.insert(request_id, pending);
+            return;
+        }
+
+        if let Some(new_session_id) =
+            self.dispatch_host_scoped_request(&pending.host_id, &pending.msg, Some(session_id))
+        {
+            log::info!(
+                "Retried host-scoped request after writer failure: \
+                 host={} request_id={} old_session={session_id:?} new_session={new_session_id:?}",
+                pending.host_id,
+                request_id
+            );
+            pending.dispatched_session_id = new_session_id;
+            self.pending_host_requests.insert(request_id, pending);
+        } else {
+            log::warn!(
+                "Host-scoped request failed before reaching daemon and no alternate \
+                 session is available: host={} request_id={} session={session_id:?}",
+                pending.host_id,
+                request_id
+            );
+            pending.cancel_timeout();
+            let _ = pending
+                .result_tx
+                .send(Err(HostRequestError::AllSessionsDisconnected));
+        }
     }
 
     /// Returns the user-facing connection label for a connected host, if one
@@ -1189,13 +1821,14 @@ impl RemoteServerManager {
         auth_context: &RemoteServerAuthContext,
         codebase_index_limits: Option<CodebaseIndexLimits>,
         spawner: &ModelSpawner<Self>,
-        executor: &Arc<warpui::r#async::executor::Background>,
+        executor: &Arc<warpui_core::r#async::executor::Background>,
     ) -> Result<InitializeHandshake, ConnectAndHandshakeError> {
         // Phase 1: Connect (establish streams, create client).
         let Connection {
             client,
             event_rx,
             failure_rx,
+            host_response_rx,
             child,
             control_path,
             stderr_tail,
@@ -1298,6 +1931,7 @@ impl RemoteServerManager {
             host_id: HostId::new(resp.host_id),
             event_rx,
             failure_rx,
+            host_response_rx,
         })
     }
 
@@ -1380,9 +2014,7 @@ impl RemoteServerManager {
                 exit_status: None,
                 was_reconnect_attempt: false,
             });
-            if !self.host_to_sessions.contains_key(&host_id) {
-                ctx.emit(RemoteServerManagerEvent::HostDisconnected { host_id });
-            }
+            self.handle_host_disconnected(&host_id, ctx);
         }
         ctx.emit(RemoteServerManagerEvent::SessionDeregistered { session_id });
 
@@ -1575,7 +2207,7 @@ impl RemoteServerManager {
             return false;
         };
         let current_identity_key = auth_context.remote_server_identity_key();
-        let Some((session_id, client, remote_identity_key)) =
+        let Some((session_id, _client, remote_identity_key)) =
             self.connected_session_for_host(&host_id, &current_identity_key)
         else {
             log::warn!(
@@ -1590,6 +2222,7 @@ impl RemoteServerManager {
              remote_identity_key={remote_identity_key} repo_path={repo_path}"
         );
 
+        let handle = self.host_request_handle(&host_id);
         let spawner = self.spawner.clone();
         ctx.background_executor()
             .spawn(async move {
@@ -1617,28 +2250,53 @@ impl RemoteServerManager {
                     return;
                 };
 
-                match mutation_kind.send(client, repo_path, auth_token).await {
-                    Ok(status) => {
-                        log::info!(
-                            "[Remote codebase indexing] Manager received codebase index mutation response: \
-                             operation={operation:?} host={host_id} session={session_id:?} \
-                             remote_identity_key={remote_identity_key} repo_path={} state={:?} \
-                             failure_message={:?}",
-                            status.repo_path,
-                            status.state,
-                            status.failure_message
-                        );
-                        let remote_path = remote_path_for_status(&host_id, &status).unwrap_or(remote_path);
-                        let _ = spawner
-                            .spawn(move |_me, ctx| {
-                                ctx.emit(RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
-                                    session_id: Some(session_id),
-                                    remote_path,
-                                    status,
-                                    mutation_kind: Some(mutation_kind),
-                                });
-                            })
-                            .await;
+                let proto_msg = mutation_kind.to_proto_message(repo_path, auth_token);
+                match handle.send(proto_msg).await {
+                    Ok(msg) => {
+                        // Parse CodebaseIndexStatusUpdated from response.
+                        let status = match msg.message {
+                            Some(crate::proto::server_message::Message::CodebaseIndexStatusUpdated(update)) => {
+                                crate::codebase_index_proto::proto_to_codebase_index_status_updated(&update)
+                            }
+                            _ => None,
+                        };
+                        if let Some(status) = status {
+                            log::info!(
+                                "[Remote codebase indexing] Manager received codebase index mutation response: \
+                                 operation={operation:?} host={host_id} session={session_id:?} \
+                                 remote_identity_key={remote_identity_key} repo_path={} state={:?} \
+                                 failure_message={:?}",
+                                status.repo_path,
+                                status.state,
+                                status.failure_message
+                            );
+                            let remote_path = remote_path_for_status(&host_id, &status).unwrap_or(remote_path);
+                            let _ = spawner
+                                .spawn(move |_me, ctx| {
+                                    ctx.emit(RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
+                                        session_id: Some(session_id),
+                                        remote_path,
+                                        status,
+                                        mutation_kind: Some(mutation_kind),
+                                    });
+                                })
+                                .await;
+                        } else {
+                            log::warn!(
+                                "Remote server codebase index mutation: unexpected response \
+                                 operation={operation:?} host={host_id} session={session_id:?} \
+                                 repo_path={repo_path_for_log}"
+                            );
+                            let _ = spawner
+                                .spawn(move |_me, ctx| {
+                                    ctx.emit(RemoteServerManagerEvent::CodebaseIndexMutationFailed {
+                                        session_id,
+                                        mutation_kind,
+                                        error_kind: RemoteServerErrorKind::Other,
+                                    });
+                                })
+                                .await;
+                        }
                     }
                     Err(e) => {
                         log::warn!(
@@ -1646,7 +2304,13 @@ impl RemoteServerManager {
                              operation={operation:?} host={host_id} session={session_id:?} \
                              repo_path={repo_path_for_log} error={e}"
                         );
-                        let error_kind = RemoteServerErrorKind::from_client_error(&e);
+                        let error_kind = match &e {
+                            HostRequestError::AllSessionsDisconnected => RemoteServerErrorKind::Disconnected,
+                            HostRequestError::Timeout => RemoteServerErrorKind::Timeout,
+                            HostRequestError::ServerError { .. }
+                            | HostRequestError::OperationFailed(_) => RemoteServerErrorKind::ServerError,
+                            HostRequestError::UnexpectedResponse => RemoteServerErrorKind::Other,
+                        };
                         let _ = spawner
                             .spawn(move |_me, ctx| {
                                 ctx.emit(RemoteServerManagerEvent::CodebaseIndexMutationFailed {
@@ -1656,8 +2320,6 @@ impl RemoteServerManager {
                                 });
                             })
                             .await;
-                        // Transport-level telemetry is emitted automatically
-                        // by send_tracked_request via ClientEvent::RequestFailed.
                     }
                 }
             })
@@ -1706,7 +2368,7 @@ impl RemoteServerManager {
         session_id: SessionId,
         path: String,
         ctx: &mut ModelContext<Self>,
-    ) -> Option<futures::channel::oneshot::Receiver<Option<RemoteNavigationResult>>> {
+    ) -> Option<oneshot::Receiver<Option<RemoteNavigationResult>>> {
         // Dedup: skip if this session already navigated to the same path.
         if self
             .last_navigation
@@ -1729,7 +2391,7 @@ impl RemoteServerManager {
             },
         );
 
-        let (tx, rx) = futures::channel::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         let spawner = self.spawner.clone();
         ctx.background_executor()
             .spawn(async move {
@@ -1807,147 +2469,202 @@ impl RemoteServerManager {
     }
 
     /// Sends a `GetDiffState` request to the remote server for the given
-    /// session and emits the snapshot response as a manager event.
+    /// host and emits the snapshot response as a manager event.
+    ///
+    /// `GetDiffState` is session-scoped: the daemon registers a per-connection
+    /// diff-state subscription, so the request is dispatched over a specific
+    /// connected session — `preferred_session` when it is still connected
+    /// (the session actually showing the review), otherwise any connected
+    /// session for the host. Routing over the viewing session means closing
+    /// an unrelated session can't disturb this request, and the session-scoped
+    /// request/response correlation resolves it promptly (success or error) if
+    /// that connection drops.
+    ///
+    /// When no session is currently connected for the host the request is
+    /// silently dropped (logged) — the caller is a session-agnostic model
+    /// whose state machine self-heals on `HostConnected`, so emitting a
+    /// synthetic error here would clobber its `Disconnected` state and
+    /// defeat the recovery path. Callers will re-issue the request once
+    /// a session to the host is established.
     pub fn get_diff_state(
         &mut self,
-        session_id: SessionId,
-        remote_path: RemotePath,
+        host_id: HostId,
+        repo_path: StandardizedPath,
         mode: DiffMode,
+        preferred_session: Option<SessionId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(client) = self.client_for_session(session_id).cloned() else {
-            log::warn!("Remote server get_diff_state: no connected client session={session_id:?}");
+        let Some(client) = self.client_for_host_preferring(&host_id, preferred_session) else {
+            log::warn!("Remote server get_diff_state: no connected client host={host_id}");
             return;
         };
 
-        let RemotePath {
-            host_id,
-            path: repo_path,
-        } = remote_path;
-        let mode_for_event = mode.clone();
-        let repo_path_for_event = repo_path.clone();
-        let spawner = self.spawner.clone();
-        ctx.background_executor()
-            .spawn(async move {
-                let result = client.get_diff_state(&repo_path, mode).await;
+        let repo_path_str = repo_path.to_string();
+        let mode_for_rpc = mode.clone();
+        let host_id_for_event = host_id;
+        let repo_path_for_event = repo_path;
+        let mode_for_event = mode;
+        ctx.spawn(
+            async move { client.get_diff_state(repo_path_str, mode_for_rpc).await },
+            move |_me, result, ctx| {
+                let emit_snapshot = |snapshot, ctx: &mut ModelContext<Self>| {
+                    ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
+                        host_id: host_id_for_event.clone(),
+                        repo_path: repo_path_for_event.clone(),
+                        mode: mode_for_event.clone(),
+                        snapshot,
+                    });
+                };
+
                 match result {
                     Ok(GetDiffStateResponse {
                         result: Some(get_diff_state_response::Result::Snapshot(snapshot)),
+                    }) => emit_snapshot(snapshot, ctx),
+                    Ok(GetDiffStateResponse {
+                        result: Some(get_diff_state_response::Result::Error(e)),
                     }) => {
-                        let _ = spawner
-                            .spawn(move |_me, ctx| {
-                                ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
-                                    host_id,
-                                    repo_path: repo_path_for_event,
-                                    mode: mode_for_event,
-                                    snapshot,
-                                });
-                            })
-                            .await;
+                        log::warn!("Remote server get_diff_state error: {}", e.message);
+                        emit_snapshot(
+                            Self::make_diff_state_error_snapshot(
+                                &repo_path_for_event,
+                                &mode_for_event,
+                                e.message,
+                            ),
+                            ctx,
+                        );
                     }
-                    other => {
-                        let error_message = match other {
-                            Ok(GetDiffStateResponse {
-                                result: Some(get_diff_state_response::Result::Error(e)),
-                            }) => {
-                                log::warn!("Remote server get_diff_state error: {}", e.message);
-                                e.message
-                            }
-                            Ok(_) => {
-                                let message = "Remote server returned an empty \
-                                                GetDiffStateResponse"
-                                    .to_string();
-                                log::warn!("{message}");
-                                message
-                            }
-                            Err(e) => {
-                                // Transport-level telemetry is emitted automatically
-                                // by send_request via RequestFailedEvent.
-                                log::warn!(
-                                    "Remote server get_diff_state failed: \
-                                     session={session_id:?} error={e}"
-                                );
-                                e.to_string()
-                            }
-                        };
-                        let error_snapshot = DiffStateSnapshot {
-                            repo_path: repo_path_for_event.to_string(),
-                            mode: Some(mode_for_event.clone()),
-                            metadata: None,
-                            state: Some(DiffState {
-                                state: Some(diff_state::State::Error(DiffStateErrorValue {
-                                    message: error_message,
-                                })),
-                            }),
-                            diffs: None,
-                        };
-                        let _ = spawner
-                            .spawn(move |_me, ctx| {
-                                ctx.emit(RemoteServerManagerEvent::DiffStateSnapshotReceived {
-                                    host_id,
-                                    repo_path: repo_path_for_event,
-                                    mode: mode_for_event,
-                                    snapshot: error_snapshot,
-                                });
-                            })
-                            .await;
+                    Ok(GetDiffStateResponse { result: None }) => {
+                        log::warn!("Remote server get_diff_state: unexpected response");
+                        emit_snapshot(
+                            Self::make_diff_state_error_snapshot(
+                                &repo_path_for_event,
+                                &mode_for_event,
+                                "Unexpected response from server".to_string(),
+                            ),
+                            ctx,
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Remote server get_diff_state failed: host={} error={e}",
+                            host_id_for_event
+                        );
+                        emit_snapshot(
+                            Self::make_diff_state_error_snapshot(
+                                &repo_path_for_event,
+                                &mode_for_event,
+                                e.to_string(),
+                            ),
+                            ctx,
+                        );
                     }
                 }
-            })
-            .detach();
+            },
+        );
+    }
+
+    /// Builds a `DiffStateSnapshot` carrying an `Error` state. Used by the
+    /// post-dispatch transport-error path so callers downstream of
+    /// `DiffStateSnapshotReceived` see a consistent error shape.
+    fn make_diff_state_error_snapshot(
+        repo_path: &StandardizedPath,
+        mode: &DiffMode,
+        message: String,
+    ) -> DiffStateSnapshot {
+        DiffStateSnapshot {
+            repo_path: repo_path.to_string(),
+            mode: Some(mode.clone()),
+            metadata: None,
+            state: Some(DiffState {
+                state: Some(diff_state::State::Error(DiffStateErrorValue { message })),
+            }),
+            diffs: None,
+        }
     }
 
     /// Sends a `GetBranches` request to the remote server for the given
-    /// session and emits the result as a manager event.
+    /// host and emits the result as a manager event.
+    ///
+    /// When no session is currently connected for the host the request is
+    /// silently dropped (logged). Callers can re-issue once a session
+    /// becomes available; emitting a synthetic error response here would
+    /// only feed downstream models an empty `BranchesReceived` and isn't
+    /// useful for an event-driven state machine.
     pub fn get_branches(
         &mut self,
-        session_id: SessionId,
-        remote_path: RemotePath,
+        host_id: HostId,
+        repo_path: StandardizedPath,
         max_branch_count: Option<u32>,
         include_remotes: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(client) = self.client_for_session(session_id).cloned() else {
-            log::warn!("Remote server get_branches: no connected client session={session_id:?}");
-            return;
+        use crate::proto::{
+            get_branches_response, host_scoped_request, ClientMessage, GetBranches,
         };
 
-        let repo_path = remote_path.path;
-        let repo_path_for_event = repo_path.clone();
-        let spawner = self.spawner.clone();
-        ctx.background_executor()
-            .spawn(async move {
-                let result = client
-                    .get_branches(&repo_path, max_branch_count, include_remotes)
-                    .await
-                    .map_err(|e| e.to_string());
-                let _ = spawner
-                    .spawn(move |_me, ctx| {
-                        ctx.emit(RemoteServerManagerEvent::GetBranchesResponse {
-                            session_id,
-                            repo_path: repo_path_for_event,
-                            result,
-                        });
-                    })
-                    .await;
-            })
-            .detach();
+        let session_id = match self.find_connected_session(&host_id) {
+            Some(sid) => sid,
+            None => {
+                log::warn!("Remote server get_branches: no connected client host={host_id}");
+                return;
+            }
+        };
+
+        let request_id = crate::protocol::RequestId::new();
+        let msg = ClientMessage::host_scoped(
+            request_id.to_string(),
+            host_scoped_request::Message::GetBranches(GetBranches {
+                repo_path: repo_path.to_string(),
+                max_branch_count,
+                include_remotes,
+            }),
+        );
+
+        let result_rx = self.send_host_request(&host_id, msg);
+
+        let repo_path_for_event = repo_path;
+        ctx.spawn(result_rx, move |_me, result, ctx| {
+            let branches_result = match result {
+                Ok(Ok(msg)) => match msg.message {
+                    Some(crate::proto::server_message::Message::GetBranchesResponse(resp)) => {
+                        match resp.result {
+                            Some(get_branches_response::Result::Success(success)) => {
+                                Ok(success.branches)
+                            }
+                            Some(get_branches_response::Result::Error(e)) => Err(e.message),
+                            None => Err("Empty GetBranchesResponse".to_string()),
+                        }
+                    }
+                    _ => Err("Unexpected response for GetBranches".to_string()),
+                },
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => return, // oneshot cancelled
+            };
+            ctx.emit(RemoteServerManagerEvent::GetBranchesResponse {
+                session_id,
+                repo_path: repo_path_for_event,
+                result: branches_result,
+            });
+        });
     }
 
     /// Sends an `UnsubscribeDiffState` notification (fire-and-forget) to the
-    /// remote server for the given session.
+    /// remote server for the given host.
+    ///
+    /// Safe no-op when no session is connected: the server already cleans up
+    /// the corresponding `(repo, mode, conn_id)` subscription when the
+    /// connection drops (see `deregister_connection` in the daemon), so the
+    /// client doesn't need to retry.
     pub fn unsubscribe_diff_state(
         &self,
-        session_id: SessionId,
-        remote_path: &RemotePath,
+        host_id: HostId,
+        repo_path: &StandardizedPath,
         mode: DiffMode,
     ) {
-        if let Some(client) = self.client_for_session(session_id) {
-            client.unsubscribe_diff_state(&remote_path.path, mode);
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.unsubscribe_diff_state(repo_path, mode);
         } else {
-            log::debug!(
-                "Remote server unsubscribe_diff_state: no client for session={session_id:?}"
-            );
+            log::debug!("Remote server unsubscribe_diff_state: no client for host={host_id}");
         }
     }
 
@@ -1956,39 +2673,51 @@ impl RemoteServerManager {
     #[allow(clippy::too_many_arguments)]
     pub fn discard_files(
         &mut self,
-        session_id: SessionId,
-        remote_path: RemotePath,
+        host_id: HostId,
+        repo_path: StandardizedPath,
         files: Vec<FileStatusInfo>,
         should_stash: bool,
         branch_name: Option<String>,
         mode: DiffMode,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(client) = self.client_for_session(session_id).cloned() else {
-            log::warn!("Remote server discard_files: no connected client session={session_id:?}");
-            return;
-        };
+        use crate::proto::{host_scoped_request, ClientMessage, DiscardFilesRequest};
 
-        let repo_path = remote_path.path;
-        ctx.background_executor()
-            .spawn(async move {
-                match client
-                    .discard_files(&repo_path, files, should_stash, branch_name, mode)
-                    .await
-                {
-                    Ok(()) => {
-                        log::info!("Remote server discard_files succeeded");
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Remote server discard_files failed: session={session_id:?} error={e}"
-                        );
-                        // Transport-level telemetry is emitted automatically
-                        // by send_request via RequestFailedEvent.
-                    }
+        let request_id = crate::protocol::RequestId::new();
+        let msg = ClientMessage::host_scoped(
+            request_id.to_string(),
+            host_scoped_request::Message::DiscardFiles(DiscardFilesRequest {
+                repo_path: repo_path.to_string(),
+                files,
+                should_stash,
+                branch_name,
+                mode: Some(mode),
+            }),
+        );
+
+        let result_rx = self.send_host_request(&host_id, msg);
+        let host_id_for_log = host_id;
+
+        ctx.spawn(result_rx, move |_me, result, _ctx| {
+            // A non-transport response can still carry a discard-specific
+            // error nested in the DiscardFilesResponse; parse it before
+            // treating the discard as successful.
+            let discard_result = match result {
+                Ok(Ok(msg)) => crate::host_response::discard_files_result(&msg),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => return, // oneshot cancelled
+            };
+            match discard_result {
+                Ok(()) => {
+                    log::info!("Remote server discard_files succeeded");
                 }
-            })
-            .detach();
+                Err(e) => {
+                    log::warn!(
+                        "Remote server discard_files failed: host={host_id_for_log} error={e}"
+                    );
+                }
+            }
+        });
     }
 
     /// Sends a `LoadRepoMetadataDirectory` request to the remote server for
@@ -2117,6 +2846,12 @@ impl RemoteServerManager {
             ClientEvent::MessageDecodingError => {
                 ctx.emit(RemoteServerManagerEvent::ServerMessageDecodingError { session_id });
             }
+            ClientEvent::HostScopedWriteFailed { request_id } => {
+                self.handle_host_scoped_write_failed(session_id, request_id);
+            }
+            ClientEvent::HostScopedDecodeFailed { request_id } => {
+                self.fail_host_request_decode_error(request_id);
+            }
             ClientEvent::BufferUpdated {
                 path,
                 new_server_version,
@@ -2191,6 +2926,7 @@ impl RemoteServerManager {
             host_id,
             event_rx,
             failure_rx,
+            host_response_rx,
         } = handshake;
         log::info!("Remote server connected: session={session_id:?} host={host_id}");
 
@@ -2243,6 +2979,34 @@ impl RemoteServerManager {
                 });
             },
             |_, _| {}, // no-op on done
+        );
+        // Drain the host-scoped response channel. Responses arriving here
+        // are either the normal path for host-scoped requests sent via
+        // `send_host_scoped` on this session, or daemon failover responses
+        // re-routed from a dead sibling connection.
+        ctx.spawn_stream_local(
+            host_response_rx,
+            move |me, msg, _ctx| {
+                let request_id = crate::protocol::RequestId::from(msg.request_id.clone());
+                if let Some(pending) = me.pending_host_requests.remove(&request_id) {
+                    pending.cancel_timeout();
+                    // Check for server-reported ErrorResponse.
+                    if let Some(crate::proto::server_message::Message::Error(ref e)) = msg.message {
+                        let _ = pending.result_tx.send(Err(HostRequestError::ServerError {
+                            code: e.code(),
+                            message: e.message.clone(),
+                        }));
+                    } else {
+                        let _ = pending.result_tx.send(Ok(msg));
+                    }
+                } else {
+                    log::warn!(
+                        "Host-scoped response on session {session_id:?} with \
+                         unknown request_id={request_id} (no pending host request)"
+                    );
+                }
+            },
+            |_, _| {},
         );
         if is_first_session {
             ctx.emit(RemoteServerManagerEvent::HostConnected {
@@ -2414,11 +3178,7 @@ impl RemoteServerManager {
             // Clear stale repo metadata and host index so downstream
             // models don't hold onto data from the dead server process.
             self.remove_from_host_index(&host_id, session_id);
-            if !self.host_to_sessions.contains_key(&host_id) {
-                ctx.emit(RemoteServerManagerEvent::HostDisconnected {
-                    host_id: host_id.clone(),
-                });
-            }
+            self.handle_host_disconnected(&host_id, ctx);
 
             // Clear navigation cache so navigate_to_directory re-fires
             // after reconnect. The cached path only dedupes for the
@@ -2637,8 +3397,17 @@ impl RemoteServerManager {
             exit_status,
             was_reconnect_attempt: false,
         });
-        if !self.host_to_sessions.contains_key(&host_id) {
-            ctx.emit(RemoteServerManagerEvent::HostDisconnected { host_id });
+        self.handle_host_disconnected(&host_id, ctx);
+    }
+
+    /// If no sessions remain for `host_id`, emits `HostDisconnected` and
+    /// fails any pending host-scoped requests that targeted this host.
+    fn handle_host_disconnected(&mut self, host_id: &HostId, ctx: &mut ModelContext<Self>) {
+        if !self.host_to_sessions.contains_key(host_id) {
+            ctx.emit(RemoteServerManagerEvent::HostDisconnected {
+                host_id: host_id.clone(),
+            });
+            self.fail_pending_host_requests_for_disconnected_hosts();
         }
     }
 

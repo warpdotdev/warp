@@ -33,6 +33,18 @@ impl From<&proto::DiffMode> for DiffMode {
     }
 }
 
+impl From<&proto::PrInfo> for PrInfo {
+    fn from(pr_info: &proto::PrInfo) -> Self {
+        PrInfo {
+            number: pr_info.number,
+            url: pr_info.url.clone(),
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
+        }
+    }
+}
+
 impl TryFrom<&proto::GitFileStatus> for GitFileStatus {
     type Error = String;
 
@@ -111,15 +123,6 @@ impl From<&proto::Commit> for Commit {
             files_changed: commit.files_changed as usize,
             additions: commit.additions as usize,
             deletions: commit.deletions as usize,
-        }
-    }
-}
-
-impl From<&proto::PrInfo> for PrInfo {
-    fn from(pr: &proto::PrInfo) -> Self {
-        PrInfo {
-            number: pr.number,
-            url: pr.url.clone(),
         }
     }
 }
@@ -406,6 +409,15 @@ impl From<&Commit> for proto::Commit {
     }
 }
 
+impl From<&PrInfo> for proto::PrInfo {
+    fn from(pr_info: &PrInfo) -> Self {
+        proto::PrInfo {
+            number: pr_info.number,
+            url: pr_info.url.clone(),
+        }
+    }
+}
+
 impl From<&DiffMetadata> for proto::DiffMetadata {
     fn from(m: &DiffMetadata) -> Self {
         proto::DiffMetadata {
@@ -416,9 +428,7 @@ impl From<&DiffMetadata> for proto::DiffMetadata {
             has_head_commit: m.has_head_commit,
             unpushed_commits: m.unpushed_commits.iter().map(proto::Commit::from).collect(),
             upstream_ref: m.upstream_ref.clone(),
-            // PR info is fetched independently per repo by GitRepoStatusModel
-            // and is not part of the diff state. Always None on the wire.
-            pr_info: None,
+            pr_info: m.pr_info.as_ref().map(proto::PrInfo::from),
         }
     }
 }

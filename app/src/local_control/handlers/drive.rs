@@ -2,7 +2,7 @@ use ::local_control::protocol::{
     DriveInspectParams, DriveInspectResult, DriveListParams, DriveListResult, DriveMutationAudit,
     DriveMutationResult, DriveObjectCreateParams, DriveObjectId, DriveObjectInsertParams,
     DriveObjectSummary, DriveObjectType as ControlDriveObjectType, DriveObjectUpdateParams,
-    PermissionCategory, TargetSelector,
+    TargetSelector,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode, RequestEnvelope};
 use serde_json::json;
@@ -775,7 +775,9 @@ fn drive_object_content(object: &dyn CloudObject) -> Result<serde_json::Value, C
             }))
         }
         ControlDriveObjectType::AiFact
+        | ControlDriveObjectType::AiRule
         | ControlDriveObjectType::McpServer
+        | ControlDriveObjectType::McpServerCollection
         | ControlDriveObjectType::Space
         | ControlDriveObjectType::Trash => Err(drive_unsupported_type_error()),
     }
@@ -789,9 +791,11 @@ fn drive_object_type_rank(object_type: ControlDriveObjectType) -> u8 {
         ControlDriveObjectType::EnvVarCollection => 3,
         ControlDriveObjectType::Folder => 4,
         ControlDriveObjectType::AiFact => 5,
-        ControlDriveObjectType::McpServer => 6,
-        ControlDriveObjectType::Space => 7,
-        ControlDriveObjectType::Trash => 8,
+        ControlDriveObjectType::AiRule => 6,
+        ControlDriveObjectType::McpServer => 7,
+        ControlDriveObjectType::McpServerCollection => 8,
+        ControlDriveObjectType::Space => 9,
+        ControlDriveObjectType::Trash => 10,
     }
 }
 
@@ -821,7 +825,6 @@ fn audit(action: ActionKind, authenticated_user_subject: String) -> DriveMutatio
     DriveMutationAudit {
         action: action.as_str().to_owned(),
         authenticated_user_subject,
-        permission_category: PermissionCategory::MutateUnderlyingData,
     }
 }
 

@@ -1,6 +1,6 @@
 //! Execution-underlying handlers for local-control actions.
 use ::local_control::protocol::{ActionParams, LocalControlAuditRecord, WorkflowRunParams};
-use ::local_control::{ActionKind, ControlError, ErrorCode, PermissionCategory, RequestEnvelope};
+use ::local_control::{ActionKind, ControlError, ErrorCode, RequestEnvelope};
 
 pub(crate) fn run_input(
     request: &RequestEnvelope,
@@ -42,7 +42,6 @@ pub(crate) fn execution_audit_record(
     LocalControlAuditRecord {
         action: action.as_str().to_owned(),
         target_scope: action.metadata().target_scope,
-        permission_category: PermissionCategory::MutateUnderlyingData,
         authenticated_user_subject: authenticated_user_subject.to_owned(),
     }
 }

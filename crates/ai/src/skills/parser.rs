@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-use std::fs;
 use std::ops::Range;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -19,19 +17,6 @@ pub struct ParsedMarkdown {
     /// The line range where the markdown content (without front matter) is located (1-indexed)
     /// None if there is no front matter (content is the entire file)
     pub line_range: Option<Range<usize>>,
-}
-
-/// Parse a markdown file with YAML front matter
-///
-/// # Arguments
-/// * `path` - Path to the markdown file to parse
-///
-/// # Returns
-/// * `Result<ParsedMarkdown>` - Parsed document with front matter and content
-#[allow(dead_code)]
-pub fn parse_markdown_file(path: &Path) -> Result<ParsedMarkdown> {
-    let content = fs::read_to_string(path)?;
-    parse_markdown_content(&content)
 }
 
 /// Parse markdown content with YAML front matter

@@ -18,7 +18,7 @@ pub use auth::{
 };
 pub use catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, AuthenticatedUserRequirement,
-    InvocationContext, PermissionCategory, RiskTier, StateDataCategory, TargetScope,
+    InvocationContext, TargetScope,
 };
 pub use discovery::{
     ControlEndpoint, CredentialBrokerReference, InstanceId, InstanceRecord, RegisteredInstance,
@@ -35,5 +35,5 @@ pub use protocol::{
     PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope, SettingGetParams, ThemeStateResult,
     WorkflowArgument, WorkflowRunParams,
 };
-pub use scripting::{ScriptingGrant, ScriptingIdentitySource, ScriptingScope};
+pub use scripting::{ScriptingGrant, ScriptingIdentitySource};
 pub use selectors::{PaneSelector, SessionSelector, TabSelector, TargetSelector, WindowSelector};

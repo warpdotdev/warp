@@ -11,13 +11,17 @@ use crate::discovery::InstanceId;
 use crate::protocol::{
     ActionKind, ControlError, ErrorCode, ExecutionContextProof, InvocationContext,
 };
-use crate::scripting::{ScriptingGrant, ScriptingScope};
+use crate::scripting::ScriptingGrant;
 
 /// Bearer token used to authorize a single scoped local-control credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthToken(String);
 
 impl AuthToken {
+    /// Generates a bearer secret from 32 bytes of operating-system CSPRNG output.
+    ///
+    /// Local-control bearer tokens are authentication material, so they use
+    /// `OsRng` instead of a deterministic or fast userspace PRNG.
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut bytes);
@@ -320,12 +324,25 @@ impl CredentialGrant {
         self.authenticated_user.subject = Some(subject.into());
         self
     }
+    pub fn is_expired(&self) -> bool {
+        Utc::now() >= self.expires_at
+    }
 
-    pub fn verify_for_action(&self, action: ActionKind) -> Result<(), ControlError> {
-        if Utc::now() >= self.expires_at {
+    pub fn verify_for_action(
+        &self,
+        instance_id: &InstanceId,
+        action: ActionKind,
+    ) -> Result<(), ControlError> {
+        if self.is_expired() {
             return Err(ControlError::new(
                 ErrorCode::UnauthorizedLocalClient,
                 "local-control credential has expired",
+            ));
+        }
+        if &self.instance_id != instance_id {
+            return Err(ControlError::new(
+                ErrorCode::UnauthorizedLocalClient,
+                "local-control credential belongs to a different Warp instance",
             ));
         }
         if self.action != action {
@@ -355,9 +372,7 @@ impl CredentialGrant {
                     ),
                 ));
             };
-            scripting_grant.verify_scope(ScriptingScope::from_permission(
-                metadata.permission_category,
-            ))?;
+            scripting_grant.verify_action(action)?;
             if self.authenticated_user.subject.as_deref() != Some(scripting_grant.subject.as_str())
             {
                 return Err(ControlError::new(

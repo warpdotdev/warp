@@ -4,8 +4,7 @@
 //! before routing each supported action to an app-side handler.
 use ::local_control::auth::CredentialGrant;
 use ::local_control::{
-    ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
-    PROTOCOL_VERSION,
+    Action, ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
 };
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -15,6 +14,7 @@ use crate::local_control::handlers::{
 };
 use crate::local_control::permissions::{
     ensure_action_allowed, ensure_authenticated_user_matches, ensure_feature_enabled,
+    ensure_protocol_version,
 };
 use crate::local_control::resolver::validate_action_params;
 
@@ -47,309 +47,130 @@ impl LocalControlBridge {
         if let Err(error) = ensure_feature_enabled() {
             return ResponseEnvelope::error(request.request_id, error);
         }
-        if request.protocol_version != PROTOCOL_VERSION {
+        if let Err(error) = ensure_protocol_version(request.protocol_version) {
+            return ResponseEnvelope::error(request.request_id, error);
+        }
+        let Some(instance_id) = &self.instance_id else {
             return ResponseEnvelope::error(
                 request.request_id,
                 ControlError::new(
-                    ErrorCode::ProtocolVersionUnsupported,
-                    format!("unsupported protocol version {}", request.protocol_version),
+                    ErrorCode::BridgeUnavailable,
+                    "local-control bridge has no active instance identity",
                 ),
             );
-        }
-        if let Err(error) = validate_action_params(&request.action) {
+        };
+        if let Err(error) = validate_request_authority(instance_id, &request.action, &grant) {
             return ResponseEnvelope::error(request.request_id, error);
         }
-        if let Err(error) = grant.verify_for_action(request.action.kind) {
+        if let Err(error) =
+            ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
+        {
             return ResponseEnvelope::error(request.request_id, error);
         }
         if let Err(error) = ensure_authenticated_user_matches(&grant, ctx) {
             return ResponseEnvelope::error(request.request_id, error);
         }
-        if !request.action.kind.is_implemented() {
-            return ResponseEnvelope::error(
-                request.request_id,
-                ControlError::new(
-                    ErrorCode::UnsupportedAction,
-                    format!(
-                        "{} is not implemented by this local-control bridge",
-                        request.action.kind.as_str()
-                    ),
-                ),
-            );
-        }
         match request.action.kind {
-            ActionKind::InstanceList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::instance(&self.instance_id) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::AppPing => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::ping(&self.instance_id) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::AppVersion => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::version(&self.instance_id) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
+            ActionKind::InstanceList => match metadata::instance(&self.instance_id) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::AppPing => match metadata::ping(&self.instance_id) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::AppVersion => match metadata::version(&self.instance_id) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
             ActionKind::AppActive => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 ResponseEnvelope::ok(request.request_id, metadata::active(&self.instance_id, ctx))
             }
-            ActionKind::InstanceInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                ResponseEnvelope::ok(
-                    request.request_id,
-                    metadata::inspect(&self.instance_id, ctx),
-                )
-            }
+            ActionKind::InstanceInspect => ResponseEnvelope::ok(
+                request.request_id,
+                metadata::inspect(&self.instance_id, ctx),
+            ),
             ActionKind::CapabilityList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 ResponseEnvelope::ok(request.request_id, metadata::capability_list())
             }
-            ActionKind::CapabilityInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::capability_inspect(&request.action) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
+            ActionKind::CapabilityInspect => match metadata::capability_inspect(&request.action) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
             ActionKind::ActionList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 ResponseEnvelope::ok(request.request_id, metadata::action_list())
             }
-            ActionKind::ActionInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::action_inspect(&request.action) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::WindowList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::window_list(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::TabList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::tab_list(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::TabInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::tab_inspect(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::PaneList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::pane_list(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::PaneInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::pane_inspect(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::SessionList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::session_list(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::SessionInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::session_inspect(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::WindowInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match metadata::window_inspect(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::ThemeList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match settings_surfaces::theme_list(ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::ThemeGet => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match settings_surfaces::theme_get(ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::AppearanceGet => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match settings_surfaces::appearance_get(ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::SettingList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match settings_surfaces::setting_list(ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::SettingGet => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match settings_surfaces::setting_get(&request.action, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
-            ActionKind::KeybindingList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match settings_surfaces::keybinding_list(ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
+            ActionKind::ActionInspect => match metadata::action_inspect(&request.action) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::WindowList => match metadata::window_list(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::TabList => match metadata::tab_list(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::TabInspect => match metadata::tab_inspect(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::PaneList => match metadata::pane_list(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::PaneInspect => match metadata::pane_inspect(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::SessionList => match metadata::session_list(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::SessionInspect => match metadata::session_inspect(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::WindowInspect => match metadata::window_inspect(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::ThemeList => match settings_surfaces::theme_list(ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::ThemeGet => match settings_surfaces::theme_get(ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::AppearanceGet => match settings_surfaces::appearance_get(ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::SettingList => match settings_surfaces::setting_list(ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::SettingGet => match settings_surfaces::setting_get(&request.action, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
+            ActionKind::KeybindingList => match settings_surfaces::keybinding_list(ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
             ActionKind::KeybindingGet => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match settings_surfaces::keybinding_get(&request.action, ctx) {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
-            ActionKind::FileList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match product_metadata::file_list(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
+            ActionKind::FileList => match product_metadata::file_list(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
             ActionKind::TabCreate => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match layout::create_terminal_tab(&self.instance_id, &request.target, ctx) {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
@@ -393,11 +214,6 @@ impl LocalControlBridge {
             | ActionKind::DriveNotebookOpen
             | ActionKind::DriveEnvVarCollectionOpen
             | ActionKind::DriveObjectShareOpen => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match app_state::handle(
                     &self.instance_id,
                     request.action.kind,
@@ -634,11 +450,6 @@ impl LocalControlBridge {
                 }
             }
             ActionKind::BlockList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match request
                     .action
                     .params_as()
@@ -649,11 +460,6 @@ impl LocalControlBridge {
                 }
             }
             ActionKind::BlockInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match request
                     .action
                     .params_as()
@@ -664,11 +470,6 @@ impl LocalControlBridge {
                 }
             }
             ActionKind::BlockOutput => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match request
                     .action
                     .params_as()
@@ -678,23 +479,11 @@ impl LocalControlBridge {
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
-            ActionKind::InputGet => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
-                match data::get_input_state(&request.target, ctx) {
-                    Ok(data) => ResponseEnvelope::ok(request.request_id, data),
-                    Err(error) => ResponseEnvelope::error(request.request_id, error),
-                }
-            }
+            ActionKind::InputGet => match data::get_input_state(&request.target, ctx) {
+                Ok(data) => ResponseEnvelope::ok(request.request_id, data),
+                Err(error) => ResponseEnvelope::error(request.request_id, error),
+            },
             ActionKind::HistoryList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match request
                     .action
                     .params_as()
@@ -705,22 +494,12 @@ impl LocalControlBridge {
                 }
             }
             ActionKind::DriveList => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match drive::drive_list(&request.target, &request.action, ctx) {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
                 }
             }
             ActionKind::DriveInspect => {
-                if let Err(error) =
-                    ensure_action_allowed(grant.invocation_context, request.action.kind, ctx)
-                {
-                    return ResponseEnvelope::error(request.request_id, error);
-                }
                 match drive::drive_inspect(&request.target, &request.action, ctx) {
                     Ok(data) => ResponseEnvelope::ok(request.request_id, data),
                     Err(error) => ResponseEnvelope::error(request.request_id, error),
@@ -738,4 +517,22 @@ impl LocalControlBridge {
             ),
         }
     }
+}
+
+pub(crate) fn validate_request_authority(
+    instance_id: &InstanceId,
+    action: &Action,
+    grant: &CredentialGrant,
+) -> Result<(), ControlError> {
+    grant.verify_for_action(instance_id, action.kind)?;
+    if !action.kind.is_implemented() {
+        return Err(ControlError::new(
+            ErrorCode::UnsupportedAction,
+            format!(
+                "{} is not implemented by this local-control bridge",
+                action.kind.as_str()
+            ),
+        ));
+    }
+    validate_action_params(action)
 }

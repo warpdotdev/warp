@@ -159,6 +159,25 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
         false
     }
 
+    /// Whether this agent's Oz platform plugin is already installed.
+    /// Default returns `true` because most agents do not have a platform plugin.
+    fn is_platform_plugin_installed(&self) -> bool {
+        true
+    }
+    /// Whether this agent's Oz platform plugin is below the minimum required version.
+    /// Default returns `false` because most agents do not have a platform plugin.
+    fn platform_plugin_needs_update(&self) -> bool {
+        false
+    }
+
+    /// Whether the agent's plugin marketplace is currently overridden to a
+    /// local filesystem path. This is used by local test flows to avoid
+    /// clobbering a developer's marketplace override while still preserving
+    /// normal install/update behavior in staging and production.
+    fn has_local_marketplace_override(&self) -> bool {
+        false
+    }
+
     /// Install the Warp notification plugin.
     /// Default returns an error — only agents with `can_auto_install() == true` should override.
     async fn install(&self) -> Result<(), PluginInstallError> {
@@ -206,6 +225,12 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         Ok(())
     }
+    /// Update the Oz platform plugin for this CLI agent, if one exists.
+    /// Default reuses the install path because most agents do not have a
+    /// platform plugin or need distinct update behavior.
+    async fn update_platform_plugin(&self) -> Result<(), PluginInstallError> {
+        self.install_platform_plugin().await
+    }
 }
 
 /// Returns a plugin manager for the given CLI agent, or `None` if the agent
@@ -241,7 +266,11 @@ pub(crate) fn plugin_manager_for_with_shell(
             if FeatureFlag::CodexNotifications.is_enabled()
                 && FeatureFlag::HOANotifications.is_enabled() =>
         {
-            Some(Box::new(CodexPluginManager))
+            Some(Box::new(CodexPluginManager::new(
+                shell_path,
+                shell_type,
+                path_env_var,
+            )))
         }
         CLIAgent::Gemini
             if FeatureFlag::GeminiNotifications.is_enabled()

@@ -6,7 +6,7 @@ use uuid::Uuid;
 pub use crate::catalog::{
     ActionImplementationStatus, ActionKind, ActionMetadata, ActionParameterSpec, ActionResultSpec,
     AuthenticatedUserRequirement, ExecutionContextProof, InvocationContext, PROTOCOL_VERSION,
-    PermissionCategory, RiskTier, StateDataCategory, TargetScope,
+    TargetScope,
 };
 pub use crate::selectors::{
     PaneSelector, PaneTarget, SessionSelector, SessionTarget, TabSelector, TabTarget,
@@ -28,7 +28,9 @@ pub enum DriveObjectType {
     Prompt,
     Folder,
     AiFact,
+    AiRule,
     McpServer,
+    McpServerCollection,
     Space,
     Trash,
 }
@@ -225,15 +227,14 @@ pub struct DriveObjectSummary {
     pub name: String,
 }
 
-/// Structured audit payload attached to high-risk Drive mutation responses.
+/// Structured audit payload attached to authenticated Drive mutation responses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DriveMutationAudit {
     pub action: String,
     pub authenticated_user_subject: String,
-    pub permission_category: PermissionCategory,
 }
 
-/// Result payload for high-risk Drive object mutations.
+/// Result payload for authenticated Drive object mutations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DriveMutationResult {
     pub object: DriveObjectSummary,
@@ -274,7 +275,6 @@ pub enum ControlResult {
 pub struct LocalControlAuditRecord {
     pub action: String,
     pub target_scope: TargetScope,
-    pub permission_category: PermissionCategory,
     pub authenticated_user_subject: String,
 }
 

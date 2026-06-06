@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::skills::SkillPathOrigin;
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use input_context::{input_context_for_request, parse_context_attachments};
@@ -121,6 +122,18 @@ impl SessionContext {
     /// the remote server client is connected).
     pub fn is_remote(&self) -> bool {
         matches!(self.session_type, Some(SessionType::WarpifiedRemote { .. }))
+    }
+
+    pub fn skill_path_origin(&self) -> SkillPathOrigin {
+        match &self.session_type {
+            Some(SessionType::WarpifiedRemote {
+                host_id: Some(host_id),
+            }) => SkillPathOrigin::Remote {
+                host_id: host_id.clone(),
+            },
+            Some(SessionType::WarpifiedRemote { host_id: None }) => SkillPathOrigin::Unavailable,
+            Some(SessionType::Local) | None => SkillPathOrigin::Local,
+        }
     }
 
     #[cfg(test)]
@@ -570,25 +583,23 @@ impl BlocklistAIController {
 
         // Subscribe to the orchestration event service to inject events
         // (e.g. MessagesReceivedFromAgents) into conversations that receive inter-agent messages.
-        if FeatureFlag::OrchestrationV2.is_enabled() {
-            // TODO(QUALITY-733): Remove the legacy v1 orchestration event-service path once
-            // v2 event streaming no longer drains through OrchestrationEventService.
-            let svc = OrchestrationEventService::handle(ctx);
-            ctx.subscribe_to_model(&svc, move |me, event, ctx| {
-                let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
-                me.handle_pending_events_ready(*conversation_id, ctx);
-            });
-        }
-        if FeatureFlag::OrchestrationV2.is_enabled() {
-            let streamer = OrchestrationEventStreamer::handle(ctx);
-            ctx.subscribe_to_model(&streamer, move |me, event, ctx| {
-                let OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
-                    conversation_id,
-                    wake_message,
-                } = event;
+        let svc = OrchestrationEventService::handle(ctx);
+        ctx.subscribe_to_model(&svc, move |me, event, ctx| {
+            let OrchestrationEventServiceEvent::EventsReady { conversation_id } = event;
+            me.handle_pending_events_ready(*conversation_id, ctx);
+        });
+        let streamer = OrchestrationEventStreamer::handle(ctx);
+        ctx.subscribe_to_model(&streamer, move |me, event, ctx| match event {
+            OrchestrationEventStreamerEvent::DormantClaudeWakeReady {
+                conversation_id,
+                wake_message,
+            } => {
                 me.handle_dormant_claude_wake_ready(*conversation_id, wake_message.clone(), ctx);
-            });
-        }
+            }
+            // Viewer-mode events are handled by `OrchestrationViewerModel`.
+            OrchestrationEventStreamerEvent::ChildSpawned { .. }
+            | OrchestrationEventStreamerEvent::ChildStatusChanged { .. } => {}
+        });
         Self {
             input_model,
             context_model,
@@ -1449,7 +1460,7 @@ impl BlocklistAIController {
         }
 
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-            history.set_active_conversation_id(conversation_id, self.terminal_view_id, ctx);
+            history.mark_active_conversation_id(conversation_id, self.terminal_view_id, ctx);
         });
 
         if !FeatureFlag::AgentView.is_enabled() && trigger == FollowUpTrigger::Auto {
@@ -1505,31 +1516,27 @@ impl BlocklistAIController {
         // subagent is or will be active — events will be delivered via the idle
         // path once the subagent session ends.
         let mut has_piggybacked_events = false;
-        if FeatureFlag::OrchestrationV2.is_enabled() {
-            // TODO(QUALITY-733): Remove the legacy event-service piggyback path once v2 event
-            // delivery no longer reuses OrchestrationEventService queues.
-            if will_trigger_server_subagent || has_active_subagent {
-                log::debug!(
-                    "Skipping event piggyback for conversation {conversation_id:?}: \
-                     {}",
-                    if will_trigger_server_subagent {
-                        "results will trigger a server-side subagent"
-                    } else {
-                        "a subagent is currently active"
-                    }
-                );
-            } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx)
-                .update(ctx, |svc, ctx| {
-                    svc.drain_events_for_request(conversation_id, ctx)
-                })
-            {
-                has_piggybacked_events = true;
-                request_input
-                    .input_messages
-                    .entry(task_id)
-                    .or_default()
-                    .extend(event_inputs);
-            }
+        if will_trigger_server_subagent || has_active_subagent {
+            log::debug!(
+                "Skipping event piggyback for conversation {conversation_id:?}: \
+                 {}",
+                if will_trigger_server_subagent {
+                    "results will trigger a server-side subagent"
+                } else {
+                    "a subagent is currently active"
+                }
+            );
+        } else if let Some((event_inputs, task_id)) = OrchestrationEventService::handle(ctx)
+            .update(ctx, |svc, ctx| {
+                svc.drain_events_for_request(conversation_id, ctx)
+            })
+        {
+            has_piggybacked_events = true;
+            request_input
+                .input_messages
+                .entry(task_id)
+                .or_default()
+                .extend(event_inputs);
         }
 
         let result = self.send_request_input(
@@ -2402,7 +2409,7 @@ impl BlocklistAIController {
         });
         if !is_passive_request {
             history_model.update(ctx, |history_model, ctx| {
-                history_model.set_active_conversation_id(
+                history_model.mark_active_conversation_id(
                     conversation_data.id,
                     self.terminal_view_id,
                     ctx,
@@ -2613,6 +2620,11 @@ impl BlocklistAIController {
                             }
                             warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
                                 let client_actions = actions.actions;
+                                let skill_path_origin = SessionContext::from_session(
+                                    self.active_session.as_ref(ctx),
+                                    ctx,
+                                )
+                                .skill_path_origin();
                                 let apply_result =
                                     history_model.update(ctx, |history_model, ctx| {
                                         history_model.apply_client_actions(
@@ -2620,6 +2632,7 @@ impl BlocklistAIController {
                                             client_actions,
                                             conversation_id,
                                             self.terminal_view_id,
+                                            &skill_path_origin,
                                             ctx,
                                         )
                                     });
@@ -2778,9 +2791,7 @@ impl BlocklistAIController {
 
                     // Now that the stream is cleaned up, re-check for pending
                     // orchestration events that couldn't be drained earlier.
-                    if FeatureFlag::OrchestrationV2.is_enabled() {
-                        self.handle_pending_events_ready(conversation_id, ctx);
-                    }
+                    self.handle_pending_events_ready(conversation_id, ctx);
                 }
 
                 // Before cleaning up the response stream, check if we should attempt to resume.

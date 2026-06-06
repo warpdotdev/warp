@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use warp_server_client::cloud_object::CloudObjectUpsertParams;
-// Re-exported from warp_server_client.
-pub use warp_server_client::cloud_object::{GenericStringModel, Serializer};
+use cloud_objects::cloud_object::CloudObjectUpsertParams;
+// Re-exported from cloud_objects.
+pub use cloud_objects::cloud_object::{GenericStringModel, Serializer};
 pub use warp_server_client::ids::GenericStringObjectId;
 
 use crate::appearance::Appearance;

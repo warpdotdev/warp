@@ -37,6 +37,7 @@ use websocket::{Message, Sink, Stream, WebsocketMessage as _};
 use crate::auth::auth_state::AuthState;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::editor::{CrdtOperation, ReplicaId};
+use crate::server::iap::IapManager;
 use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::telemetry_context;
@@ -309,12 +310,15 @@ impl Network {
         session_id: SessionId,
         auth_client: Arc<dyn AuthClient>,
         auth_state: Arc<AuthState>,
+        iap_headers: Vec<(&'static str, String)>,
     ) -> anyhow::Result<((impl Sink, impl Stream), UserID)> {
         let Some(join_endpoint) = connect_endpoint(format!("/sessions/join/{session_id}")) else {
             bail!("This channel does not support session-sharing.");
         };
         let user_id = Self::get_user_id(auth_client, &auth_state).await?;
-        let socket = websocket::WebSocket::connect(join_endpoint, None /* protocols */).await?;
+        let socket =
+            websocket::WebSocket::connect_with_headers(&join_endpoint, None::<&str>, iap_headers)
+                .await?;
         anyhow::Ok(((socket.split().await), user_id))
     }
 
@@ -386,10 +390,20 @@ impl Network {
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        let iap_headers: Vec<(&'static str, String)> = IapManager::as_ref(ctx)
+            .iap_state()
+            .and_then(|state| state.proxy_auth_header())
+            .into_iter()
+            .collect();
         // Open a websocket to the server to join the session.
         ctx.spawn(
-            Self::connect_websocket_and_get_user_id(session_id, auth_client, auth_state.clone()),
-            |network, conn, ctx| match conn {
+            Self::connect_websocket_and_get_user_id(
+                session_id,
+                auth_client,
+                auth_state.clone(),
+                iap_headers,
+            ),
+            move |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
                     let initialize_message = UpstreamMessage::Initialize(InitPayload {
                         viewer_id: network.id.clone(),
@@ -411,7 +425,13 @@ impl Network {
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
                 }
                 Err(e) => {
-                    log::error!("Failed to join shared session: {e}");
+                    log::error!(
+                        "viewer Network::start_websocket: WS connect FAILED for \
+                         session_id={session_id}: {e:#}; emitting FailedToJoin (no automatic retry)"
+                    );
+                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.check_ws_connect_error(&e, ctx);
+                    });
                     ctx.emit(NetworkEvent::FailedToJoin {
                         reason: FailedToJoinReason::FailedToConnectToServer,
                     });
@@ -436,10 +456,23 @@ impl Network {
         let session_id = self.session_id;
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        let iap_state = IapManager::as_ref(ctx).iap_state();
         let abort_handle = ctx.spawn_with_retry_on_error(
             move || {
                 log::info!("Attempting to reconnect to session sharing server as viewer");
-                Self::connect_websocket_and_get_user_id(session_id, auth_client.clone(), auth_state.clone())
+                // Re-read the IAP header each attempt so a refresh that landed
+                // since the last try is picked up (staging only).
+                let iap_headers: Vec<(&'static str, String)> = iap_state
+                    .as_ref()
+                    .and_then(|state| state.proxy_auth_header())
+                    .into_iter()
+                    .collect();
+                Self::connect_websocket_and_get_user_id(
+                    session_id,
+                    auth_client.clone(),
+                    auth_state.clone(),
+                    iap_headers,
+                )
             },
             RECONNECT_RETRY_STRATEGY,
             move |network, conn, ctx| match conn {
@@ -469,6 +502,9 @@ impl Network {
                     network.on_websocket_connected(ws_proxy_rx, sink, stream, ctx)
                 }
                 RequestState::RequestFailedRetryPending(e) => {
+                    IapManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.check_ws_connect_error(&e, ctx);
+                    });
                     log::warn!("Failed to reconnect to shared session as viewer, will retry: {e}");
                 }
                 RequestState::RequestFailed(e) => {
@@ -486,10 +522,10 @@ impl Network {
 
     /// Fetches the new user id and reconnectes to the websocket.
     pub fn reauthenticate_viewer(&mut self, ctx: &mut ModelContext<Self>) {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
+        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         ctx.spawn(
-            async move { Self::get_user_id(server_api, &auth_state).await },
+            async move { Self::get_user_id(auth_client, &auth_state).await },
             |network, res, ctx| match res {
                 Ok(user_id) => {
                     let message = UpstreamMessage::Reauthenticated { user_id };
@@ -539,7 +575,6 @@ impl Network {
                     );
                     return;
                 }
-                log::info!("Successfully joined shared session.");
                 self.id = Some(viewer_id.clone());
                 self.stage = Stage::JoinedSuccessfully;
 
@@ -618,7 +653,13 @@ impl Network {
                 ));
             }
             DownstreamMessage::FailedToJoin { reason } => {
-                log::warn!("Failed to join shared session: {reason:?}");
+                log::warn!(
+                    "viewer Network: server replied FailedToJoin for \
+                     session_id={} reason={reason:?} stage={:?} (no automatic retry on initial \
+                     join failure)",
+                    self.session_id,
+                    std::mem::discriminant(&self.stage),
+                );
 
                 if let Stage::Reconnecting { abort_handle } = &self.stage {
                     abort_handle.abort();

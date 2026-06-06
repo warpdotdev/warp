@@ -330,7 +330,7 @@ impl CodeReviewState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub enum RightPanelAction {
     ToggleFileSidebar,
@@ -1676,8 +1676,14 @@ impl RightPanelView {
                 });
             }
         } else {
+            // Prefer the pane group's active session so the diff request rides
+            // the connection actually showing the review; the manager falls
+            // back to any connected session for the host when unavailable.
+            let preferred_session = pane_group
+                .read(ctx, |pg, ctx| pg.active_session_view(ctx))
+                .and_then(|tv| tv.as_ref(ctx).active_block_session_id());
             let diff_state_model = self.working_directories_model.update(ctx, |model, ctx| {
-                model.get_or_create_diff_state_model(repo_path.clone(), ctx)
+                model.get_or_create_diff_state_model(repo_path.clone(), preferred_session, ctx)
             });
 
             let Some(diff_state_model) = diff_state_model else {

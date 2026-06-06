@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
+use session_sharing_protocol::sharer::SessionRetentionReason;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
@@ -32,7 +33,7 @@ use crate::terminal::model::session::ExecuteCommandOptions;
 use crate::terminal::model::RespectObfuscatedSecrets;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::ConversationRestorationInNewPaneType;
+use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
 use crate::terminal::TerminalView;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -59,7 +60,8 @@ pub(crate) enum ShareSessionError {
 }
 
 const TERMINAL_SESSION_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(60);
-const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(10);
+/// The total time to wait for session sharing to start, including retries.
+const TERMINAL_SESSION_SHARE_DELAY: Duration = Duration::from_secs(20);
 
 /// Options for creating the terminal view before constructing a [`TerminalDriver`].
 pub(crate) struct TerminalDriverOptions {
@@ -593,6 +595,29 @@ impl TerminalDriver {
             }
         }
     }
+
+    pub fn extend_shared_session_retention(
+        &mut self,
+        reason: SessionRetentionReason,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.terminal_view.update(ctx, |terminal, ctx| {
+            if !terminal
+                .model
+                .lock()
+                .shared_session_status()
+                .is_active_sharer()
+            {
+                log::warn!(
+                    "Tried to extend shared session retention before sharing was active: {reason:?}"
+                );
+                return;
+            }
+
+            log::info!("Emitting request to extend shared session retention: {reason:?}");
+            ctx.emit(Event::ExtendSessionRetention { reason });
+        });
+    }
 }
 
 /// The first DFA match returned by
@@ -707,3 +732,7 @@ impl TerminalDriver {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_tests.rs"]
+mod tests;

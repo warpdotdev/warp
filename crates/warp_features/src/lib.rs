@@ -352,9 +352,6 @@ pub enum FeatureFlag {
     /// Enables new Search Codebase UI
     SearchCodebaseUI,
 
-    /// Enables return changed lines on apply diff result
-    ChangedLinesOnlyApplyDiffResult,
-
     /// Enables us to render linked code blocks
     LinkedCodeBlocks,
 
@@ -691,24 +688,9 @@ pub enum FeatureFlag {
     /// content changes via auto-reload.
     CodeReviewScrollPreservation,
 
-    /// Enables server-side durable messaging for orchestration (v2).
-    /// When enabled, messages and events are stored in Postgres and the client
-    /// opens a persistent SSE connection to the server to receive events in
-    /// real time.
-    OrchestrationV2,
-
     /// Re-enables local Claude Code and Codex child harnesses in orchestration
     /// flows while the default behavior temporarily keeps them disabled.
     LocalClaudeCodexChildHarnesses,
-
-    /// Gates client-side support for the `orchestrate` tool, which batches
-    /// multiple child agents into a single tool call with an inline
-    /// confirmation card. When enabled, the client advertises
-    /// `RequestSettings.SupportsOrchestrate = true` and the server's
-    /// orchestrate tool replaces `start_agent` / `start_agent_v2` for
-    /// orchestration-capable conversations. Layered on top of
-    /// `OrchestrationV2`; has no effect when v2 is off.
-    RunAgentsTool,
 
     /// Renders a horizontal pill bar in the agent view pane header showing the
     /// orchestrator agent and all of its child agents, with click-to-switch
@@ -722,6 +704,13 @@ pub enum FeatureFlag {
     /// and switches the view to its transcript.
     OrchestrationViewerPillBar,
 
+    /// Replaces `OrchestrationViewerModel`'s REST polling loop with an SSE-driven
+    /// `ancestor_run_id` stream consumed via `OrchestrationEventStreamer`'s new
+    /// viewer-mode entry. Off by default; flipping it on activates the
+    /// per-orchestrator viewer-mode consumer and the broadcast `ChildSpawned`
+    /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
+    OrchestrationViewerStreamer,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -729,6 +718,8 @@ pub enum FeatureFlag {
     /// Gates the `/queue` slash command, which lets users queue a follow-up prompt
     /// while the agent is mid-response.
     QueueSlashCommand,
+    /// Extends queued prompts to Cloud Mode setup and follow-up draining.
+    QueuedPromptsV2,
 
     /// Enables an agent tool for the CLI subagent to explicitly transfer command control to the
     /// user.
@@ -743,6 +734,9 @@ pub enum FeatureFlag {
 
     /// Enables header rows on all inline menus (label, tabs, resize handle).
     InlineMenuHeaders,
+    /// Clears the current prompt when opening the inline model selector from the
+    /// model chip, then restores that prompt when the selector closes.
+    RestorePromptOnInlineModelSelectorSearch,
 
     /// Enables associating a tab color with a directory so tabs automatically
     /// adopt the configured color when their working directory matches.
@@ -783,6 +777,10 @@ pub enum FeatureFlag {
     /// Enables the install/update chip for the Codex Warp notification plugin.
     /// Requires HOANotifications to also be enabled.
     CodexNotifications,
+
+    /// Enables the Codex Warp plugin marketplace integration.
+    /// When disabled, Codex uses native OSC9 notifications.
+    CodexPlugin,
 
     /// Enables the install/update chip for the Gemini CLI Warp extension.
     /// Requires HOANotifications to also be enabled.
@@ -847,11 +845,6 @@ pub enum FeatureFlag {
 
     CloudModeInputV2,
 
-    /// Gates the user-configurable context window slider in AI settings and
-    /// the execution profile editor. When disabled, the slider is hidden and
-    /// `base_model_context_window_limit` is not sent on outbound requests, so
-    /// the server falls back to its default.
-    ConfigurableContextWindow,
     /// Enables continuing cloud mode conversations in the cloud after an execution ends.
     HandoffCloudCloud,
 
@@ -873,6 +866,8 @@ pub enum FeatureFlag {
 
     /// Gates the v2 billing and usage page redesign.
     BillingAndUsagePageV2,
+    /// Enables configurable expanded context windows for eligible GPT models.
+    GPTConfigurableContextWindow,
 
     /// Replaces the raw harness CLI command with a styled header showing CLI name + status icon.
     HarnessSessionHeader,
@@ -929,7 +924,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::OzLaunchModal,
-    FeatureFlag::QueueSlashCommand,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
     FeatureFlag::CrossRepoContext,
@@ -940,22 +934,23 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::EditableMarkdownMermaid,
     FeatureFlag::CodeReviewScrollPreservation,
     FeatureFlag::RememberFastForwardState,
+    FeatureFlag::CodexPlugin,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
-    FeatureFlag::DragTabsToWindows,
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
-    FeatureFlag::RemoteCodeReview,
+    FeatureFlag::GPTConfigurableContextWindow,
+    FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::BlocklistMarkdownTableRendering,
-    FeatureFlag::MarkdownTables,
+    #[cfg(target_os = "macos")]
+    FeatureFlag::DragTabsToWindows,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -1061,9 +1056,6 @@ impl FeatureFlag {
             ),
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
-            ),
-            OrchestrationV2 => Some(
-                "Enables orchestration of teams of agents with dedicated UI, lifecycle events and inter-agent messaging.",
             ),
             _ => None,
         }

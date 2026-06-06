@@ -3,30 +3,18 @@ use chrono::Duration;
 use super::*;
 
 #[test]
-fn verified_terminal_grant_carries_subject_and_scope() {
+fn verified_terminal_grant_carries_subject_and_action() {
     let grant = ScriptingGrant::verified_warp_terminal(
         "session-1",
         "user-1",
-        vec![ScriptingScope::ReadMetadata],
+        vec![ActionKind::AppPing],
         Duration::minutes(5),
     );
 
     assert_eq!(grant.subject, "user-1");
-    assert!(grant.has_scope(&ScriptingScope::ReadMetadata));
-    assert!(!grant.has_scope(&ScriptingScope::MutateUnderlyingData));
+    assert!(grant.has_action(ActionKind::AppPing));
+    assert!(!grant.has_action(ActionKind::InputRun));
     grant
-        .verify_scope(ScriptingScope::ReadMetadata)
-        .expect("scope is accepted");
-}
-
-#[test]
-fn permission_categories_map_to_scripting_scopes() {
-    assert_eq!(
-        ScriptingScope::from_permission(PermissionCategory::ReadMetadata),
-        ScriptingScope::ReadMetadata
-    );
-    assert_eq!(
-        ScriptingScope::from_permission(PermissionCategory::MutateMetadataConfiguration),
-        ScriptingScope::MutateMetadataConfiguration
-    );
+        .verify_action(ActionKind::AppPing)
+        .expect("action is accepted");
 }

@@ -3,13 +3,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 
 use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
+};
 
 use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
 use super::block::DirectoryContext;
@@ -26,11 +28,13 @@ use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::outline::RepoOutlines;
+use crate::code_review::git_status_update::GitRepoStatusModel;
 use crate::terminal::event::{BlockCompletedEvent, BlockType};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
+use crate::util::git::{PrInfo, RepositoryInfo};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// A non-image file picked via the "attach file" button, stored until query submission.
@@ -99,6 +103,7 @@ impl PendingQueryState {
 pub struct BlocklistAIContextModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     directory_context: DirectoryContext,
+    git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
 
     /// `BlockId`s corresponding to blocks to be included as context with the next AI query.
     pending_context_block_ids: HashSet<BlockId>,
@@ -277,6 +282,7 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
+            git_repo_status: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -304,6 +310,7 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
+            git_repo_status: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -386,7 +393,14 @@ impl BlocklistAIContextModel {
     /// Returns `AIAgentContext` for the blocks to be included in the current AI query.
     /// If `is_user_query` is true, includes blocks, selected text, and images as context.
     /// If false, excludes these user-specific contexts but includes everything else.
-    pub fn pending_context(&self, app: &AppContext, is_user_query: bool) -> Vec<AIAgentContext> {
+    pub fn pending_context(
+        &self,
+        app: &AppContext,
+        is_user_query: bool,
+        current_working_directory_location: Option<&LocalOrRemotePath>,
+    ) -> Vec<AIAgentContext> {
+        // `pwd` is the shell-reported path used for directory context and local indexing.
+        // The location is passed separately because it preserves remote host identity for rules.
         let pwd = self.current_pwd();
         let is_pwd_indexed = if cfg!(feature = "agent_mode_evals") {
             // In evals, we want to disable file outline based search. Full
@@ -399,15 +413,8 @@ impl BlocklistAIContextModel {
                 })
         };
 
-        let project_rules = if let Some(pwd) = pwd.clone().and_then(|path| {
-            PathBuf::from_str(&path)
-                .ok()
-                .and_then(|s| s.canonicalize().ok())
-        }) {
-            ProjectContextModel::as_ref(app).find_applicable_rules(&pwd)
-        } else {
-            None
-        };
+        let project_rules = current_working_directory_location
+            .and_then(|pwd| ProjectContextModel::as_ref(app).find_applicable_rules(pwd));
 
         let mut context = Vec::new();
 
@@ -433,17 +440,25 @@ impl BlocklistAIContextModel {
             });
         }
 
+        // Include repository info from the origin remote URL if available.
+        if let Some(repo_context) = self.repository_context(app) {
+            context.push(repo_context);
+        }
+        if let Some(pull_request_context) = self.pull_request_context(app) {
+            context.push(pull_request_context);
+        }
+
         // Always include project rules if available
         if let Some(rules) = project_rules {
             context.push(AIAgentContext::ProjectRules {
-                root_path: rules.root_path.to_string_lossy().into(),
+                root_path: rules.root_path.display_path(),
                 active_rules: rules
                     .active_rules
                     .into_iter()
                     .map(|rule| {
                         let line_count = rule.content.lines().count();
                         FileContext {
-                            file_name: rule.path.to_string_lossy().into(),
+                            file_name: rule.path.display_path(),
                             content: AnyFileContent::StringContent(rule.content.clone()),
                             line_range: None,
                             last_modified: None,
@@ -974,6 +989,41 @@ impl BlocklistAIContextModel {
                 requires_text_resync: false,
             });
         }
+    }
+
+    pub fn set_git_repo_status(&mut self, handle: Option<WeakModelHandle<GitRepoStatusModel>>) {
+        self.git_repo_status = handle;
+    }
+
+    /// Builds an `AIAgentContext::Repository` from cached git remote metadata, if available.
+    fn repository_context(&self, app: &AppContext) -> Option<AIAgentContext> {
+        let handle = self.git_repo_status.as_ref()?.upgrade(app)?;
+        let repository_info = handle.as_ref(app).repository_info()?;
+        Some(Self::repository_context_from_repository_info(
+            repository_info,
+        ))
+    }
+
+    fn repository_context_from_repository_info(repository_info: &RepositoryInfo) -> AIAgentContext {
+        AIAgentContext::Repository {
+            name: repository_info.name.clone(),
+            owner: repository_info.owner.clone(),
+        }
+    }
+
+    fn pull_request_context(&self, app: &AppContext) -> Option<AIAgentContext> {
+        let handle = self.git_repo_status.as_ref()?.upgrade(app)?;
+        let pr_info = handle.as_ref(app).pr_info()?;
+        Self::pull_request_context_from_pr_info(pr_info)
+    }
+
+    fn pull_request_context_from_pr_info(pr_info: &PrInfo) -> Option<AIAgentContext> {
+        Some(AIAgentContext::PullRequest {
+            number: i32::try_from(pr_info.number).ok()?,
+            state: pr_info.state.clone(),
+            draft: pr_info.draft,
+            base_branch: pr_info.base_branch.clone(),
+        })
     }
 
     /// Clears all pending attachments.

@@ -16,6 +16,7 @@ pub enum WebIntent {
     DriveObject(Url),
     SettingsView(Url),
     Home(Url),
+    CloudAgentHome(Url),
     Action(Url),
 }
 
@@ -43,8 +44,8 @@ impl WebIntent {
             } else {
                 match segments[0] {
                     "app" => {
-                        return Ok(WebIntent::Home(Url::parse(&format!(
-                            "{url_scheme}://home"
+                        return Ok(WebIntent::CloudAgentHome(Url::parse(&format!(
+                            "{url_scheme}://action/new_cloud_agent_conversation?source=web_home"
                         ))?));
                     }
                     // For sessions, we expect the URL to be in the format: {scheme}/session/{session_id}
@@ -154,6 +155,7 @@ impl WebIntent {
             WebIntent::DriveObject(url) => url,
             WebIntent::SettingsView(url) => url,
             WebIntent::Home(url) => url,
+            WebIntent::CloudAgentHome(url) => url,
             WebIntent::Action(url) => url,
         }
     }
@@ -174,6 +176,7 @@ pub fn open_url_on_desktop(url: &Url) {
         Ok(WebIntent::ConversationView(intent))
         | Ok(WebIntent::DriveObject(intent))
         | Ok(WebIntent::SessionView(intent))
+        | Ok(WebIntent::CloudAgentHome(intent))
         | Ok(WebIntent::Action(intent)) => {
             crate::platform::wasm::emit_event(crate::platform::wasm::WarpEvent::OpenOnNative {
                 url: intent.into(),
@@ -193,6 +196,7 @@ fn set_context_flags_from_url(url: Url) {
         Ok(WebIntent::DriveObject(_)) => ContextFlag::set_warp_drive_link_only(),
         Ok(WebIntent::SettingsView(_)) => ContextFlag::set_settings_link_only(),
         Ok(WebIntent::Home(_)) => ContextFlag::set_warp_home_link_only(),
+        Ok(WebIntent::CloudAgentHome(_)) => {}
         Ok(WebIntent::Action(_)) => {} // No special context flag for actions
         _ => {}
     }

@@ -55,7 +55,6 @@ struct ActiveCommandsContext {
     session_context: Availability,
     is_orchestration_enabled: bool,
     is_cloud_handoff_enabled: bool,
-    is_feedback_skill_available: bool,
     #[cfg(not(target_family = "wasm"))]
     active_conversation_is_cloud_oz: bool,
     has_default_host: bool,
@@ -308,9 +307,7 @@ impl SlashCommandDataSource {
         ActiveCommandsContext {
             session_context,
             is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
-            is_cloud_handoff_enabled: ai_settings
-                .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx),
-            is_feedback_skill_available: crate::workspace::is_feedback_skill_available(ctx),
+            is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),
             #[cfg(not(target_family = "wasm"))]
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
             has_default_host,
@@ -330,12 +327,6 @@ impl SlashCommandDataSource {
             return false;
         }
         if command.name == commands::MOVE_TO_CLOUD.name && !context.is_cloud_handoff_enabled {
-            return false;
-        }
-        // The static `/feedback` command is an AI-off fallback for the richer bundled
-        // `feedback` skill. Hide it whenever the bundled skill will actually take over,
-        // matching the precedence used by `Workspace::send_feedback`.
-        if command.name == commands::FEEDBACK.name && context.is_feedback_skill_available {
             return false;
         }
         // /continue-locally only applies to cloud Oz conversations. Local conversations
@@ -512,11 +503,13 @@ impl SyncDataSource for SlashCommandDataSource {
         // Skills are invoked by the agent, so they're hidden entirely when AI is globally off.
         if FeatureFlag::ListSkills.is_enabled() && AISettings::as_ref(app).is_any_ai_enabled(app) {
             let cli_agent_providers = self.active_cli_agent_providers(app);
-            let cwd = self.active_session.as_ref(app).current_working_directory();
-            let cwd_path = cwd.as_ref().map(std::path::Path::new);
+            let cwd_path = self
+                .active_session
+                .as_ref(app)
+                .current_working_directory_location(app);
             let skills = SkillManager::handle(app)
                 .as_ref(app)
-                .get_skills_for_working_directory(cwd_path, app);
+                .get_skills_for_working_directory(cwd_path.as_ref(), app);
 
             let skill_manager = SkillManager::as_ref(app);
             for mut skill in skills {

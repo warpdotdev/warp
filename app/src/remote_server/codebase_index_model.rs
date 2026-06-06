@@ -14,7 +14,8 @@ use super::manager::{
 };
 use crate::ai::blocklist::SessionContext;
 use crate::ai::codebase_auto_indexing::{
-    auto_index_candidate_roots, should_auto_index_codebase, CodebaseAutoIndexingSurface,
+    auto_index_candidate_roots, should_auto_index_codebase, should_use_codebase_indexing,
+    CodebaseAutoIndexingSurface,
 };
 use crate::server::telemetry::{
     RemoteCodebaseAutoIndexTrigger, RemoteCodebaseIndexStatusTelemetrySource,
@@ -81,16 +82,22 @@ fn remote_codebase_name(repo_path: &str) -> String {
         .unwrap_or(repo_path)
         .to_string()
 }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct HostLabel {
+    label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PathAtHost {
+    host: HostLabel,
+    path: StandardizedPath,
+}
 
 #[derive(Default)]
 pub struct RemoteCodebaseIndexModel {
-    statuses: HashMap<RemotePath, RemoteCodebaseIndexStatus>,
+    statuses: HashMap<PathAtHost, RemoteCodebaseIndexStatus>,
     active_repos_by_host: HashMap<HostId, RemotePath>,
-    host_labels: HashMap<HostId, String>,
-    // Local settings-change auto-indexing replays all active terminal working
-    // directories. Remote sessions on the same host can be in different git
-    // repos, so track daemon-resolved git roots per session and let the shared
-    // auto-index candidate helper dedupe paths before requesting indexing.
+    host_labels: HashMap<HostId, HostLabel>,
     active_git_repos_by_session: HashMap<SessionId, RemotePath>,
     last_git_repos_by_host: HashMap<HostId, RemotePath>,
 }
@@ -155,6 +162,65 @@ impl RemoteCodebaseIndexModel {
         Self::default()
     }
 
+    fn host_label_for_host(&self, host_id: &HostId) -> HostLabel {
+        self.host_labels
+            .get(host_id)
+            .cloned()
+            .unwrap_or_else(|| HostLabel {
+                label: host_id.to_string(),
+            })
+    }
+
+    fn status_key_for_remote_path(&self, remote_path: &RemotePath) -> PathAtHost {
+        PathAtHost {
+            host: self.host_label_for_host(&remote_path.host_id),
+            path: remote_path.path.clone(),
+        }
+    }
+
+    fn remote_path_for_status_key(&self, key: &PathAtHost) -> RemotePath {
+        RemotePath::new(self.host_id_for_label(&key.host), key.path.clone())
+    }
+
+    fn host_id_for_label(&self, host_label: &HostLabel) -> HostId {
+        self.host_labels
+            .iter()
+            .find_map(|(host_id, label)| (label == host_label).then_some(host_id.clone()))
+            .unwrap_or_else(|| HostId::new(host_label.label.clone()))
+    }
+
+    fn move_statuses_to_resolved_host_label(
+        &mut self,
+        old_host_label: HostLabel,
+        new_host_label: HostLabel,
+    ) -> bool {
+        if old_host_label == new_host_label {
+            return false;
+        }
+
+        let mut moved_statuses = vec![];
+        self.statuses.retain(|key, status| {
+            if key.host == old_host_label {
+                moved_statuses.push((
+                    PathAtHost {
+                        host: new_host_label.clone(),
+                        path: key.path.clone(),
+                    },
+                    status.clone(),
+                ));
+                false
+            } else {
+                true
+            }
+        });
+
+        let statuses_moved = !moved_statuses.is_empty();
+        for (key, status) in moved_statuses {
+            self.statuses.entry(key).or_insert(status);
+        }
+        statuses_moved
+    }
+
     pub fn active_repo_availability(
         &self,
         session_context: &SessionContext,
@@ -187,6 +253,9 @@ impl RemoteCodebaseIndexModel {
         explicit_repo_path: Option<&str>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            return false;
+        }
         let Some(host_id) = session_context.host_id() else {
             return false;
         };
@@ -210,15 +279,21 @@ impl RemoteCodebaseIndexModel {
         true
     }
 
-    pub fn codebases_for_agent_context(&self) -> Vec<RemoteCodebaseContextEntry> {
+    pub fn codebases_for_agent_context(&self, host_id: &HostId) -> Vec<RemoteCodebaseContextEntry> {
+        let host_label = self.host_label_for_host(host_id);
         let mut entries = self
             .statuses
             .iter()
-            .filter(|&(remote_path, status)| {
-                search_availability_for_status(status, remote_path.clone()).is_ready()
+            .filter(|&(key, status)| {
+                key.host == host_label
+                    && search_availability_for_status(
+                        status,
+                        RemotePath::new(host_id.clone(), key.path.clone()),
+                    )
+                    .is_ready()
             })
-            .map(|(remote_path, _)| {
-                let path = remote_path.path.as_str().to_string();
+            .map(|(key, _)| {
+                let path = key.path.as_str().to_string();
                 RemoteCodebaseContextEntry {
                     name: remote_codebase_name(&path),
                     path,
@@ -230,6 +305,9 @@ impl RemoteCodebaseIndexModel {
     }
 
     pub fn request_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            return;
+        }
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.ensure_codebase_indexed(
                 remote_path,
@@ -242,6 +320,9 @@ impl RemoteCodebaseIndexModel {
     }
 
     pub fn resync_index(&self, remote_path: RemotePath, ctx: &mut ModelContext<Self>) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            return;
+        }
         RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
             manager.resync_codebase(remote_path, ctx);
         });
@@ -257,14 +338,10 @@ impl RemoteCodebaseIndexModel {
         let mut entries = self
             .statuses
             .iter()
-            .map(|(remote_path, status)| RemoteCodebaseIndexSettingsEntry {
-                remote_path: remote_path.clone(),
+            .map(|(key, status)| RemoteCodebaseIndexSettingsEntry {
+                remote_path: self.remote_path_for_status_key(key),
                 status: status.clone(),
-                host_label: self
-                    .host_labels
-                    .get(&remote_path.host_id)
-                    .cloned()
-                    .unwrap_or_else(|| remote_path.host_id.to_string()),
+                host_label: key.host.label.clone(),
             })
             .collect::<Vec<_>>();
         entries.sort_by(|a, b| {
@@ -281,6 +358,9 @@ impl RemoteCodebaseIndexModel {
     ) {
         match event {
             RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { host_id, statuses } => {
+                if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+                    return;
+                }
                 let (changed, telemetry_updates) =
                     self.apply_statuses_snapshot_with_telemetry(host_id, statuses);
                 for update in telemetry_updates {
@@ -301,6 +381,9 @@ impl RemoteCodebaseIndexModel {
                 mutation_kind,
                 session_id: _,
             } => {
+                if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+                    return;
+                }
                 if let Some(update) =
                     self.apply_status_update_with_telemetry(remote_path.clone(), status.clone())
                 {
@@ -385,27 +468,28 @@ impl RemoteCodebaseIndexModel {
             | RemoteServerManagerEvent::ServerMessageDecodingError { .. } => {}
         }
     }
-    fn should_request_auto_index_for_navigated_git_repo(&self, remote_path: &RemotePath) -> bool {
-        let Some(status) = self.status_for_repo(remote_path) else {
-            return true;
-        };
-
-        match search_availability_for_status(status, remote_path.clone()) {
-            RemoteCodebaseSearchAvailability::Ready(_)
-            | RemoteCodebaseSearchAvailability::Indexing { .. } => false,
-            RemoteCodebaseSearchAvailability::NoConnectedHost
-            | RemoteCodebaseSearchAvailability::NoActiveRepo
-            | RemoteCodebaseSearchAvailability::NotIndexed { .. }
-            | RemoteCodebaseSearchAvailability::Unavailable { .. } => true,
-        }
-    }
 
     fn handle_codebase_context_enablement_changed(&mut self, ctx: &mut ModelContext<Self>) {
-        if !should_auto_index_codebase(CodebaseAutoIndexingSurface::Remote, ctx) {
+        if !should_use_codebase_indexing(CodebaseAutoIndexingSurface::Remote, ctx) {
+            let remote_paths = self.clear_remote_codebase_indexing_state();
+            if !remote_paths.is_empty() {
+                ctx.emit(RemoteCodebaseIndexModelEvent::SettingsEntriesChanged);
+            }
+            for remote_path in remote_paths {
+                RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.drop_codebase_index(remote_path, ctx);
+                });
+            }
             return;
         }
 
         let remote_paths = self.active_git_repo_paths_needing_auto_index();
+        if remote_paths.is_empty()
+            || !should_auto_index_codebase(CodebaseAutoIndexingSurface::Remote, ctx)
+        {
+            return;
+        }
+
         emit_auto_index_requested_telemetry(
             RemoteCodebaseAutoIndexTrigger::CodebaseContextEnablementChanged,
             remote_paths.len(),
@@ -422,6 +506,28 @@ impl RemoteCodebaseIndexModel {
                     ctx,
                 );
             });
+        }
+    }
+
+    fn clear_remote_codebase_indexing_state(&mut self) -> Vec<RemotePath> {
+        let statuses = std::mem::take(&mut self.statuses);
+        statuses
+            .into_keys()
+            .map(|key| self.remote_path_for_status_key(&key))
+            .collect()
+    }
+    fn should_request_auto_index_for_navigated_git_repo(&self, remote_path: &RemotePath) -> bool {
+        let Some(status) = self.status_for_repo(remote_path) else {
+            return true;
+        };
+
+        match search_availability_for_status(status, remote_path.clone()) {
+            RemoteCodebaseSearchAvailability::Ready(_)
+            | RemoteCodebaseSearchAvailability::Indexing { .. } => false,
+            RemoteCodebaseSearchAvailability::NoConnectedHost
+            | RemoteCodebaseSearchAvailability::NoActiveRepo
+            | RemoteCodebaseSearchAvailability::NotIndexed { .. }
+            | RemoteCodebaseSearchAvailability::Unavailable { .. } => true,
         }
     }
 
@@ -462,11 +568,15 @@ impl RemoteCodebaseIndexModel {
                     .is_some_and(|root_hash| !root_hash.is_empty()),
             );
         }
+        let host_label = self.host_label_for_host(host_id);
         let incoming_statuses = statuses
             .iter()
             .map(|status_with_path| {
                 (
-                    status_with_path.remote_path.clone(),
+                    PathAtHost {
+                        host: host_label.clone(),
+                        path: status_with_path.remote_path.path.clone(),
+                    },
                     status_with_path.status.clone(),
                 )
             })
@@ -474,35 +584,36 @@ impl RemoteCodebaseIndexModel {
         let existing_status_count = self
             .statuses
             .keys()
-            .filter(|remote_path| remote_path.host_id == *host_id)
+            .filter(|key| key.host == host_label)
             .count();
         let snapshot_is_unchanged = existing_status_count == incoming_statuses.len()
             && self
                 .statuses
                 .iter()
-                .filter(|(remote_path, _)| remote_path.host_id == *host_id)
-                .all(|(remote_path, status)| incoming_statuses.get(remote_path) == Some(status));
+                .filter(|(key, _)| key.host == host_label)
+                .all(|(key, status)| incoming_statuses.get(key) == Some(status));
         if snapshot_is_unchanged {
             return (false, vec![]);
         }
         let previous_statuses = self
             .statuses
             .iter()
-            .filter(|(remote_path, _)| remote_path.host_id == *host_id)
-            .map(|(remote_path, status)| (remote_path.clone(), status.clone()))
+            .filter(|(key, _)| key.host == host_label)
+            .map(|(key, status)| (key.clone(), status.clone()))
             .collect::<HashMap<_, _>>();
-        self.statuses.retain(|key, _| key.host_id != *host_id);
+        self.statuses.retain(|key, _| key.host != host_label);
         let mut telemetry_updates = vec![];
-        for (remote_path, status) in incoming_statuses {
-            if previous_statuses.get(&remote_path) == Some(&status) {
-                self.statuses.insert(remote_path, status);
+        for (key, status) in incoming_statuses {
+            if previous_statuses.get(&key) == Some(&status) {
+                self.statuses.insert(key, status);
                 continue;
             }
             let previous_state = previous_statuses
-                .get(&remote_path)
+                .get(&key)
                 .map(|previous_status| previous_status.state);
+            let remote_path = RemotePath::new(host_id.clone(), key.path.clone());
             self.log_status_update(&remote_path, &status);
-            self.statuses.insert(remote_path, status.clone());
+            self.statuses.insert(key, status.clone());
             telemetry_updates.push(RemoteCodebaseIndexStatusTelemetryUpdate::new(
                 &status,
                 previous_state,
@@ -525,15 +636,16 @@ impl RemoteCodebaseIndexModel {
         remote_path: RemotePath,
         status: RemoteCodebaseIndexStatus,
     ) -> Option<RemoteCodebaseIndexStatusTelemetryUpdate> {
-        if self.statuses.get(&remote_path) == Some(&status) {
+        let key = self.status_key_for_remote_path(&remote_path);
+        if self.statuses.get(&key) == Some(&status) {
             return None;
         }
         let previous_state = self
             .statuses
-            .get(&remote_path)
+            .get(&key)
             .map(|previous_status| previous_status.state);
         self.log_status_update(&remote_path, &status);
-        self.statuses.insert(remote_path, status.clone());
+        self.statuses.insert(key, status.clone());
         Some(RemoteCodebaseIndexStatusTelemetryUpdate::new(
             &status,
             previous_state,
@@ -578,21 +690,34 @@ impl RemoteCodebaseIndexModel {
     fn record_host_label(&mut self, host_id: &HostId, ctx: &mut ModelContext<Self>) -> bool {
         let Some(host_label) = RemoteServerManager::as_ref(ctx)
             .host_label(host_id)
-            .map(ToOwned::to_owned)
+            .map(|label| HostLabel {
+                label: label.to_string(),
+            })
         else {
             return false;
         };
         if self.host_labels.get(host_id) == Some(&host_label) {
             return false;
         }
+        let previous_host_label = self.host_label_for_host(host_id);
         self.host_labels.insert(host_id.clone(), host_label);
+        self.move_statuses_to_resolved_host_label(
+            previous_host_label,
+            self.host_label_for_host(host_id),
+        );
         true
     }
 
     fn mark_host_unavailable(&mut self, host_id: &HostId) -> bool {
+        let host_label = self.host_label_for_host(host_id);
+        self.active_repos_by_host.remove(host_id);
+        self.active_git_repos_by_session
+            .retain(|_, remote_path| remote_path.host_id != *host_id);
+        self.last_git_repos_by_host.remove(host_id);
+
         let mut updated = false;
-        for (remote_path, status) in &mut self.statuses {
-            if remote_path.host_id == *host_id {
+        for (key, status) in &mut self.statuses {
+            if key.host == host_label {
                 let failure_message = "The remote host is currently disconnected.".to_string();
                 if status.state != RemoteCodebaseIndexState::Unavailable
                     || status.failure_message.as_ref() != Some(&failure_message)
@@ -603,10 +728,6 @@ impl RemoteCodebaseIndexModel {
                 }
             }
         }
-        self.active_repos_by_host.remove(host_id);
-        self.active_git_repos_by_session
-            .retain(|_, remote_path| remote_path.host_id != *host_id);
-        self.last_git_repos_by_host.remove(host_id);
         updated
     }
 
@@ -650,7 +771,7 @@ impl RemoteCodebaseIndexModel {
                 // Remote branch: an explicit path inside an indexed remote repo should search that
                 // indexed repo root. This preserves remote cross-repo search for paths that can be
                 // matched against daemon-reported index state.
-                return Some(remote_path.clone());
+                return Some(remote_path);
             }
 
             // Remote branch: an explicit path that does not match known index state is still
@@ -664,7 +785,7 @@ impl RemoteCodebaseIndexModel {
         {
             // Remote branch: if the remote cwd is inside a known indexed repo, use the indexed root
             // rather than re-indexing the nested directory.
-            return Some(remote_path.clone());
+            return Some(remote_path);
         }
         if let Some(remote_path) = self.active_repos_by_host.get(host_id) {
             if self.status_for_repo(remote_path).is_some() {
@@ -687,7 +808,7 @@ impl RemoteCodebaseIndexModel {
         if let Some((remote_path, _)) = current_working_directory
             .and_then(|cwd| self.single_descendant_status_for_path(host_id, cwd))
         {
-            return Some(remote_path.clone());
+            return Some(remote_path);
         }
 
         if let Some(remote_path) = self.active_repos_by_host.get(host_id) {
@@ -719,33 +840,40 @@ impl RemoteCodebaseIndexModel {
     }
 
     fn status_for_repo(&self, remote_path: &RemotePath) -> Option<&RemoteCodebaseIndexStatus> {
-        self.statuses.get(remote_path)
+        self.statuses
+            .get(&self.status_key_for_remote_path(remote_path))
     }
 
     fn best_status_for_path(
         &self,
         host_id: &HostId,
         path: &str,
-    ) -> Option<(&RemotePath, &RemoteCodebaseIndexStatus)> {
+    ) -> Option<(RemotePath, &RemoteCodebaseIndexStatus)> {
+        let host_label = self.host_label_for_host(host_id);
         let path = StandardizedPath::try_new(path).ok()?;
         self.statuses
             .iter()
-            .filter(|(key, _)| key.host_id == *host_id && path.starts_with(&key.path))
-            .max_by_key(|(remote_path, _)| remote_path.path.as_str().len())
+            .filter(|(key, _)| key.host == host_label && path.starts_with(&key.path))
+            .max_by_key(|(key, _)| key.path.as_str().len())
+            .map(|(key, status)| (RemotePath::new(host_id.clone(), key.path.clone()), status))
     }
 
     fn single_descendant_status_for_path(
         &self,
         host_id: &HostId,
         path: &str,
-    ) -> Option<(&RemotePath, &RemoteCodebaseIndexStatus)> {
+    ) -> Option<(RemotePath, &RemoteCodebaseIndexStatus)> {
+        let host_label = self.host_label_for_host(host_id);
         let path = StandardizedPath::try_new(path).ok()?;
         let mut descendants = self
             .statuses
             .iter()
-            .filter(|(key, _)| key.host_id == *host_id && key.path.starts_with(&path));
-        let descendant = descendants.next()?;
-        descendants.next().is_none().then_some(descendant)
+            .filter(|(key, _)| key.host == host_label && key.path.starts_with(&path));
+        let (key, status) = descendants.next()?;
+        descendants
+            .next()
+            .is_none()
+            .then(|| (RemotePath::new(host_id.clone(), key.path.clone()), status))
     }
 
     fn last_git_repo_for_context(
@@ -811,7 +939,6 @@ fn search_availability_for_status(
         },
     }
 }
-
 fn emit_status_changed_telemetry(
     update: RemoteCodebaseIndexStatusTelemetryUpdate,
     mutation_kind: Option<RemoteCodebaseIndexUpdateOperation>,

@@ -9,6 +9,7 @@ Thanks for helping improve Warp! This guide explains how to open issues, propose
 
 - Bug fixes are welcome once the report is actionable from the provided details or maintainer triage.
 - Feature requests must be marked `ready-to-spec` or `ready-to-implement` before PRs are accepted.
+- Issues marked `warp:reserved-internal` are being handled by the Warp team and are not open for contributor PRs.
 - Specs are the place where technical and design discussion on larger issues happen.
 - Oz automatically triages incoming issues and reviews open PRs.
 - Implementation PRs must include proof of manual testing.
@@ -31,6 +32,7 @@ The Warp team applies one of the following labels when an issue is ready for con
 - **`ready-to-spec`** — The problem is understood but the design is open. Open a spec PR with a *product spec* (`product.md`) and a *tech spec* (`tech.md`) under [`specs/`](specs/) — see [Opening a Spec PR](#opening-a-spec-pr) for what goes in each. This label is **reserved for feature requests**.
 - **`ready-to-implement`** — The issue is ready for a code PR. For bugs, this means the report is sufficiently reproducible or actionable and the likely fix does not need a spec, mocks, or deeper investigation.
 - **`needs-mocks`** — Design mocks are required before implementation can begin. Wait for the Warp team to land them.
+- **`warp:reserved-internal`** — The Warp team is reserving this work for internal implementation or alignment. Do not open a spec or code PR for issues with this label; Oz will reject contributor PRs linked to them with an explanatory comment.
 
 Anyone can pick up a ready issue — readiness labels are not assignments, and the best implementation wins through normal review. If an issue has been sitting un-triaged or you'd like readiness re-evaluated, mention **@oss-maintainers** in a comment to flag it for the team.
 
@@ -92,9 +94,17 @@ Issues labeled `ready-to-spec` need a spec before code can begin. A spec consist
 - **`product.md`** (the *product spec*) — Defines the desired behavior from the consumer's perspective (the user, an API caller, a CLI user, etc.) and stays out of implementation detail. The core is a numbered list of **testable behavior invariants** covering the happy path, user-visible states, inputs and responses, and edge cases (empty / error / loading, cancellation, offline, permission denied, races, accessibility). Optional sections: problem statement, goals / non-goals, Figma link, open questions.
 - **`tech.md`** (the *tech spec*) — The implementation plan, grounded in this codebase. Required sections: **Context** (the current system and relevant files with line references), **Proposed changes** (modules touched, new types / APIs / state, data flow, tradeoffs), and **Testing and validation** (how each invariant from the product spec will be verified). Optional: end-to-end flow, Mermaid diagrams, risks, parallelization, follow-ups.
 
+The spec-writing skills are sourced from [`warpdotdev/common-skills`](https://github.com/warpdotdev/common-skills), not authored directly in this repository. This checkout pins the expected versions in [`skills-lock.json`](skills-lock.json), and the bootstrap scripts can restore them for you:
+
+- `./script/bootstrap` installs or updates common skills by default and prompts for a project-local or global install target when needed.
+- `./script/bootstrap --install-common-skills-in-repo` installs the pinned common skills into this checkout's `.agents/skills/`.
+- `./script/bootstrap --install-common-skills-globally` installs the pinned common skills into `~/.agents/skills/`.
+- `WARP_COMMON_SKILLS_INSTALL_TARGET=project ./script/bootstrap` and `WARP_COMMON_SKILLS_INSTALL_TARGET=global ./script/bootstrap` select the same targets non-interactively.
+- `./script/bootstrap --skip-common-skills` leaves common skills untouched if you are managing them separately.
+
 To open a spec PR:
 
-1. Add `specs/GH<issue-number>/product.md` and `specs/GH<issue-number>/tech.md`. See [`specs/GH408/`](specs/GH408/), [`specs/GH1063/`](specs/GH1063/), and [`specs/GH1066/`](specs/GH1066/) for examples of well-structured specs, and browse the rest of [`specs/`](specs/) for more. The [`/write-product-spec`](.agents/skills/write-product-spec/SKILL.md) and [`/write-tech-spec`](.agents/skills/write-tech-spec/SKILL.md) skills are available to scaffold these for you.
+1. Add `specs/GH<issue-number>/product.md` and `specs/GH<issue-number>/tech.md`. See [`specs/GH408/`](specs/GH408/), [`specs/GH1063/`](specs/GH1063/), and [`specs/GH1066/`](specs/GH1066/) for examples of well-structured specs, and browse the rest of [`specs/`](specs/) for more. After common skills are installed, the `/write-product-spec` and `/write-tech-spec` skills are available to scaffold these for you.
 2. Use the PR as the home for product and technical discussion.
 3. Once the specs are approved, implementation generally continues on the same PR. In rarer cases — for example, if a large spec is merged on its own so the implementation can be broken up — it can move to a linked follow-up PR.
 
@@ -143,6 +153,16 @@ All pull requests go through a two-stage review process:
 
 You do not need to manually request reviewers at any stage. After pushing changes that address Oz's feedback, comment `/oz-review` on the PR to request a re-review — you can do this up to **three times** per PR. If something looks stuck or you need additional reviews, mention **@oss-maintainers** on the PR to escalate to the team.
 
+### Stale PRs with requested changes
+
+If a review (from Oz or a maintainer) leaves your PR with **changes requested** and it then goes quiet, automation follows up and eventually closes it so the review queue stays current. This applies only to external-contributor PRs with an active requested-changes review.
+
+- **Reminders** are posted at **7** and **14** days of inactivity, with a **final warning at 26 days**.
+- The PR is **automatically closed at ~30 days** of inactivity — but only after that final warning, so you always get a heads-up first.
+- Only **your** activity resets the timer: pushing to your branch (including a force-push) or commenting on the PR. Maintainer comments don't reset it, since the PR is waiting on you.
+- To keep a PR open, just push updates or reply. A closed PR can be reopened when you're ready to continue (reopen it and push, or ask a maintainer to reopen).
+- Maintainers can apply the **`no-autoclose`** label to exempt a PR that should stay open (for example, when it's blocked on us).
+
 ## Development Setup
 
 See [README.md](README.md) and [WARP.md](WARP.md) for the full engineering guide. Quick start:
@@ -171,7 +191,7 @@ Run unit tests with `cargo nextest run`.
 
 ## Code Style
 
-- `cargo fmt` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` must pass.
+- `./script/format --check` and `cargo clippy --workspace --all-targets --all-features --tests -- -D warnings` must pass.
 - Prefer imports over path qualifiers, inline format args (`println!("{x}")`), and exhaustive `match` over `_` wildcards.
 - See [WARP.md](WARP.md) for the full style guide, including WarpUI patterns and terminal model locking rules.
 

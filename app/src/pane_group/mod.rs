@@ -43,7 +43,6 @@ use warpui::{
 };
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIAgentHarness, AIConversation, AIConversationId};
 use crate::ai::agent_conversations_model::{
     AgentConversationEntryId, AgentConversationNavigationSubject, AgentConversationsModel,
@@ -164,12 +163,13 @@ use crate::workspace::{
 };
 use crate::{cmd_or_ctrl_shift, report_if_error, send_telemetry_from_ctx};
 
+mod ambient_pane_restoration;
 mod child_agent;
 pub mod focus_state;
 pub mod pane;
 pub mod tree;
 pub mod working_directories;
-use child_agent::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
+use ambient_pane_restoration::AmbientRestoreKind;
 use focus_state::PaneGroupFocusState;
 
 #[cfg(test)]
@@ -907,6 +907,17 @@ pub struct PaneGroup {
     /// Entries are removed as each task's data arrives and the pane is replaced.
     pending_ambient_agent_conversation_restorations: HashMap<AmbientAgentTaskId, PaneId>,
 
+    /// Hidden remote-child placeholders waiting on task data, keyed by
+    /// task id; the value is the placeholder's canonical
+    /// `child_agent_panes` key. Kept separate from
+    /// `pending_ambient_agent_conversation_restorations` so the
+    /// visible-tree `replace_pane` flow doesn't swap a hidden child pane.
+    pending_remote_child_hydrations: HashMap<AmbientAgentTaskId, AIConversationId>,
+
+    /// Whether `ensure_pending_ambient_restoration_subscription` has been
+    /// called; the subscription is shared by both pending maps.
+    pending_ambient_restoration_subscription_installed: bool,
+
     /// Maps child agent conversation IDs to their hidden pane IDs, so they can
     /// be revealed from the parent's status card.
     child_agent_panes: HashMap<AIConversationId, PaneId>,
@@ -1046,19 +1057,6 @@ type InitialLayoutCallback = Box<
         &mut ViewContext<PaneGroup>,
     ) -> (PaneData, InitialFocus),
 >;
-
-/// The restoration path for an ambient agent pane.
-enum AmbientRestoreKind {
-    /// Active shared session
-    SharedSession { session_id: SessionId },
-    /// Conversation data isn't loaded yet — show a loading pane and
-    /// defer the real restoration to the pending-restoration subscription
-    /// (which waits for the data to be loaded async).
-    PendingRestoration { task_id: AmbientAgentTaskId },
-    /// If there's no task ID to restore, we open a fresh cloud mode pane
-    /// (this is a valid state from when a user quits with an empty cloud mode pane).
-    NewCloudConversation,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AIDocumentPaneVisibilityAction {
@@ -1878,7 +1876,10 @@ impl PaneGroup {
                 let (terminal_view, terminal_manager) = match restore_kind {
                     AmbientRestoreKind::SharedSession { session_id } => {
                         Self::create_shared_session_viewer(
-                            session_id, resources, view_size, true, ctx,
+                            session_id, resources, view_size,
+                            true, // enable_orchestration_polling
+                            true, // is_cloud_mode
+                            ctx,
                         )
                     }
                     AmbientRestoreKind::PendingRestoration { task_id } => {
@@ -3102,6 +3103,8 @@ impl PaneGroup {
             left_panel_open: false,
             is_right_panel_maximized: false,
             pending_ambient_agent_conversation_restorations: HashMap::new(),
+            pending_remote_child_hydrations: HashMap::new(),
+            pending_ambient_restoration_subscription_installed: false,
             child_agent_panes: HashMap::new(),
             transitively_shared_child_panes: HashMap::new(),
             child_agent_origin: None,
@@ -3149,440 +3152,6 @@ impl PaneGroup {
                     None => true,
                 }
             })
-    }
-
-    /// Lazily restores hidden child panes for the given parent conversation.
-    ///
-    /// Unlike the old startup sweep, this runs only when the parent agent view
-    /// is actually restored or entered. Children that already belong to some
-    /// other pane or tab are left alone.
-    fn restore_missing_child_agent_panes_for_parent(
-        &mut self,
-        parent_conversation_id: AIConversationId,
-        parent_pane_id: PaneId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let child_ids = BlocklistAIHistoryModel::as_ref(ctx)
-            .child_conversation_ids_of(&parent_conversation_id)
-            .to_vec();
-
-        for child_id in child_ids {
-            if self
-                .child_agent_panes
-                .get(&child_id)
-                .is_some_and(|pane_id| self.has_pane_id(*pane_id))
-            {
-                continue;
-            }
-
-            if self.is_conversation_owned_outside_pane(child_id, parent_pane_id, ctx) {
-                continue;
-            }
-
-            let child_conversation = BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(&child_id)
-                .cloned()
-                .or_else(|| {
-                    RestoredAgentConversations::handle(ctx)
-                        .update(ctx, |store, _| store.take_conversation(&child_id))
-                });
-            let Some(child_conversation) = child_conversation else {
-                log::warn!("Child conversation {child_id:?} not found in memory or restored store");
-                continue;
-            };
-
-            self.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);
-        }
-    }
-
-    /// Restores hidden child panes if this terminal pane is already showing a
-    /// fullscreen agent view. This covers restored or replaced panes whose
-    /// terminal view entered agent view before pane-group attachment finished.
-    fn restore_missing_child_agent_panes_for_terminal_pane_if_needed(
-        &mut self,
-        pane_id: PaneId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let Some(terminal_pane_id) = pane_id.as_terminal_pane_id() else {
-            return;
-        };
-        let Some(parent_conversation_id) = self
-            .terminal_view_from_pane_id(terminal_pane_id, ctx)
-            .and_then(|terminal_view| {
-                let terminal_view = terminal_view.as_ref(ctx);
-                let agent_view_state = terminal_view
-                    .agent_view_controller()
-                    .as_ref(ctx)
-                    .agent_view_state();
-                if agent_view_state.is_fullscreen() {
-                    agent_view_state.active_conversation_id()
-                } else {
-                    None
-                }
-            })
-        else {
-            return;
-        };
-
-        self.restore_missing_child_agent_panes_for_parent(
-            parent_conversation_id,
-            terminal_pane_id.into(),
-            ctx,
-        );
-    }
-
-    /// Ensures `child_conversation_id` has a hidden child pane if it still
-    /// belongs under a parent conversation in this pane group.
-    ///
-    /// Returns true if the conversation is already reachable through an
-    /// existing pane or if lazy restoration successfully materialized the child
-    /// pane.
-    fn ensure_hidden_child_agent_pane_for_conversation(
-        &mut self,
-        child_conversation_id: AIConversationId,
-        ctx: &mut ViewContext<Self>,
-    ) -> bool {
-        if self
-            .child_agent_panes
-            .get(&child_conversation_id)
-            .is_some_and(|pane_id| self.has_pane_id(*pane_id))
-        {
-            return true;
-        }
-
-        let parent_conversation_id =
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                history_model
-                    .conversation(&child_conversation_id)
-                    .and_then(|conversation| {
-                        history_model.resolved_parent_conversation_id_for_conversation(conversation)
-                    })
-                    .or_else(|| {
-                        RestoredAgentConversations::handle(ctx).read(ctx, |store, _| {
-                            store.get_conversation(&child_conversation_id).and_then(
-                                |conversation| {
-                                    history_model.resolved_parent_conversation_id_for_conversation(
-                                        conversation,
-                                    )
-                                },
-                            )
-                        })
-                    })
-            });
-
-        let Some(parent_conversation_id) = parent_conversation_id else {
-            return self
-                .terminal_view_id_for_owned_conversation(child_conversation_id, ctx)
-                .is_some();
-        };
-
-        let child_owner_terminal_view_id =
-            self.terminal_view_id_for_owned_conversation(child_conversation_id, ctx);
-        let Some(parent_pane_id) = self.pane_id_for_owned_conversation(parent_conversation_id, ctx)
-        else {
-            return child_owner_terminal_view_id.is_some();
-        };
-
-        if self.is_conversation_owned_outside_pane(child_conversation_id, parent_pane_id, ctx) {
-            return true;
-        }
-
-        self.restore_missing_child_agent_panes_for_parent(
-            parent_conversation_id,
-            parent_pane_id,
-            ctx,
-        );
-
-        self.child_agent_panes
-            .get(&child_conversation_id)
-            .is_some_and(|pane_id| self.has_pane_id(*pane_id))
-            || self.is_conversation_owned_outside_pane(child_conversation_id, parent_pane_id, ctx)
-    }
-
-    /// Creates a hidden child agent pane for an existing child conversation,
-    /// restoring the conversation and tracking it in `child_agent_panes`.
-    fn create_hidden_child_agent_pane(
-        &mut self,
-        child_conversation: AIConversation,
-        parent_pane_id: PaneId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let child_id = child_conversation.id();
-
-        // Viewer-side child clicked before `OrchestrationViewerModel`
-        // surfaced a `session_id`: render a loading placeholder; the real
-        // pane gets swapped in by `ensure_shared_session_viewer_child_pane`.
-        if child_conversation.is_viewing_shared_session() {
-            let resources = TerminalViewResources {
-                tips_completed: self.tips_completed.clone(),
-                server_api: self.server_api.clone(),
-                model_event_sender: self.model_event_sender.clone(),
-            };
-            let view_size = Self::estimated_view_bounds(ctx).size();
-            let (loading_view, loading_manager) = Self::create_loading_terminal_manager_and_view(
-                resources,
-                view_size,
-                ctx.window_id(),
-                ctx,
-            );
-            let pane_data = TerminalPane::new(
-                Uuid::new_v4().as_bytes().to_vec(),
-                loading_manager,
-                loading_view.clone(),
-                self.model_event_sender.clone(),
-                ctx,
-            );
-            let new_pane_id = pane_data.terminal_pane_id();
-            if self
-                .attach_child_pane_off_tree(Box::new(pane_data), ctx)
-                .is_none()
-            {
-                log::error!(
-                    "create_hidden_child_agent_pane: failed to attach loading placeholder for \
-                     viewer-side child {child_id:?}"
-                );
-                return;
-            }
-
-            // Restore the conversation and enter agent view so the pill bar
-            // renders (its gate requires `is_fullscreen()`). The output area
-            // stays a loading spinner because the loading view's
-            // `ConversationTranscriptViewerStatus::Loading` short-circuits
-            // the block list render in `TerminalView::render`.
-            loading_view.update(ctx, |terminal_view, ctx| {
-                terminal_view.restore_conversation_after_view_creation(
-                    RestoredAIConversation::new(child_conversation),
-                    true,
-                    RestoreConversationEntryBehavior::PreserveAgentViewState,
-                    ctx,
-                );
-                terminal_view.enter_agent_view(
-                    None,
-                    Some(child_id),
-                    AgentViewEntryOrigin::SharedSessionSelection,
-                    ctx,
-                );
-            });
-
-            self.child_agent_panes.insert(child_id, new_pane_id.into());
-            return;
-        }
-
-        if child_conversation.is_remote_child() {
-            let Some(task_id) = child_conversation.task_id() else {
-                log::warn!(
-                    "Cannot restore remote child conversation {child_id:?} without a task ID"
-                );
-                return;
-            };
-
-            let new_pane_id =
-                self.insert_ambient_agent_pane_hidden_for_child_agent(parent_pane_id, ctx);
-
-            if let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) {
-                let mut restored = false;
-                new_terminal_view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.restore_conversation_after_view_creation(
-                        RestoredAIConversation::new(child_conversation),
-                        true,
-                        RestoreConversationEntryBehavior::PreserveAgentViewState,
-                        ctx,
-                    );
-                    terminal_view.enter_agent_view(
-                        None,
-                        Some(child_id),
-                        AgentViewEntryOrigin::CloudAgent,
-                        ctx,
-                    );
-                    let Some(ambient_agent_view_model) = terminal_view
-                        .ambient_agent_view_model()
-                        .into_optional_handle()
-                        .cloned()
-                    else {
-                        return;
-                    };
-                    ambient_agent_view_model.update(ctx, |model, ctx| {
-                        model.set_conversation_id(Some(child_id));
-                        model.enter_viewing_existing_session(task_id, ctx);
-                    });
-                    restored = true;
-                });
-                if restored {
-                    self.child_agent_panes.insert(child_id, new_pane_id.into());
-                } else {
-                    log::error!(
-                        "Failed to restore remote child agent pane {child_id:?}: missing ambient agent view model"
-                    );
-                    self.discard_pane(new_pane_id.into(), ctx);
-                }
-            } else {
-                log::error!("Failed to get terminal view for remote child agent pane {child_id:?}");
-                self.discard_pane(new_pane_id.into(), ctx);
-            }
-            return;
-        }
-        let child_task_context =
-            child_conversation
-                .task_id()
-                .map(|task_id| HiddenChildAgentTaskContext {
-                    task_id,
-                    working_dir: child_conversation
-                        .current_working_directory()
-                        .or_else(|| child_conversation.initial_working_directory())
-                        .map(PathBuf::from),
-                });
-        // Restored hidden child panes don't inherit the host's shared
-        // session — the host's share decision is handled at original
-        // dispatch time, not on subsequent restores.
-        let new_pane_id = self.insert_terminal_pane_hidden_for_child_agent(
-            parent_pane_id,
-            HashMap::new(),
-            IsSharedSessionCreator::No,
-            ctx,
-        );
-
-        if let Some(new_terminal_view) = self.terminal_view_from_pane_id(new_pane_id, ctx) {
-            if let Some(task_context) = child_task_context.as_ref() {
-                apply_hidden_child_agent_task_context(&new_terminal_view, task_context, ctx);
-            }
-            new_terminal_view.update(ctx, |terminal_view, ctx| {
-                terminal_view.restore_conversation_after_view_creation(
-                    RestoredAIConversation::new(child_conversation),
-                    true,
-                    RestoreConversationEntryBehavior::PreserveAgentViewState,
-                    ctx,
-                );
-                terminal_view.enter_agent_view(
-                    None,
-                    Some(child_id),
-                    AgentViewEntryOrigin::ChildAgent,
-                    ctx,
-                );
-            });
-
-            self.child_agent_panes.insert(child_id, new_pane_id.into());
-        } else {
-            log::error!("Failed to get terminal view for child agent pane {child_id:?}");
-            self.discard_pane(new_pane_id.into(), ctx);
-        }
-    }
-
-    /// Materializes a hidden shared-session viewer pane for a viewer-
-    /// discovered child agent. Triggered by
-    /// `Event::EnsureSharedSessionViewerChildPane`, which
-    /// `OrchestrationViewerModel` emits on the parent's view the first
-    /// time it observes a `session_id` for a child. The new pane gets its
-    /// own `BlocklistAIController` and viewer-side `Network` so child
-    /// traffic doesn't cross the parent's single-stream state.
-    fn ensure_shared_session_viewer_child_pane(
-        &mut self,
-        child_conversation_id: AIConversationId,
-        child_session_id: SessionId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Race recovery: a pill click before materialization had a
-        // `session_id` falls through to `create_hidden_child_agent_pane`,
-        // which leaves a loading placeholder in `child_agent_panes`. The
-        // emission gate in `OrchestrationViewerModel` guarantees this
-        // helper runs at most once per child per model lifetime, so any
-        // existing entry must be that fallback — safe to discard.
-        let fallback_was_swapped_anchor = if let Some(prior_pane_id) = self
-            .child_agent_panes
-            .get(&child_conversation_id)
-            .copied()
-            .filter(|pane_id| self.has_pane_id(*pane_id))
-        {
-            let anchor = self.panes.original_pane_for_replacement(prior_pane_id);
-            self.discard_child_agent_pane_for_conversation(child_conversation_id, ctx);
-            anchor
-        } else {
-            None
-        };
-
-        let Some(child_conversation) = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&child_conversation_id)
-            .cloned()
-        else {
-            log::warn!(
-                "ensure_shared_session_viewer_child_pane: no local conversation {child_conversation_id:?}"
-            );
-            return;
-        };
-        let child_task_id = child_conversation.task_id();
-
-        let resources = TerminalViewResources {
-            tips_completed: self.tips_completed.clone(),
-            server_api: self.server_api.clone(),
-            model_event_sender: self.model_event_sender.clone(),
-        };
-        let view_size = Self::estimated_view_bounds(ctx).size();
-        let (new_terminal_view, terminal_manager) = Self::create_shared_session_viewer(
-            child_session_id,
-            resources,
-            view_size,
-            // Per-child viewer: parent's model already discovers descendants.
-            false,
-            ctx,
-        );
-
-        let pane_data = TerminalPane::new(
-            Uuid::new_v4().as_bytes().to_vec(),
-            terminal_manager,
-            new_terminal_view.clone(),
-            self.model_event_sender.clone(),
-            ctx,
-        );
-        let new_pane_id = pane_data.terminal_pane_id();
-        if self
-            .attach_child_pane_off_tree(Box::new(pane_data), ctx)
-            .is_none()
-        {
-            log::error!(
-                "ensure_shared_session_viewer_child_pane: failed to attach pane for conv={child_conversation_id:?}"
-            );
-            return;
-        }
-
-        new_terminal_view.update(ctx, |terminal_view, ctx| {
-            terminal_view.suppress_initial_conversation_details_panel_auto_open();
-            terminal_view.restore_conversation_after_view_creation(
-                RestoredAIConversation::new(child_conversation),
-                true,
-                RestoreConversationEntryBehavior::PreserveAgentViewState,
-                ctx,
-            );
-            terminal_view.enter_agent_view(
-                None,
-                Some(child_conversation_id),
-                AgentViewEntryOrigin::SharedSessionSelection,
-                ctx,
-            );
-            // Shared-session viewer is `is_cloud_mode=false`, so
-            // `ambient_agent_view_model()` is typically `None`. Update
-            // opportunistically; the network's `JoinedSuccessfully` is the
-            // authoritative source for ambient agent state.
-            if let Some(ambient_agent_view_model) = terminal_view
-                .ambient_agent_view_model()
-                .into_optional_handle()
-                .cloned()
-            {
-                ambient_agent_view_model.update(ctx, |model, ctx| {
-                    model.set_conversation_id(Some(child_conversation_id));
-                    if let Some(task_id) = child_task_id {
-                        model.enter_viewing_existing_session(task_id, ctx);
-                    }
-                });
-            }
-        });
-
-        self.child_agent_panes
-            .insert(child_conversation_id, new_pane_id.into());
-
-        // If the discarded fallback was occupying a tree slot via temporary
-        // replacement, re-swap so the user lands on the new pane.
-        if let Some(anchor) = fallback_was_swapped_anchor {
-            self.swap_active_pane_to_conversation(anchor, child_conversation_id, ctx);
-        }
     }
 
     /// Helper that creates the initial [`PaneData`] and [`InitialFocus`] given a terminal view.
@@ -3646,22 +3215,15 @@ impl PaneGroup {
         (terminal_view, terminal_manager)
     }
 
-    /// Stores the pending ambient agent restorations, triggers async fetches for
-    /// their task data, and sets up a single long-lived subscription that will
-    /// process each pane as its task data arrives.
-    fn register_pending_ambient_restorations(
-        &mut self,
-        pending: Vec<(AmbientAgentTaskId, PaneId)>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        for (task_id, _) in &pending {
-            AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-                model.get_or_async_fetch_task_data(task_id, ctx);
-            });
+    /// Installs the long-lived AgentConversationsModel subscription used by
+    /// both `pending_ambient_agent_conversation_restorations` and
+    /// `pending_remote_child_hydrations` if it has not been installed yet.
+    /// Idempotent across multiple callers.
+    fn ensure_pending_ambient_restoration_subscription(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.pending_ambient_restoration_subscription_installed {
+            return;
         }
-
-        self.pending_ambient_agent_conversation_restorations = pending.into_iter().collect();
-
+        self.pending_ambient_restoration_subscription_installed = true;
         let conversations_model = AgentConversationsModel::handle(ctx);
         ctx.subscribe_to_model(&conversations_model, |me, _, event, ctx| {
             me.handle_pending_ambient_restoration_event(event, ctx);
@@ -3683,145 +3245,8 @@ impl PaneGroup {
             return;
         }
 
-        if self
-            .pending_ambient_agent_conversation_restorations
-            .is_empty()
-        {
-            return;
-        }
-
-        let ready_tasks: Vec<_> = self
-            .pending_ambient_agent_conversation_restorations
-            .keys()
-            .filter(|task_id| {
-                AgentConversationsModel::as_ref(ctx)
-                    .get_task_data(task_id)
-                    .is_some()
-            })
-            .copied()
-            .collect();
-
-        let resources = TerminalViewResources {
-            tips_completed: self.tips_completed.clone(),
-            server_api: self.server_api.clone(),
-            model_event_sender: self.model_event_sender.clone(),
-        };
-        let view_size = Self::estimated_view_bounds(ctx).size();
-
-        for task_id in ready_tasks {
-            let Some(pane_id) = self
-                .pending_ambient_agent_conversation_restorations
-                .remove(&task_id)
-            else {
-                continue;
-            };
-            let Some(task) = AgentConversationsModel::as_ref(ctx).get_task_data(&task_id) else {
-                continue;
-            };
-
-            match AgentConversationsModel::resolve_open_action(
-                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
-                    task.task_id,
-                )),
-                None,
-                ctx,
-            ) {
-                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
-                    session_id,
-                    task_id: _,
-                }) => {
-                    let (view, terminal_manager) = Self::create_shared_session_viewer(
-                        session_id,
-                        resources.clone(),
-                        view_size,
-                        true, // root orchestrator viewer
-                        ctx,
-                    );
-                    let new_pane = TerminalPane::new(
-                        Uuid::new_v4().as_bytes().to_vec(),
-                        terminal_manager,
-                        view,
-                        self.model_event_sender.clone(),
-                        ctx,
-                    );
-                    self.replace_pane(pane_id, new_pane, false, ctx);
-                }
-                Some(WorkspaceAction::OpenConversationTranscriptViewer {
-                    conversation_id,
-                    ambient_agent_task_id,
-                }) => {
-                    if let Some(target_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
-                        Self::fetch_and_load_transcript(
-                            target_view,
-                            conversation_id,
-                            ambient_agent_task_id,
-                            ctx,
-                        );
-                    } else {
-                        self.pending_ambient_agent_conversation_restorations
-                            .insert(task_id, pane_id);
-                    }
-                }
-                _ => {
-                    self.replace_pane_with_new_cloud_conversation(pane_id, ctx);
-                }
-            }
-        }
-    }
-
-    /// Fetches conversation data and loads it into the given transcript viewer.
-    fn fetch_and_load_transcript(
-        target_view: ViewHandle<TerminalView>,
-        server_conversation_token: ServerConversationToken,
-        ambient_agent_task_id: Option<AmbientAgentTaskId>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let history_model_handle = BlocklistAIHistoryModel::handle(ctx);
-
-        let future = history_model_handle.update(ctx, |history_model, ctx| {
-            history_model.load_conversation_by_server_token(&server_conversation_token, ctx)
-        });
-        ctx.spawn(future, move |group, conversation, ctx| {
-            if let Some(conversation) = conversation {
-                group.load_data_into_transcript_viewer(
-                    target_view,
-                    conversation,
-                    ambient_agent_task_id,
-                    ctx,
-                );
-            } else if let Some(pane_id) =
-                group.find_pane_id_for_terminal_view(target_view.id(), ctx)
-            {
-                log::error!(
-                    "Failed to restore ambient agent pane, replacing with new cloud conversation"
-                );
-                group.replace_pane_with_new_cloud_conversation(pane_id, ctx);
-            }
-        });
-    }
-
-    /// Replaces a pane with a new cloud conversation.
-    fn replace_pane_with_new_cloud_conversation(
-        &mut self,
-        pane_id: PaneId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let resources = TerminalViewResources {
-            tips_completed: self.tips_completed.clone(),
-            server_api: self.server_api.clone(),
-            model_event_sender: self.model_event_sender.clone(),
-        };
-        let view_size = Self::estimated_view_bounds(ctx).size();
-        let (view, terminal_manager) =
-            Self::create_ambient_agent_terminal(resources, view_size, ctx);
-        let new_pane = TerminalPane::new(
-            Uuid::new_v4().as_bytes().to_vec(),
-            terminal_manager,
-            view,
-            self.model_event_sender.clone(),
-            ctx,
-        );
-        self.replace_pane(pane_id, new_pane, false, ctx);
+        self.process_pending_ambient_restorations(ctx);
+        self.process_pending_remote_child_hydrations(ctx);
     }
 
     /// Initial layout for a [`PaneGroup`] with a single ambient agent pane.
@@ -4057,7 +3482,8 @@ impl PaneGroup {
                 session_id,
                 resources,
                 view_bounds.size(),
-                true, // root orchestrator viewer
+                true,  // enable_orchestration_polling (root orchestrator viewer)
+                false, // is_cloud_mode
                 ctx,
             );
 
@@ -5156,7 +4582,6 @@ impl PaneGroup {
         let Some(child_pane_id) = owner_child_pane else {
             return false;
         };
-
         if self
             .child_agent_origin
             .as_ref()
@@ -6527,12 +5952,20 @@ impl PaneGroup {
         (terminal_view, terminal_manager)
     }
 
+    /// `is_cloud_mode` controls whether the resulting [`TerminalView`] is
+    /// constructed with an `ambient_agent_view_model`. Pass `true` when the
+    /// viewer pane represents the local pane of a cloud orchestration parent
+    /// agent — otherwise the snapshot path in
+    /// `TerminalPane::snapshot` falls through to an empty
+    /// `LeafContents::Terminal` for shared-session viewers and the pane
+    /// restores as a stray local terminal on the next launch.
     #[allow(clippy::too_many_arguments)]
     fn create_shared_session_viewer(
         session_id: SessionId,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         enable_orchestration_polling: bool,
+        is_cloud_mode: bool,
         ctx: &mut ViewContext<Self>,
     ) -> (
         ViewHandle<TerminalView>,
@@ -6547,6 +5980,7 @@ impl PaneGroup {
                     initial_size,
                     window_id,
                     enable_orchestration_polling,
+                    is_cloud_mode,
                     ctx,
                 ));
             terminal_manager
@@ -7428,7 +6862,6 @@ impl PaneGroup {
             .map(PaneId::from);
         let from_owner_lookup = self.pane_id_for_conversation_owner(conversation_id, ctx);
         let target_pane_id = from_child_panes.or(from_visible_pane).or(from_owner_lookup);
-
         let Some(target_pane_id) = target_pane_id else {
             // No owning pane in this group (e.g. the conversation lives
             // in another tab). Fall back to workspace-level navigation.
@@ -7456,7 +6889,7 @@ impl PaneGroup {
         if let Some(replacement_id) = self.panes.replacement_pane_for_original(target_pane_id) {
             self.revert_swap_clearing_split_off(replacement_id, ctx);
             self.handle_pane_count_change(ctx);
-            self.focus_pane(target_pane_id, true, ctx);
+            self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
             for pane_id in [replacement_id, target_pane_id] {
                 if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
                     terminal_view.update(ctx, |view, ctx| {
@@ -7482,7 +6915,7 @@ impl PaneGroup {
         // If revert landed us on the target, just focus and return.
         if anchor == target_pane_id {
             self.handle_pane_count_change(ctx);
-            self.focus_pane(anchor, true, ctx);
+            self.focus_pane_preserving_maximized_state(anchor, true, ctx);
             if let Some(terminal_view) = self.terminal_view_from_pane_id(anchor, ctx) {
                 terminal_view.update(ctx, |view, ctx| {
                     view.update_agent_view_back_button_state(ctx);
@@ -7497,7 +6930,7 @@ impl PaneGroup {
         if self.panes.is_pane_in_tree(target_pane_id) && !self.panes.is_pane_hidden(&target_pane_id)
         {
             self.handle_pane_count_change(ctx);
-            self.focus_pane(target_pane_id, true, ctx);
+            self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
             if let Some(terminal_view) = self.terminal_view_from_pane_id(target_pane_id, ctx) {
                 terminal_view.update(ctx, |view, ctx| {
                     view.update_agent_view_back_button_state(ctx);
@@ -7517,10 +6950,8 @@ impl PaneGroup {
             );
             return;
         }
-
         self.handle_pane_count_change(ctx);
-        self.focus_pane(target_pane_id, true, ctx);
-
+        self.focus_pane_preserving_maximized_state(target_pane_id, true, ctx);
         // Refresh the back-button label on both swapped panes; otherwise
         // a stale label would persist until the next agent-view entry.
         for pane_id in [anchor, target_pane_id] {
@@ -7912,6 +7343,21 @@ impl PaneGroup {
         true
     }
 
+    fn focus_pane_preserving_maximized_state(
+        &mut self,
+        id: PaneId,
+        focus_pane_contents: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let was_maximized = self.is_focused_pane_maximized(ctx);
+        let focused = self.focus_pane(id, focus_pane_contents, ctx);
+        if focused && was_maximized {
+            self.focus_state.update(ctx, |focus_state, ctx| {
+                focus_state.set_focused_pane_maximized(true, ctx);
+            });
+        }
+        focused
+    }
     fn focus_pane_and_record_in_history(
         &mut self,
         id: PaneId,

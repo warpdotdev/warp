@@ -1,3 +1,11 @@
+use ::local_control::protocol::{
+    BlockIdParams, BlockInspectResult, BlockListParams, BlockListResult, BlockSummary,
+    HistoryEntrySummary, HistoryListParams, HistoryListResult, InputStateResult, PaneTarget,
+    SessionTarget, TabTarget, TargetSelector,
+};
+use ::local_control::{ActionKind, ControlError, ErrorCode};
+use warpui::{ModelContext, SingletonEntity, ViewHandle};
+
 use crate::local_control::resolver::target_window_id_for_target;
 use crate::local_control::LocalControlBridge;
 use crate::pane_group::{PaneGroup, PaneId};
@@ -6,13 +14,6 @@ use crate::terminal::model::TerminalModel;
 use crate::terminal::view::TerminalView;
 use crate::terminal::History;
 use crate::workspace::Workspace;
-use ::local_control::protocol::{
-    BlockIdParams, BlockInspectResult, BlockListParams, BlockListResult, BlockSummary,
-    HistoryEntrySummary, HistoryListParams, HistoryListResult, InputStateResult, PaneTarget,
-    SessionTarget, TabTarget, TargetSelector,
-};
-use ::local_control::{ActionKind, ControlError, ErrorCode};
-use warpui::{ModelContext, SingletonEntity, ViewHandle};
 
 struct ResolvedTerminalTarget {
     terminal_view: ViewHandle<TerminalView>,

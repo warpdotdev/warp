@@ -2,7 +2,7 @@ use chrono::Duration;
 
 use super::*;
 use crate::discovery::InstanceId;
-use crate::scripting::{ScriptingGrant, ScriptingScope};
+use crate::scripting::ScriptingGrant;
 
 #[test]
 fn rejects_missing_authorization_header() {
@@ -47,12 +47,40 @@ fn scoped_credential_allows_only_granted_action() {
         Duration::minutes(5),
     );
     grant
-        .verify_for_action(ActionKind::TabCreate)
+        .verify_for_action(&grant.instance_id, ActionKind::TabCreate)
         .expect("tab.create grant is accepted");
     let err = grant
-        .verify_for_action(ActionKind::WindowCreate)
+        .verify_for_action(&grant.instance_id, ActionKind::WindowCreate)
         .expect_err("other actions are rejected");
     assert_eq!(err.code, ErrorCode::InsufficientPermissions);
+}
+
+#[test]
+fn scoped_credential_rejects_different_instance() {
+    let grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::TabCreate,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(5),
+    );
+    let err = grant
+        .verify_for_action(&InstanceId("inst_other".to_owned()), ActionKind::TabCreate)
+        .expect_err("other instance is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
+}
+#[test]
+fn scoped_credential_rejects_expired_grant() {
+    let grant = CredentialGrant::new(
+        InstanceId("inst_test".to_owned()),
+        ActionKind::TabCreate,
+        InvocationContext::OutsideWarp,
+        Duration::minutes(-1),
+    );
+
+    let err = grant
+        .verify_for_action(&grant.instance_id, ActionKind::TabCreate)
+        .expect_err("expired grant is rejected");
+    assert_eq!(err.code, ErrorCode::UnauthorizedLocalClient);
 }
 
 #[test]
@@ -77,7 +105,7 @@ fn authenticated_user_actions_require_subject() {
     );
     assert!(grant.authenticated_user.required);
     let err = grant
-        .verify_for_action(ActionKind::DriveInspect)
+        .verify_for_action(&grant.instance_id, ActionKind::DriveInspect)
         .expect_err("authenticated-user actions require a subject");
     assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
 }
@@ -93,13 +121,13 @@ fn authenticated_drive_mutation_requires_authenticated_user_grant() {
     assert!(grant.authenticated_user.required);
     assert!(grant.authenticated_user.subject.is_none());
     let err = grant
-        .verify_for_action(ActionKind::DriveObjectCreate)
+        .verify_for_action(&grant.instance_id, ActionKind::DriveObjectCreate)
         .expect_err("missing authenticated user subject is rejected");
     assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
 }
 
 #[test]
-fn authenticated_drive_mutation_grant_carries_underlying_data_mutation_metadata() {
+fn authenticated_drive_mutation_grant_allows_only_granted_action() {
     let mut grant = CredentialGrant::new(
         InstanceId("inst_test".to_owned()),
         ActionKind::DriveObjectCreate,
@@ -107,17 +135,13 @@ fn authenticated_drive_mutation_grant_carries_underlying_data_mutation_metadata(
         Duration::minutes(5),
     );
     grant.authenticated_user.subject = Some("user_123".to_owned());
-    assert_eq!(
-        grant.permission_category,
-        PermissionCategory::MutateUnderlyingData
-    );
-    assert_eq!(
-        grant.state_data_category,
-        StateDataCategory::UnderlyingDataMutation
-    );
     grant
-        .verify_for_action(ActionKind::DriveObjectCreate)
+        .verify_for_action(&grant.instance_id, ActionKind::DriveObjectCreate)
         .expect("authenticated Drive mutation grant is accepted");
+    let err = grant
+        .verify_for_action(&grant.instance_id, ActionKind::DriveObjectUpdate)
+        .expect_err("a different Drive mutation is rejected");
+    assert_eq!(err.code, ErrorCode::InsufficientPermissions);
 }
 
 #[test]
@@ -177,7 +201,7 @@ fn authenticated_action_requires_terminal_scripting_grant() {
     );
     grant.authenticated_user.subject = Some("user-1".to_owned());
     let err = grant
-        .verify_for_action(ActionKind::InputRun)
+        .verify_for_action(&grant.instance_id, ActionKind::InputRun)
         .expect_err("missing terminal scripting grant is rejected");
 
     assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
@@ -195,28 +219,34 @@ fn authenticated_action_accepts_matching_terminal_scripting_grant() {
     grant.scripting_grant = Some(ScriptingGrant::verified_warp_terminal(
         "session-1",
         "user-1",
-        vec![ScriptingScope::MutateUnderlyingData],
+        vec![ActionKind::InputRun],
         Duration::minutes(5),
     ));
 
     grant
-        .verify_for_action(ActionKind::InputRun)
+        .verify_for_action(&grant.instance_id, ActionKind::InputRun)
         .expect("matching terminal scripting grant is accepted");
 }
 
 #[test]
 fn execution_grant_rejects_outside_warp_context_even_with_subject() {
-    let grant = CredentialGrant::new(
+    let mut grant = CredentialGrant::new(
         InstanceId("inst_test".to_owned()),
         ActionKind::DriveWorkflowRun,
         InvocationContext::OutsideWarp,
         Duration::minutes(5),
     )
     .with_authenticated_user_subject("user_123");
+    grant.scripting_grant = Some(ScriptingGrant::verified_warp_terminal(
+        "session-1",
+        "user_123",
+        vec![ActionKind::DriveWorkflowRun],
+        Duration::minutes(5),
+    ));
     let err = grant
-        .verify_for_action(ActionKind::DriveWorkflowRun)
+        .verify_for_action(&grant.instance_id, ActionKind::DriveWorkflowRun)
         .expect_err("drive.workflow.run cannot run outside Warp");
-    assert_eq!(err.code, ErrorCode::AuthenticatedUserRequired);
+    assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
 }
 
 #[test]
@@ -245,33 +275,4 @@ fn credential_request_rejects_terminal_proof_for_external_client() {
         .verify_execution_context_proof()
         .expect_err("terminal proof is rejected for external context");
     assert_eq!(err.code, ErrorCode::ExecutionContextNotAllowed);
-}
-
-#[test]
-fn scoped_credential_carries_metadata_configuration_permission() {
-    let grant = CredentialGrant::new(
-        InstanceId("inst_test".to_owned()),
-        ActionKind::SettingSet,
-        InvocationContext::OutsideWarp,
-        Duration::minutes(5),
-    );
-    assert_eq!(grant.risk_tier, RiskTier::MutatingNonDestructive);
-    assert_eq!(
-        grant.state_data_category,
-        StateDataCategory::MetadataConfigurationMutation
-    );
-    assert_eq!(
-        grant.permission_category,
-        PermissionCategory::MutateMetadataConfiguration
-    );
-    assert_ne!(
-        grant.permission_category,
-        PermissionCategory::MutateAppState
-    );
-    assert_ne!(
-        grant.permission_category,
-        PermissionCategory::MutateUnderlyingData
-    );
-    assert!(!grant.authenticated_user.required);
-    assert!(grant.authenticated_user.subject.is_none());
 }

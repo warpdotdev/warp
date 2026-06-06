@@ -50,6 +50,7 @@ use crate::tab::SelectedTabColor;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::{InlineMenuAction, InlineMenuType};
 use crate::terminal::input::message_bar::Message;
+use crate::terminal::input::models::InlineModelSelectorTab;
 use crate::terminal::input::slash_command_model::{
     SlashCommandEntryState, UpdatedSlashCommandModel,
 };
@@ -808,8 +809,22 @@ impl Input {
                         footer.open_v2_model_selector(ctx);
                     });
                     return true;
+                } else if trigger.is_keybinding() {
+                    // A keybinding may carry a pre-existing prompt in the buffer; open
+                    // like the model chip so the prompt is parked for search and
+                    // restored when a model is selected (or the selector is dismissed).
+                    self.open_model_selector_and_snapshot_prompt(
+                        InlineModelSelectorTab::BaseAgent,
+                        ctx,
+                    );
                 } else {
-                    self.open_model_selector(ctx);
+                    // Typed `/model`: the buffer holds the consumable command text.
+                    // Just switch into the model selector; `set_mode` snapshots the
+                    // buffer so it's restored on dismiss but cleared on selection.
+                    self.suggestions_mode_model.update(ctx, |model, ctx| {
+                        model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
+                    });
+                    ctx.notify();
                 }
             }
             profiles if command.name == commands::PROFILE.name => {
@@ -900,9 +915,7 @@ impl Input {
             }
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
             move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
-                if !AISettings::as_ref(ctx)
-                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx)
-                {
+                if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
                     return false;
                 }
                 let prompt = argument
@@ -923,10 +936,27 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
+                } else if self.source_conversation_has_content(ctx) {
+                    // Empty `/handoff` with a non-empty source conversation:
+                    // dispatch the immediate empty-prompt handoff (continue /
+                    // snapshot rehydration); the workspace synthesizes the
+                    // launch and collects attachments.
+                    ctx.dispatch_typed_action_deferred(
+                        WorkspaceAction::OpenLocalToCloudHandoffPane {
+                            launch: None,
+                            environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
+                        },
+                    );
                 } else {
-                    // `/handoff` with no query enters `&` compose mode,
-                    // same as the footer chip.
-                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
+                    // Empty `/handoff` with no source content — surface a toast
+                    // so the user knows why nothing happened. The chip falls
+                    // back to `&` compose mode here; the slash-command flow
+                    // does not because it has no compose-draft state to seed.
+                    show_error_toast(
+                        "Nothing to hand off — start a conversation first.".to_owned(),
+                        ctx,
+                    );
                 }
             }
             fork if command.name == commands::FORK.name => {
@@ -1063,12 +1093,16 @@ impl Input {
                 };
 
                 let history = BlocklistAIHistoryModel::handle(ctx);
-                let is_in_progress = history
+                // An empty conversation defaults to `InProgress` even though nothing is
+                // running, so exclude it here to auto-send rather than queue.
+                let should_queue = history
                     .as_ref(ctx)
                     .conversation(&conversation_id)
-                    .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
+                    .is_some_and(|c| {
+                        !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+                    });
 
-                if is_in_progress {
+                if should_queue {
                     QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                         model.append(
                             conversation_id,

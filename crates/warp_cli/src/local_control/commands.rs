@@ -36,7 +36,6 @@ struct CatalogActionSummary {
     implementation_status: ActionImplementationStatus,
     requires_authenticated_user: bool,
     target_scope: local_control::protocol::TargetScope,
-    permission_category: local_control::protocol::PermissionCategory,
 }
 
 impl From<local_control::discovery::InstanceRecord> for InstanceSummary {
@@ -62,11 +61,58 @@ impl From<ActionMetadata> for CatalogActionSummary {
             implementation_status: metadata.implementation_status,
             requires_authenticated_user: metadata.requires_authenticated_user,
             target_scope: metadata.target_scope,
-            permission_category: metadata.permission_category,
         }
     }
 }
 
+fn render_human_readable(action: ActionKind, data: &serde_json::Value) -> String {
+    match action {
+        ActionKind::AppPing => format!(
+            "Warp instance {} is reachable (protocol version {})",
+            value_or_unknown(data, "instance_id"),
+            value_or_unknown(data, "protocol_version")
+        ),
+        ActionKind::AppVersion => format!(
+            "Warp instance {}\nchannel: {}\napp_id: {}\nprotocol_version: {}",
+            value_or_unknown(data, "instance_id"),
+            value_or_unknown(data, "channel"),
+            value_or_unknown(data, "app_id"),
+            value_or_unknown(data, "protocol_version")
+        ),
+        ActionKind::TabCreate => format!(
+            "Created tab {} in window {} (active index {}, tab count {})",
+            nested_value_or_unknown(data, &["tab", "id"]),
+            nested_value_or_unknown(data, &["window", "id"]),
+            nested_value_or_unknown(data, &["tab", "active_index"]),
+            nested_value_or_unknown(data, &["tab", "count"])
+        ),
+        _ => serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string()),
+    }
+}
+
+fn value_or_unknown(data: &serde_json::Value, key: &str) -> String {
+    nested_value_or_unknown(data, &[key])
+}
+
+fn nested_value_or_unknown(data: &serde_json::Value, path: &[&str]) -> String {
+    let value = path
+        .iter()
+        .try_fold(data, |value, key| value.get(*key))
+        .unwrap_or(&serde_json::Value::Null);
+    match value {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Null => "<unknown>".to_owned(),
+        value => value.to_string(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn render_human_readable_for_test(
+    action: ActionKind,
+    data: &serde_json::Value,
+) -> String {
+    render_human_readable(action, data)
+}
 pub(super) fn run_instance_command(
     command: InstanceCommand,
     output_format: OutputFormat,
@@ -511,11 +557,10 @@ fn render_catalog_list(
         OutputFormat::Pretty | OutputFormat::Text => {
             for summary in metadata.into_iter().map(CatalogActionSummary::from) {
                 println!(
-                    "{}	status={:?}	scope={:?}	permission={:?}	authenticated_user={}",
+                    "{}\tstatus={:?}\tscope={:?}\tauthenticated_user={}",
                     summary.name,
                     summary.implementation_status,
                     summary.target_scope,
-                    summary.permission_category,
                     summary.requires_authenticated_user
                 );
             }
@@ -580,7 +625,10 @@ fn run_action_with_params<T: Serialize>(
     match output_format {
         OutputFormat::Json => write_json(&data),
         OutputFormat::Ndjson => write_json_line(&data),
-        OutputFormat::Pretty | OutputFormat::Text => write_json(&data),
+        OutputFormat::Pretty | OutputFormat::Text => {
+            println!("{}", render_human_readable(action, &data));
+            Ok(())
+        }
     }
 }
 

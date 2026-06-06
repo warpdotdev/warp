@@ -8,7 +8,7 @@ use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
 use serde_json::json;
 use settings::Setting as _;
 use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::{ModelContext, SingletonEntity, ViewHandle, WindowId};
+use warpui::{ModelContext, SingletonEntity as _, ViewHandle, WindowId};
 
 use crate::local_control::LocalControlBridge;
 use crate::pane_group::{PaneGroup, PaneId};

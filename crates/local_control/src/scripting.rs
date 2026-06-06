@@ -6,31 +6,7 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::PermissionCategory;
-use crate::protocol::{ControlError, ErrorCode};
-
-/// Permission scope carried by a verified terminal scripting grant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ScriptingScope {
-    ReadMetadata,
-    ReadUnderlyingData,
-    MutateAppState,
-    MutateMetadataConfiguration,
-    MutateUnderlyingData,
-}
-
-impl ScriptingScope {
-    pub fn from_permission(permission: PermissionCategory) -> Self {
-        match permission {
-            PermissionCategory::ReadMetadata => Self::ReadMetadata,
-            PermissionCategory::ReadUnderlyingData => Self::ReadUnderlyingData,
-            PermissionCategory::MutateAppState => Self::MutateAppState,
-            PermissionCategory::MutateMetadataConfiguration => Self::MutateMetadataConfiguration,
-            PermissionCategory::MutateUnderlyingData => Self::MutateUnderlyingData,
-        }
-    }
-}
+use crate::protocol::{ActionKind, ControlError, ErrorCode};
 
 /// How a scripting grant was obtained.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +20,7 @@ pub enum ScriptingIdentitySource {
 pub struct ScriptingGrant {
     pub source: ScriptingIdentitySource,
     pub subject: String,
-    pub scopes: Vec<ScriptingScope>,
+    pub actions: Vec<ActionKind>,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -53,7 +29,7 @@ impl ScriptingGrant {
     pub fn verified_warp_terminal(
         terminal_session_id: impl Into<String>,
         subject: impl Into<String>,
-        scopes: Vec<ScriptingScope>,
+        actions: Vec<ActionKind>,
         ttl: Duration,
     ) -> Self {
         let issued_at = Utc::now();
@@ -62,7 +38,7 @@ impl ScriptingGrant {
                 terminal_session_id: terminal_session_id.into(),
             },
             subject: subject.into(),
-            scopes,
+            actions,
             issued_at,
             expires_at: issued_at + ttl,
         }
@@ -72,21 +48,24 @@ impl ScriptingGrant {
         Utc::now() >= self.expires_at
     }
 
-    pub fn has_scope(&self, scope: &ScriptingScope) -> bool {
-        self.scopes.contains(scope)
+    pub fn has_action(&self, action: ActionKind) -> bool {
+        self.actions.contains(&action)
     }
 
-    pub fn verify_scope(&self, scope: ScriptingScope) -> Result<(), ControlError> {
+    pub fn verify_action(&self, action: ActionKind) -> Result<(), ControlError> {
         if self.is_expired() {
             return Err(ControlError::new(
                 ErrorCode::UnauthorizedLocalClient,
                 "authenticated scripting grant has expired",
             ));
         }
-        if !self.has_scope(&scope) {
+        if !self.has_action(action) {
             return Err(ControlError::new(
                 ErrorCode::InsufficientPermissions,
-                "authenticated scripting grant does not include the required scope",
+                format!(
+                    "authenticated scripting grant cannot invoke {}",
+                    action.as_str()
+                ),
             ));
         }
         Ok(())

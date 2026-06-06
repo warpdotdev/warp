@@ -76,7 +76,6 @@ use crate::settings::{
     AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
 };
 use crate::settings_view::SettingsSection;
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
@@ -377,7 +376,7 @@ impl AgentInputFooter {
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::OpenHandoffPane);
+                    ctx.dispatch_typed_action(AgentInputFooterAction::HandoffChipClicked);
                 })
         });
 
@@ -507,12 +506,12 @@ impl AgentInputFooter {
                     me.plugin_chip_ready = false;
                 }
 
-                // When a listener connects for an agent with rich status,
-                // the plugin is verified installed — hide the chip.
-                // (Codex always has a listener but no actual plugin to install.)
+                // When a structured plugin connects, the plugin is verified
+                // installed — hide the chip. Codex's OSC 9 fallback is not a
+                // structured plugin, so its chip stays until the plugin connects.
                 if CLIAgentSessionsModel::as_ref(ctx)
                     .session(me.terminal_view_id)
-                    .is_some_and(|s| s.listener.is_some() && agent_supports_rich_status(&s.agent))
+                    .is_some_and(|s| s.supports_rich_status())
                 {
                     me.plugin_chip_ready = false;
                 }
@@ -533,10 +532,7 @@ impl AgentInputFooter {
                                     |me, _, ctx: &mut ViewContext<Self>| {
                                         let suppress = CLIAgentSessionsModel::as_ref(ctx)
                                             .session(me.terminal_view_id)
-                                            .is_some_and(|s| {
-                                                s.listener.is_some()
-                                                    && agent_supports_rich_status(&s.agent)
-                                            });
+                                            .is_some_and(|s| s.supports_rich_status());
                                         if !suppress {
                                             me.plugin_chip_ready = true;
                                             ctx.notify();
@@ -982,13 +978,16 @@ impl AgentInputFooter {
             }
         }
 
-        Flex::row()
+        let content = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(CLOUD_MODE_V2_FOOTER_GAP)
             .with_child(left.finish())
             .with_child(right.finish())
-            .finish()
+            .finish();
+
+        Clipped::new(content).finish()
     }
 
     fn all_display_chips(&self) -> impl Iterator<Item = &ViewHandle<DisplayChip>> {
@@ -1084,10 +1083,9 @@ impl AgentInputFooter {
             let manager = plugin_manager_for(session.agent)?;
             let min_version = manager.minimum_plugin_version();
             let chip_key = plugin_chip_key(session.agent.command_prefix(), &session.remote_host);
-
-            // If the plugin is connected (listener present) and this agent supports
+            // If a structured plugin is connected and this agent supports
             // version-based updates, check the reported version.
-            if session.listener.is_some() && manager.supports_update() {
+            if session.supports_rich_status() && manager.supports_update() {
                 let needs_update = match &session.plugin_version {
                     // No version reported = pre-versioning plugin, definitely outdated.
                     None => true,
@@ -2115,10 +2113,7 @@ impl AgentInputFooter {
                 .is_enabled()
                 .then(|| ChildView::new(&self.fast_forward_button).finish()),
             AgentToolbarItemKind::HandoffToCloud => {
-                if !AISettings::as_ref(app)
-                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, app)
-                    || is_cloud_context
-                {
+                if !AISettings::as_ref(app).is_cloud_handoff_enabled(app) || is_cloud_context {
                     return None;
                 }
 
@@ -2408,9 +2403,10 @@ pub enum AgentInputFooterAction {
     StartRemoteControl,
     StopRemoteControl,
     OpenCodingAgentSettings,
-    /// Open the local-to-cloud handoff pane. Dispatched by the
-    /// "Hand off to cloud" footer chip.
-    OpenHandoffPane,
+    /// User clicked the "Hand off to cloud" footer chip. The terminal `Input`
+    /// subscriber decides whether to dispatch the immediate empty-prompt
+    /// handoff or enter `&` compose mode based on the current input state.
+    HandoffChipClicked,
     ShowContextMenu {
         position: Vector2F,
     },
@@ -2607,12 +2603,16 @@ impl TypedActionView for AgentInputFooter {
                     widget_id: crate::settings_view::cli_agent_settings_widget_id(),
                 });
             }
-            AgentInputFooterAction::OpenHandoffPane => {
+            AgentInputFooterAction::HandoffChipClicked => {
                 if FeatureFlag::OzHandoff.is_enabled()
                     && FeatureFlag::HandoffLocalCloud.is_enabled()
                     && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
                 {
-                    ctx.emit(AgentInputFooterEvent::OpenHandoffPane);
+                    // The terminal `Input` subscriber decides what to do with
+                    // the chip click — auto-handoff when the input buffer is
+                    // empty and the source conversation has content, or `&`
+                    // compose mode otherwise (preserving any in-flight prompt).
+                    ctx.emit(AgentInputFooterEvent::HandoffChipClicked);
                 }
             }
             AgentInputFooterAction::ShowContextMenu { position } => {
@@ -2662,8 +2662,10 @@ pub enum AgentInputFooterEvent {
     #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(CLIAgent, PluginModalKind),
     /// Local-to-cloud handoff chip clicked. The terminal `Input` subscriber
-    /// activates `&` handoff-compose mode on the local input.
-    OpenHandoffPane,
+    /// either dispatches the immediate empty-prompt handoff (empty buffer +
+    /// source conversation with content) or activates `&` compose mode
+    /// (preserving any in-flight prompt).
+    HandoffChipClicked,
 }
 
 impl Entity for AgentInputFooter {

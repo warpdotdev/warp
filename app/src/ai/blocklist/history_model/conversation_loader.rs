@@ -85,7 +85,14 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
 
     let conversation_data = serde_json::from_str::<AgentConversationData>(&conversation_data).ok();
 
-    match AIConversation::new_restored(conversation_id, tasks, conversation_data) {
+    // Local-DB restore: an empty `agent_tasks` row is the normal shape of a
+    // child conversation persisted before its first server response, so
+    // synthesize a fresh optimistic root rather than failing the restore.
+    match AIConversation::new_restored_synthesizing_on_empty(
+        conversation_id,
+        tasks,
+        conversation_data,
+    ) {
         Ok(conversation) => Some(conversation),
         Err(e) => {
             log::warn!("Failed to convert persisted conversation to AIConversation: {e:?}");
@@ -539,6 +546,32 @@ impl BlocklistAIHistoryModel {
                     .and_then(|data| self.resolved_parent_conversation_id_from_persisted_data(data))
                 {
                     self.index_child_conversation(conversation_id, parent_id);
+                    // Eagerly hydrate the child conversation into
+                    // `conversations_by_id` so the pill bar and orchestration
+                    // transcript name resolution can find it before the
+                    // parent's hidden child pane materializes lazily. This is
+                    // restricted to orchestration children only — non-child
+                    // historical conversations continue to load lazily via
+                    // `restore_conversations`. We do NOT emit
+                    // `RestoredConversations`, touch
+                    // `live_conversation_ids_for_terminal_view`, or update
+                    // `terminal_view_created_at` here; those still happen
+                    // later when the hidden pane is materialized via
+                    // `restore_conversations`. A subsequent `restore_conversations`
+                    // call replaces this entry idempotently.
+                    if let Some(child_conversation) =
+                        convert_persisted_conversation_to_ai_conversation_with_metadata(
+                            agent_conversation.clone(),
+                        )
+                    {
+                        self.conversations_by_id
+                            .insert(conversation_id, child_conversation);
+                    } else {
+                        log::warn!(
+                            "Failed to eagerly hydrate orchestration child {conversation_id}; \
+                             pill bar / name resolution will fall back to lazy materialization",
+                        );
+                    }
                     return None;
                 }
 
@@ -627,7 +660,7 @@ impl BlocklistAIHistoryModel {
                 let credits_spent = conversation_data
                     .as_ref()
                     .and_then(|data| data.conversation_usage_metadata.as_ref())
-                    .map(|m| m.credits_spent);
+                    .map(|m| m.credits_spent + m.platform_credits_spent);
                 let artifacts = conversation_data
                     .as_ref()
                     .and_then(|data| data.artifacts_json.as_ref())

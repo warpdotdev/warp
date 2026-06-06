@@ -20,4 +20,5 @@ uuid.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+command.workspace = true
 tempfile.workspace = true

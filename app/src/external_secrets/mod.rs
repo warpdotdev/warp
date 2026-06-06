@@ -6,11 +6,11 @@ use core::fmt;
 use std::path::PathBuf;
 
 use anyhow::anyhow;
+pub use cloud_object_models::{ExternalSecret, LastPassSecret, OnePasswordSecret};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use warp_util::path::ShellFamily;
 
 #[cfg(all(not(target_family = "wasm"), feature = "local_tty"))]
 use crate::terminal::local_shell::execute_command;
@@ -50,40 +50,6 @@ const LASTPASS_INSTALLED_COMMAND: [&str; 2] = ["lpass", "-v"];
 
 const ONEPASSWORD_DOCS_LINK: &str = "https://developer.1password.com/docs/cli/get-started/";
 const LASTPASS_DOCS_LINK: &str = "https://github.com/lastpass/lastpass-cli";
-
-/// Represents a "completed" secret
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum ExternalSecret {
-    OnePassword(OnePasswordSecret),
-    LastPass(LastPassSecret),
-}
-
-impl ExternalSecret {
-    pub fn get_secret_extraction_command(&self, shell_family: ShellFamily) -> String {
-        let prefix = match shell_family {
-            ShellFamily::Posix => "\\",
-            ShellFamily::PowerShell => "",
-        };
-        match self {
-            ExternalSecret::OnePassword(secret) => {
-                format!(
-                    "{}op item get --fields credential --reveal {}",
-                    prefix, secret.reference
-                )
-            }
-            ExternalSecret::LastPass(secret) => {
-                format!("{}lpass show --password {}", prefix, secret.reference)
-            }
-        }
-    }
-
-    pub fn get_display_name(&self) -> String {
-        match self {
-            ExternalSecret::OnePassword(secret) => secret.name.clone(),
-            ExternalSecret::LastPass(secret) => secret.name.clone(),
-        }
-    }
-}
 
 /// Used to check if a secret manager is installed/fetch list of secrets
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -307,10 +273,10 @@ fn parse_onepassword_secrets(output: &str) -> anyhow::Result<Vec<ExternalSecret>
                 .and_then(|v| v.as_str())
                 .ok_or(anyhow!("Secret is missing id"))?;
 
-            Ok(ExternalSecret::OnePassword(OnePasswordSecret {
-                name: name.to_string(),
-                reference: reference.to_string(),
-            }))
+            Ok(ExternalSecret::OnePassword(OnePasswordSecret::new(
+                name.to_string(),
+                reference.to_string(),
+            )))
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
@@ -323,10 +289,10 @@ fn parse_lastpass_secrets(output: &str) -> anyhow::Result<Vec<ExternalSecret>> {
         .filter_map(|line| {
             let parts = line.split(*WARP_SECRET_DELIMITER).collect_vec();
             if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-                Some(ExternalSecret::LastPass(LastPassSecret {
-                    name: parts[0].to_owned(),
-                    reference: parts[1].to_owned(),
-                }))
+                Some(ExternalSecret::LastPass(LastPassSecret::new(
+                    parts[0].to_owned(),
+                    parts[1].to_owned(),
+                )))
             } else {
                 None
             }
@@ -338,16 +304,4 @@ fn parse_lastpass_secrets(output: &str) -> anyhow::Result<Vec<ExternalSecret>> {
     } else {
         Err(anyhow!("Failed to parse any secrets"))
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct OnePasswordSecret {
-    name: String,
-    reference: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct LastPassSecret {
-    name: String,
-    reference: String,
 }

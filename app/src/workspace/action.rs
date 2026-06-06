@@ -41,6 +41,7 @@ use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
+use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::PaneViewLocator;
 
 /// This enum determines how the search query is initialized when opening command search.
@@ -169,6 +170,33 @@ pub enum WorkspaceAction {
     CloseNonActiveTabs,
     CloseTabsRight(usize),
     CloseTabsRightActiveTab,
+    /// Close every tab that belongs to the given tab group.
+    CloseTabGroup(TabGroupId),
+    /// Toggle collapsed state for the given tab group.
+    ToggleTabGroupCollapsed(TabGroupId),
+    /// Opens an inline editor over the given group's header for renaming.
+    RenameTabGroup(TabGroupId),
+    /// Creates a new tab group containing the tab at the given index.
+    NewTabGroupFromTab(usize),
+    /// Moves the tab at `tab_index` into `group_id`, appending it to the
+    /// end of the group's contiguous run.
+    MoveTabToGroup {
+        tab_index: usize,
+        group_id: TabGroupId,
+    },
+    /// Removes the tab at the given index from its current group.
+    RemoveTabFromGroup(usize),
+    ToggleTabGroupRightClickMenu {
+        group_id: TabGroupId,
+        anchor: TabContextMenuAnchor,
+    },
+    UngroupTabs(TabGroupId),
+    NewTabInGroup(TabGroupId),
+    MoveTabGroupUp(TabGroupId),
+    MoveTabGroupDown(TabGroupId),
+    CloseTabsOutsideGroup(TabGroupId),
+    CloseTabsAboveGroup(TabGroupId),
+    CloseTabsBelowGroup(TabGroupId),
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -275,6 +303,12 @@ pub enum WorkspaceAction {
         tab_position: RectF,
     },
     DropTab,
+    StartGroupDrag(TabGroupId),
+    DragGroup {
+        group_id: TabGroupId,
+        position: RectF,
+    },
+    DropGroup,
     /// Toggles the left panel. In Code Mode V1 this toggles Warp Drive.
     /// In Code Mode V2 this toggles the left panel which contains both the project explorer and
     /// Warp Drive. This happens as explicit action from the user.
@@ -587,6 +621,7 @@ pub enum WorkspaceAction {
     NavigateNextPaneOrPanel,
     ToggleProjectExplorer,
     ToggleGlobalSearch,
+    ToggleHiddenFiles,
     OpenGlobalSearch,
     ToggleConversationListView,
     /// Open the Build Plan Migration Modal (for debugging)
@@ -776,6 +811,7 @@ impl WorkspaceAction {
             | MoveTabLeft(_)
             | MoveTabRight(_)
             | DropTab
+            | DropGroup
             | RenameTab(_)
             | ResetTabName(_)
             | RenamePane(_)
@@ -790,6 +826,19 @@ impl WorkspaceAction {
             | CloseNonActiveTabs
             | CloseTabsRight(_)
             | CloseTabsRightActiveTab
+            | CloseTabGroup(_)
+            | ToggleTabGroupCollapsed(_)
+            | RenameTabGroup(_)
+            | NewTabGroupFromTab(_)
+            | MoveTabToGroup { .. }
+            | RemoveTabFromGroup(_)
+            | UngroupTabs(_)
+            | NewTabInGroup(_)
+            | MoveTabGroupUp(_)
+            | MoveTabGroupDown(_)
+            | CloseTabsOutsideGroup(_)
+            | CloseTabsAboveGroup(_)
+            | CloseTabsBelowGroup(_)
             | ToggleTabColor { .. }
             | AddDefaultTab
             | AddTerminalTab { .. }
@@ -849,6 +898,7 @@ impl WorkspaceAction {
             | ToggleSyntaxHighlighting
             | OpenLaunchConfigSaveModal
             | ToggleTabRightClickMenu { .. }
+            | ToggleTabGroupRightClickMenu { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
             | OpenNewSessionMenu { .. }
             | ToggleTabConfigsMenu
@@ -884,6 +934,8 @@ impl WorkspaceAction {
             | OpenInExplorer { .. }
             | DragTab { .. }
             | StartTabDrag
+            | DragGroup { .. }
+            | StartGroupDrag(_)
             | ToggleLeftPanel
             | ToggleWarpDrive
             | OpenWarpDrive
@@ -967,6 +1019,7 @@ impl WorkspaceAction {
             | NavigateNextPaneOrPanel
             | ToggleProjectExplorer
             | ToggleGlobalSearch
+            | ToggleHiddenFiles
             | OpenGlobalSearch
             | ToggleConversationListView
             | ToggleNotificationMailbox { .. }

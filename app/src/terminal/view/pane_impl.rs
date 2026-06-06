@@ -24,6 +24,7 @@ use crate::ai::agent::conversation::{
 };
 use crate::ai::blocklist::agent_view::agent_view_bg_fill;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::parent_conversation_navigation_card;
+use crate::ai::blocklist::orchestration_topology::orchestration_aware_conversation_status;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::drive::sharing::ShareableObject;
@@ -256,19 +257,10 @@ impl TerminalView {
         let is_fullscreen_agent_view = self.agent_view_controller.as_ref(app).is_fullscreen();
 
         if in_nav_stack || (is_fullscreen_agent_view && has_parent_terminal) {
-            if FeatureFlag::OrchestrationV2.is_enabled() {
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(ChildView::new(&self.agent_view_back_button).finish())
-                    .finish()
-            } else {
-                Flex::column()
-                    .with_main_axis_alignment(MainAxisAlignment::Center)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(ChildView::new(&self.agent_view_back_button).finish())
-                    .finish()
-            }
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(ChildView::new(&self.agent_view_back_button).finish())
+                .finish()
         } else {
             Flex::row().finish()
         }
@@ -475,8 +467,7 @@ impl TerminalView {
     }
 
     fn render_parent_conversation_header_card(&self, app: &AppContext) -> Option<Box<dyn Element>> {
-        if !(FeatureFlag::OrchestrationV2.is_enabled()
-            && FeatureFlag::AgentView.is_enabled()
+        if !(FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(app).is_fullscreen())
         {
             return None;
@@ -551,10 +542,6 @@ impl TerminalView {
                 .with_child(pinned_header)
                 .with_child(secondary_row)
                 .finish();
-        }
-
-        if !FeatureFlag::OrchestrationV2.is_enabled() {
-            return header;
         }
 
         if let Some(parent_card) = parent_conversation_header_card {
@@ -991,7 +978,9 @@ impl TerminalView {
 
     /// Selected conversation status for chrome, or [`ConversationStatus::InProgress`] while the
     /// active block is long-running (terminal-derived; not mirrored in history events) or while
-    /// a cloud-mode ambient agent is still in its environment-setup phase.
+    /// a cloud-mode ambient agent is still in its environment-setup phase. For orchestrator
+    /// conversations, returns the aggregated child status so tab/header badges keep reflecting
+    /// active descendants after its turn finishes.
     pub fn selected_conversation_status(&self, ctx: &AppContext) -> Option<ConversationStatus> {
         let long_running = self.is_long_running();
         let cloud_setup = self.is_in_cloud_agent_setup_phase(ctx);
@@ -1014,7 +1003,10 @@ impl TerminalView {
             return None;
         }
 
-        Some(conversation.status().clone())
+        Some(orchestration_aware_conversation_status(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            conversation,
+        ))
     }
 
     pub fn selected_conversation_is_empty(&self, ctx: &AppContext) -> bool {

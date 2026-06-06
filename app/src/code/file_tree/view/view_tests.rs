@@ -113,6 +113,156 @@ fn build_repo_state_with_unloaded_directory(repo_root: &std::path::Path) -> File
     FileTreeState::new(root, vec![], None)
 }
 
+fn flattened_paths(
+    view: &FileTreeView,
+    root: &std::path::Path,
+) -> Vec<warp_util::standardized_path::StandardizedPath> {
+    view.root_directories
+        .get(&std_path(root))
+        .expect("root directory is tracked")
+        .items
+        .iter()
+        .map(|item| item.path().clone())
+        .collect()
+}
+
+#[test]
+fn hidden_files_are_filtered_until_setting_is_enabled() {
+    VirtualFS::test("file_tree_hidden_files_setting", |dirs, mut vfs| {
+        vfs.mkdir("tree/.config").with_files(vec![
+            Stub::FileWithContent("tree/.env", "SECRET=value\n"),
+            Stub::FileWithContent("tree/.config/settings.toml", ""),
+            Stub::FileWithContent("tree/visible.txt", "content\n"),
+        ]);
+        let tree = dirs.tests().join("tree");
+        let hidden_file = tree.join(".env");
+        let hidden_dir = tree.join(".config");
+        let visible_file = tree.join("visible.txt");
+
+        App::test((), |mut app| async move {
+            let _ = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![tree.clone()], ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let paths = flattened_paths(view, &tree);
+                assert!(paths.contains(&std_path(&tree)));
+                assert!(paths.contains(&std_path(&visible_file)));
+                assert!(!paths.contains(&std_path(&hidden_file)));
+                assert!(!paths.contains(&std_path(&hidden_dir)));
+            });
+
+            <crate::settings::CodeSettings as warpui::SingletonEntity>::handle(&app).update(
+                &mut app,
+                |settings, ctx| {
+                    settings::Setting::set_value(&mut settings.show_hidden_files, true, ctx)
+                        .expect("show hidden files setting updates");
+                },
+            );
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let paths = flattened_paths(view, &tree);
+                assert!(paths.contains(&std_path(&hidden_file)));
+                assert!(paths.contains(&std_path(&hidden_dir)));
+            });
+        });
+    });
+}
+
+#[test]
+fn hidden_root_directory_is_not_filtered() {
+    VirtualFS::test("file_tree_hidden_root_directory", |dirs, mut vfs| {
+        vfs.mkdir(".config").with_files(vec![
+            Stub::FileWithContent(".config/settings.toml", ""),
+            Stub::FileWithContent(".config/.secret", ""),
+        ]);
+        let hidden_root = dirs.tests().join(".config");
+        let visible_file = hidden_root.join("settings.toml");
+        let hidden_file = hidden_root.join(".secret");
+
+        App::test((), |mut app| async move {
+            let _ = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![hidden_root.clone()], ctx);
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let paths = flattened_paths(view, &hidden_root);
+                assert!(paths.contains(&std_path(&hidden_root)));
+                assert!(paths.contains(&std_path(&visible_file)));
+                assert!(!paths.contains(&std_path(&hidden_file)));
+            });
+        });
+    });
+}
+
+#[test]
+fn selected_hidden_file_is_cleared_when_filtered() {
+    VirtualFS::test(
+        "file_tree_selected_hidden_file_filtered",
+        |dirs, mut vfs| {
+            vfs.mkdir("tree").with_files(vec![
+                Stub::FileWithContent("tree/.env", "SECRET=value\n"),
+                Stub::FileWithContent("tree/visible.txt", "content\n"),
+            ]);
+            let tree = dirs.tests().join("tree");
+            let hidden_file = tree.join(".env");
+
+            App::test((), |mut app| async move {
+                let _ = initialize_app(&mut app);
+                <crate::settings::CodeSettings as warpui::SingletonEntity>::handle(&app).update(
+                    &mut app,
+                    |settings, ctx| {
+                        settings::Setting::set_value(&mut settings.show_hidden_files, true, ctx)
+                            .expect("show hidden files setting updates");
+                    },
+                );
+
+                let (_, file_tree_view) =
+                    app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+                file_tree_view.update(&mut app, |view, ctx| {
+                    view.set_is_active(true, ctx);
+                    view.set_root_directories(vec![tree.clone()], ctx);
+
+                    let root_dir = view.root_directories.get(&std_path(&tree)).unwrap();
+                    let (index, _) = root_dir
+                        .items
+                        .iter()
+                        .enumerate()
+                        .find(|(_, item)| item.path() == &std_path(&hidden_file))
+                        .expect("hidden file is visible");
+                    let id = super::FileTreeIdentifier {
+                        root: std_path(&tree),
+                        index,
+                    };
+                    view.select_id(&id, ctx);
+                });
+
+                <crate::settings::CodeSettings as warpui::SingletonEntity>::handle(&app).update(
+                    &mut app,
+                    |settings, ctx| {
+                        settings::Setting::set_value(&mut settings.show_hidden_files, false, ctx)
+                            .expect("show hidden files setting updates");
+                    },
+                );
+
+                file_tree_view.read(&app, |view, _ctx| {
+                    let paths = flattened_paths(view, &tree);
+                    assert!(!paths.contains(&std_path(&hidden_file)));
+                    assert!(view.selected_item.is_none());
+                });
+            });
+        },
+    );
+}
+
 #[test]
 fn repo_transition_unregisters_lazy_loaded_path() {
     VirtualFS::test("file_tree_repo_transition", |dirs, mut vfs| {

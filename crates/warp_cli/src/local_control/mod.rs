@@ -4,13 +4,10 @@ mod completions;
 mod output;
 mod selectors;
 use std::ffi::OsString;
-
 use std::process::ExitCode;
 
-use crate::agent::OutputFormat;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::aot::Shell;
-
 use commands::{
     run_action_catalog_command, run_app_command, run_appearance_command, run_block_command,
     run_capability_command, run_drive_command, run_file_command, run_history_command,
@@ -20,6 +17,9 @@ use commands::{
 };
 use completions::generate_completions_to_stdout;
 use output::write_control_error;
+
+use crate::agent::OutputFormat;
+
 /// Hidden flag used by the channel-specific Warp app binary to enter `warpctrl` mode.
 pub const CONTROL_MODE_FLAG: &str = "--warpctrl";
 
@@ -245,7 +245,7 @@ pub enum AppCommand {
     /// Check that the selected local Warp app responds.
     Ping(TargetArgs),
 
-    /// Print protocol and app version metadata for the selected local Warp app.
+    /// Print protocol and build identity metadata for the selected local Warp app.
     Version(TargetArgs),
 
     /// Print the active window/tab/pane/session chain.
@@ -741,6 +741,8 @@ fn parse_workflow_argument(
     })
 }
 
+#[cfg(test)]
+pub(crate) use commands::render_human_readable_for_test;
 #[cfg(test)]
 pub(crate) use completions::generate_completion_string;
 #[cfg(test)]

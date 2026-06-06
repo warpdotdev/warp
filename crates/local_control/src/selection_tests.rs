@@ -16,7 +16,7 @@ fn record(id: &str, pid: u32) -> InstanceRecord {
         executable_path: None,
         endpoint: Some(ControlEndpoint::localhost(4000)),
         credential_broker: Some(CredentialBrokerReference {
-            endpoint: ControlEndpoint::localhost(4000),
+            socket_path: format!("{id}.broker.sock").into(),
         }),
         outside_warp_control_enabled: true,
         actions: vec![ActionKind::TabCreate.metadata()],
