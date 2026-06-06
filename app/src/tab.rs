@@ -744,6 +744,10 @@ pub struct TabComponent<'a> {
     title: String,
     has_custom_title: bool,
     tab_index: usize,
+    /// When `true`, the tab's 1-based position number is rendered before its
+    /// title to make the Cmd+1..9 switch shortcuts discoverable. Controlled by
+    /// the `appearance.tabs.show_tab_numbers` setting.
+    show_tab_number: bool,
     styles: TabStyles,
     ui_builder: UiBuilder,
     indicator: Indicator,
@@ -859,6 +863,7 @@ impl<'a> TabComponent<'a> {
             .as_ref(ctx)
             .is_terminal_pane_being_shared(ctx);
         let should_show_indicators = *TabSettings::as_ref(ctx).show_indicators.value();
+        let show_tab_number = *TabSettings::as_ref(ctx).show_tab_numbers.value();
         let are_inputs_synced = SyncedInputState::as_ref(ctx)
             .should_sync_this_pane_group(tab.pane_group.id(), tab.pane_group.window_id(ctx));
 
@@ -913,6 +918,7 @@ impl<'a> TabComponent<'a> {
             title,
             has_custom_title: tab.pane_group.as_ref(ctx).custom_title(ctx).is_some(),
             tab_index,
+            show_tab_number,
             styles: TabStyles::default(appearance, tab.color()),
             ui_builder: appearance.ui_builder().clone(),
             indicator,
@@ -1133,8 +1139,15 @@ impl<'a> TabComponent<'a> {
             )
             .finish()
         } else {
+            // Optionally prefix the title with the tab's 1-based position so the
+            // Cmd+1..9 switch shortcuts are discoverable at a glance.
+            let title = if self.show_tab_number {
+                format!("{}  {}", self.tab_index + 1, self.title)
+            } else {
+                self.title.clone()
+            };
             Text::new_inline(
-                self.title.clone(),
+                title,
                 self.styles
                     .default
                     .font_family_id
