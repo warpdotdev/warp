@@ -657,11 +657,13 @@ pub fn run() -> Result<()> {
                 // It only needs logging to stderr since stdout is the protocol
                 // channel. No crash reporting, no initialize_app.
                 let launch_mode = LaunchMode::RemoteServerProxy;
+                let mut tracing_initialization = tracing::init()?;
                 warp_logging::init(warp_logging::LogConfig {
                     is_cli: true,
                     log_destination: launch_mode.log_destination(),
                     ..Default::default()
                 })?;
+                tracing_initialization.log_initialization_warning();
                 return crate::remote_server::run_proxy(args.identity_key.clone());
             }
             #[cfg(not(target_family = "wasm"))]
@@ -789,9 +791,10 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         sentry::Hub::main();
     }
 
-    if launch_mode.needs_profiling() {
-        tracing::init()?;
-    }
+    let mut tracing_initialization = launch_mode
+        .needs_profiling()
+        .then(tracing::init)
+        .transpose()?;
 
     let log_destination = launch_mode.log_destination();
     let is_cli = log_destination.is_some();
@@ -816,6 +819,9 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         }
     }
 
+    if let Some(initialization) = tracing_initialization.as_mut() {
+        initialization.log_initialization_warning();
+    }
     timer.mark_interval_end("LOG_FILE_SETUP_COMPLETE");
 
     #[cfg(windows)]
@@ -825,14 +831,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     // any children we spawn (like the terminal server) inherit our adjusted
     // rlimits.
     resource_limits::adjust_resource_limits();
-
-    // Configure rustls to use its default crypto provider.  This MUST be called
-    // before making any network requests that use TLS, otherwise rustls will
-    // panic.
-    #[cfg(not(target_family = "wasm"))]
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("must be able to initialize crypto provider for TLS support");
 
     // For wasm builds we have this special case to parse out the intent
     // from the url that is used to visite the app on web.
