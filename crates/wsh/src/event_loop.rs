@@ -78,6 +78,7 @@ impl Mode {
 
 // ── Agent subprocess ─────────────────────────────────────────────────
 
+#[allow(clippy::disallowed_types)]
 fn resolve_agent_binary() -> String {
     if let Ok(bin) = env::var("WSH_AGENT_BINARY") {
         return bin;

@@ -54,8 +54,6 @@ pub fn leave_alt_screen() -> anyhow::Result<()> {
 struct Layout {
     scrollback_height: usize,
     active_height: usize,
-    agent_input_row: Option<u16>,
-    agent_status_row: Option<u16>,
     status_bar_row: u16,
 }
 
@@ -80,25 +78,9 @@ fn compute_layout(frame: &Frame) -> Layout {
 
     let status_bar_row = (total - 1) as u16;
 
-    // Agent status/input render inline, immediately after scrollback.
-    let after_content = scrollback_height + active_height;
-    let agent_status_row = if has_status {
-        Some(after_content as u16)
-    } else {
-        None
-    };
-    let agent_input_row = if has_input {
-        let row = after_content + if has_status { 1 } else { 0 };
-        Some(row as u16)
-    } else {
-        None
-    };
-
     Layout {
         scrollback_height,
         active_height,
-        agent_input_row,
-        agent_status_row,
         status_bar_row,
     }
 }
@@ -137,21 +119,19 @@ pub fn render(frame: &Frame) -> anyhow::Result<()> {
         } else {
             render_blank_row(&mut stdout, cols)?;
         }
+        next_row += 1;
     }
 
-    // --- Agent status (ephemeral) ---
-    if let (Some(status_row), Some(status_text)) =
-        (layout.agent_status_row, frame.agent_status)
-    {
-        queue!(stdout, cursor::MoveTo(0, status_row))?;
+    // --- Agent status (ephemeral, inline after content) ---
+    if let Some(status_text) = frame.agent_status {
+        queue!(stdout, cursor::MoveTo(0, next_row))?;
         render_agent_status(&mut stdout, status_text, cols)?;
+        next_row += 1;
     }
 
-    // --- Agent input line ---
-    if let (Some(input_row), Some((buf, cursor_pos))) =
-        (layout.agent_input_row, frame.agent_input)
-    {
-        queue!(stdout, cursor::MoveTo(0, input_row))?;
+    // --- Agent input line (inline after content) ---
+    if let Some((buf, cursor_pos)) = frame.agent_input {
+        queue!(stdout, cursor::MoveTo(0, next_row))?;
         render_agent_input(&mut stdout, buf, cursor_pos, cols)?;
     }
 
@@ -416,7 +396,6 @@ mod tests {
         assert_eq!(layout.active_height, 1);
         assert_eq!(layout.scrollback_height, 22);
         assert_eq!(layout.status_bar_row, 23);
-        assert!(layout.agent_input_row.is_none());
     }
 
     #[test]
@@ -441,8 +420,6 @@ mod tests {
         // active hidden when agent_input present; usable = 22, all scrollback
         assert_eq!(layout.active_height, 0);
         assert_eq!(layout.scrollback_height, 22);
-        // agent_input inline right after scrollback
-        assert_eq!(layout.agent_input_row, Some(22));
         assert_eq!(layout.status_bar_row, 23);
     }
 
@@ -515,7 +492,6 @@ mod tests {
         // usable = 3 - 1(status) - 1(input) = 1, active hidden
         assert_eq!(layout.active_height, 0);
         assert_eq!(layout.scrollback_height, 1);
-        assert_eq!(layout.agent_input_row, Some(1));
     }
 
     #[test]
@@ -540,8 +516,6 @@ mod tests {
         // active hidden; usable = 22, all scrollback
         assert_eq!(layout.active_height, 0);
         assert_eq!(layout.scrollback_height, 22);
-        assert_eq!(layout.agent_status_row, Some(22));
-        assert!(layout.agent_input_row.is_none());
         assert_eq!(layout.status_bar_row, 23);
     }
 
