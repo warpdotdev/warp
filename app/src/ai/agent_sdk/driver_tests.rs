@@ -853,7 +853,7 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
 
         let skill_names = SkillManager::handle(&app).read(&app, |manager: &SkillManager, ctx| {
             manager
-                .get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
+                .get_skills_for_working_directory(None, ctx)
                 .into_iter()
                 .map(|s| s.name.clone())
                 .collect::<Vec<_>>()

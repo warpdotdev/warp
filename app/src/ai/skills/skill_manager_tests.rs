@@ -253,7 +253,6 @@ fn get_skills_for_working_directory_name_collision_returns_both() {
         let skills = skill_manager_handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(
                 Some(&LocalOrRemotePath::Local(repo.clone())),
-                SkillPathScope::Local,
                 ctx,
             )
         });
@@ -642,7 +641,7 @@ fn get_skills_for_working_directory_respects_location() {
             manager.is_cloud_environment = true;
         });
         let cloud_skills = handle.read(&app, |manager, ctx| {
-            manager.get_skills_for_working_directory(None, SkillPathScope::Local, ctx)
+            manager.get_skills_for_working_directory(None, ctx)
         });
         let cloud_names: HashSet<_> = cloud_skills
             .iter()
