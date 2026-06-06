@@ -107,33 +107,23 @@ pub fn render(frame: &Frame) -> anyhow::Result<()> {
 
     queue!(stdout, terminal::Clear(ClearType::All))?;
 
-    // --- Scrollback region ---
+    // --- Scrollback region (pinned to top) ---
+    let mut next_row: u16 = 0;
     if layout.scrollback_height > 0 && !frame.completed_rows.is_empty() {
         let total_completed = frame.completed_rows.len();
         let end = total_completed.saturating_sub(frame.scroll_offset);
         let start = end.saturating_sub(layout.scrollback_height);
         let visible = &frame.completed_rows[start..end];
 
-        for (i, row) in visible.iter().enumerate() {
-            queue!(stdout, cursor::MoveTo(0, i as u16))?;
+        for row in visible {
+            queue!(stdout, cursor::MoveTo(0, next_row))?;
             render_cell_row(&mut stdout, row, cols)?;
-        }
-
-        // Blank any remaining scrollback lines
-        let rendered = visible.len();
-        for i in rendered..layout.scrollback_height {
-            queue!(stdout, cursor::MoveTo(0, i as u16))?;
-            render_blank_row(&mut stdout, cols)?;
-        }
-    } else {
-        for i in 0..layout.scrollback_height {
-            queue!(stdout, cursor::MoveTo(0, i as u16))?;
-            render_blank_row(&mut stdout, cols)?;
+            next_row += 1;
         }
     }
 
-    // --- Active block region ---
-    let active_start_row = layout.scrollback_height as u16;
+    // --- Active block region (immediately after scrollback) ---
+    let active_start_row = next_row;
     let grid_offset = (frame.active_cursor.0 + 1).saturating_sub(layout.active_height);
     for i in 0..layout.active_height {
         let screen_row = active_start_row + i as u16;
