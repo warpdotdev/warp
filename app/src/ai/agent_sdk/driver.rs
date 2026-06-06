@@ -546,6 +546,12 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
 }
 
 impl AgentDriver {
+    #[tracing::instrument(skip_all, err, fields(
+        tags.cloud_agent = true,
+        task_id = ?options.task_id,
+        parent_run_id = ?options.parent_run_id,
+        is_sandbox = tracing::field::Empty,
+    ))]
     pub fn new(
         options: AgentDriverOptions,
         ctx: &mut ModelContext<Self>,
@@ -626,6 +632,7 @@ impl AgentDriver {
         // so they allow root execution with permissive flags.
         if warp_isolation_platform::detect().is_some() {
             env_vars.insert(OsString::from("IS_SANDBOX"), OsString::from("1"));
+            tracing::Span::current().record("is_sandbox", true);
         }
 
         let resolved_env_vars = Arc::new(env_vars);
@@ -1782,6 +1789,7 @@ impl AgentDriver {
     /// Driving the agent mostly requires main-thread UI framework updates, but using `async` and
     /// a `ModelSpawner` lets us express the high-level process linearly rather than in a
     /// series of callbacks and state machine updates.
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn run_internal(
         task: Task,
         foreground: ModelSpawner<Self>,
@@ -3278,6 +3286,11 @@ impl AgentDriver {
     ) {
         match event {
             TerminalDriverEvent::SlowBootstrap => {
+                tracing::event!(
+                    tracing::Level::WARN,
+                    tags.cloud_agent = true,
+                    "slow bootstrap"
+                );
                 eprintln!(
                     "Warning: Terminal session is slow to bootstrap. See https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#shells to troubleshoot."
                 );
@@ -3286,6 +3299,12 @@ impl AgentDriver {
                 session_id,
                 join_url,
             } => {
+                tracing::event!(
+                    tracing::Level::INFO,
+                    tags.cloud_agent = true,
+                    session_id = %*session_id,
+                    "shared session established",
+                );
                 write_session_joined(join_url, self.output_format);
 
                 // If running as part of a task, store the session-sharing link.
@@ -3369,6 +3388,7 @@ impl AgentDriver {
     /// Invoke the end-of-run snapshot upload pipeline if the feature flag is enabled and this
     /// driver is associated with a cloud task. Errors are logged internally; this helper always
     /// returns so cleanup can proceed.
+    #[tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
     async fn run_snapshot_upload(spawner: &ModelSpawner<Self>) {
         if !FeatureFlag::OzHandoff.is_enabled() {
             return;

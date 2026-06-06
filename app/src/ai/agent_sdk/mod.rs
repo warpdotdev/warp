@@ -13,6 +13,7 @@ pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHa
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
 use telemetry::CliTelemetryEvent;
+use tracing::Instrument as _;
 use warp_cli::agent::{
     AgentCommand, AgentProfileCommand, Harness, OutputFormat, Prompt, RunAgentArgs,
 };
@@ -594,6 +595,12 @@ impl warpui::Entity for AgentDriverRunner {
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
 impl AgentDriverRunner {
+    #[tracing::instrument(skip_all, err, fields(
+        tags.cloud_agent = true,
+        args.sandboxed = args.sandboxed,
+        args.computer_use = args.computer_use.computer_use,
+        args.no_computer_use = args.computer_use.no_computer_use
+    ))]
     async fn setup_and_run_driver(
         foreground: ModelSpawner<Self>,
         args: RunAgentArgs,
@@ -1305,6 +1312,7 @@ impl AgentDriverRunner {
     /// wraps the returned payload (if any) in [`driver::ResumeOptions::ThirdParty`]; each harness
     /// owns its server call and error mapping. Returns `None` if a third-party harness has no
     /// resume payload to surface.
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, conversation_id = conversation_id))]
     async fn load_conversation_information(
         foreground: &ModelSpawner<Self>,
         conversation_id: String,
@@ -1366,6 +1374,7 @@ impl AgentDriverRunner {
     }
 
     /// Resolve the environment and store into `driver_options`.
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, ?environment_id))]
     async fn resolve_environment(
         foreground: &ModelSpawner<Self>,
         environment_id: Option<String>,
@@ -1409,6 +1418,7 @@ impl AgentDriverRunner {
     }
 
     /// Create the AgentDriver and start running the task.
+    #[tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
     fn create_and_run_driver(
         ctx: &mut AppContext,
         driver_options: driver::AgentDriverOptions,
@@ -1429,7 +1439,9 @@ impl AgentDriverRunner {
             if let Some(share_requests) = share_requests {
                 driver.add_share_requests(share_requests, ctx);
             }
-            let agent_future = driver.run(task, ctx);
+            let span =
+                tracing::info_span!("run", tags.cloud_agent = true, ?task.model, ?task.harness);
+            let agent_future = driver.run(task, ctx).instrument(span);
 
             ctx.spawn(agent_future, |_, result, ctx| match result {
                 Ok(()) => {
@@ -1572,6 +1584,8 @@ fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
     for cause in err.chain().skip(1) {
         let _ = write!(&mut message, "\n=> {cause}");
     }
+
+    tracing::event!(tracing::Level::ERROR, tags.cloud_agent = true, message);
 
     #[cfg(not(target_family = "wasm"))]
     {
