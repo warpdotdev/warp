@@ -108,6 +108,36 @@ fn test_convert_conversation_data_to_ai_conversation_sets_restored_run_id() {
 }
 
 #[test]
+#[allow(deprecated)]
+fn test_convert_conversation_data_uses_root_task_description_title() {
+    let conversation_id = AIConversationId::new();
+    let conversation_data = api::ConversationData {
+        tasks: vec![api::Task {
+            id: "root".to_string(),
+            messages: vec![],
+            dependencies: None,
+            description: "Stored root task title".to_string(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+        ordered_message_ids: vec![],
+    };
+
+    let conversation = convert_conversation_data_to_ai_conversation(
+        conversation_id,
+        &conversation_data,
+        test_server_metadata("server-token", None),
+        RestorationMode::Continue,
+    )
+    .expect("conversation should restore");
+
+    assert_eq!(
+        conversation.title().as_deref(),
+        Some("Stored root task title"),
+    );
+}
+
+#[test]
 fn test_convert_tool_call_result_to_input_transfer_control_snapshot() {
     let task_id = crate::ai::agent::task::TaskId::new("task".to_string());
     let mut document_versions = HashMap::new();

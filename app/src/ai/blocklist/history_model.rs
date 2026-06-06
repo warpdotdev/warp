@@ -523,6 +523,7 @@ impl BlocklistAIHistoryModel {
         let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) else {
             return;
         };
+        metadata.title = conversation.title().unwrap_or_default();
 
         metadata.server_conversation_token = conversation.server_conversation_token().cloned();
         if metadata.server_conversation_token.is_some() {
@@ -532,6 +533,36 @@ impl BlocklistAIHistoryModel {
             metadata.server_conversation_metadata = Some(server_metadata.clone());
             metadata.has_cloud_data = true;
         }
+    }
+
+    /// Applies a server-confirmed title to the local root task description.
+    pub fn rename_conversation_after_server_success(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), UpdateHistoryError> {
+        let terminal_view_id = self.terminal_view_id_for_conversation(&conversation_id);
+        {
+            let conversation = self
+                .conversations_by_id
+                .get_mut(&conversation_id)
+                .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
+            conversation.update_root_task_description(title.clone(), ctx);
+        }
+
+        if let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) {
+            metadata.title = title.clone();
+            if let Some(server_metadata) = metadata.server_conversation_metadata.as_mut() {
+                server_metadata.title = title;
+            }
+        }
+
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+            terminal_view_id,
+            conversation_id,
+        });
+        Ok(())
     }
     pub fn mark_conversation_as_remote_child(
         &mut self,

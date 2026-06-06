@@ -1536,6 +1536,33 @@ impl AgentConversationsModel {
                     conversation_id: *conversation_id,
                 });
             }
+            BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                conversation_id, ..
+            } => {
+                let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                let title = history_model
+                    .conversation(conversation_id)
+                    .and_then(|conversation| conversation.title())
+                    .or_else(|| {
+                        history_model
+                            .get_conversation_metadata(conversation_id)
+                            .map(|metadata| metadata.title.clone())
+                    });
+
+                if let Some(title) = title {
+                    for task in self.tasks.values_mut() {
+                        if entry::conversation_id_shadowed_by_task(task, history_model)
+                            == Some(*conversation_id)
+                        {
+                            task.title = title.clone();
+                        }
+                    }
+                }
+
+                ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
+                    kind: ConversationUpdateKind::MetadataChanged,
+                });
+            }
 
             // Task/exchange-level changes that don't affect conversation navigation.
             BlocklistAIHistoryEvent::CreatedSubtask { .. }
@@ -1543,7 +1570,6 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::ReassignedExchange { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             // UpdatedStreamingExchange covers streaming and other exchange-level updates but
             // doesn't change any ConversationNavigationData fields (title comes from
             // UpdateTaskDescription, last_updated uses exchange.start_time which is set at append time).

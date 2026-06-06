@@ -1455,21 +1455,32 @@ impl AIConversation {
         self.task_store.latest_skills()
     }
 
-    /// Get the auto-generated title of the given conversation
-    /// (falling back to the first query if the title is empty).
     /// Get the title of the given conversation.
     /// Priority: auto-generated task description > initial query > fallback_display_title.
     pub fn title(&self) -> Option<String> {
         self.task_store
             .root_task()
             .and_then(|task| {
-                if task.description().is_empty() {
-                    self.initial_query()
-                } else {
-                    Some(task.description().to_owned())
-                }
+                (!task.description().is_empty())
+                    .then(|| task.description().to_owned())
+                    .or_else(|| self.initial_query())
             })
             .or_else(|| self.fallback_display_title.clone())
+    }
+
+    /// Updates the canonical root-task title and persists the conversation.
+    pub fn update_root_task_description(
+        &mut self,
+        description: String,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) {
+        let description_for_metadata = description.clone();
+        self.task_store
+            .modify_root_task(|root_task| root_task.update_description(description));
+        if let Some(metadata) = self.server_metadata.as_mut() {
+            metadata.title = description_for_metadata;
+        }
+        self.write_updated_conversation_state(ctx);
     }
 
     /// Set a fallback title used when no task description or initial query exists.

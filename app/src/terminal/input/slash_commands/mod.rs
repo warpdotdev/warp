@@ -44,6 +44,7 @@ use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND
 use crate::search::slash_command_menu::static_commands::Availability;
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::SlashCommandAcceptedDetails;
 use crate::settings::AISettings;
 use crate::tab::SelectedTabColor;
@@ -146,6 +147,26 @@ fn open_file_command_path(
         });
 
     (file_path, parsed_path.line_and_column_num)
+}
+
+const RENAME_CONVERSATION_TITLE_MAX_CHARS: usize = 500;
+
+#[derive(Debug, PartialEq, Eq)]
+enum RenameConversationTitleError {
+    Missing,
+    TooLong,
+}
+
+fn normalize_rename_conversation_title(
+    argument: Option<&str>,
+) -> Result<String, RenameConversationTitleError> {
+    let Some(title) = argument.map(str::trim).filter(|title| !title.is_empty()) else {
+        return Err(RenameConversationTitleError::Missing);
+    };
+    if title.chars().count() > RENAME_CONVERSATION_TITLE_MAX_CHARS {
+        return Err(RenameConversationTitleError::TooLong);
+    }
+    Ok(title.to_owned())
 }
 
 impl Input {
@@ -503,6 +524,108 @@ impl Input {
                 };
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
+            }
+            rename_conversation if command.name == commands::RENAME_CONVERSATION.name => {
+                let title = match normalize_rename_conversation_title(argument.map(String::as_str))
+                {
+                    Ok(title) => title,
+                    Err(RenameConversationTitleError::Missing) => {
+                        show_error_toast(
+                            "Please provide a title after /rename-conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
+                    Err(RenameConversationTitleError::TooLong) => {
+                        show_error_toast(
+                                format!(
+                                    "Conversation title must be {RENAME_CONVERSATION_TITLE_MAX_CHARS} characters or fewer",
+                                ),
+                                ctx,
+                            );
+                        return true;
+                    }
+                };
+
+                let Some(conversation_id) = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                else {
+                    show_error_toast(
+                        "/rename-conversation requires an active conversation".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+
+                let history = BlocklistAIHistoryModel::handle(ctx);
+                let Some(server_conversation_id) = history
+                    .as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| {
+                        conversation
+                            .server_conversation_token()
+                            .map(|token| token.as_str().to_owned())
+                    })
+                else {
+                    show_error_toast(
+                        "Cannot rename conversation until it has synced with the server".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+
+                let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
+                ctx.spawn(
+                    async move {
+                        server_api
+                            .rename_conversation(server_conversation_id, title)
+                            .await
+                    },
+                    move |_input, result, ctx| match result {
+                        Ok(response) => {
+                            let renamed = BlocklistAIHistoryModel::handle(ctx).update(
+                                ctx,
+                                |history, ctx| {
+                                    history.rename_conversation_after_server_success(
+                                        conversation_id,
+                                        response.title,
+                                        ctx,
+                                    )
+                                },
+                            );
+                            match renamed {
+                                Ok(()) => {
+                                    let window_id = ctx.window_id();
+                                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                        toast_stack.add_ephemeral_toast(
+                                            DismissibleToast::default(
+                                                "Conversation renamed".to_owned(),
+                                            ),
+                                            window_id,
+                                            ctx,
+                                        );
+                                    });
+                                }
+                                Err(e) => {
+                                    show_error_toast(
+                                        format!(
+                                            "Conversation was renamed, but the local title could not be updated: {e}",
+                                        ),
+                                        ctx,
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            show_error_toast(
+                                format!("Failed to rename conversation: {e}"),
+                                ctx,
+                            );
+                        }
+                    },
+                );
             }
             set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
                 let supported_options = || {
