@@ -194,7 +194,7 @@ fn persisted_index_restore_starts_on_startup_by_default() {
         });
 
         manager.read(&app, |manager, _| {
-            assert!(manager.persisted_index_restore_started);
+            assert!(manager.build_queue.is_running());
         });
     });
 }
@@ -233,11 +233,11 @@ fn deferred_persisted_index_restore_starts_once() {
         });
 
         manager.update(&mut app, |manager, ctx| {
-            assert!(!manager.persisted_index_restore_started);
+            assert!(!manager.build_queue.is_running());
             assert_eq!(manager.build_queue.queued_metadata().into_iter().count(), 2);
 
             manager.start_persisted_index_restore(ctx);
-            assert!(manager.persisted_index_restore_started);
+            assert!(manager.build_queue.is_running());
             assert_eq!(manager.build_queue.queued_metadata().into_iter().count(), 1);
 
             manager.start_persisted_index_restore(ctx);

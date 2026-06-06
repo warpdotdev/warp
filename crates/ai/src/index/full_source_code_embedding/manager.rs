@@ -295,8 +295,6 @@ pub struct CodebaseIndexManager {
 
     build_queue: BuildQueue,
 
-    persisted_index_restore_started: bool,
-
     max_indices: Option<usize>,
 
     max_files_repo_limit: usize,
@@ -391,7 +389,6 @@ impl CodebaseIndexManager {
                 #[cfg(feature = "local_fs")]
                 watcher: file_watcher,
                 build_queue: BuildQueue::empty(),
-                persisted_index_restore_started: false,
                 max_indices: max_index_count,
                 max_files_repo_limit,
                 embedding_generation_batch_size,
@@ -427,7 +424,8 @@ impl CodebaseIndexManager {
         }
 
         // For the moment, we've decided to load all snapshots regardless of the index count.
-        let build_queue = BuildQueue::new_with_persisted(valid_metadata);
+        let build_queue =
+            BuildQueue::new_with_persisted(valid_metadata, restore_persisted_indices_on_startup);
 
         let mut me = Self {
             codebase_indices: HashMap::new(),
@@ -436,7 +434,6 @@ impl CodebaseIndexManager {
             #[cfg(feature = "local_fs")]
             watcher: file_watcher,
             build_queue,
-            persisted_index_restore_started: false,
             max_indices: max_index_count,
             max_files_repo_limit,
             embedding_generation_batch_size,
@@ -445,9 +442,7 @@ impl CodebaseIndexManager {
             snapshot_storage,
         };
 
-        if restore_persisted_indices_on_startup {
-            me.start_persisted_index_restore(ctx);
-        }
+        me.start_next_queued_index(ctx);
 
         me
     }
@@ -463,7 +458,6 @@ impl CodebaseIndexManager {
             #[cfg(feature = "local_fs")]
             watcher: file_watcher,
             build_queue: BuildQueue::empty(),
-            persisted_index_restore_started: true,
             max_indices: None,
             max_files_repo_limit: 0,
             embedding_generation_batch_size: 100,
@@ -821,12 +815,12 @@ impl CodebaseIndexManager {
     }
 
     pub fn start_persisted_index_restore(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.persisted_index_restore_started || !self.is_indexing_enabled() {
+        if !self.is_indexing_enabled() {
             return;
         }
-
-        self.persisted_index_restore_started = true;
-        self.start_next_queued_index(ctx);
+        if self.build_queue.start() {
+            self.start_next_queued_index(ctx);
+        }
     }
 
     pub fn index_directory(&mut self, directory: PathBuf, ctx: &mut ModelContext<Self>) -> bool {
@@ -1125,10 +1119,6 @@ impl CodebaseIndexManager {
     }
 
     fn start_next_queued_index(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.persisted_index_restore_started {
-            return;
-        }
-
         if let Some(next_repo) = self.build_queue.pick_next_sync() {
             self.build_and_sync_codebase_index(BuildSource::FromPersistedMetadata(next_repo), ctx);
         }
