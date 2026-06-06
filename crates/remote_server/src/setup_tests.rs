@@ -367,6 +367,80 @@ fn install_script_avoids_pattern_substitution_for_tilde_expansion() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn install_script_installs_packaged_lib_directory() {
+    use command::blocking::Command;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Stdio;
+
+    fn replace_home(path: &str, home: &Path) -> PathBuf {
+        PathBuf::from(path.replacen('~', home.to_str().unwrap(), 1))
+    }
+
+    let root = std::env::temp_dir().join(format!(
+        "warp-install-script-lib-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let home = root.join("home");
+    let payload = root.join("payload");
+    fs::create_dir_all(payload.join("lib")).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    fs::write(payload.join("oz-fixture"), "#!/bin/sh\nprintf 'fixture'\n").unwrap();
+    fs::write(payload.join("lib/libswiftCore.dylib"), "swift core fixture").unwrap();
+
+    let tarball = root.join("oz.tar.gz");
+    let tar_output = Command::new("tar")
+        .arg("-czf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&payload)
+        .arg(".")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to create test tarball");
+    assert!(
+        tar_output.status.success(),
+        "tar exited with {:?}: stderr={}",
+        tar_output.status,
+        String::from_utf8_lossy(&tar_output.stderr),
+    );
+
+    let bash = if Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "bash"
+    };
+    let script = install_script(Some(tarball.to_str().unwrap()));
+    let output = Command::new(bash)
+        .arg("-c")
+        .arg(script)
+        .env("HOME", &home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run install script");
+    assert!(
+        output.status.success(),
+        "install script exited with {:?}: stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let installed_binary = replace_home(&remote_server_binary(), &home);
+    let installed_dir = replace_home(&remote_server_dir(), &home);
+    assert!(installed_binary.is_file());
+    assert_eq!(
+        fs::read_to_string(installed_dir.join("lib/libswiftCore.dylib")).unwrap(),
+        "swift core fixture",
+    );
+    assert!(!installed_dir.join("lib.tmp").exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn version_hash_is_deterministic() {
     // version_hash uses the compile-time GIT_RELEASE_TAG which is typically

@@ -92,6 +92,106 @@ function relpath() {
   python -c "import os,sys;print(os.path.relpath(*(sys.argv[1:])))" "$@";
 }
 
+function cli_binary_has_rpath() {
+  local binary_path="$1"
+  local rpath="$2"
+
+  otool -l "$binary_path" | grep -A2 "LC_RPATH" | grep -q "path $rpath "
+}
+
+function add_cli_distribution_rpath() {
+  local binary_path="$1"
+  local rpath="@executable_path/lib"
+
+  if cli_binary_has_rpath "$binary_path" "$rpath"; then
+    echo "$binary_path already has LC_RPATH $rpath"
+  else
+    echo "Adding LC_RPATH $rpath to $binary_path"
+    install_name_tool -add_rpath "$rpath" "$binary_path"
+  fi
+}
+
+function copy_cli_swift_runtime_libraries() {
+  local binary_path="$1"
+  local lib_dir="$2"
+  local tmp_lib_dir="$lib_dir.tmp"
+  local swift_toolchain
+  local swift_stdlib_args
+
+  echo "Copying required Swift runtime dylibs for $binary_path"
+  rm -rf "$lib_dir" "$tmp_lib_dir"
+  mkdir -p "$tmp_lib_dir"
+  swift_stdlib_args=(
+    --copy
+    --scan-executable "$binary_path"
+    --destination "$tmp_lib_dir"
+    --platform macosx
+  )
+
+  swift_toolchain="$(xcrun --find swiftc)"
+  if [[ "$swift_toolchain" == */Toolchains/*.xctoolchain/usr/bin/swiftc ]]; then
+    swift_toolchain="${swift_toolchain%/usr/bin/swiftc}"
+    swift_stdlib_args+=(--toolchain "$swift_toolchain")
+  fi
+
+  xcrun swift-stdlib-tool "${swift_stdlib_args[@]}"
+
+  if find "$tmp_lib_dir" -type f -name 'libswift*.dylib' | grep -q .; then
+    mv "$tmp_lib_dir" "$lib_dir"
+    echo "Copied Swift runtime dylibs into $lib_dir"
+  else
+    echo "No Swift runtime dylibs are required for $binary_path"
+    rm -rf "$tmp_lib_dir"
+  fi
+}
+
+function validate_cli_distribution_linkage() {
+  local binary_path="$1"
+  local lib_dir="$2"
+
+  echo "Validating CLI binary linkage for $binary_path"
+  otool -L "$binary_path"
+  otool -l "$binary_path" | awk '
+    /LC_RPATH/ { in_rpath = 1 }
+    in_rpath && /path / { print; in_rpath = 0 }
+  '
+
+  if otool -L "$binary_path" | grep -q '@rpath/libswift'; then
+    if ! cli_binary_has_rpath "$binary_path" "@executable_path/lib"; then
+      echo "error: CLI binary references @rpath/libswift* but is missing LC_RPATH @executable_path/lib." >&2
+      exit 1
+    fi
+    if [[ ! -d "$lib_dir" ]] || ! find "$lib_dir" -type f -name 'libswift*.dylib' | grep -q .; then
+      echo "error: CLI binary references @rpath/libswift* but no Swift runtime dylibs were copied into $lib_dir." >&2
+      exit 1
+    fi
+  fi
+
+  if otool -L "$binary_path" | grep -E -q '/(Applications/Xcode|Library/Developer/CommandLineTools|Toolchains)/.*libswift'; then
+    echo "error: CLI binary references absolute Xcode/toolchain Swift library paths." >&2
+    exit 1
+  fi
+}
+
+function codesign_cli_libs() {
+  local lib_dir="$1"
+  local signing_cert="$2"
+  local timestamp_arg="${3:-}"
+
+  if [[ ! -d "$lib_dir" ]]; then
+    return
+  fi
+
+  find "$lib_dir" -type f -name '*.dylib' -print0 | while IFS= read -r -d '' dylib; do
+    echo "Codesigning $dylib..."
+    if [[ -n "$timestamp_arg" ]]; then
+      codesign -f -o runtime --timestamp -s "$signing_cert" "$dylib"
+    else
+      codesign --force --options runtime --sign "$signing_cert" "$dylib"
+    fi
+  done
+}
+
 # Defaults for command-line flags.
 UNIVERSAL_BINARY=true
 BUILD_BINARY=true
@@ -589,6 +689,11 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
 
   echo "Copying binary into $OUT_DIR/$WARP_BIN"
   cp "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN" "$OUT_DIR/$WARP_BIN"
+  add_cli_distribution_rpath "$OUT_DIR/$WARP_BIN"
+
+  CLI_LIB_DIR="$OUT_DIR/lib"
+  copy_cli_swift_runtime_libraries "$OUT_DIR/$WARP_BIN" "$CLI_LIB_DIR"
+  validate_cli_distribution_linkage "$OUT_DIR/$WARP_BIN" "$CLI_LIB_DIR"
 
   if [[ -n "$TARGET_ARCH" && -e "target/$DEFAULT_TARGET/$TARGET_PROFILE_DIR/$WARP_BIN.dSYM" ]]; then
     echo "Copying .dSYM into $OUT_DIR/$WARP_BIN.dSYM"
@@ -669,6 +774,7 @@ if [[ $SELFSIGN = true ]]; then
     echo "Self-signing $BUNDLE_DIR/$WARP_APP_NAME.app with ${SIGNING_CERT}..."
     codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Debug-Entitlements.plist
   elif [[ "$ARTIFACT" == cli ]]; then
+    codesign_cli_libs "$OUT_DIR/lib" "$SIGNING_CERT"
     echo "Self-signing $OUT_DIR/$WARP_BIN with ${SIGNING_CERT}..."
     codesign --force --options runtime --sign "$SIGNING_CERT" "$OUT_DIR/$WARP_BIN" --entitlements script/Debug-Entitlements.plist
   fi
@@ -678,19 +784,34 @@ elif [[ $CODESIGN = true ]]; then
     # Use --deep so we sign bundled frameworks as well
     codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Entitlements.plist
   elif [[ "$ARTIFACT" == cli ]]; then
+    codesign_cli_libs "$OUT_DIR/lib" "$APPLE_TEAM_ID" "--timestamp"
     echo "Codesigning $OUT_DIR/$WARP_BIN..."
     codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$WARP_BIN" --entitlements script/Entitlements.plist
-
     # Create the .zip for notarization in a separate location - otherwise, Apple's codesigning
     # tools decide that it's a sealed resource that belongs to the binary and needs to also be signed.
+    # Notarize the complete standalone CLI distribution layout, including the adjacent Swift
+    # runtime dylibs and resources, so Apple validates the same layout we ship in the tarball.
+    NOTARIZATION_STAGING_DIR="$BUNDLE_DIR/${WARP_BIN}_notarize"
     NOTARIZATION_ARTIFACT="$BUNDLE_DIR/${WARP_BIN}_notarize.zip"
+    if [[ -e "$NOTARIZATION_STAGING_DIR" ]]; then
+      echo "Removing old notarization staging directory..."
+      rm -rf "$NOTARIZATION_STAGING_DIR"
+    fi
     if [[ -e "$NOTARIZATION_ARTIFACT" ]]; then
       echo "Removing old notarization artifact..."
       rm "$NOTARIZATION_ARTIFACT"
     fi
+    mkdir -p "$NOTARIZATION_STAGING_DIR"
+    cp "$OUT_DIR/$WARP_BIN" "$NOTARIZATION_STAGING_DIR/"
+    if [[ -d "$OUT_DIR/lib" ]]; then
+      cp -R "$OUT_DIR/lib" "$NOTARIZATION_STAGING_DIR/"
+    fi
+    if [[ -d "$OUT_DIR/resources" ]]; then
+      cp -R "$OUT_DIR/resources" "$NOTARIZATION_STAGING_DIR/"
+    fi
 
     # Create a .zip archive to notarize.
-    ditto -c -k "$OUT_DIR/$WARP_BIN" "$NOTARIZATION_ARTIFACT"
+    ditto -c -k --keepParent "$NOTARIZATION_STAGING_DIR" "$NOTARIZATION_ARTIFACT"
     
     # It's not possible to staple notarization tickets to standalone binaries:
     # https://developer.apple.com/documentation/security/customizing-the-notarization-workflow?language=objc#Staple-the-ticket-to-your-distribution
@@ -841,6 +962,10 @@ if [ "${GITHUB_ACTIONS}" == "true" ]; then
 
   if [[ -n "$BUNDLED_RESOURCES_DIR" ]]; then
     echo "bundled_resources_dir=$BUNDLED_RESOURCES_DIR" >> "$GITHUB_OUTPUT"
+  fi
+
+  if [[ -n "$CLI_LIB_DIR" && -d "$CLI_LIB_DIR" ]]; then
+    echo "cli_lib_dir=$CLI_LIB_DIR" >> "$GITHUB_OUTPUT"
   fi
   
   echo "::echo::off"

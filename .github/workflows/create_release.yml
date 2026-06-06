@@ -463,8 +463,29 @@ jobs:
 
       - name: Package CLI binary
         run: |
-          mv ${{ steps.bundle_cli.outputs.binary_path }} oz-${{ steps.get-config.outputs.channel }}
-          tar czf oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz oz-${{ steps.get-config.outputs.channel }} -C "$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")" resources
+          bundle_dir="$(dirname "${{ steps.bundle_cli.outputs.bundled_resources_dir }}")"
+          mv "${{ steps.bundle_cli.outputs.binary_path }}" oz-${{ steps.get-config.outputs.channel }}
+          tar_args=(oz-${{ steps.get-config.outputs.channel }} -C "$bundle_dir" resources)
+          if [[ -d "$bundle_dir/lib" ]]; then
+            tar_args+=(-C "$bundle_dir" lib)
+          fi
+          tar czf oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz "${tar_args[@]}"
+        shell: bash
+
+      - name: Validate CLI tarball launch layout
+        run: |
+          tarball="oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz"
+          tar tzf "$tarball"
+
+          if otool -L oz-${{ steps.get-config.outputs.channel }} | grep -q '@rpath/libswift'; then
+            otool -l oz-${{ steps.get-config.outputs.channel }} | grep -A2 LC_RPATH
+            tar tzf "$tarball" | grep -E '^lib/libswift.*\.dylib$'
+          fi
+
+          verify_dir="$(mktemp -d)"
+          tar xzf "$tarball" -C "$verify_dir"
+          "$verify_dir/oz-${{ steps.get-config.outputs.channel }}" --version
+        shell: bash
 
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}

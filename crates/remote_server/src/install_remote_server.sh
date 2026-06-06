@@ -82,4 +82,10 @@ tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' | head -n1)
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
 chmod +x "$bin"
+if [ -d "$tmpdir/lib" ]; then
+  rm -rf "$install_dir/lib.tmp"
+  cp -R "$tmpdir/lib" "$install_dir/lib.tmp"
+  rm -rf "$install_dir/lib"
+  mv "$install_dir/lib.tmp" "$install_dir/lib"
+fi
 mv "$bin" "$install_dir/{binary_name}{version_suffix}"
