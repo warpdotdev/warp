@@ -5123,10 +5123,6 @@ impl TerminalView {
 
             let mut finish_reason: Option<FinishReason> = None;
             if let Some(active_ai_block) = self.active_ai_block(ctx) {
-                // Focus the block so that the user can interact
-                // with any blocking actions (if any).
-                self.focus_ai_block_if_self_focused(active_ai_block, ctx);
-
                 // A new exchange is already active, so callbacks for the
                 // just-finished exchange will be skipped. Clear any pending
                 // user query now to prevent its callback from firing when
