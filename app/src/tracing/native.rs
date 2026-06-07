@@ -1,3 +1,42 @@
+//! Configures opt-in OpenTelemetry export for cloud-agent traces on native platforms.
+//!
+//! The global `tracing` subscriber observes the whole application, while
+//! [`CloudAgentSpanExporter`] limits OTLP export to spans explicitly marked with
+//! [`CLOUD_AGENT_MARKER`]. Keeping this selection at the exporter boundary lets callers use the
+//! normal `tracing` macros and propagation machinery without installing a second subscriber or
+//! coupling generic task executors to cloud-agent tracing.
+//!
+//! # Why spans must be ended during shutdown
+//!
+//! An OpenTelemetry span is submitted to a span processor only after it ends. Shutting down an
+//! [`SdkTracerProvider`] flushes spans that have already reached its processors, but it does not end
+//! spans that are still active. Some `tracing::Span` references are intentionally propagated into
+//! asynchronous task machinery and can therefore remain alive when the application terminates.
+//! Shutting down the provider before those spans end would silently discard them.
+//!
+//! [`ShutdownAwareTracer`] and [`ShutdownAwareSpan`] wrap the SDK tracer and spans used by
+//! `tracing-opentelemetry`. This keeps existing `tracing` instrumentation unchanged while allowing
+//! [`ActiveSpanRegistry`] to explicitly end every started SDK span before shutting down the
+//! provider. The application retains [`Initialization`] in its termination callback so this
+//! ordering happens before platforms that terminate the process without running Rust destructors;
+//! [`Initialization`]'s `Drop` implementation remains a fallback for ordinary returns.
+//!
+//! # Span ownership and synchronization
+//!
+//! `tracing-opentelemetry` creates SDK spans lazily, when a `tracing` span is first activated.
+//! Every SDK span that reaches [`ShutdownAwareTracer::build_with_context`] is wrapped in an
+//! `Arc<Mutex<_>>` and weakly registered. The wrapper remains the span's owner; the registry uses
+//! weak references so tracking does not extend normal span lifetimes. A `tracing` span that is
+//! never activated never creates an SDK span and therefore has nothing for this registry to end.
+//!
+//! Span creation and shutdown are serialized by the registry-state mutex. Shutdown keeps that
+//! mutex locked while it ends active spans and shuts down the provider, preventing a span from
+//! being created in the otherwise-dangerous gap between those operations. The lock order is
+//! always registry state followed by an individual SDK span. Normal span operations lock only the
+//! individual SDK span and never attempt to lock the registry. Mutex acquisition recovers poisoned
+//! inner values because trace export and shutdown are best-effort cleanup that should continue
+//! after an unrelated panic.
+
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
@@ -23,11 +62,23 @@ use super::Initialization;
 use crate::channel::ChannelState;
 use crate::tracing::install_no_subscriber;
 
+/// The tag used to mark spans related to cloud agents, which we use to filter out
+/// spans we don't care about (e.g.: ones from dependencies).
 const CLOUD_AGENT_MARKER: &str = "tags.cloud_agent";
+/// The environment variable used to configure the cloud agent OTLP endpoint.
 const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
+/// The environment variable used to configure the OTel service name.
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 
+/// Installs the native tracing subscriber and optional cloud-agent OTLP exporter.
+///
+/// Export is deliberately opt-in through [`CLOUD_AGENT_OTLP_ENDPOINT`]. When the endpoint is
+/// absent or the exporter cannot be constructed, a no-op subscriber is installed so tracing
+/// instrumentation remains safe without producing output or partially initializing export.
 pub fn init() -> anyhow::Result<Initialization> {
+    // INFO is the default because this is a global subscriber and DEBUG-level application spans
+    // would otherwise create substantial work even though only marked cloud-agent spans are
+    // exported. RUST_LOG can still override this when deeper tracing is needed.
     let env_filter = EnvFilter::builder()
         .with_default_directive(tracing::Level::INFO.into())
         .from_env_lossy();
@@ -70,6 +121,13 @@ pub fn init() -> anyhow::Result<Initialization> {
     })
 }
 
+/// Builds the SDK provider and its batch exporter.
+///
+/// A batch exporter keeps network export off instrumentation call sites. The provider is retained
+/// by [`Initialization`] so application termination can explicitly shut it down after active spans
+/// have been ended. Exported resources include Warp's version and channel alongside standard
+/// environment-detected OpenTelemetry attributes, with `OTEL_SERVICE_NAME` taking precedence over
+/// the default service name.
 fn build_provider(base_endpoint: &str) -> anyhow::Result<SdkTracerProvider> {
     let endpoint = traces_endpoint(base_endpoint)?;
     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -103,6 +161,10 @@ fn build_provider(base_endpoint: &str) -> anyhow::Result<SdkTracerProvider> {
         .build())
 }
 
+/// Converts the configured OTLP base URL into the HTTP/protobuf traces endpoint.
+///
+/// The configuration is treated as a base URL rather than a complete signal-specific URL, so any
+/// query or fragment is discarded before appending `v1/traces`.
 fn traces_endpoint(base_endpoint: &str) -> anyhow::Result<String> {
     let mut endpoint = Url::parse(base_endpoint).context("Invalid cloud-agent OTLP endpoint")?;
     if !matches!(endpoint.scheme(), "http" | "https") {
@@ -119,6 +181,7 @@ fn traces_endpoint(base_endpoint: &str) -> anyhow::Result<String> {
     Ok(endpoint.into())
 }
 
+/// Returns the export shutdown timeout using the standard OpenTelemetry environment variables.
 fn export_timeout() -> Duration {
     [
         "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
@@ -134,6 +197,10 @@ fn export_timeout() -> Duration {
     .unwrap_or(super::DEFAULT_EXPORT_TIMEOUT)
 }
 
+/// Tracks started SDK spans so they can be ended before provider shutdown.
+///
+/// This registry belongs beside the provider in [`Initialization`]. It stores only weak references
+/// so a span that ends normally can be dropped without first unregistering itself.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ActiveSpanRegistry {
     state: Arc<Mutex<ActiveSpanRegistryState>>,
@@ -141,11 +208,18 @@ pub(super) struct ActiveSpanRegistry {
 
 #[derive(Debug, Default)]
 struct ActiveSpanRegistryState {
+    /// Prevents new spans from remaining active after shutdown begins.
     shutting_down: bool,
+    /// Weak references avoid extending the lifetime of spans that end normally.
     spans: Vec<Weak<Mutex<SdkSpan>>>,
 }
 
 impl ActiveSpanRegistry {
+    /// Builds and registers an SDK span while excluding concurrent shutdown.
+    ///
+    /// `tracing-opentelemetry` calls this lazily when it activates a `tracing` span. If shutdown
+    /// has already begun, the newly built span is ended immediately rather than being allowed to
+    /// outlive the provider.
     fn build_span(
         &self,
         tracer: &SdkTracer,
@@ -159,6 +233,8 @@ impl ActiveSpanRegistry {
         if state.shutting_down {
             span.lock().unwrap_or_else(|err| err.into_inner()).end();
         } else {
+            // Dead weak references are pruned opportunistically to avoid requiring normal span
+            // completion to acquire the registry lock.
             state.spans.retain(|span| span.strong_count() > 0);
             state.spans.push(Arc::downgrade(&span));
         }
@@ -168,6 +244,11 @@ impl ActiveSpanRegistry {
         }
     }
 
+    /// Ends every registered span and then shuts down the provider.
+    ///
+    /// The registry lock intentionally remains held through provider shutdown. This guarantees
+    /// that every span built before shutdown is ended first and that no span can be built between
+    /// the final end call and the provider becoming unable to accept ended spans.
     pub(super) fn shutdown(
         &self,
         provider: &SdkTracerProvider,
@@ -188,6 +269,11 @@ impl ActiveSpanRegistry {
     }
 }
 
+/// Adapts [`SdkTracer`] so spans created by `tracing-opentelemetry` are registered for shutdown.
+///
+/// Wrapping the tracer, rather than the span processor, is necessary because processors receive
+/// only a temporary mutable reference in `on_start` and receive owned exportable data only after
+/// `on_end`. A processor therefore cannot retain handles to, or end, active spans during shutdown.
 #[derive(Clone, Debug)]
 struct ShutdownAwareTracer {
     inner: SdkTracer,
@@ -212,6 +298,12 @@ impl opentelemetry::trace::Tracer for ShutdownAwareTracer {
     }
 }
 
+/// Provides synchronized access to an SDK span shared with [`ActiveSpanRegistry`].
+///
+/// The immutable [`SpanContext`] is cached outside the mutex because the OpenTelemetry
+/// [`opentelemetry::trace::Span`] trait must return it by reference. All mutable SDK-span operations
+/// are forwarded through the mutex, allowing shutdown to end the same underlying span. Repeated
+/// end calls are harmless because SDK spans export only once.
 #[derive(Debug)]
 struct ShutdownAwareSpan {
     span_context: SpanContext,
@@ -283,6 +375,12 @@ impl opentelemetry::trace::Span for ShutdownAwareSpan {
     }
 }
 
+/// Restricts the shared tracing subscriber's output to explicitly marked cloud-agent spans.
+///
+/// Filtering here preserves normal parent/context propagation inside the application while
+/// ensuring unrelated application tracing is never sent to the configured cloud-agent endpoint.
+/// The marker is a per-span routing attribute rather than an inherited property, so every span
+/// intended for export must set it explicitly.
 #[derive(Debug)]
 struct CloudAgentSpanExporter {
     inner: opentelemetry_otlp::SpanExporter,
@@ -332,6 +430,8 @@ impl SpanExporter for CloudAgentSpanExporter {
     }
 }
 
+/// Removes unrelated spans and strips the internal routing marker from spans and events before
+/// export.
 fn filter_cloud_agent_span(mut span: SpanData) -> Option<SpanData> {
     let is_cloud_agent_span = span.attributes.iter().any(|attribute| {
         attribute.key.as_str() == CLOUD_AGENT_MARKER && attribute.value == Value::Bool(true)
