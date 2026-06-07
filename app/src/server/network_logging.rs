@@ -226,6 +226,11 @@ fn format_request_for_display(
         format!("URL: {url}"),
     ];
 
+    for (name, value) in request.headers() {
+        let value_str = value.to_str().unwrap_or("<binary>");
+        lines.push(format!("{name}: {value_str}"));
+    }
+
     if let Some(payload) = serialized_payload {
         lines.push(format!("Body: {payload}"));
     }
@@ -245,14 +250,20 @@ fn format_response_for_display(timestamp: &str, response: &reqwest::Response) ->
         .query()
         .map_or(String::new(), |query| format!("?{query}"));
 
-    [
+    let mut lines = vec![
         format!("[{timestamp}] Response"),
         format!("Status: {status}"),
         format!("Host: {}", url.host_str().unwrap_or("")),
         format!("Path: {path}{query}"),
         format!("URL: {url}"),
-    ]
-    .join("\n")
+    ];
+
+    for (name, value) in response.headers() {
+        let value_str = value.to_str().unwrap_or("<binary>");
+        lines.push(format!("{name}: {value_str}"));
+    }
+
+    lines.join("\n")
 }
 
 #[cfg(test)]
