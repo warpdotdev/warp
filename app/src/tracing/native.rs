@@ -21,10 +21,10 @@ use url::Url;
 
 use super::Initialization;
 use crate::channel::ChannelState;
+use crate::tracing::install_no_subscriber;
 
 const CLOUD_AGENT_MARKER: &str = "tags.cloud_agent";
 const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
-const DEFAULT_EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 
 pub fn init() -> anyhow::Result<Initialization> {
@@ -37,12 +37,7 @@ pub fn init() -> anyhow::Result<Initialization> {
         .filter(|endpoint| !endpoint.trim().is_empty())
     else {
         install_no_subscriber()?;
-        return Ok(Initialization {
-            initialization_warning: None,
-            active_spans: None,
-            provider: None,
-            shutdown_timeout: DEFAULT_EXPORT_TIMEOUT,
-        });
+        return Ok(Initialization::default());
     };
 
     let shutdown_timeout = export_timeout();
@@ -73,16 +68,6 @@ pub fn init() -> anyhow::Result<Initialization> {
         provider: Some(provider),
         shutdown_timeout,
     })
-}
-
-fn install_no_subscriber() -> anyhow::Result<()> {
-    // Configure the global tracing subscriber to not care about any spans or
-    // events.
-    //
-    // This is done so that we prevent the `tracing` crate from writing out log
-    // lines for spans and trace events.
-    subscriber::set_global_default(subscriber::NoSubscriber::new())?;
-    Ok(())
 }
 
 fn build_provider(base_endpoint: &str) -> anyhow::Result<SdkTracerProvider> {
@@ -146,7 +131,7 @@ fn export_timeout() -> Duration {
             .and_then(|value| value.parse::<u64>().ok())
             .map(Duration::from_millis)
     })
-    .unwrap_or(DEFAULT_EXPORT_TIMEOUT)
+    .unwrap_or(super::DEFAULT_EXPORT_TIMEOUT)
 }
 
 #[derive(Clone, Debug, Default)]

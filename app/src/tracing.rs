@@ -1,22 +1,33 @@
 #[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
+
+use tracing::subscriber;
+
+#[cfg(not(target_family = "wasm"))]
 mod native;
+
+#[cfg(not(target_family = "wasm"))]
+const DEFAULT_EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn init() -> anyhow::Result<Initialization> {
     #[cfg(target_family = "wasm")]
     {
-        // Configure the global tracing subscriber to not care about any spans or
-        // events.
-        //
-        // This is done so that we prevent the `tracing` crate from writing out log
-        // lines for spans and trace events.
-        tracing::subscriber::set_global_default(subscriber::NoSubscriber::new())?;
-        return Ok(Initialization {
-            initialization_warning: None,
-        });
+        install_no_subscriber()?;
+        return Ok(Initialization::default());
     }
 
     #[cfg(not(target_family = "wasm"))]
     native::init()
+}
+
+fn install_no_subscriber() -> anyhow::Result<()> {
+    // Configure the global tracing subscriber to not care about any spans or
+    // events.
+    //
+    // This is done so that we prevent the `tracing` crate from writing out log
+    // lines for spans and trace events.
+    subscriber::set_global_default(subscriber::NoSubscriber::new())?;
+    Ok(())
 }
 
 pub struct Initialization {
@@ -27,6 +38,20 @@ pub struct Initialization {
     provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
     #[cfg(not(target_family = "wasm"))]
     shutdown_timeout: std::time::Duration,
+}
+
+impl Default for Initialization {
+    fn default() -> Self {
+        Self {
+            initialization_warning: None,
+            #[cfg(not(target_family = "wasm"))]
+            active_spans: None,
+            #[cfg(not(target_family = "wasm"))]
+            provider: None,
+            #[cfg(not(target_family = "wasm"))]
+            shutdown_timeout: DEFAULT_EXPORT_TIMEOUT,
+        }
+    }
 }
 
 impl Initialization {
