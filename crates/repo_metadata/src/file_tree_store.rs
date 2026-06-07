@@ -47,12 +47,14 @@ impl FileTreeEntry {
         Arc::make_mut(&mut self.state_map).rename_path(path, new_path)
     }
 
-    pub fn load_at_path(
+    pub async fn load_at_path(
         &mut self,
         path: &StandardizedPath,
         gitignores: &mut Vec<Gitignore>,
     ) -> Result<(), BuildTreeError> {
-        Arc::make_mut(&mut self.state_map).load_at_path(path, gitignores)
+        Arc::make_mut(&mut self.state_map)
+            .load_at_path(path, gitignores)
+            .await
     }
 
     pub fn insert_entry_at_path(&mut self, path: Arc<StandardizedPath>, entry: Entry) {

@@ -1,4 +1,5 @@
 use std::fs;
+use std::future::Future;
 
 use ignore::gitignore::Gitignore;
 
@@ -6,6 +7,10 @@ use super::{matches_gitignores, Entry, IgnoredPathStrategy};
 #[cfg(unix)]
 use crate::StandingQueryContent;
 use crate::{StandingQueryDefinitions, StandingQueryResults};
+
+fn run<T>(future: impl Future<Output = T>) -> T {
+    futures::executor::block_on(future)
+}
 #[test]
 fn test_git_path_filtering_allowlist() {
     use std::path::Path;
@@ -350,7 +355,7 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = 1000;
-    super::Entry::build_tree_with_force_included_paths(
+    run(super::Entry::build_tree_with_force_included_paths(
         root,
         &mut files,
         &mut gitignores,
@@ -362,7 +367,7 @@ fn build_skill_tree_with_gitignore(root: &std::path::Path, gitignore: &str) -> s
             force_included_paths: &[std::path::PathBuf::from(".agents/skills")],
             budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
         },
-    )
+    ))
     .unwrap()
 }
 
@@ -382,7 +387,7 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
         let mut results = StandingQueryResults::default();
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
-        let tree = Entry::build_tree_with_standing_queries(
+        let tree = run(Entry::build_tree_with_standing_queries(
             &repo,
             &mut files,
             &mut gitignores,
@@ -396,7 +401,7 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
             },
             &mut results,
             &definitions,
-        )
+        ))
         .unwrap();
 
         let agents = find_entry(&tree, &repo.join(".agents")).expect(".agents should be present");
@@ -436,7 +441,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
             let mut definitions = StandingQueryDefinitions::default();
             definitions
                 .set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
-            let tree = Entry::build_tree_with_standing_queries(
+            let tree = run(Entry::build_tree_with_standing_queries(
                 &repo,
                 &mut files,
                 &mut gitignores,
@@ -450,7 +455,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
                 },
                 &mut results,
                 &definitions,
-            )
+            ))
             .unwrap();
 
             assert!(find_entry(&tree, &linked_directory).is_none());
@@ -479,7 +484,7 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
         let mut files = Vec::new();
         let mut gitignores = Vec::new();
         let mut results = StandingQueryResults::default();
-        let tree = Entry::build_tree_with_standing_queries(
+        let tree = run(Entry::build_tree_with_standing_queries(
             &repo,
             &mut files,
             &mut gitignores,
@@ -493,7 +498,7 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
             },
             &mut results,
             &StandingQueryDefinitions::default(),
-        )
+        ))
         .unwrap();
 
         let src = find_entry(&tree, &repo.join("src")).expect("src should be represented");
@@ -531,7 +536,7 @@ fn shallow_tree_expands_force_included_skill_branch_only() {
         let mut results = StandingQueryResults::default();
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
-        let tree = Entry::build_tree_with_standing_queries(
+        let tree = run(Entry::build_tree_with_standing_queries(
             &workspace,
             &mut files,
             &mut gitignores,
@@ -545,7 +550,7 @@ fn shallow_tree_expands_force_included_skill_branch_only() {
             },
             &mut results,
             &definitions,
-        )
+        ))
         .unwrap();
 
         let agents = find_entry(&tree, &workspace.join(".agents"))
@@ -583,7 +588,7 @@ fn ignored_directory_stays_lazy() {
         std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
         let mut files = Vec::new();
         let mut gitignores = Vec::new();
-        let tree = Entry::build_tree(
+        let tree = run(Entry::build_tree(
             &repo,
             &mut files,
             &mut gitignores,
@@ -592,7 +597,7 @@ fn ignored_directory_stays_lazy() {
             0,
             &IgnoredPathStrategy::IncludeLazy,
             super::BudgetExceededBehavior::StopAndLazyLoad,
-        )
+        ))
         .unwrap();
         let target_dir = find_entry(&tree, &repo.join("target"))
             .expect("ignored unrelated directory should be present as lazy");
@@ -709,7 +714,7 @@ fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
 
     let mut files = Vec::new();
     let mut gitignores = Vec::<Gitignore>::new();
-    let tree = Entry::build_tree(
+    let tree = run(Entry::build_tree(
         &root_path,
         &mut files,
         &mut gitignores,
@@ -718,7 +723,7 @@ fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
         0,
         &IgnoredPathStrategy::Include,
         super::BudgetExceededBehavior::StopAndLazyLoad,
-    )
+    ))
     .unwrap();
 
     let Entry::Directory(root) = tree else {
@@ -752,7 +757,7 @@ fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
 
     let mut files = Vec::new();
     let mut gitignores = Vec::<Gitignore>::new();
-    let mut tree = Entry::build_tree(
+    let mut tree = run(Entry::build_tree(
         &root_path,
         &mut files,
         &mut gitignores,
@@ -761,7 +766,7 @@ fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
         0,
         &IgnoredPathStrategy::IncludeLazy,
         super::BudgetExceededBehavior::StopAndLazyLoad,
-    )
+    ))
     .unwrap();
 
     let ignored_path = root_path.join("ignored-dir");
@@ -773,7 +778,7 @@ fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
     assert!(!directory.loaded);
     assert!(directory.children.is_empty());
 
-    ignored_dir.load(&mut gitignores).unwrap();
+    run(ignored_dir.load(&mut gitignores)).unwrap();
 
     let Entry::Directory(directory) = ignored_dir else {
         panic!("ignored child should still be a directory");
@@ -962,7 +967,7 @@ fn build_with_budget(
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = budget;
-    super::Entry::build_tree_with_force_included_paths(
+    run(super::Entry::build_tree_with_force_included_paths(
         root,
         &mut files,
         &mut gitignores,
@@ -974,7 +979,7 @@ fn build_with_budget(
             force_included_paths,
             budget_exceeded_behavior: super::BudgetExceededBehavior::StopAndLazyLoad,
         },
-    )
+    ))
     .unwrap()
 }
 
@@ -1138,7 +1143,7 @@ fn build_tree_fail_fast_errors_when_budget_exceeded() {
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = 5;
-    let result = Entry::build_tree(
+    let result = run(Entry::build_tree(
         &root,
         &mut files,
         &mut gitignores,
@@ -1147,7 +1152,7 @@ fn build_tree_fail_fast_errors_when_budget_exceeded() {
         0,
         &IgnoredPathStrategy::Exclude,
         super::BudgetExceededBehavior::FailFast,
-    );
+    ));
     assert!(
         matches!(result, Err(super::BuildTreeError::ExceededMaxFileLimit)),
         "FailFast must abort when the file budget is exceeded"
@@ -1165,7 +1170,7 @@ fn build_tree_fail_fast_succeeds_within_budget() {
     let mut files = Vec::new();
     let mut gitignores = Vec::new();
     let mut file_limit = 10;
-    let result = Entry::build_tree(
+    let result = run(Entry::build_tree(
         &root,
         &mut files,
         &mut gitignores,
@@ -1174,6 +1179,6 @@ fn build_tree_fail_fast_succeeds_within_budget() {
         0,
         &IgnoredPathStrategy::Exclude,
         super::BudgetExceededBehavior::FailFast,
-    );
+    ));
     assert!(result.is_ok(), "FailFast must succeed when within budget");
 }
