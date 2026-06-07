@@ -59,41 +59,31 @@ pub enum LspDescriptorErrorKind {
 
 impl fmt::Display for LspDescriptorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let entry_label = match &self.entry_name {
-            Some(name) => format!("entry `{name}`"),
-            None => "entry without `name`".to_string(),
+        // Redaction-safe: never write the raw user-typed value (the offending
+        // pattern, command, or serde message) — it may contain a secret. The
+        // entry `name` is included only when fully valid, so it too cannot
+        // carry one. Raw values remain in the struct fields for `Debug`.
+        let entry = match &self.entry_name {
+            Some(name) if check_name(name).is_none() => name.as_str(),
+            _ => "anonymous",
         };
+        write!(f, "entry `{entry}`: ")?;
         match &self.kind {
-            LspDescriptorErrorKind::DuplicateName => {
-                write!(f, "{entry_label}: duplicate `name`")
+            LspDescriptorErrorKind::DuplicateName => write!(f, "duplicate `name`"),
+            LspDescriptorErrorKind::EmptyFiletypes => write!(f, "`filetypes` must be non-empty"),
+            LspDescriptorErrorKind::MissingName => write!(f, "missing required `name`"),
+            LspDescriptorErrorKind::MissingCommand => write!(f, "missing required `command`"),
+            LspDescriptorErrorKind::MalformedEntry { .. } => write!(f, "malformed entry"),
+            LspDescriptorErrorKind::InvalidGlob { .. } => write!(f, "invalid glob in `filetypes`"),
+            LspDescriptorErrorKind::UnsupportedGlobFeature { feature, .. } => {
+                write!(f, "`filetypes` glob uses unsupported feature `{feature}`")
             }
-            LspDescriptorErrorKind::EmptyFiletypes => {
-                write!(f, "{entry_label}: `filetypes` must be a non-empty array")
+            LspDescriptorErrorKind::InvalidName { reason } => write!(f, "invalid `name`: {reason}"),
+            LspDescriptorErrorKind::ReservedName => {
+                write!(f, "`name` is reserved for a built-in language server")
             }
-            LspDescriptorErrorKind::MissingName => write!(f, "{entry_label}: missing required `name`"),
-            LspDescriptorErrorKind::MissingCommand => {
-                write!(f, "{entry_label}: missing required `command`")
-            }
-            LspDescriptorErrorKind::MalformedEntry { reason } => {
-                write!(f, "{entry_label}: malformed entry: {reason}")
-            }
-            LspDescriptorErrorKind::InvalidGlob { pattern, reason } => write!(
-                f,
-                "{entry_label}: invalid glob `{pattern}`: {reason}",
-            ),
-            LspDescriptorErrorKind::UnsupportedGlobFeature { pattern, feature } => write!(
-                f,
-                "{entry_label}: glob `{pattern}` uses unsupported feature `{feature}` (not allowed in v1)",
-            ),
-            LspDescriptorErrorKind::InvalidName { reason } => {
-                write!(f, "{entry_label}: invalid `name`: {reason}")
-            }
-            LspDescriptorErrorKind::ReservedName => write!(
-                f,
-                "{entry_label}: `name` is reserved for a built-in language server",
-            ),
-            LspDescriptorErrorKind::UnsafeCommandPath { command, reason } => {
-                write!(f, "{entry_label}: unsafe `command` `{command}`: {reason}")
+            LspDescriptorErrorKind::UnsafeCommandPath { reason, .. } => {
+                write!(f, "unsafe `command`: {reason}")
             }
         }
     }

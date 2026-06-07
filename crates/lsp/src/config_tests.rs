@@ -222,12 +222,14 @@ fn test_path_to_lsp_uri_rejects_relative_path() {
 mod custom_config_tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use serde_json::json;
     use warpui::r#async::block_on;
 
     use crate::config::CustomLspServerConfig;
     use crate::descriptor::LspServerDescriptor;
+    use crate::log_redaction::NoopLogRedactor;
 
     fn descriptor_with(
         command: &str,
@@ -253,6 +255,7 @@ mod custom_config_tests {
             PathBuf::from("/tmp/cache/test-lsp"),
             None,
             "warp-test".to_string(),
+            Arc::new(NoopLogRedactor),
         )
     }
 

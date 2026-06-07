@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::config::{CustomLspServerConfig, LspServerConfig, LspServerConfigKind};
 use crate::descriptor::{parse::parse_entries, LspServerDescriptor};
+use crate::log_redaction::NoopLogRedactor;
 use crate::model::LspServerModel;
 use crate::supported_servers::LSPServerType;
 
@@ -60,6 +61,7 @@ fn custom_model_with_filetypes(name: &str, filetypes: &[(&str, Option<&str>)]) -
         PathBuf::from("/tmp/cache/test-lsp"),
         None,
         "warp-test".to_string(),
+        Arc::new(NoopLogRedactor),
     );
     LspServerModel::new(LspServerConfigKind::Custom(Box::new(config)))
 }

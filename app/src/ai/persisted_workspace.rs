@@ -1327,6 +1327,7 @@ impl PersistedWorkspace {
                 cache_dir,
                 path_env_var.clone(),
                 ChannelState::app_id().application_name().to_string(),
+                Arc::new(crate::code::lsp_log_redactor::AppSecretRedactor),
             )
             .with_log_relative_path(log_relative_path);
 

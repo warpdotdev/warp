@@ -39,7 +39,7 @@ fn display_handles_anonymous_entry() {
         kind: LspDescriptorErrorKind::MissingName,
     };
     let s = format!("{err}");
-    assert!(s.contains("entry without"));
+    assert!(s.contains("anonymous"));
     assert!(s.contains("name"));
 }
 
@@ -173,4 +173,60 @@ fn is_windows_absolute_rejects_root_relative_and_bare() {
             "expected `{cmd}` not to be Windows-absolute"
         );
     }
+}
+
+#[test]
+fn display_omits_raw_glob_pattern_and_reason() {
+    let err = LspDescriptorError {
+        entry_name: Some("ruby-lsp".to_string()),
+        kind: LspDescriptorErrorKind::InvalidGlob {
+            pattern: "se[cret-AKIA".to_string(),
+            reason: "unterminated character class".to_string(),
+        },
+    };
+    let shown = err.to_string();
+    assert!(!shown.contains("se[cret-AKIA"), "leaked pattern: {shown}");
+    assert!(!shown.contains("unterminated"), "leaked reason: {shown}");
+    // A valid entry name is charset-constrained, so it is safe to include.
+    assert!(shown.contains("ruby-lsp"));
+}
+
+#[test]
+fn display_omits_raw_command() {
+    let err = LspDescriptorError {
+        entry_name: Some("ruby-lsp".to_string()),
+        kind: LspDescriptorErrorKind::UnsafeCommandPath {
+            command: "./AKIAIOSFODNN7EXAMPLE/server".to_string(),
+            reason: "must be an absolute path or a bare command name (no path separators)",
+        },
+    };
+    assert!(!err.to_string().contains("AKIA"), "leaked command");
+}
+
+#[test]
+fn display_omits_raw_serde_message() {
+    let err = LspDescriptorError {
+        entry_name: None,
+        kind: LspDescriptorErrorKind::MalformedEntry {
+            reason: "invalid type: AKIAIOSFODNN7EXAMPLE".to_string(),
+        },
+    };
+    let shown = err.to_string();
+    assert!(!shown.contains("AKIA"), "leaked serde message: {shown}");
+    assert!(shown.contains("anonymous"));
+}
+
+#[test]
+fn display_uses_anonymous_for_invalid_name() {
+    // An InvalidName entry's own name failed validation, so it may carry a
+    // secret-shaped value and must not be echoed.
+    let err = LspDescriptorError {
+        entry_name: Some("token=AKIAIOSFODNN7EXAMPLE".to_string()),
+        kind: LspDescriptorErrorKind::InvalidName {
+            reason: "must contain only ASCII letters, digits, `.`, `_`, or `-`",
+        },
+    };
+    let shown = err.to_string();
+    assert!(!shown.contains("AKIA"), "leaked invalid name: {shown}");
+    assert!(shown.contains("anonymous"));
 }
