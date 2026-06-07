@@ -98,7 +98,7 @@ use crate::workspace::WorkspaceAction;
 use crate::{send_telemetry_from_ctx, BlocklistAIHistoryModel, ToastStack};
 const MENU_WIDTH: f32 = 200.0;
 const MAX_HEIGHT: f32 = 320.0;
-const MIN_RESIZABLE_WIDTH: f32 = 280.0;
+const MIN_RESIZABLE_WIDTH: f32 = 360.0;
 const DEFAULT_RESIZABLE_WIDTH: f32 = 480.0;
 const MIN_RESIZABLE_HEIGHT: f32 = 40.0;
 const MIN_REMAINING_WINDOW_WIDTH: f32 = 200.0;
