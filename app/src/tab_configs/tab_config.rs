@@ -203,6 +203,48 @@ impl TabConfig {
     }
 }
 
+pub(crate) fn validate_load_time_tab_config_directories(config: &TabConfig) -> Result<(), String> {
+    let mut invalid_directories = Vec::new();
+
+    for pane in &config.panes {
+        let Some(directory) = pane.directory.as_deref() else {
+            continue;
+        };
+
+        if directory.is_empty() || contains_template_placeholder(directory) {
+            continue;
+        }
+
+        let expanded = shellexpand::tilde(directory).into_owned();
+        let path = PathBuf::from(&expanded);
+        if path.is_dir() {
+            continue;
+        }
+
+        let reason = if path.exists() {
+            "path exists but is not a directory"
+        } else {
+            "directory does not exist"
+        };
+        invalid_directories.push(format!(
+            "pane '{}' references invalid directory '{}': {}",
+            pane.id, expanded, reason
+        ));
+    }
+
+    if invalid_directories.is_empty() {
+        Ok(())
+    } else {
+        Err(invalid_directories.join("; "))
+    }
+}
+
+fn contains_template_placeholder(value: &str) -> bool {
+    value
+        .split_once("{{")
+        .is_some_and(|(_, rest)| rest.contains("}}"))
+}
+
 /// Renders a [`TabConfig`] with the given param values into a [`PaneTemplateType`]
 /// and an optional rendered title.
 ///

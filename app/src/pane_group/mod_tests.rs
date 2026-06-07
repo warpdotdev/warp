@@ -2509,39 +2509,6 @@ fn test_initial_widths_are_computed_correctly() {
 }
 
 #[test]
-fn test_tab_config_preserves_nonexistent_cwd() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        let cwd = std::env::temp_dir().join(format!(
-            "warp-tab-config-nonexistent-cwd-{}",
-            Uuid::new_v4()
-        ));
-        assert!(!cwd.exists());
-
-        let pane_group = mock_pane_group(
-            &mut app,
-            MockOptions {
-                layout: PanesLayout::Template(PaneTemplateType::PaneTemplate {
-                    is_focused: None,
-                    cwd: cwd.clone(),
-                    commands: vec![],
-                    pane_mode: PaneMode::Terminal,
-                    shell: None,
-                }),
-                ..Default::default()
-            },
-        );
-
-        pane_group.read(&app, |pane_group, ctx| {
-            let terminal_view = pane_group.terminal_view_at_pane_index(0, ctx).unwrap();
-            let model = terminal_view.as_ref(ctx).model.lock();
-            assert_eq!(model.session_startup_path(), Some(cwd));
-        });
-    });
-}
-
-#[test]
 fn test_is_terminal_pane_being_shared() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
