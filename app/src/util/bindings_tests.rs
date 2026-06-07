@@ -121,8 +121,8 @@ fn test_orchestration_cycle_bindings_are_editable() {
                 .find(|binding| binding.name == "terminal:cycle_previous_orchestration_child_agent")
                 .and_then(|binding| trigger_to_keystroke(binding.trigger));
 
-            assert_eq!(next, Keystroke::parse("ctrl-]").ok());
-            assert_eq!(previous, Keystroke::parse("ctrl-[").ok());
+            assert_eq!(next, Keystroke::parse("ctrl-alt-tab").ok());
+            assert_eq!(previous, Keystroke::parse("ctrl-alt-shift-tab").ok());
         });
     });
 }
