@@ -19666,7 +19666,7 @@ impl Workspace {
                             if *last_gid == group_id {
                                 *run_len += 1;
                                 continue;
-                                // Current tab is part of the last existing group, 
+                                // Current tab is part of the last existing group,
                                 // continue building this groups 'slot'.
                             }
                         }
@@ -26996,7 +26996,7 @@ fn render_group_member_icon_collage(
             GROUP_ICON_COLLAGE_MINI_SIZE,
             appearance,
         );
-        // Placement mapping for each icon. 
+        // Placement mapping for each icon.
         // (number of icons, index of icon) -> position.
         let offset = match (count, idx) {
             (3, 0) => vec2f(-diag, -diag),
