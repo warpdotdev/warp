@@ -213,6 +213,7 @@ tikv-jemallocator = { version = "0.6", optional = true, features = [
 toml = "0.8.13"
 toml_edit.workspace = true
 tracing.workspace = true
+tracing-futures = { workspace = true, features = ["futures-03"] }
 ui_components.workspace = true
 unicase = "2.7.0"
 unicode-general-category.workspace = true

@@ -286,6 +286,7 @@ toml_edit = "0.25.5"
 tower = "0.5.2"
 tower-http = "0.6.6"
 tracing = "0.1.40"
+tracing-futures = "0.2.5"
 tracing-opentelemetry = { version = "0.33.0", default-features = false }
 tracing-subscriber = { version = "0.3.22", default-features = false, features = [
   "registry",
