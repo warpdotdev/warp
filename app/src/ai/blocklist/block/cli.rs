@@ -99,7 +99,6 @@ use crate::{send_telemetry_from_ctx, BlocklistAIHistoryModel, ToastStack};
 const MENU_WIDTH: f32 = 200.0;
 const MAX_HEIGHT: f32 = 320.0;
 const MIN_RESIZABLE_WIDTH: f32 = 360.0;
-const DEFAULT_RESIZABLE_WIDTH: f32 = 480.0;
 const MIN_RESIZABLE_HEIGHT: f32 = 40.0;
 const MIN_REMAINING_WINDOW_WIDTH: f32 = 200.0;
 const MIN_REMAINING_WINDOW_HEIGHT: f32 = 100.0;
@@ -477,7 +476,7 @@ impl CLISubagentView {
             always_allow_read_files_checked,
             is_input_dismissed: false,
             input_dismiss_timer_handle: None,
-            resizable_width: resizable_state_handle(DEFAULT_RESIZABLE_WIDTH),
+            resizable_width: resizable_state_handle(MIN_RESIZABLE_WIDTH),
             resizable_height: resizable_state_handle(MAX_HEIGHT),
             current_working_directory,
             shell_launch_data,
