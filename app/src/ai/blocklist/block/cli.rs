@@ -101,6 +101,8 @@ const MAX_HEIGHT: f32 = 320.0;
 const MIN_RESIZABLE_WIDTH: f32 = 280.0;
 const DEFAULT_RESIZABLE_WIDTH: f32 = 480.0;
 const MIN_RESIZABLE_HEIGHT: f32 = 40.0;
+const MIN_REMAINING_WINDOW_WIDTH: f32 = 200.0;
+const MIN_REMAINING_WINDOW_HEIGHT: f32 = 100.0;
 const AVATAR_RIGHT_MARGIN: f32 = 8.;
 const CONTENT_PADDING: f32 = 12.;
 const ALLOW_ACTION_POSITION_ID: &str = "allow-action-position-id";
@@ -1398,13 +1400,19 @@ impl View for CLISubagentView {
         let width_resizable = Resizable::new(self.resizable_width.clone(), content)
             .with_dragbar_side(DragBarSide::Left)
             .on_resize(|ctx, _| ctx.notify())
-            .with_bounds_callback(Box::new(|_| (MIN_RESIZABLE_WIDTH, f32::MAX)))
+            .with_bounds_callback(Box::new(|window_size| {
+                let max = (window_size.x() - MIN_REMAINING_WINDOW_WIDTH).max(MIN_RESIZABLE_WIDTH);
+                (MIN_RESIZABLE_WIDTH, max)
+            }))
             .finish();
 
         Resizable::new(self.resizable_height.clone(), width_resizable)
             .with_dragbar_side(DragBarSide::Top)
             .on_resize(|ctx, _| ctx.notify())
-            .with_bounds_callback(Box::new(|_| (MIN_RESIZABLE_HEIGHT, f32::MAX)))
+            .with_bounds_callback(Box::new(|window_size| {
+                let max = (window_size.y() - MIN_REMAINING_WINDOW_HEIGHT).max(MIN_RESIZABLE_HEIGHT);
+                (MIN_RESIZABLE_HEIGHT, max)
+            }))
             .finish()
     }
 
