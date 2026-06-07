@@ -73,10 +73,18 @@ pub const HOME_DIR_ENV_VAR_PREFIX: &str = "$HOME";
 /// than enough to make collisions among a single user's workspaces
 /// vanishingly unlikely.
 pub fn workspace_hash(path: &Path) -> String {
+    short_hash(&path.to_string_lossy())
+}
+
+/// Stable 16-char lowercase-hex hash (first 8 bytes of SHA-256) of `input`'s
+/// UTF-8 bytes. Safe to use as a filesystem-name segment regardless of the
+/// input's characters. Shared by [`workspace_hash`] and the per-server LSP
+/// cache directory so they use the same hash shape.
+pub fn short_hash(input: &str) -> String {
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
-    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update(input.as_bytes());
     let digest = hasher.finalize();
     hex::encode(&digest[..8])
 }

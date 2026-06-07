@@ -847,3 +847,37 @@ mod workspace_hash_tests {
         assert!(!hash.contains('.'));
     }
 }
+
+#[cfg(test)]
+mod short_hash_tests {
+    use super::short_hash;
+
+    #[test]
+    fn stable_for_same_input() {
+        assert_eq!(short_hash("ruby-lsp"), short_hash("ruby-lsp"));
+    }
+
+    #[test]
+    fn different_for_different_inputs() {
+        assert_ne!(short_hash("ruby-lsp"), short_hash("gopls"));
+    }
+
+    #[test]
+    fn returns_16_lowercase_hex_chars() {
+        let hash = short_hash("ruby-lsp");
+        assert_eq!(hash.len(), 16);
+        assert!(hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    }
+
+    #[test]
+    fn safe_segment_even_for_unsafe_input() {
+        // The input may contain separators or reserved chars; the hash never does.
+        let hash = short_hash("../foo/bar baz\\qux");
+        assert!(!hash.contains('/'));
+        assert!(!hash.contains('\\'));
+        assert!(!hash.contains(' '));
+        assert!(!hash.contains('.'));
+    }
+}

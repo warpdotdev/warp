@@ -1305,13 +1305,7 @@ impl PersistedWorkspace {
                 continue;
             };
 
-            let Some(cache_dir) = warp_core::paths::lsp_server_cache_dir(&descriptor.name) else {
-                log::warn!(
-                    "Custom LSP \"{}\" has an unsafe name for a cache directory; skipping",
-                    descriptor.name
-                );
-                continue;
-            };
+            let cache_dir = warp_core::paths::lsp_server_cache_dir(&descriptor.name);
             let workspace_slug = warp_util::path::workspace_hash(&workspace_root);
             let log_relative_path = custom_relative_log_path(&descriptor.name, &workspace_root);
             log::info!(
