@@ -1375,7 +1375,7 @@ impl PersistedWorkspace {
                     {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             let toast = DismissibleToast::error(format!(
-                                "Failed to start LSP server for {workspace_root_display} with error {e}",
+                                "Failed to start LSP server \"{server_type_name}\" for {workspace_root_display} with error {e}",
                             ));
                             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                         });

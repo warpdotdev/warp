@@ -55,6 +55,23 @@ fn missing_env_var_expands_to_empty_string() {
 }
 
 #[test]
+#[serial]
+fn missing_env_var_is_warned_once() {
+    unsafe {
+        std::env::remove_var("LSP_DESCRIPTOR_TEST_PLACEHOLDER_DEFINITELY_UNSET");
+    }
+    let context = ctx();
+    let _ = expand(
+        "{{env_LSP_DESCRIPTOR_TEST_PLACEHOLDER_DEFINITELY_UNSET}} \
+         {{env_LSP_DESCRIPTOR_TEST_PLACEHOLDER_DEFINITELY_UNSET}}",
+        &context,
+    );
+    let warned = context.warned.lock().unwrap();
+    assert_eq!(warned.len(), 1);
+    assert!(warned.contains("env_LSP_DESCRIPTOR_TEST_PLACEHOLDER_DEFINITELY_UNSET"));
+}
+
+#[test]
 fn unknown_placeholder_passes_through_verbatim() {
     let out = expand("plain {{nope}} text", &ctx());
     assert_eq!(out, "plain {{nope}} text");

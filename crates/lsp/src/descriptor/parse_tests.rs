@@ -268,6 +268,20 @@ fn unknown_fields_are_ignored() {
 }
 
 #[test]
+fn raw_descriptor_captures_unknown_fields() {
+    let raw: RawDescriptor = serde_json::from_value(json!({
+        "name": "ruby-lsp",
+        "command": "ruby-lsp",
+        "totally_made_up": 42,
+        "future_field": true,
+    }))
+    .expect("known fields still deserialize");
+    let mut keys: Vec<&str> = raw.unknown_fields.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["future_field", "totally_made_up"]);
+}
+
+#[test]
 fn parses_initialization_options_verbatim() {
     let entries = vec![json!({
         "name": "jdtls",

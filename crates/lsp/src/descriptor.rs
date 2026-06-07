@@ -16,16 +16,30 @@ pub mod validate;
 /// `[[editor.language_servers]]` table in settings.toml.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct LspServerDescriptor {
+    /// Unique identifier for this server, e.g. `"ruby-lsp"`. Shown in the
+    /// footer's "Enable {name}" button and in logs.
     pub name: String,
+    /// Path to the server binary: an absolute path, or a bare name resolved
+    /// against `PATH`. Supports `{{...}}` placeholders — `{{workspace_root}}`,
+    /// `{{workspace_slug}}`, `{{cache_dir}}`, and `{{env_VAR}}` (any
+    /// environment variable) — and leading `~`/`~/` home-directory expansion.
+    /// Wrap a placeholder in a third pair of braces (`{{{workspace_root}}}`) to
+    /// pass it through verbatim without substitution.
     pub command: String,
+    /// Arguments passed to `command` on launch. Each undergoes the same
+    /// `{{...}}` placeholder substitution and `~` expansion as `command`.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Filename patterns that claim files for this server. Non-empty.
     pub filetypes: Vec<LspFiletypePattern>,
+    /// Extra environment variables merged into the server process's
+    /// environment. Each value undergoes the same `{{...}}` placeholder
+    /// substitution as `command`.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// Verbatim payload for the LSP `initialize` request's
-    /// `initializationOptions` field. Strings inside undergo placeholder
-    /// substitution at launch time; other values pass through unchanged.
+    /// Sent as the LSP `initialize` request's `initializationOptions`. String
+    /// leaves undergo the same `{{...}}` placeholder substitution as `command`;
+    /// non-string values pass through unchanged.
     pub initialization_options: Option<Value>,
 }
 
