@@ -264,7 +264,7 @@ use crate::editor::{
 use crate::env_vars::manager::{EnvVarCollectionManager, EnvVarCollectionSource};
 use crate::env_vars::CloudEnvVarCollection;
 use crate::experiments::{BlockOnboarding, Experiment};
-use crate::launch_configs::launch_config::WindowTemplate;
+use crate::launch_configs::launch_config::{PaneTemplateType, WindowTemplate};
 use crate::launch_configs::save_modal::{LaunchConfigModalEvent, LaunchConfigSaveModal};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
@@ -8727,48 +8727,6 @@ impl Workspace {
         });
 
         ctx.notify();
-    }
-
-    /// Auto-opens the conversation list on first app start.
-    /// Once we've done this once, we persist a preference so subsequent restarts
-    /// will respect the user's visibility preference (restored from workspace state).
-    fn maybe_auto_open_conversation_list(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::AgentViewConversationListView.is_enabled()
-            || !AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
-        {
-            return;
-        }
-
-        let has_auto_opened = *AISettings::as_ref(ctx).has_auto_opened_conversation_list;
-        if has_auto_opened {
-            return;
-        }
-
-        // Only auto-open on terminal tabs, not on settings or other non-terminal tabs
-        let has_terminal = self
-            .active_tab_pane_group()
-            .as_ref(ctx)
-            .has_terminal_panes();
-        if !has_terminal {
-            return;
-        }
-
-        // For first-time-users, auto-open the conversation list for discoverability
-        if !self.active_tab_pane_group().as_ref(ctx).left_panel_open {
-            self.open_left_panel(ctx);
-        }
-        self.left_panel_view.update(ctx, |lp, ctx| {
-            lp.restore_active_view_from_snapshot(ToolPanelView::ConversationListView, ctx);
-        });
-
-        // Mark that we've done the one-time auto-open
-        AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(
-                settings
-                    .has_auto_opened_conversation_list
-                    .set_value(true, ctx)
-            );
-        });
     }
 
     fn close_left_panel(&mut self, ctx: &mut ViewContext<Self>) {
