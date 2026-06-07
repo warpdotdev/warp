@@ -931,15 +931,19 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let pty_spawner =
         terminal::local_tty::spawner::PtySpawner::new().context("Failed to create pty spawner")?;
 
+    let callbacks = app_callbacks(
+        launch_mode.is_integration_test(),
+        tracing_initialization.take(),
+    );
     let mut app_builder = if launch_mode.is_headless() {
         warpui::platform::AppBuilder::new_headless(
-            app_callbacks(launch_mode.is_integration_test()),
+            callbacks,
             Box::new(ASSETS),
             launch_mode.take_test_driver(),
         )
     } else {
         warpui::platform::AppBuilder::new(
-            app_callbacks(launch_mode.is_integration_test()),
+            callbacks,
             Box::new(ASSETS),
             launch_mode.take_test_driver(),
         )
@@ -2055,7 +2059,10 @@ pub(crate) fn initialize_app(
     app_state
 }
 
-pub(crate) fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
+pub(crate) fn app_callbacks(
+    is_integration_test: bool,
+    mut tracing_initialization: Option<tracing::Initialization>,
+) -> warpui::platform::AppCallbacks {
     warpui::platform::AppCallbacks {
         on_internet_reachability_changed: Some(Box::new(move |reachable, ctx| {
             NetworkStatus::handle(ctx)
@@ -2174,6 +2181,9 @@ pub(crate) fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppC
             crash_recovery::CrashRecovery::handle(ctx).update(ctx, |crash_recovery, _ctx| {
                 crash_recovery.teardown();
             });
+            if let Some(initialization) = tracing_initialization.as_mut() {
+                initialization.shutdown();
+            }
 
             // Tear down crash reporting as the last thing we do before the application
             // terminates.

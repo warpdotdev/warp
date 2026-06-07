@@ -120,6 +120,7 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
 }
 
 /// Run a Warp CLI command.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
 pub fn run(
     ctx: &mut AppContext,
     command: CliCommand,

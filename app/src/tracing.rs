@@ -22,6 +22,8 @@ pub fn init() -> anyhow::Result<Initialization> {
 pub struct Initialization {
     initialization_warning: Option<anyhow::Error>,
     #[cfg(not(target_family = "wasm"))]
+    active_spans: Option<native::ActiveSpanRegistry>,
+    #[cfg(not(target_family = "wasm"))]
     provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
     #[cfg(not(target_family = "wasm"))]
     shutdown_timeout: std::time::Duration,
@@ -33,14 +35,33 @@ impl Initialization {
             log::warn!("Failed to initialize cloud-agent OpenTelemetry exporting: {err:#}");
         }
     }
+
+    pub(crate) fn shutdown(&mut self) {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            match (self.active_spans.take(), self.provider.take()) {
+                (Some(active_spans), Some(provider)) => {
+                    if let Err(err) = active_spans.shutdown(&provider, self.shutdown_timeout) {
+                        log::warn!(
+                            "Failed to shut down cloud-agent OpenTelemetry exporting: {err}"
+                        );
+                    }
+                }
+                (None, Some(provider)) => {
+                    if let Err(err) = provider.shutdown_with_timeout(self.shutdown_timeout) {
+                        log::warn!(
+                            "Failed to shut down cloud-agent OpenTelemetry exporting: {err}"
+                        );
+                    }
+                }
+                (Some(_), None) | (None, None) => {}
+            }
+        }
+    }
 }
 
 impl Drop for Initialization {
     fn drop(&mut self) {
-        if let Some(provider) = self.provider.take() {
-            if let Err(err) = provider.shutdown_with_timeout(self.shutdown_timeout) {
-                log::warn!("Failed to shut down cloud-agent OpenTelemetry exporting: {err}");
-            }
-        }
+        self.shutdown();
     }
 }
