@@ -301,22 +301,37 @@ struct TabGroupMouseStates {
     close: MouseStateHandle,
 }
 
-/// Default fully-rounded corner radius for a vertical-tabs pane row.
-fn default_row_corner_radius() -> CornerRadius {
-    CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS))
+/// Describes how a pane row sits in its tab's row layout. Carried as state
+/// on `PaneProps`; the actual corner radius is derived at render time.
+#[derive(Clone, Copy)]
+enum PaneRowStackPosition {
+    /// Rendered with normal vertical spacing; row's background fully rounds.
+    Standalone,
+    /// Stacked flush against siblings (no inter-row gap); only the outer
+    /// (first/last) corners round so adjacent backgrounds meet edge-to-edge.
+    Flush { is_first: bool, is_last: bool },
 }
 
-/// Corner radius for a pane row stacked flush with its siblings: round only
-/// the outer (first/last) corners so interior rows sit edge-to-edge.
-fn flush_row_corner_radius(is_first: bool, is_last: bool) -> CornerRadius {
-    let mut cr = CornerRadius::default();
-    if is_first {
-        cr.merge(CornerRadius::with_top(Radius::Pixels(ROW_CORNER_RADIUS)));
+impl PaneRowStackPosition {
+    /// Resting corner radius for the row's background — derived from its
+    /// position in the stack alone, before hover/selected overrides.
+    fn corner_radius(self) -> CornerRadius {
+        match self {
+            PaneRowStackPosition::Standalone => {
+                CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS))
+            }
+            PaneRowStackPosition::Flush { is_first, is_last } => {
+                let mut cr = CornerRadius::default();
+                if is_first {
+                    cr.merge(CornerRadius::with_top(Radius::Pixels(ROW_CORNER_RADIUS)));
+                }
+                if is_last {
+                    cr.merge(CornerRadius::with_bottom(Radius::Pixels(ROW_CORNER_RADIUS)));
+                }
+                cr
+            }
+        }
     }
-    if is_last {
-        cr.merge(CornerRadius::with_bottom(Radius::Pixels(ROW_CORNER_RADIUS)));
-    }
-    cr
 }
 
 fn pane_row_background(
@@ -375,7 +390,7 @@ fn render_pane_row_element(
         is_focused,
         typed: _,
         is_being_dragged,
-        row_corner_radius,
+        stack_position,
         is_in_multi_selection,
         is_in_multi_tab_selection,
         pane_color,
@@ -391,15 +406,16 @@ fn render_pane_row_element(
     } = props;
     let is_selected = is_active_tab && is_focused;
     let mut row = Hoverable::new(mouse_state, move |state| {
-        // Hovered or selected rows always fully round.
-        let active_corner_radius = if state.is_hovered() || is_selected {
-            default_row_corner_radius()
+        // Hovered or selected rows always fully round; otherwise derive the
+        // resting radius from the row's stack position.
+        let corner_radius = if state.is_hovered() || is_selected {
+            CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS))
         } else {
-            row_corner_radius
+            stack_position.corner_radius()
         };
         let mut container = Container::new(Clipped::new(content).finish())
             .with_padding(padding)
-            .with_corner_radius(active_corner_radius);
+            .with_corner_radius(corner_radius);
 
         if let Some(background) = pane_row_background(
             pane_color,
@@ -771,9 +787,9 @@ struct PaneProps<'a> {
     is_focused: bool,
     typed: TypedPane<'a>,
     is_being_dragged: bool,
-    /// Corner radius for this row's background. Defaults to fully rounded;
-    /// build_rows narrows it when stacking panes flush.
-    row_corner_radius: CornerRadius,
+    /// Where this row sits in its tab's row stack. Drives corner-radius
+    /// derivation at render time; defaults to `Standalone`.
+    stack_position: PaneRowStackPosition,
     /// True when this row's tab is part of the active multi-selection
     /// (shift-click range or cmd-click toggle).
     is_in_multi_selection: bool,
@@ -2142,9 +2158,10 @@ fn render_tab_group_internal(
                     continue;
                 };
                 if stack_panes_flush {
-                    let is_first = row_idx == 0;
-                    let is_last = row_idx + 1 == total_rows;
-                    pane_props.row_corner_radius = flush_row_corner_radius(is_first, is_last);
+                    pane_props.stack_position = PaneRowStackPosition::Flush {
+                        is_first: row_idx == 0,
+                        is_last: row_idx + 1 == total_rows,
+                    };
                 }
                 let view_mode = *TabSettings::as_ref(app).vertical_tabs_view_mode.value();
                 let row = match view_mode {
@@ -2230,7 +2247,8 @@ fn render_tab_group_internal(
             };
             let mut container = Container::new(build_rows()).with_background(background);
             if FeatureFlag::GroupedTabs.is_enabled() && stack_panes_flush {
-                container = container.with_corner_radius(default_row_corner_radius());
+                container =
+                    container.with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
             }
             if is_drag_target {
                 container = container.with_border(
@@ -3514,7 +3532,7 @@ impl<'a> PaneProps<'a> {
             is_focused: pane_group.focused_pane_id(app) == pane_id,
             typed,
             is_being_dragged: pane.is_pane_being_dragged(app),
-            row_corner_radius: default_row_corner_radius(),
+            stack_position: PaneRowStackPosition::Standalone,
             is_in_multi_selection,
             is_in_multi_tab_selection,
             pane_color: pane_row_state.pane_color,
