@@ -517,7 +517,9 @@ fn test_ordered_list_counting() {
 
     // If the first ordered list item is partially out of viewport, that still counts - numbering
     // should start at 1.
-    model.viewport.scroll((-6.).into_pixels(), model.height());
+    model
+        .viewport
+        .scroll((-6.).into_pixels(), model.height(), Pixels::zero());
     let mut numbering = model.viewport_list_numbering();
     assert_eq!(numbering.advance(0, None).label_index, 1);
 
@@ -741,14 +743,19 @@ fn test_scroll_snapshot() {
     drop(content);
 
     // Scroll so that the EEEE line is at the top of the viewport.
-    model.viewport.scroll((-44.).into_pixels(), model.height());
+    model
+        .viewport
+        .scroll((-44.).into_pixels(), model.height(), Pixels::zero());
     let scroll_position = model.snapshot_scroll_position();
     assert_eq!(scroll_position.first_character_offset(), 13.into());
 
     // Now, double the viewport width, halving the number of soft-wrapped lines.
-    model
-        .viewport
-        .set_size(vec2f(80., 60.), model.width(), model.height());
+    model.viewport.set_size(
+        vec2f(80., 60.),
+        model.width(),
+        model.height(),
+        Pixels::zero(),
+    );
 
     // At first, the content will not have been laid out again, so the scroll position is
     // unaffected.
@@ -768,9 +775,12 @@ fn test_scroll_snapshot() {
     assert_eq!(model.viewport.scroll_top().as_f32(), 12.);
 
     // Halve the original viewport width, leading to twice as many soft-wrapped lines.
-    model
-        .viewport
-        .set_size(vec2f(20., 60.), model.width(), model.height());
+    model.viewport.set_size(
+        vec2f(20., 60.),
+        model.width(),
+        model.height(),
+        Pixels::zero(),
+    );
     layout_content(&mut model);
     assert_eq!(model.height().as_f32(), 60. + 80. + 24.);
 

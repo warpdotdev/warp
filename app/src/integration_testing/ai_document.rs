@@ -13,6 +13,7 @@ use crate::ai::ai_document_view::AIDocumentView;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
+use crate::notebooks::editor::view::RichTextEditorView;
 use crate::workspace::WorkspaceAction;
 
 const SCROLL_OFFSET_FUDGE_FACTOR_PIXELS: Pixels = Pixels::new(0.01);
@@ -109,12 +110,10 @@ pub fn scroll_ai_document_by(delta_y: f32) -> TestStep {
             Ok(view) => view,
             Err(_) => panic!("expected exactly one AI document view"),
         };
-        let position = document_view.read(app, |view, ctx| {
+        let view_position_id = format!("ai_document_view_{}", document_view.id());
+        let position = document_view.read(app, |_view, ctx| {
             let rect = ctx
-                .element_position_by_id_at_last_frame(
-                    window_id,
-                    view.view_position_id_for_integration_test(),
-                )
+                .element_position_by_id_at_last_frame(window_id, &view_position_id)
                 .expect("AI document view should have rendered");
             vec2f(
                 (rect.origin_x() + rect.max_x()) / 2.,
@@ -150,18 +149,16 @@ pub fn record_ai_document_scroll_header_state(snapshot_key: impl Into<String>) -
 /// Asserts whether the AI document editor has a scroll header.
 pub fn assert_ai_document_has_scroll_header(expected: bool) -> AssertionCallback {
     Box::new(move |app, window_id| {
-        let document_view = match single_ai_document_view(app, window_id) {
-            Ok(view) => view,
+        let state = match ai_document_scroll_header_state(app, window_id) {
+            Ok(state) => state,
             Err(outcome) => return outcome,
         };
-        let (has_header, _, _, _) = document_view.read(app, |view, ctx| {
-            view.editor_scroll_header_state_for_integration_test(ctx)
-        });
-        if has_header == expected {
+        if state.has_header == expected {
             AssertionOutcome::Success
         } else {
             AssertionOutcome::failure(format!(
-                "Expected AI document scroll header presence to be {expected}, got {has_header}"
+                "Expected AI document scroll header presence to be {expected}, got {}",
+                state.has_header
             ))
         }
     })
@@ -276,17 +273,36 @@ fn ai_document_scroll_header_state(
     app: &mut App,
     window_id: WindowId,
 ) -> Result<AIDocumentScrollHeaderState, AssertionOutcome> {
-    let document_view = single_ai_document_view(app, window_id)?;
-    let (has_header, header_scroll_top, header_height, content_scroll_top) = document_view
-        .read(app, |view, ctx| {
-            view.editor_scroll_header_state_for_integration_test(ctx)
-        });
-    Ok(AIDocumentScrollHeaderState {
-        has_header,
-        header_scroll_top,
-        header_height,
-        content_scroll_top,
-    })
+    let editor = single_ai_document_editor_view(app, window_id)?;
+    Ok(editor.read(app, |editor, ctx| {
+        let render_state = editor.model().as_ref(ctx).render_state().clone();
+        let render_state = render_state.as_ref(ctx);
+        let header_height = render_state.scroll_prefix_height();
+        AIDocumentScrollHeaderState {
+            has_header: !scroll_offset_approx_zero(header_height),
+            header_scroll_top: render_state.viewport().scroll_top().min(header_height),
+            header_height,
+            content_scroll_top: render_state.content_scroll_top(),
+        }
+    }))
+}
+
+/// Returns the single AI document editor view in a window.
+fn single_ai_document_editor_view(
+    app: &App,
+    window_id: WindowId,
+) -> Result<ViewHandle<RichTextEditorView>, AssertionOutcome> {
+    let views = app
+        .views_of_type::<RichTextEditorView>(window_id)
+        .unwrap_or_default();
+    if views.len() == 1 {
+        Ok(views[0].clone())
+    } else {
+        Err(AssertionOutcome::failure(format!(
+            "Expected exactly one AI document editor view, found {}",
+            views.len()
+        )))
+    }
 }
 
 /// Applies a predicate to the AI document scroll-header state.

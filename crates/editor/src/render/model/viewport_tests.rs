@@ -119,24 +119,24 @@ fn test_scroll_bounds() {
     let mut state = ViewportState::new(8.0.into_pixels(), 16.0.into_pixels());
 
     // Scroll down within the document.
-    assert!(state.scroll((-6.0).into_pixels(), content_height));
+    assert!(state.scroll((-6.0).into_pixels(), content_height, Pixels::zero()));
     assert_eq!(state.scroll_top.as_f32(), 6.);
 
     // Now, scroll up, but past the beginning of the document. The scroll_top
     // should clamp at 0.
-    assert!(state.scroll(100.0.into_pixels(), content_height));
+    assert!(state.scroll(100.0.into_pixels(), content_height, Pixels::zero()));
     assert_eq!(state.scroll_top.as_f32(), 0.);
 
     // Now, scroll back down.
-    assert!(state.scroll((-12.0).into_pixels(), content_height));
+    assert!(state.scroll((-12.0).into_pixels(), content_height, Pixels::zero()));
     assert_eq!(state.scroll_top.as_f32(), 12.);
 
     // We can keep scrolling, but it's clamped to the last viewport of the document.
-    assert!(state.scroll((-100.0).into_pixels(), content_height));
+    assert!(state.scroll((-100.0).into_pixels(), content_height, Pixels::zero()));
     assert_eq!(state.scroll_top.as_f32(), 16.);
 
     // If we try to scroll more, it has no effect.
-    assert!(!state.scroll((-10.0).into_pixels(), content_height));
+    assert!(!state.scroll((-10.0).into_pixels(), content_height, Pixels::zero()));
     assert_eq!(state.scroll_top.as_f32(), 16.);
 }
 
@@ -162,24 +162,44 @@ fn test_viewport_height_change() {
     let mut state = ViewportState::new(100.0.into_pixels(), 200.0.into_pixels());
 
     // Scroll the viewport.
-    state.scroll(-(50.0.into_pixels()), content_height);
+    state.scroll(-(50.0.into_pixels()), content_height, Pixels::zero());
     assert_eq!(state.scroll_top, 50.0.into_pixels());
 
     // Resize the viewport such that it no longer has a scrollbar.
-    state.set_size(vec2f(100., 400.), content_width, content_height);
+    state.set_size(
+        vec2f(100., 400.),
+        content_width,
+        content_height,
+        Pixels::zero(),
+    );
     assert_eq!(state.scroll_top, Pixels::zero());
 
     // Resize the viewport to need scrolling again. This won't autoscroll, however.
-    state.set_size(vec2f(100., 100.), content_width, content_height);
+    state.set_size(
+        vec2f(100., 100.),
+        content_width,
+        content_height,
+        Pixels::zero(),
+    );
     assert_eq!(state.scroll_top, Pixels::zero());
 
     // Scroll, and then shrink the viewport further. This should preserve the scroll position.
-    state.scroll(-(50.0.into_pixels()), content_height);
-    state.set_size(vec2f(100., 80.), content_width, content_height);
+    state.scroll(-(50.0.into_pixels()), content_height, Pixels::zero());
+    state.set_size(
+        vec2f(100., 80.),
+        content_width,
+        content_height,
+        Pixels::zero(),
+    );
     assert_eq!(state.scroll_top, 50.0.into_pixels());
 
     // The scroll_top cannot be past the last viewport of content. If the viewport extends such
     // that the scroll position is invalid, but a scrollbar is still needed, we'll scroll up slightly.
-    state.set_size(vec2f(100., 260.), content_width, content_height);
+    state.set_size(
+        vec2f(100., 260.),
+        content_width,
+        content_height,
+        Pixels::zero(),
+    );
     assert_eq!(state.scroll_top, 40.0.into_pixels());
 }

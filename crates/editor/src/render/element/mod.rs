@@ -127,6 +127,7 @@ pub struct RichTextElement<V: EditorView> {
     vim_mode: Option<VimMode>,
     /// Vim visual tails - stored cursor positions when entering vim visual mode
     vim_visual_tails: Vec<CharOffset>,
+    scroll_prefix_height: Pixels,
 }
 
 /// State purely related to the display of this element. Generally, render-layer state should be
@@ -435,6 +436,7 @@ impl<V: EditorView> RichTextElement<V> {
             max_width: None,
             buffer_version: None,
             pending_edits_flushed: false,
+            scroll_prefix_height: Pixels::zero(),
             vim_mode,
             vim_visual_tails,
         }
@@ -453,6 +455,11 @@ impl<V: EditorView> RichTextElement<V> {
     pub fn with_max_width(mut self, max_width: Option<Pixels>) -> Self {
         self.max_width = max_width;
         self
+    }
+
+    /// Sets non-text chrome height that scrolls before rich text content.
+    pub fn set_scroll_prefix_height(&mut self, scroll_prefix_height: Pixels) {
+        self.scroll_prefix_height = scroll_prefix_height.max(Pixels::zero());
     }
 
     /// The size of the viewport.
@@ -488,7 +495,7 @@ impl<V: EditorView> RichTextElement<V> {
             .viewport_size
             .y()
             .into_pixels();
-        let total_size = model.height();
+        let total_size = model.height() + self.scroll_prefix_height;
         if visible_px.approx_eq(total_size, UNIT_MARGIN) {
             // This is a hack copied from the BlockListElement. Due to floating-point
             // errors, total_size and visible_px may be slightly different,
@@ -507,6 +514,27 @@ impl<V: EditorView> RichTextElement<V> {
             scroll_start: scroll_top,
             visible_px,
             total_size,
+        }
+    }
+
+    /// Returns content-only scroll data for viewporting laid-out text blocks.
+    fn vertical_content_scroll_data(&self, app: &AppContext) -> ScrollData {
+        let model = self.model.as_ref(app);
+        let viewport_height = self
+            .viewport_size_info
+            .expect("Viewport size should exist")
+            .viewport_size
+            .y()
+            .into_pixels();
+
+        ScrollData {
+            scroll_start: model
+                .viewport()
+                .content_scroll_top(self.scroll_prefix_height),
+            visible_px: model
+                .viewport()
+                .visible_content_height(viewport_height, self.scroll_prefix_height),
+            total_size: model.height(),
         }
     }
 
@@ -832,7 +860,7 @@ impl<V: EditorView> RichTextElement<V> {
 
         let model = self.model.as_ref(ctx);
         let mut ordered_list_numbering = model.viewport_list_numbering();
-        let scroll_data = self.vertical_scroll_data(ctx);
+        let scroll_data = self.vertical_content_scroll_data(ctx);
 
         let content = model.content();
         let viewport_items = content.viewport_items(
@@ -1044,6 +1072,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
             viewport_size: self.viewport_size_info,
             buffer_version: self.buffer_version,
             pending_edits_flushed: self.pending_edits_flushed,
+            scroll_prefix_height: self.scroll_prefix_height,
         };
         self.model.as_ref(app).submit_element_update(layout_update);
     }
@@ -1120,7 +1149,10 @@ impl<V: EditorView> Element for RichTextElement<V> {
                 model.next_render_buffer_version(),
                 app,
             ),
-            self.vertical_scroll_data(app).scroll_start.as_f32(),
+            model
+                .viewport()
+                .content_offset(self.scroll_prefix_height)
+                .as_f32(),
             viewport_size,
             model,
             ctx,

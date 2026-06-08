@@ -132,7 +132,7 @@ impl RenderState {
     ) -> Location {
         self.render_coordinates_to_location(
             (x + self.viewport.scroll_left()).max(Pixels::zero()),
-            (y + self.viewport.scroll_top()).max(Pixels::zero()),
+            (y + self.viewport.content_offset(self.scroll_prefix_height)).max(Pixels::zero()),
             options,
         )
     }

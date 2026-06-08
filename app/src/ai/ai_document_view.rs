@@ -16,8 +16,6 @@ use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::UiComponent;
-#[cfg(feature = "integration_tests")]
-use warpui::units::Pixels;
 use warpui::{
     id, AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
@@ -493,27 +491,6 @@ impl AIDocumentView {
 
     pub fn document_version(&self) -> AIDocumentVersion {
         self.document_version
-    }
-
-    /// Returns the view position ID used by integration scroll events.
-    #[cfg(feature = "integration_tests")]
-    pub(crate) fn view_position_id_for_integration_test(&self) -> &str {
-        &self.view_position_id
-    }
-
-    /// Returns embedded editor scroll-header state for integration assertions.
-    #[cfg(feature = "integration_tests")]
-    pub(crate) fn editor_scroll_header_state_for_integration_test(
-        &self,
-        ctx: &AppContext,
-    ) -> (bool, Pixels, Pixels, Pixels) {
-        let editor = self.editor.as_ref(ctx);
-        (
-            editor.has_scroll_header_renderer_for_integration_test(),
-            editor.scroll_header_scroll_top_for_integration_test(ctx),
-            editor.scroll_header_height_for_integration_test(ctx),
-            editor.content_scroll_top_for_integration_test(ctx),
-        )
     }
 
     pub fn selected_text(&self, ctx: &AppContext) -> Option<String> {

@@ -396,6 +396,7 @@ pub struct RenderState {
 
     /// State of the current viewport, which determines which items are visible.
     viewport: ViewportState,
+    scroll_prefix_height: Pixels,
 
     styles: RichTextStyles,
 
@@ -1750,6 +1751,7 @@ impl RenderState {
             show_final_trailing_newline_when_non_empty: true,
             has_final_trailing_newline: Cell::new(true),
             viewport: ViewportState::new(viewport_width, viewport_height),
+            scroll_prefix_height: Pixels::zero(),
             selections: Default::default(),
             decorations: Default::default(),
             content: RefCell::new(content),
@@ -1890,6 +1892,21 @@ impl RenderState {
         (self.content.borrow().summary().height as f32).into_pixels()
     }
 
+    /// Height of non-text chrome that scrolls before content.
+    pub fn scroll_prefix_height(&self) -> Pixels {
+        self.scroll_prefix_height
+    }
+
+    /// The content-space scroll offset after the scroll prefix is consumed.
+    pub fn content_scroll_top(&self) -> Pixels {
+        self.viewport.content_scroll_top(self.scroll_prefix_height)
+    }
+
+    /// Total scrollable height including the scroll prefix.
+    fn scrollable_height(&self) -> Pixels {
+        self.height() + self.scroll_prefix_height
+    }
+
     pub fn width(&self) -> Pixels {
         self.content.borrow().summary().width
     }
@@ -1939,7 +1956,7 @@ impl RenderState {
 
         Self::move_cursor_to_location(&mut cursor, location);
 
-        Some(cursor.positioned_item()?.start_y_offset - self.viewport().scroll_top())
+        Some(cursor.positioned_item()?.start_y_offset - self.content_scroll_top())
     }
 
     fn move_cursor_to_location<'a>(
@@ -2085,9 +2102,13 @@ impl RenderState {
         let mut range_set = RangeSet::new();
         let content = self.content.borrow();
         let mut cursor = content.cursor::<Height, LayoutSummary>();
-        cursor.seek_clamped(&self.viewport.scroll_top().into(), SeekBias::Left);
+        let content_scroll_top = self.content_scroll_top();
+        cursor.seek_clamped(&content_scroll_top.into(), SeekBias::Left);
 
-        let viewport_end_height = self.viewport.scroll_top() + self.viewport().height();
+        let viewport_end_height = content_scroll_top
+            + self
+                .viewport
+                .visible_content_height(self.viewport.height(), self.scroll_prefix_height);
 
         // Track the current range being built
         let mut current_range_start: Option<CharOffset> = None;
@@ -2146,8 +2167,12 @@ impl RenderState {
             .y()
             .approx_ne(self.viewport.height().as_f32(), UNIT_MARGIN);
 
-        self.viewport
-            .set_size(size_info.viewport_size, self.width(), self.height());
+        self.viewport.set_size(
+            size_info.viewport_size,
+            self.width(),
+            self.height(),
+            self.scroll_prefix_height,
+        );
 
         // TODO(CLD-85): re-layout according to the high-level design (async, debounced, avoid
         // where possible).
@@ -2167,7 +2192,10 @@ impl RenderState {
     /// Scroll the viewport by the given number of lines. Even with precise
     /// trackpad scrolling, all scroll events are reported in lines.
     pub fn scroll(&mut self, delta: Pixels, ctx: &mut ModelContext<Self>) {
-        if self.viewport.scroll(delta, self.height()) {
+        if self
+            .viewport
+            .scroll(delta, self.height(), self.scroll_prefix_height)
+        {
             ctx.notify();
         }
     }
@@ -2376,10 +2404,10 @@ impl RenderState {
                 self.autoscroll(mode, ctx);
             }
             LayoutAction::ScrollTo(position) => {
-                if self
-                    .viewport
-                    .scroll_to(position.to_scroll_top(self), self.height())
-                {
+                if self.viewport.scroll_to(
+                    self.scroll_prefix_height + position.to_scroll_top(self),
+                    self.scrollable_height(),
+                ) {
                     ctx.notify();
                 }
             }
@@ -2521,13 +2549,34 @@ impl RenderState {
 
     /// Updates the model with the results of laying out its element.
     fn apply_element_update(&mut self, update: ElementUpdate, ctx: &mut ModelContext<Self>) {
+        let old_scroll_prefix_height = self.scroll_prefix_height;
+        let old_scroll_top = self.viewport.scroll_top();
+        let old_content_scroll_top = self.content_scroll_top();
+        let scroll_prefix_changed = self.scroll_prefix_height != update.scroll_prefix_height;
+        self.scroll_prefix_height = update.scroll_prefix_height;
         // Clear up the remaining pending edits state after layout is completed. Also make sure we have the updated
         // content sizing.
-        if self.lazy_layout {
+        if self.lazy_layout || scroll_prefix_changed {
             self.update_content_sizing();
+        }
+        if scroll_prefix_changed {
+            let header_added = old_scroll_prefix_height <= Pixels::zero()
+                && self.scroll_prefix_height > Pixels::zero();
+            let scroll_top = if header_added {
+                Pixels::zero()
+            } else if old_scroll_top > old_scroll_prefix_height {
+                self.scroll_prefix_height + old_content_scroll_top
+            } else {
+                old_scroll_top.min(self.scroll_prefix_height)
+            };
+            self.viewport
+                .scroll_to(scroll_top, self.scrollable_height());
         }
         if update.pending_edits_flushed {
             ctx.emit(RenderEvent::PendingEditsFlushed);
+        }
+        if scroll_prefix_changed {
+            ctx.notify();
         }
 
         if let Some(viewport_size) = update.viewport_size {
@@ -2809,13 +2858,17 @@ impl RenderState {
     }
 
     fn update_content_sizing(&mut self) {
-        self.viewport.update_content_height(self.height());
+        self.viewport
+            .update_content_height(self.height(), self.scroll_prefix_height);
         self.viewport.update_content_width(self.width());
     }
 
     /// Perform an autoscroll action based on the mode.
     pub fn autoscroll(&mut self, mode: AutoScrollMode, ctx: &mut ModelContext<Self>) {
         let table_scroll_changed = self.reveal_autoscroll_offsets_in_tables(&mode);
+        let visible_content_height = self
+            .viewport
+            .visible_content_height(self.viewport.height(), self.scroll_prefix_height);
         let ((in_line_selection_start, in_line_selection_end), vertical_autoscroll_only) =
             match mode {
                 AutoScrollMode::ScrollOffsetsIntoViewport(offsets) => {
@@ -2828,10 +2881,10 @@ impl RenderState {
                     pixel_delta,
                 } => {
                     let (start, _) = self.character_width_height_range(character_offset);
-                    if self
-                        .viewport
-                        .scroll_to(start.y().into_pixels() + pixel_delta, self.height())
-                        || table_scroll_changed
+                    if self.viewport.scroll_to(
+                        self.scroll_prefix_height + start.y().into_pixels() + pixel_delta,
+                        self.scrollable_height(),
+                    ) || table_scroll_changed
                     {
                         ctx.notify();
                     }
@@ -2844,8 +2897,8 @@ impl RenderState {
                     (
                         Self::multiselect_autoscroll_bounding_box(
                             cursor_positions,
-                            self.viewport.height(),
-                            self.viewport.scroll_top(),
+                            visible_content_height,
+                            self.content_scroll_top(),
                         ),
                         vertical_only,
                     )
@@ -2855,7 +2908,7 @@ impl RenderState {
 
                     // Calculate half the viewport dimensions
                     let half_viewport_width = self.viewport.width().as_f32() / 2.0;
-                    let half_viewport_height = self.viewport.height().as_f32() / 2.0;
+                    let half_viewport_height = visible_content_height.as_f32() / 2.0;
 
                     // Compute the bounding box centered on the character position
                     // Start = character position - half viewport
@@ -2882,6 +2935,7 @@ impl RenderState {
             self.height(),
             self.width(),
             should_autoscroll_horizontally,
+            self.scroll_prefix_height,
         ) || table_scroll_changed
         {
             ctx.notify();
@@ -3114,7 +3168,10 @@ impl RenderState {
         let bounds = self.character_bounds(offset)?;
 
         // Convert from content coordinates to viewport coordinates
-        let scroll_top = self.viewport.scroll_top().as_f32();
+        let scroll_top = self
+            .viewport
+            .content_offset(self.scroll_prefix_height)
+            .as_f32();
         let scroll_left = self.viewport.scroll_left().as_f32();
 
         let viewport_origin = vec2f(
@@ -3160,7 +3217,7 @@ impl RenderState {
     pub(super) fn viewport_list_numbering(&self) -> ListNumbering {
         let content = self.content.borrow();
         let mut cursor = content.cursor::<Height, ()>();
-        cursor.seek_clamped(&self.viewport.scroll_top().into(), SeekBias::Left);
+        cursor.seek_clamped(&self.content_scroll_top().into(), SeekBias::Left);
 
         // If the viewport starts with an ordered list item, we need to know its initial numbering.
         // This only depends on the ordered list items immediately above the viewport. To find them,
@@ -3275,6 +3332,7 @@ pub(crate) struct ElementUpdate {
     pub viewport_size: Option<SizeInfo>,
     pub buffer_version: Option<BufferVersion>,
     pub pending_edits_flushed: bool,
+    pub scroll_prefix_height: Pixels,
 }
 
 /// The mode of a requested autoscroll action.

@@ -151,6 +151,29 @@ impl ViewportState {
         self.scroll_top
     }
 
+    /// The content-space offset for rendering content after a scroll prefix.
+    pub fn content_offset(&self, scroll_prefix_height: Pixels) -> Pixels {
+        self.scroll_top - scroll_prefix_height
+    }
+
+    /// The first visible content-space offset after a scroll prefix.
+    pub fn content_scroll_top(&self, scroll_prefix_height: Pixels) -> Pixels {
+        self.content_offset(scroll_prefix_height)
+            .max(Pixels::zero())
+    }
+
+    /// The content height visible in the viewport after accounting for a scroll prefix.
+    pub fn visible_content_height(
+        &self,
+        viewport_height: Pixels,
+        scroll_prefix_height: Pixels,
+    ) -> Pixels {
+        let content_start = self.content_scroll_top(scroll_prefix_height);
+        let content_end =
+            (self.scroll_top + viewport_height - scroll_prefix_height).max(Pixels::zero());
+        (content_end - content_start).max(Pixels::zero())
+    }
+
     /// The current horizontal scroll position of the viewport.
     pub fn scroll_left(&self) -> Pixels {
         self.scroll_left
@@ -160,8 +183,16 @@ impl ViewportState {
     /// which should be the height of the buffer content.
     ///
     /// Returns whether the view should be re-rendered.
-    pub(super) fn scroll(&mut self, delta: Pixels, content_height: Pixels) -> bool {
-        self.scroll_to(self.scroll_top - delta, content_height)
+    pub(super) fn scroll(
+        &mut self,
+        delta: Pixels,
+        content_height: Pixels,
+        scroll_prefix_height: Pixels,
+    ) -> bool {
+        self.scroll_to(
+            self.scroll_top - delta,
+            content_height + scroll_prefix_height,
+        )
     }
 
     pub(super) fn scroll_horizontally(&mut self, delta: Pixels, content_width: Pixels) -> bool {
@@ -203,10 +234,14 @@ impl ViewportState {
     /// affects the range of valid scroll positions.
     ///
     /// Returns whether the view should be re-rendered.
-    pub(super) fn update_content_height(&mut self, content_height: Pixels) -> bool {
+    pub(super) fn update_content_height(
+        &mut self,
+        content_height: Pixels,
+        scroll_prefix_height: Pixels,
+    ) -> bool {
         // A scroll of 0 will reapply the clamping logic to ensure the scroll
         // position is still in bounds.
-        self.scroll(Pixels::zero(), content_height)
+        self.scroll(Pixels::zero(), content_height, scroll_prefix_height)
     }
 
     pub(super) fn update_content_width(&mut self, content_width: Pixels) -> bool {
@@ -222,6 +257,7 @@ impl ViewportState {
         content_height: Pixels,
         content_width: Pixels,
         should_autoscroll_horizontally: bool,
+        scroll_prefix_height: Pixels,
     ) -> bool {
         let mut changed = false;
 
@@ -243,18 +279,21 @@ impl ViewportState {
             }
         }
 
-        if item_start.y().into_pixels() < self.scroll_top {
+        let item_start_y = item_start.y().into_pixels() + scroll_prefix_height;
+        let item_end_y = item_end.y().into_pixels() + scroll_prefix_height;
+        let scrollable_height = content_height + scroll_prefix_height;
+
+        if item_start_y < self.scroll_top {
             // The position we want to scroll to is `item_start - AUTO_SCROLL_MARGIN.into_pixels()`.
-            changed = self.scroll(
-                self.scroll_top - item_start.y().into_pixels() + AUTO_SCROLL_MARGIN.into_pixels(),
-                content_height,
+            changed = self.scroll_to(
+                (item_start_y - AUTO_SCROLL_MARGIN.into_pixels()).max(Pixels::zero()),
+                scrollable_height,
             ) || changed;
-        } else if item_end.y().into_pixels() > self.scroll_top + self.height {
+        } else if item_end_y > self.scroll_top + self.height {
             // The position we want to scroll to is `item_end - self.height + AUTO_SCROLL_MARGIN.into_pixels()`.
-            changed = self.scroll(
-                self.scroll_top - item_end.y().into_pixels() + self.height
-                    - AUTO_SCROLL_MARGIN.into_pixels(),
-                content_height,
+            changed = self.scroll_to(
+                item_end_y - self.height + AUTO_SCROLL_MARGIN.into_pixels(),
+                scrollable_height,
             ) || changed;
         }
 
@@ -328,12 +367,13 @@ impl ViewportState {
         size: Vector2F,
         content_width: Pixels,
         content_height: Pixels,
+        scroll_prefix_height: Pixels,
     ) {
         self.width = size.x().into_pixels();
         self.height = size.y().into_pixels();
         // If set_size is called, the view is already being re-rendered, so we can ignore the
         // return value of update_content_height.
-        self.update_content_height(content_height);
+        self.update_content_height(content_height, scroll_prefix_height);
         self.update_content_width(content_width);
     }
 }

@@ -7,7 +7,7 @@ use sum_tree::SumTree;
 use warpui_core::assets::asset_cache::AssetSource;
 use warpui_core::fonts::FamilyId;
 use warpui_core::text_layout::{CaretPosition, TextFrame};
-use warpui_core::units::IntoPixels;
+use warpui_core::units::{IntoPixels, Pixels};
 
 use crate::content::text::{
     BufferBlockStyle, CodeBlockType, FormattedTable, table_cell_offset_maps,
@@ -463,7 +463,9 @@ fn test_hit_scrolled() {
     model.set_content(tree);
 
     // Scroll the viewport directly since we don't have a ModelContext.
-    model.viewport.scroll((-40.0).into_pixels(), model.height());
+    model
+        .viewport
+        .scroll((-40.0).into_pixels(), model.height(), Pixels::zero());
 
     // Because of scrolling, this hits the second line.
     assert_eq!(
@@ -483,7 +485,9 @@ fn test_hit_scrolled() {
 
     // Now, scroll to the last viewport (containing the last paragraph, part of "ped", and the
     // trailing newline).
-    model.viewport.scroll((-47.0).into_pixels(), model.height());
+    model
+        .viewport
+        .scroll((-47.0).into_pixels(), model.height(), Pixels::zero());
 
     // This line is soft-wrapped to be partially in-viewport.
     assert_eq!(
