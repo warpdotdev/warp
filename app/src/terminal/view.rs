@@ -8055,7 +8055,9 @@ impl TerminalView {
         if self.current_long_running_command_agent_interaction_state() == state {
             return;
         }
-        log::info!("Applying shared-session LRC interaction_state={state:?}");
+        log::info!(
+            "Applying shared-session LRC interaction_state={state:?} to block_id={block_id:?}"
+        );
         match state {
             LongRunningCommandAgentInteractionState::InControl => {
                 self.cli_subagent_controller.update(ctx, |controller, ctx| {
