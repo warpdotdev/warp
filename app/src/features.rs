@@ -415,12 +415,12 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ConversationsAsContext,
         #[cfg(feature = "incremental_auto_reload")]
         FeatureFlag::IncrementalAutoReload,
-        #[cfg(feature = "orchestration_pill_bar")]
-        FeatureFlag::OrchestrationPillBar,
-        #[cfg(feature = "orchestration_viewer_pill_bar")]
-        FeatureFlag::OrchestrationViewerPillBar,
+        #[cfg(feature = "run_agents_tool")]
+        FeatureFlag::RunAgentsTool,
         #[cfg(feature = "orchestration_viewer_streamer")]
         FeatureFlag::OrchestrationViewerStreamer,
+        #[cfg(feature = "owner_orchestration_ancestor_streamer")]
+        FeatureFlag::OwnerOrchestrationAncestorStreamer,
         #[cfg(feature = "pending_user_query_indicator")]
         FeatureFlag::PendingUserQueryIndicator,
         #[cfg(feature = "queue_slash_command")]
@@ -447,6 +447,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TabConfigs,
         #[cfg(feature = "grouped_tabs")]
         FeatureFlag::GroupedTabs,
+        #[cfg(feature = "warp_control_cli")]
+        FeatureFlag::WarpControlCli,
         #[cfg(feature = "agent_harness")]
         FeatureFlag::AgentHarness,
         #[cfg(feature = "oz_handoff")]

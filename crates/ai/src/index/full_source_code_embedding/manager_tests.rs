@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(feature = "local_fs")]
+use chrono::Utc;
+#[cfg(feature = "local_fs")]
+use repo_metadata::DirectoryWatcher;
 use warpui_core::App;
 
 use super::{
@@ -170,6 +174,74 @@ fn initializes_with_injected_snapshot_storage_when_configured() {
             let snapshot_storage = manager.snapshot_storage.as_ref().unwrap();
             assert_eq!(snapshot_storage.path(), expected_snapshot_dir);
             assert!(!snapshot_storage.is_app_default());
+        });
+    });
+}
+
+#[test]
+fn persisted_index_restore_starts_on_startup_by_default() {
+    App::test((), |app| async move {
+        let manager = app.add_singleton_model(|ctx| {
+            CodebaseIndexManager::new(
+                Vec::new(),
+                Some(1),
+                1000,
+                32,
+                Arc::new(MockStoreClient),
+                true,
+                ctx,
+            )
+        });
+
+        manager.read(&app, |manager, _| {
+            assert!(manager.build_queue.is_running());
+        });
+    });
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn deferred_persisted_index_restore_starts_once() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+
+        let snapshot_dir = tempfile::tempdir().unwrap();
+        let storage = SnapshotStorage::from_dir(snapshot_dir.path().join("daemon")).unwrap();
+        let first_repo = tempfile::tempdir().unwrap();
+        let second_repo = tempfile::tempdir().unwrap();
+        let mut first_metadata = workspace_metadata(first_repo.path());
+        first_metadata.modified_ts = Some(Utc::now());
+        let mut second_metadata = workspace_metadata(second_repo.path());
+        second_metadata.modified_ts = Some(Utc::now());
+        std::fs::write(storage.snapshot_path(first_repo.path()), b"snapshot").unwrap();
+        std::fs::write(storage.snapshot_path(second_repo.path()), b"snapshot").unwrap();
+
+        let manager = app.add_singleton_model(|ctx| {
+            CodebaseIndexManager::new_with_snapshot_storage(
+                CodebaseIndexManagerConfig::new(
+                    vec![first_metadata, second_metadata],
+                    Some(2),
+                    1000,
+                    32,
+                    Arc::new(MockStoreClient),
+                    true,
+                )
+                .defer_persisted_index_restore(),
+                Some(storage),
+                ctx,
+            )
+        });
+
+        manager.update(&mut app, |manager, ctx| {
+            assert!(!manager.build_queue.is_running());
+            assert_eq!(manager.build_queue.queued_metadata().into_iter().count(), 2);
+
+            manager.start_persisted_index_restore(ctx);
+            assert!(manager.build_queue.is_running());
+            assert_eq!(manager.build_queue.queued_metadata().into_iter().count(), 1);
+
+            manager.start_persisted_index_restore(ctx);
+            assert_eq!(manager.build_queue.queued_metadata().into_iter().count(), 1);
         });
     });
 }

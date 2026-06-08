@@ -746,12 +746,11 @@ impl ServerApi {
         Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
-    /// Opens an SSE stream against the ancestor-scoped endpoint that serves
-    /// every direct child of the supplied parent run. Mirrors
-    /// [`Self::stream_agent_events`] in transport, auth, and header handling.
+    /// Opens an SSE stream against the ancestor-scoped agent event endpoint.
     pub async fn stream_agent_events_for_ancestor(
         &self,
         ancestor_run_id: &str,
+        include_self: bool,
         since_sequence: i64,
     ) -> Result<http_client::EventSourceStream> {
         debug_assert!(
@@ -763,8 +762,13 @@ impl ServerApi {
             .await
             .context("Failed to get access token for SSE stream")?;
 
+        let include_self_param = if include_self {
+            "&include_self=true"
+        } else {
+            ""
+        };
         let url = format!(
-            "{}/api/v1/agent/events/stream?ancestor_run_id={}&since={since_sequence}",
+            "{}/api/v1/agent/events/stream?ancestor_run_id={}&since={since_sequence}{include_self_param}",
             ChannelState::rtc_http_url(),
             urlencoding::encode(ancestor_run_id),
         );

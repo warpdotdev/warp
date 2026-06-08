@@ -29,6 +29,7 @@ pub mod federate;
 pub mod harness_support;
 pub mod integration;
 pub mod json_filter;
+pub mod local_control;
 pub mod mcp;
 pub mod model;
 pub mod provider;

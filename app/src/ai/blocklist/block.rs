@@ -171,6 +171,7 @@ use crate::server::telemetry::{
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AgentModeCodingPermissionsType, FontSettings,
     InputModeSettings, InputModeSettingsChangedEvent, InputSettings,
+    OrchestrationMessageDisplayMode,
 };
 use crate::settings_view::SettingsSection;
 use crate::terminal::find::TerminalFindModel;
@@ -783,7 +784,7 @@ impl CollapsibleElementState {
     }
 
     fn finish_reasoning(&mut self, app: &AppContext) {
-        let should_auto_collapse = self.should_auto_collapse_reasoning_on_finish();
+        let should_auto_collapse = self.should_auto_collapse_on_finish();
         let thinking_mode = AISettings::as_ref(app).thinking_display_mode;
 
         self.sync_finished_state(true);
@@ -815,6 +816,23 @@ impl CollapsibleElementState {
         }
     }
 
+    /// Applies orchestration message display behavior after streaming finishes.
+    fn finish_orchestration_message(&mut self, display_mode: OrchestrationMessageDisplayMode) {
+        let should_auto_collapse = self.should_auto_collapse_on_finish();
+
+        self.sync_finished_state(true);
+
+        if display_mode.should_collapse_agent_message_body_on_finish() && should_auto_collapse {
+            self.expansion_state = CollapsibleExpansionState::Collapsed;
+        } else if let CollapsibleExpansionState::Expanded {
+            scroll_pinned_to_bottom,
+            ..
+        } = &mut self.expansion_state
+        {
+            *scroll_pinned_to_bottom = false;
+        }
+    }
+
     fn toggle_expansion(&mut self) {
         if !self.last_known_is_finished {
             self.user_toggled_while_streaming = true;
@@ -830,7 +848,7 @@ impl CollapsibleElementState {
         }
     }
 
-    fn should_auto_collapse_reasoning_on_finish(&self) -> bool {
+    fn should_auto_collapse_on_finish(&self) -> bool {
         !self.user_toggled_while_streaming
             && matches!(
                 self.expansion_state,
@@ -852,11 +870,30 @@ pub(crate) fn received_message_collapsible_id(message_id: &str) -> MessageId {
 
 fn default_collapsible_state_for_orchestration_action(
     action: &AIAgentActionType,
+    display_mode: OrchestrationMessageDisplayMode,
 ) -> Option<CollapsibleElementState> {
     match action {
         AIAgentActionType::StartAgent { .. } => Some(CollapsibleElementState::default()),
-        AIAgentActionType::SendMessageToAgent { .. } => Some(CollapsibleElementState::collapsed()),
+        AIAgentActionType::SendMessageToAgent { .. } => {
+            Some(default_orchestration_collapsible_state(
+                display_mode.should_expand_agent_message_body(),
+            ))
+        }
         _ => None,
+    }
+}
+
+fn default_collapsible_state_for_orchestration_message(
+    display_mode: OrchestrationMessageDisplayMode,
+) -> CollapsibleElementState {
+    default_orchestration_collapsible_state(display_mode.should_expand_agent_message_body())
+}
+
+fn default_orchestration_collapsible_state(expanded: bool) -> CollapsibleElementState {
+    if expanded {
+        CollapsibleElementState::default()
+    } else {
+        CollapsibleElementState::collapsed()
     }
 }
 
@@ -1131,6 +1168,10 @@ impl AIBlock {
                         }
                         _ => {}
                     }
+                    ctx.notify();
+                }
+                AISettingsChangedEvent::ThinkingDisplayMode { .. }
+                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
                     ctx.notify();
                 }
                 _ => {}
@@ -2148,10 +2189,14 @@ impl AIBlock {
             }
 
             // Register collapsible state for orchestration action messages.
+            let orchestration_message_display_mode =
+                AISettings::as_ref(ctx).orchestration_message_display_mode;
             match &message.message {
                 AIAgentOutputMessageType::Action(AIAgentAction { action, .. }) => {
-                    if let Some(state) = default_collapsible_state_for_orchestration_action(action)
-                    {
+                    if let Some(state) = default_collapsible_state_for_orchestration_action(
+                        action,
+                        orchestration_message_display_mode,
+                    ) {
                         self.collapsible_block_states
                             .entry(message.id.clone())
                             .or_insert(state);
@@ -2163,7 +2208,11 @@ impl AIBlock {
                             received_message_collapsible_id(&received_message.message_id);
                         self.collapsible_block_states
                             .entry(collapsible_id.clone())
-                            .or_insert_with(CollapsibleElementState::collapsed);
+                            .or_insert_with(|| {
+                                default_collapsible_state_for_orchestration_message(
+                                    orchestration_message_display_mode,
+                                )
+                            });
                         self.state_handles
                             .transcript_avatar_handles
                             .entry(collapsible_id)
@@ -2340,7 +2389,59 @@ impl AIBlock {
         self.keyboard_navigable_buttons = Some(menu);
     }
 
+    /// Applies final display behavior to orchestration message bodies.
+    fn finish_orchestration_message_collapsible_states(
+        &mut self,
+        output: &AIAgentOutput,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let display_mode = AISettings::as_ref(ctx).orchestration_message_display_mode;
+        for message in &output.messages {
+            match &message.message {
+                AIAgentOutputMessageType::Action(AIAgentAction {
+                    action: AIAgentActionType::SendMessageToAgent { .. },
+                    ..
+                }) => {
+                    self.collapsible_block_states
+                        .entry(message.id.clone())
+                        .or_insert_with(|| {
+                            default_orchestration_collapsible_state(
+                                display_mode.should_expand_agent_message_body(),
+                            )
+                        })
+                        .finish_orchestration_message(display_mode);
+                }
+                AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } => {
+                    for received_message in messages {
+                        let collapsible_id =
+                            received_message_collapsible_id(&received_message.message_id);
+                        self.collapsible_block_states
+                            .entry(collapsible_id)
+                            .or_insert_with(|| {
+                                default_collapsible_state_for_orchestration_message(display_mode)
+                            })
+                            .finish_orchestration_message(display_mode);
+                    }
+                }
+                AIAgentOutputMessageType::Text(_)
+                | AIAgentOutputMessageType::Reasoning { .. }
+                | AIAgentOutputMessageType::Summarization { .. }
+                | AIAgentOutputMessageType::Subagent(_)
+                | AIAgentOutputMessageType::Action(_)
+                | AIAgentOutputMessageType::TodoOperation(_)
+                | AIAgentOutputMessageType::WebSearch(_)
+                | AIAgentOutputMessageType::WebFetch(_)
+                | AIAgentOutputMessageType::CommentsAddressed { .. }
+                | AIAgentOutputMessageType::DebugOutput { .. }
+                | AIAgentOutputMessageType::ArtifactCreated(_)
+                | AIAgentOutputMessageType::SkillInvoked(_)
+                | AIAgentOutputMessageType::EventsFromAgents { .. } => {}
+            }
+        }
+    }
+
     fn handle_complete_output(&mut self, output: &AIAgentOutput, ctx: &mut ViewContext<Self>) {
+        self.finish_orchestration_message_collapsible_states(output, ctx);
         let mut suggestions = BlocklistAIHistoryModel::as_ref(ctx)
             .existing_suggestions_for_conversation(self.client_ids.conversation_id)
             .cloned()

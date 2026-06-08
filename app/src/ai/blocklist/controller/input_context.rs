@@ -80,9 +80,7 @@ pub(super) fn input_context_for_request(
 
     if FeatureFlag::ListSkills.is_enabled() {
         let skills = list_skills_if_changed(
-            active_session
-                .current_working_directory_location(app)
-                .as_ref(),
+            current_working_directory_location.as_ref(),
             conversation_id,
             app,
         );
