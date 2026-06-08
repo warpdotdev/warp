@@ -116,7 +116,7 @@ These changes are **unconditional** (not feature-flag gated), matching the estab
    - `is_installed()`: checks if `~/.antigravitycli/extensions/agy-warp/agy-extension.json` exists and is valid JSON.
    - `needs_update()`: compares the on-disk manifest `version` with `MINIMUM_PLUGIN_VERSION` using `compare_versions()`.
    - `install()`: runs `agy extensions install https://github.com/warpdotdev/agy-warp`.
-   - `update()`: runs `agy extensions update agy-warp`, then performs a post-update version verification (reading the on-disk manifest to confirm the version changed). If the version is still outdated, returns `PluginInstallError`.
+   - `update()`: runs `agy extensions update agy-warp`, then performs a post-update version verification (reading the on-disk manifest to confirm the installed version is at least `MINIMUM_PLUGIN_VERSION`). If the version is still outdated, returns `PluginInstallError`.
    - `install_instructions()` / `update_instructions()`: static `PluginInstructions` structs with title, subtitle, steps, and post-install notes.
 3. Register `CLIAgent::Antigravity` in `plugin_manager_for_with_shell()` in `plugin_manager/mod.rs`:
    ```rust
@@ -144,7 +144,7 @@ These changes are **unconditional** (not feature-flag gated), matching the estab
    }
    ```
 3. Add a match arm in `SkillProvider::icon()`: returns `Icon::AntigravityLogo`. The `icon_fill()` method uses a wildcard `_ => fallback` and needs no change. `provider_rank()` and `home_skills_path()` are derived from `SKILL_PROVIDER_DEFINITIONS` position and need no explicit changes.
-4. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Since `warp_multi_agent_api` is imported from `warp-proto-apis`, if the proto does not yet contain `Antigravity` as a provider type, the implementation-safe behavior is to fall back by mapping `SkillProvider::Antigravity` to the generic `Agents` proto enum variant. This ensures the `From<SkillProvider>` conversion remains infallible (a `From` impl in Rust cannot return `None`).
+4. Map it in `crates/ai/src/skills/conversion.rs` (`From<SkillProvider>` and `convert_provider` conversions). Since `warp_multi_agent_api` is imported from `warp-proto-apis`, if the proto does not yet contain `Antigravity` as a provider type, the implementation-safe behavior is to fall back by mapping `SkillProvider::Antigravity` to the generic `Agents` proto enum variant. Note that this fallback is a local-only limitation: mapping to `Agents` loses the specific `Antigravity` provider identity on API round trips (e.g. cloud sync) because `convert_provider()` will rehydrate it as `SkillProvider::Agents`. This is acceptable for this milestone since the primary use-case is local detection, and the proto will be updated in a future milestone to fully preserve identity.
 
 ## 4. End-to-End Flow
 

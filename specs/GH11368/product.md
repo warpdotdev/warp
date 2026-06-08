@@ -92,7 +92,7 @@ Warp intentionally trusts the latest extension code published to the official `w
 
 1. **Trusted source**: Only the official `warpdotdev` GitHub organization URL is hardcoded in `EXTENSION_REPO`. Users cannot redirect the install to an arbitrary repository.
 2. **HTTPS transport**: All downloads use HTTPS, relying on GitHub's TLS integrity.
-3. **Post-update version verification**: After an update, the plugin manager reads the on-disk manifest to verify the version actually changed. If it did not, the update is treated as a failure (matching the `GeminiPluginManager` pattern).
+3. **Post-update version verification**: After an update, the plugin manager reads the on-disk manifest to verify the installed version is at least `MINIMUM_PLUGIN_VERSION`. If it is not, the update is treated as a failure (matching the `GeminiPluginManager` pattern).
 
 ## Success Criteria
 
