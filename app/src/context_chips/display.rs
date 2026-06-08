@@ -290,7 +290,9 @@ impl PromptDisplay {
     pub fn on_pane_focus_changed(&mut self, focused: bool, ctx: &mut ViewContext<Self>) {
         self.pane_is_focused = focused;
         let new_chips = self.collect_chips(ctx);
-        self.reset_chips(&new_chips, ctx);
+        if self.check_if_chip_values_have_changed(&new_chips, ctx) {
+            self.reset_chips(&new_chips, ctx);
+        }
         ctx.notify();
     }
 
@@ -355,7 +357,9 @@ impl PromptDisplay {
     pub fn update_repo_path(&mut self, repo_path: Option<PathBuf>, ctx: &mut ViewContext<Self>) {
         self.current_repo_path = repo_path;
         let new_chips = self.collect_chips(ctx);
-        self.reset_chips(&new_chips, ctx);
+        if self.check_if_chip_values_have_changed(&new_chips, ctx) {
+            self.reset_chips(&new_chips, ctx);
+        }
         ctx.notify();
     }
 }
