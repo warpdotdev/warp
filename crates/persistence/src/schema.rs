@@ -359,6 +359,7 @@ diesel::table! {
         id -> Integer,
         window_id -> Integer,
         name -> Nullable<Text>,
+        color -> Nullable<Text>,
         collapsed -> Bool,
     }
 }

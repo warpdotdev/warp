@@ -28,6 +28,7 @@ use crate::server::ids::ClientId;
 use crate::tab::SelectedTabColor;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::ShellLaunchData;
+use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::tab_group::TabGroupId;
 
 #[test]
@@ -575,6 +576,7 @@ fn test_sqlite_round_trips_tab_groups() {
             tab_groups: vec![TabGroupSnapshot {
                 id: group_id,
                 name: Some("Backend".to_string()),
+                color: SelectedTabColor::Color(AnsiColorIdentifier::Blue),
                 collapsed: true,
             }],
         }],
@@ -594,6 +596,10 @@ fn test_sqlite_round_trips_tab_groups() {
     assert_eq!(restored_window.tab_groups.len(), 1);
     let restored_group = &restored_window.tab_groups[0];
     assert_eq!(restored_group.name.as_deref(), Some("Backend"));
+    assert_eq!(
+        restored_group.color,
+        SelectedTabColor::Color(AnsiColorIdentifier::Blue)
+    );
     assert!(restored_group.collapsed);
 
     // The in-memory `TabGroupId` is minted fresh on restore, so we check that

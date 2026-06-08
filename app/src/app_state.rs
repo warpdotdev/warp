@@ -66,6 +66,7 @@ pub struct WindowSnapshot {
 pub struct TabGroupSnapshot {
     pub id: TabGroupId,
     pub name: Option<String>,
+    pub color: SelectedTabColor,
     pub collapsed: bool,
 }
 

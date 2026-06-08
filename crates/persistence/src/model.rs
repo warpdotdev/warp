@@ -370,6 +370,7 @@ pub struct TabGroup {
     pub id: i32,
     pub window_id: i32,
     pub name: Option<String>,
+    pub color: Option<String>,
     pub collapsed: bool,
 }
 
@@ -378,6 +379,7 @@ pub struct TabGroup {
 pub struct NewTabGroup {
     pub window_id: i32,
     pub name: Option<String>,
+    pub color: Option<String>,
     pub collapsed: bool,
 }
 

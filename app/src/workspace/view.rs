@@ -3769,6 +3769,7 @@ impl Workspace {
                                 TabGroup {
                                     id: group_snapshot.id,
                                     name: group_snapshot.name.clone(),
+                                    color: group_snapshot.color,
                                     collapsed: group_snapshot.collapsed,
                                     draggable_state: Default::default(),
                                 },
@@ -11059,6 +11060,7 @@ impl Workspace {
                 .map(|group| TabGroupSnapshot {
                     id: group.id,
                     name: group.name.clone(),
+                    color: group.color,
                     collapsed: group.collapsed,
                 })
                 .collect()

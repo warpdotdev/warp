@@ -2,6 +2,7 @@ CREATE TABLE tab_groups (
   id INTEGER PRIMARY KEY NOT NULL,
   window_id INTEGER NOT NULL,
   name TEXT,
+  color TEXT,
   collapsed BOOLEAN NOT NULL,
   FOREIGN KEY(window_id) REFERENCES windows(id)
 );
