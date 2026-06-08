@@ -1174,6 +1174,11 @@ pub(crate) fn initialize_app(
 
     let server_api = server_api_provider.as_ref(ctx).get();
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
+    #[cfg(not(target_family = "wasm"))]
+    tracing::start_auth_refresh(
+        server_api_provider.as_ref(ctx).get_managed_secrets_client(),
+        ctx,
+    );
 
     ctx.add_singleton_model(|_ctx| AuthStateProvider::new(auth_state.clone()));
 

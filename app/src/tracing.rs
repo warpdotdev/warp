@@ -4,6 +4,8 @@ use std::time::Duration;
 use tracing::subscriber;
 
 #[cfg(not(target_family = "wasm"))]
+mod auth;
+#[cfg(not(target_family = "wasm"))]
 mod native;
 
 #[cfg(not(target_family = "wasm"))]
@@ -18,6 +20,14 @@ pub fn init() -> anyhow::Result<Initialization> {
 
     #[cfg(not(target_family = "wasm"))]
     native::init()
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn start_auth_refresh(
+    client: std::sync::Arc<dyn warp_managed_secrets::client::ManagedSecretsClient>,
+    ctx: &mut warpui::AppContext,
+) {
+    native::start_auth_refresh(client, ctx);
 }
 
 fn install_no_subscriber() -> anyhow::Result<()> {
