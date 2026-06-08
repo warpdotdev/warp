@@ -695,12 +695,10 @@ impl From<&AIApiError> for RenderableAIError {
             },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
             AIApiError::Transport(error)
-            | AIApiError::Deserialization(DeserializationError::Transport(error)) => {
-                if Self::is_transient_network_transport_error(error) {
-                    Self::transient_network_error(false, false)
-                } else {
-                    Self::request_failed_error(value)
-                }
+            | AIApiError::Deserialization(DeserializationError::Transport(error))
+                if Self::is_transient_network_transport_error(error) =>
+            {
+                Self::transient_network_error(false, false)
             }
             _ => Self::request_failed_error(value),
         }
