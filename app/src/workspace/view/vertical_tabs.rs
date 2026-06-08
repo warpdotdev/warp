@@ -2211,8 +2211,7 @@ fn render_tab_group_internal(
             // hover/active state for the whole group, so suppress the
             // per-tab background here and let each row show its own
             // selected/hovered state.
-            let allow_per_tab_highlight =
-                !in_tab_group || FeatureFlag::GroupedTabs.is_enabled();
+            let allow_per_tab_highlight = !in_tab_group || FeatureFlag::GroupedTabs.is_enabled();
             let background = if is_drag_target {
                 internal_colors::fg_overlay_2(theme)
             } else if allow_per_tab_highlight && (is_active || group_state.is_hovered()) {
