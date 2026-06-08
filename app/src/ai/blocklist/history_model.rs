@@ -557,6 +557,35 @@ impl BlocklistAIHistoryModel {
         }
     }
 
+    /// Caches a loaded conversation without assigning it to a terminal view.
+    pub(crate) fn cache_loaded_conversation(&mut self, conversation: AIConversation) {
+        let conversation_id = conversation.id();
+        let metadata = AIConversationMetadata::from(&conversation);
+
+        if let Some(key) = agent_id_key(&conversation) {
+            self.agent_id_to_conversation_id
+                .insert(key, conversation_id);
+        }
+
+        if let Some(token) = conversation.server_conversation_token() {
+            self.server_token_to_conversation_id
+                .insert(token.clone(), conversation_id);
+        }
+
+        if let Some(parent_id) =
+            self.resolved_parent_conversation_id_for_conversation(&conversation)
+        {
+            self.index_child_conversation(conversation_id, parent_id);
+        }
+
+        self.conversations_by_id
+            .insert(conversation_id, conversation);
+        self.all_conversations_metadata
+            .entry(conversation_id)
+            .or_insert(metadata);
+        self.update_cached_metadata_for_conversation(conversation_id);
+    }
+
     /// Starts an optimistic local rename and records rollback state.
     pub(crate) fn begin_conversation_rename(
         &mut self,

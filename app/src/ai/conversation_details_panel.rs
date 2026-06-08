@@ -16,14 +16,15 @@ use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
 use warpui::elements::{
     resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
-    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Fill as ElementFill, Flex,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable,
+    ResizableStateHandle, SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::UiComponent;
+use warpui::ui_components::text_input::TextInput;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -45,11 +46,13 @@ use crate::ai::ambient_agents::{cancel_task_with_toast, AmbientAgentTaskId};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
+use crate::ai::conversation_rename::rename_conversation;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
 use crate::cloud_object::CloudObjectLookup as _;
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
 use crate::notebooks::NotebookId;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
@@ -126,6 +129,7 @@ impl Default for PanelMode {
 /// Groups mouse state handles for the panel.
 #[derive(Default)]
 struct PanelMouseStates {
+    title: MouseStateHandle,
     close_button: MouseStateHandle,
     copy_directory: MouseStateHandle,
     copy_conversation_id: MouseStateHandle,
@@ -607,6 +611,7 @@ pub enum ConversationDetailsPanelEvent {
 #[derive(Debug, Clone)]
 pub enum ConversationDetailsPanelAction {
     Close,
+    StartRename,
     CopyDirectory,
     CopyConversationId,
     CopyRunId,
@@ -653,6 +658,8 @@ pub struct ConversationDetailsPanel {
     /// Selection state for cmd+C copy.
     selection_handle: SelectionHandle,
     selected_text: Arc<RwLock<Option<String>>>,
+    rename_editor: ViewHandle<EditorView>,
+    is_renaming_title: bool,
 }
 
 impl ConversationDetailsPanel {
@@ -668,6 +675,27 @@ impl ConversationDetailsPanel {
 
         let action_buttons = ctx.add_typed_action_view(ConversationActionButtonsRow::new);
         ctx.subscribe_to_view(&action_buttons, Self::handle_action_buttons_event);
+        let rename_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            EditorView::single_line(
+                SingleLineEditorOptions {
+                    text: TextOptions::ui_text(Some(appearance.ui_font_size() + 2.), appearance),
+                    select_all_on_focus: true,
+                    clear_selections_on_blur: true,
+                    ..Default::default()
+                },
+                ctx,
+            )
+        });
+        ctx.subscribe_to_view(&rename_editor, |me, _, event, ctx| match event {
+            EditorEvent::Blurred | EditorEvent::Enter => {
+                me.finish_rename(ctx);
+            }
+            EditorEvent::Escape => {
+                me.cancel_rename(ctx);
+            }
+            _ => {}
+        });
 
         #[cfg(not(target_family = "wasm"))]
         let continue_locally_button = ctx.add_typed_action_view(|_| {
@@ -707,6 +735,8 @@ impl ConversationDetailsPanel {
             copy_feedback_times: HashMap::new(),
             selection_handle: SelectionHandle::default(),
             selected_text: Default::default(),
+            rename_editor,
+            is_renaming_title: false,
         }
     }
 
@@ -718,6 +748,56 @@ impl ConversationDetailsPanel {
         self.set_artifacts(&data, ctx);
         self.set_action_buttons(&data, ctx);
         self.data = data;
+        ctx.notify();
+    }
+
+    fn conversation_id_for_rename(&self) -> Option<AIConversationId> {
+        match &self.data.mode {
+            PanelMode::Conversation {
+                ai_conversation_id, ..
+            } => *ai_conversation_id,
+            PanelMode::Task { .. } => None,
+        }
+    }
+
+    fn start_rename(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.conversation_id_for_rename().is_none() {
+            return;
+        }
+        self.is_renaming_title = true;
+        let title = self.data.title.clone();
+        self.rename_editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer_and_reset_undo_stack(ctx);
+            editor.insert_selected_text(&title, ctx);
+        });
+        ctx.focus(&self.rename_editor);
+        ctx.notify();
+    }
+
+    fn finish_rename(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.is_renaming_title {
+            return;
+        }
+        self.is_renaming_title = false;
+        let Some(conversation_id) = self.conversation_id_for_rename() else {
+            return;
+        };
+        let title = self.rename_editor.as_ref(ctx).buffer_text(ctx);
+        self.rename_editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer_and_reset_undo_stack(ctx);
+        });
+        rename_conversation(conversation_id, title, "Conversation not found", ctx);
+        ctx.notify();
+    }
+
+    fn cancel_rename(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.is_renaming_title {
+            return;
+        }
+        self.is_renaming_title = false;
+        self.rename_editor.update(ctx, |editor, ctx| {
+            editor.clear_buffer_and_reset_undo_stack(ctx);
+        });
         ctx.notify();
     }
 
@@ -1745,6 +1825,19 @@ impl ConversationDetailsPanel {
         );
         ctx.notify();
     }
+
+    fn render_inline_rename_editor(&self, appearance: &Appearance) -> Box<dyn Element> {
+        TextInput::new(
+            self.rename_editor.clone(),
+            warpui::ui_components::components::UiComponentStyles::default()
+                .set_background(ElementFill::None)
+                .set_border_radius(CornerRadius::with_all(Radius::Pixels(0.)))
+                .set_border_width(0.)
+                .set_font_size(appearance.ui_font_size() + 2.),
+        )
+        .build()
+        .finish()
+    }
 }
 
 impl View for ConversationDetailsPanel {
@@ -1844,14 +1937,29 @@ impl View for ConversationDetailsPanel {
         } else {
             HEADER_SPACING
         };
-        let title = Text::new(
-            self.data.title.clone(),
-            appearance.ui_font_family(),
-            title_font_size,
-        )
-        .with_color(theme.foreground().into())
-        .with_style(Properties::default().weight(Weight::Semibold))
-        .finish();
+        let can_rename = self.conversation_id_for_rename().is_some();
+        let title = if self.is_renaming_title {
+            self.render_inline_rename_editor(appearance)
+        } else {
+            Text::new(
+                self.data.title.clone(),
+                appearance.ui_font_family(),
+                title_font_size,
+            )
+            .with_color(theme.foreground().into())
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .finish()
+        };
+        let title = if can_rename && !self.is_renaming_title {
+            Hoverable::new(self.mouse_states.title.clone(), move |_| title)
+                .on_double_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(ConversationDetailsPanelAction::StartRename);
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish()
+        } else {
+            title
+        };
         content.add_child(
             Container::new(title)
                 .with_margin_bottom(title_margin)
@@ -2131,6 +2239,9 @@ impl TypedActionView for ConversationDetailsPanel {
         match action {
             ConversationDetailsPanelAction::Close => {
                 ctx.emit(ConversationDetailsPanelEvent::Close);
+            }
+            ConversationDetailsPanelAction::StartRename => {
+                self.start_rename(ctx);
             }
             ConversationDetailsPanelAction::CopyDirectory => match &self.data.mode {
                 PanelMode::Conversation {
