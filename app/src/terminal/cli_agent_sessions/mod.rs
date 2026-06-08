@@ -162,10 +162,11 @@ impl CLIAgentSession {
     }
 
     /// Clears state populated by `PermissionRequest`. Called whenever the
-    /// session leaves the permission flow (the user replied, a new prompt
-    /// is submitted, or the session ends successfully) so the permission
-    /// summary doesn't leak into later UI surfaces — most visibly the tab
-    /// title, which can fall back to `summary` when `query` is unset.
+    /// session leaves the permission flow (the user replied, a blocking tool
+    /// completed, a new prompt is submitted, or the session ends successfully)
+    /// so the permission summary doesn't leak into later UI surfaces — most
+    /// visibly the tab title, which can fall back to `summary` when `query`
+    /// is unset.
     fn clear_permission_scoped_state(&mut self) {
         self.session_context.summary = None;
         self.session_context.tool_name = None;
@@ -196,6 +197,7 @@ impl CLIAgentSession {
                 if !matches!(self.status, CLIAgentSessionStatus::Blocked { .. }) {
                     return None;
                 }
+                self.clear_permission_scoped_state();
                 CLIAgentSessionStatus::InProgress
             }
             CLIAgentEventType::Stop => {
