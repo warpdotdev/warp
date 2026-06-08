@@ -10,6 +10,7 @@ use ai::index::full_source_code_embedding::manager::{
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
+use tracing::Instrument as _;
 use warp_cli::agent::Harness;
 use warp_completer::completer::CommandExitStatus;
 use warp_core::command::ExitCode;
@@ -130,9 +131,13 @@ async fn prepare_environment_impl(
     if !github_repos.is_empty() {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
-                clone_repos(github_repos, working_dir, spawner).await?;
+                clone_repos(github_repos, working_dir, spawner)
+                .instrument(tracing::info_span!("clone_repos", tags.cloud_agent = true))
+                .await?;
                 for repo in github_repos {
-                    register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
+                    register_cloned_repo(repo, working_dir, is_sandbox, spawner)
+                    .instrument(tracing::info_span!("register_cloned_repo", tags.cloud_agent = true, repo = %repo.repo))
+                    .await?;
                     if !is_sandbox && should_index_codebase {
                         let receiver = index_repo_codebase(
                             &repo.repo,
@@ -140,14 +145,15 @@ async fn prepare_environment_impl(
                             Arc::clone(&repo_channels),
                             spawner,
                         )
+                        .instrument(tracing::info_span!(
+                            "index_repo_codebase",
+                            tags.cloud_agent = true
+                        ))
                         .await?;
-                        if let Some(receiver) = receiver {
-                            codebase_context_receivers.push(receiver);
-                        }
                     }
-                }
-                Ok::<(), PrepareEnvironmentError>(())
-            })
+                    Ok::<(), PrepareEnvironmentError>(())
+                },
+            )
             .await?;
 
         if should_index_codebase {
