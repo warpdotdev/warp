@@ -251,9 +251,7 @@ if [[ "$BUILD" == "true" ]]; then
     strip --strip-debug "$EXECUTABLE_PATH"
   else
     # For production builds, strip all symbols, to keep the binary size
-    # smaller. Heap profiles are raw (unsymbolized) pprof and are symbolized
-    # offline against the debug-info file uploaded to Sentry (matched by
-    # build-id), so the shipped binary does not need to keep its symbol table.
+    # smaller.
     strip --strip-all "$EXECUTABLE_PATH"
   fi
 else
