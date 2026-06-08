@@ -123,10 +123,45 @@
             zlib
           ];
 
-          buildFeatures = [
-            "release_bundle"
-            "gui"
-          ];
+          warpMetadata = appCargoToml.package.metadata.warp;
+          buildFeatureGroups = warpMetadata.build_feature_groups;
+          buildProfiles = warpMetadata.build_profiles;
+          nixBuildProfile = "linux.oss.app";
+          profileGroupNames = profile: profile.groups or [ ];
+          hasProfileFeatures =
+            profile: builtins.isAttrs profile && (profile ? groups || profile ? features);
+          hasUnsupportedBaseGroup =
+            profile: builtins.isAttrs profile && profile ? base;
+          resolveBuildProfileFeatures =
+            profilePath:
+            let
+              profilePathSegments = lib.splitString "." profilePath;
+              profileExists = lib.attrsets.hasAttrByPath profilePathSegments buildProfiles;
+              profile = lib.attrsets.getAttrFromPath profilePathSegments buildProfiles;
+              groupNames = profileGroupNames profile;
+              missingGroups = builtins.filter (group: !(builtins.hasAttr group buildFeatureGroups)) groupNames;
+              groupFeatures = lib.concatMap (group: buildFeatureGroups.${group}) (
+                builtins.filter (group: builtins.hasAttr group buildFeatureGroups) groupNames
+              );
+              directFeatures = profile.features or [ ];
+              features = lib.lists.uniqueStrings (groupFeatures ++ directFeatures);
+              missingFeatures = builtins.filter (
+                feature: !(builtins.hasAttr feature appCargoToml.features)
+              ) features;
+            in
+            if !profileExists then
+              throw "app/Cargo.toml package.metadata.warp.build_profiles.${profilePath} is missing"
+            else if hasUnsupportedBaseGroup profile then
+              throw "app/Cargo.toml package.metadata.warp.build_profiles.${profilePath} uses unsupported base build group; use groups instead"
+            else if !(hasProfileFeatures profile) then
+              throw "app/Cargo.toml package.metadata.warp.build_profiles.${profilePath} is not a leaf build profile"
+            else if missingGroups != [ ] then
+              throw "app/Cargo.toml package.metadata.warp.build_profiles.${profilePath} references undefined build feature groups: ${lib.concatStringsSep ", " missingGroups}"
+            else if missingFeatures != [ ] then
+              throw "app/Cargo.toml package.metadata.warp.build_profiles.${profilePath} references undefined Cargo features: ${lib.concatStringsSep ", " missingFeatures}"
+            else
+              features;
+          buildFeatures = resolveBuildProfileFeatures nixBuildProfile;
 
           warp-terminal-experimental = rustPlatform.buildRustPackage {
             pname = "warp-terminal-experimental";
