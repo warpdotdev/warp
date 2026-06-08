@@ -10,7 +10,7 @@ use futures_util::stream::AbortHandle;
 use http::header::{HeaderValue, AUTHORIZATION};
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use warp_managed_secrets::client::{IdentityTokenOptions, ManagedSecretsClient, TaskIdentityToken};
-use warpui::r#async::Timer;
+use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 const CLOUD_AGENT_OTLP_TOKEN: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN";
@@ -22,6 +22,7 @@ const PROACTIVE_REFRESH_JITTER: Duration = Duration::from_secs(2 * 60);
 const INITIAL_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_FAILURE_BACKOFF: Duration = Duration::from_secs(5 * 60);
 const FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
+const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub(super) struct AuthContext {
@@ -131,8 +132,9 @@ struct TokenSnapshot {
 
 impl TokenSnapshot {
     fn new(token: String, expires_at: DateTime<Utc>) -> anyhow::Result<Self> {
-        let authorization_header = HeaderValue::from_str(&format!("Bearer {token}"))
+        let mut authorization_header = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| anyhow!("Cloud-agent OTLP token cannot be used as an HTTP header"))?;
+        authorization_header.set_sensitive(true);
         Ok(Self {
             authorization_header,
             expires_at,
@@ -276,7 +278,9 @@ impl AuthRefreshCoordinator {
                         requested_duration: REFRESHED_TOKEN_DURATION,
                         subject_template: vec1::vec1!["principal".to_owned()],
                     })
+                    .with_timeout(REFRESH_REQUEST_TIMEOUT)
                     .await
+                    .map_err(|_| anyhow!("Cloud-agent OTLP authorization refresh timed out"))?
             },
             |coordinator, result, ctx| coordinator.finish_refresh(result, ctx),
         );
@@ -429,5 +433,23 @@ mod tests {
 
         assert!(!debug_output.contains("secret-test-token"));
         assert!(debug_output.contains("expires_at"));
+    }
+
+    #[test]
+    fn authorized_request_debug_redacts_token() {
+        let client = client_with_expiry(
+            "secret-request-test-token",
+            Utc::now() + TimeDelta::try_minutes(5).unwrap(),
+        );
+        let mut request = Request::builder().body(Bytes::new()).unwrap();
+
+        client.authorize_request(&mut request).unwrap();
+        let request_debug = format!("{request:?}");
+        let headers_debug = format!("{:?}", request.headers());
+
+        assert!(!request_debug.contains("secret-request-test-token"));
+        assert!(!headers_debug.contains("secret-request-test-token"));
+        assert!(request_debug.contains("Sensitive"));
+        assert!(headers_debug.contains("Sensitive"));
     }
 }
