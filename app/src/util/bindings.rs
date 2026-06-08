@@ -204,21 +204,6 @@ lazy_static! {
     /// PTY compliant. Windows users expect pasting to work using both `ctrl-v` and `ctrl-shift-v`,
     /// so we allowlist the terminal paste action for the purposes of binding validation.
     pub static ref WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES: HashSet<Keystroke> = HashSet::from_iter([Keystroke::parse("ctrl-v").expect("should be able to construct ctrl-v keystroke")]);
-    /// Action and keystroke pairs that intentionally use a PTY control character.
-    ///
-    /// Keep these exceptions scoped by both action and keystroke so unrelated TerminalView
-    /// actions remain invalid and customizing one of these actions does not allow an arbitrary
-    /// control character.
-    pub static ref PTY_NON_COMPLIANT_ACTION_KEYSTROKES: Vec<(&'static str, Keystroke)> = vec![
-        (
-            "terminal:cycle_next_orchestration_child_agent",
-            Keystroke::parse("ctrl-]").expect("should be able to construct ctrl-] keystroke"),
-        ),
-        (
-            "terminal:cycle_previous_orchestration_child_agent",
-            Keystroke::parse("ctrl-[").expect("should be able to construct ctrl-[ keystroke"),
-        ),
-    ];
 
     /// Set of keystrokes that should be considered valid bindings on all platforms even though
     /// they aren't PTY compliant.
@@ -925,11 +910,6 @@ fn is_pty_non_compliant_binding_allowed(binding_name: &str, keystroke: &Keystrok
     (OperatingSystem::get().is_mac() && MAC_PTY_NON_COMPLIANT_ACTIONS.contains(binding_name))
         || (OperatingSystem::get().is_windows()
             && WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke))
-        || PTY_NON_COMPLIANT_ACTION_KEYSTROKES
-            .iter()
-            .any(|(name, allowed_keystroke)| {
-                *name == binding_name && allowed_keystroke == keystroke
-            })
         || PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke)
 }
 

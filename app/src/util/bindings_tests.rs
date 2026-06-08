@@ -3,9 +3,7 @@ use warpui::platform::OperatingSystem;
 use warpui::App;
 
 use crate::terminal;
-use crate::util::bindings::{
-    is_pty_non_compliant_binding_allowed, keybinding_name_to_display_string, trigger_to_keystroke,
-};
+use crate::util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke};
 use crate::workspace::WorkspaceAction;
 
 #[test]
@@ -75,36 +73,6 @@ fn test_keybinding_name_to_display_string() {
     });
 }
 
-#[test]
-fn test_orchestration_cycle_pty_exceptions_are_action_scoped() {
-    let ctrl_left_bracket = Keystroke::parse("ctrl-[").expect("valid keystroke");
-    let ctrl_right_bracket = Keystroke::parse("ctrl-]").expect("valid keystroke");
-
-    assert!(is_pty_non_compliant_binding_allowed(
-        "terminal:cycle_previous_orchestration_child_agent",
-        &ctrl_left_bracket,
-    ));
-    assert!(is_pty_non_compliant_binding_allowed(
-        "terminal:cycle_next_orchestration_child_agent",
-        &ctrl_right_bracket,
-    ));
-    assert!(!is_pty_non_compliant_binding_allowed(
-        "terminal:unrelated_action",
-        &ctrl_left_bracket,
-    ));
-    assert!(!is_pty_non_compliant_binding_allowed(
-        "terminal:unrelated_action",
-        &ctrl_right_bracket,
-    ));
-    assert!(!is_pty_non_compliant_binding_allowed(
-        "terminal:cycle_next_orchestration_child_agent",
-        &ctrl_left_bracket,
-    ));
-    assert!(!is_pty_non_compliant_binding_allowed(
-        "terminal:cycle_previous_orchestration_child_agent",
-        &ctrl_right_bracket,
-    ));
-}
 
 #[test]
 fn test_orchestration_cycle_bindings_are_editable() {
