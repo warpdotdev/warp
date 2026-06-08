@@ -22,6 +22,11 @@ type ClickHandler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F)>;
 type ClickWithModifiersHandler =
     Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F, ModifiersState)>;
 
+/// Mouse-down handler that additionally receives the keyboard modifiers held
+/// at press time, captured from the `LeftMouseDown` event.
+type MouseDownWithModifiersHandler =
+    Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F, ModifiersState)>;
+
 pub struct Hoverable {
     child: Box<dyn Element>,
     state: MouseStateHandle,
@@ -34,6 +39,9 @@ pub struct Hoverable {
     // but the callback also receives the keyboard modifiers held at click time.
     click_with_modifiers_handler: Option<ClickWithModifiersHandler>,
     mouse_down_handler: Option<ClickHandler>,
+    // Fires on `LeftMouseDown` and additionally receives the keyboard modifiers
+    // held at press time.
+    mouse_down_with_modifiers_handler: Option<MouseDownWithModifiersHandler>,
     double_click_handler: Option<ClickHandler>,
     middle_click_handler: Option<ClickHandler>,
     right_click_handler: Option<ClickHandler>,
@@ -201,6 +209,7 @@ impl Hoverable {
             click_handler: None,
             click_with_modifiers_handler: None,
             mouse_down_handler: None,
+            mouse_down_with_modifiers_handler: None,
             double_click_handler: None,
             middle_click_handler: None,
             right_click_handler: None,
@@ -273,6 +282,18 @@ impl Hoverable {
         F: 'static + FnMut(&mut EventContext, &AppContext, Vector2F),
     {
         self.mouse_down_handler = Some(Box::new(callback));
+        self
+    }
+
+    /// Fires on `LeftMouseDown`, with the keyboard modifiers held at press time.
+    /// Use this when you need both press-based timing (snappy activation,
+    /// drag-implies-activate) and modifier-aware branching (e.g. shift/cmd-click
+    /// extending a selection).
+    pub fn on_mouse_down_with_modifiers<F>(mut self, callback: F) -> Self
+    where
+        F: 'static + FnMut(&mut EventContext, &AppContext, Vector2F, ModifiersState),
+    {
+        self.mouse_down_with_modifiers_handler = Some(Box::new(callback));
         self
     }
 
@@ -642,10 +663,18 @@ impl Element for Hoverable {
             Event::LeftMouseDown {
                 click_count,
                 position,
+                modifiers,
                 ..
             } => {
                 // Mouse-down sets the mouse state handle accordingly.
                 self.state().click_count = Some(*click_count);
+
+                // Fire the mouse-down-with-modifiers handler immediately if set.
+                if let Some(handler) = self.mouse_down_with_modifiers_handler.as_mut() {
+                    handler(ctx, app, *position, *modifiers);
+                    ctx.notify();
+                    return true;
+                }
 
                 // Fire the mouse-down handler immediately if one is set.
                 if let Some(handler) = self.mouse_down_handler.as_mut() {

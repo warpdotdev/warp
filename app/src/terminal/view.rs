@@ -7988,6 +7988,20 @@ impl TerminalView {
         ctx.notify();
     }
 
+    fn current_long_running_command_agent_interaction_state(
+        &self,
+    ) -> LongRunningCommandAgentInteractionState {
+        let model = self.model.lock();
+        let active_block = model.block_list().active_block();
+        if active_block.is_agent_in_control() {
+            LongRunningCommandAgentInteractionState::InControl
+        } else if active_block.is_agent_tagged_in() {
+            LongRunningCommandAgentInteractionState::TaggedIn
+        } else {
+            LongRunningCommandAgentInteractionState::NotInteracting
+        }
+    }
+
     fn emit_long_running_command_agent_interaction_state_changed(
         &self,
         agent_has_control: bool,
@@ -8008,10 +8022,6 @@ impl TerminalView {
                 LongRunningCommandAgentInteractionState::NotInteracting
             }
         };
-        log::info!(
-            "emit_long_running_command_agent_interaction_state_changed: \
-             agent_has_control={agent_has_control}, emitting state={state:?}"
-        );
         ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged { state });
     }
 
@@ -8021,6 +8031,10 @@ impl TerminalView {
         state: LongRunningCommandAgentInteractionState,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.current_long_running_command_agent_interaction_state() == state {
+            return;
+        }
+        log::info!("Applying shared-session LRC interaction_state={state:?}");
         match state {
             LongRunningCommandAgentInteractionState::InControl => {
                 self.cli_subagent_controller.update(ctx, |controller, ctx| {
