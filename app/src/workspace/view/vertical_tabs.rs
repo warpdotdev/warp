@@ -101,6 +101,8 @@ const GROUP_ACTION_BUTTON_GAP: f32 = 2.;
 const ROW_CORNER_RADIUS: f32 = 4.;
 const TAB_GROUP_MEMBER_INDENT: f32 = 12.;
 const TAB_GROUP_ICON_SIZE: f32 = 16.;
+/// Diameter of the accent color dot shown in a colored group's header.
+const GROUP_COLOR_DOT_SIZE: f32 = 10.;
 const TAB_GROUP_CONTENT_INSET: f32 = 4.;
 const BADGE_ICON_SIZE: f32 = 12.;
 const DETAIL_SIDECAR_DEFAULT_WIDTH: f32 = 320.;
@@ -2523,6 +2525,11 @@ fn render_grouped_tabs_header(
     let main_text_color = theme.main_text_color(theme.background());
     let sub_text_color = theme.sub_text_color(theme.background());
     let group_id = group.id;
+    // Resolved accent color for the group, if one is set. Drives the tinted
+    // chevron and the color dot shown next to the group title.
+    let group_color_fill: Option<WarpThemeFill> = group
+        .color
+        .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
 
     let chevron_icon = if is_collapsed {
         WarpIcon::ChevronRight
@@ -2532,7 +2539,7 @@ fn render_grouped_tabs_header(
     let chevron_button = render_tab_group_header_icon_button(
         chevron_icon,
         TAB_GROUP_ICON_SIZE,
-        main_text_color,
+        group_color_fill.unwrap_or(main_text_color),
         internal_colors::fg_overlay_2(theme),
         mouse_states.chevron.clone(),
         Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
@@ -2580,6 +2587,14 @@ fn render_grouped_tabs_header(
         .with_child(subtitle)
         .finish();
 
+    // Accent color dot, shown between the chevron and the title for colored groups.
+    let color_dot: Option<Box<dyn Element>> = group_color_fill.map(|fill| {
+        ConstrainedBox::new(UiIcon::Ellipse.to_warpui_icon(fill).finish())
+            .with_width(GROUP_COLOR_DOT_SIZE)
+            .with_height(GROUP_COLOR_DOT_SIZE)
+            .finish()
+    });
+
     let action_buttons = if show_action_buttons {
         let kebab_button = SavePosition::new(
             render_tab_group_header_icon_button(
@@ -2615,23 +2630,21 @@ fn render_grouped_tabs_header(
         Empty::new().finish()
     };
 
+    let mut inner_content = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(ICON_WITH_STATUS_GAP)
+        .with_child(chevron_slot);
+    if let Some(dot) = color_dot {
+        inner_content.add_child(dot);
+    }
+    inner_content.add_child(Shrinkable::new(1., text_column).finish());
+
     let row = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(
-            Shrinkable::new(
-                1.,
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(ICON_WITH_STATUS_GAP)
-                    .with_child(chevron_slot)
-                    .with_child(Shrinkable::new(1., text_column).finish())
-                    .finish(),
-            )
-            .finish(),
-        )
+        .with_child(Shrinkable::new(1., inner_content.finish()).finish())
         .with_child(action_buttons)
         .finish();
 

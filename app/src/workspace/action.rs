@@ -183,6 +183,11 @@ pub enum WorkspaceAction {
     ToggleTabGroupCollapsed(TabGroupId),
     /// Opens an inline editor over the given group's header for renaming.
     RenameTabGroup(TabGroupId),
+    /// Sets (or clears, with `None`) the accent color of the given tab group.
+    SetTabGroupColor {
+        group_id: TabGroupId,
+        color: Option<AnsiColorIdentifier>,
+    },
     /// Creates a new tab group containing the tab at the given index.
     NewTabGroupFromTab(usize),
     /// Moves the tab at `tab_index` into `group_id`, appending it to the
@@ -856,6 +861,7 @@ impl WorkspaceAction {
             | CloseTabGroup(_)
             | ToggleTabGroupCollapsed(_)
             | RenameTabGroup(_)
+            | SetTabGroupColor { .. }
             | NewTabGroupFromTab(_)
             | MoveTabToGroup { .. }
             | RemoveTabFromGroup(_)
