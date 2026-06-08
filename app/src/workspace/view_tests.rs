@@ -3275,6 +3275,64 @@ fn test_toggle_tab_group_collapsed_flips_state() {
 }
 
 #[test]
+fn test_set_tab_group_color_sets_and_clears() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("active tab should be in a group");
+            // New groups start uncolored.
+            assert_eq!(workspace.tab_groups[&group_id].color, None);
+
+            // Assigning a color is reflected on the group.
+            workspace.handle_action(
+                &WorkspaceAction::SetTabGroupColor {
+                    group_id,
+                    color: Some(AnsiColorIdentifier::Blue),
+                },
+                ctx,
+            );
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                Some(AnsiColorIdentifier::Blue)
+            );
+
+            // Reassigning replaces the previous color.
+            workspace.handle_action(
+                &WorkspaceAction::SetTabGroupColor {
+                    group_id,
+                    color: Some(AnsiColorIdentifier::Green),
+                },
+                ctx,
+            );
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                Some(AnsiColorIdentifier::Green)
+            );
+
+            // Passing `None` clears the color back to the default.
+            workspace.handle_action(
+                &WorkspaceAction::SetTabGroupColor {
+                    group_id,
+                    color: None,
+                },
+                ctx,
+            );
+            assert_eq!(workspace.tab_groups[&group_id].color, None);
+        });
+    });
+}
+
+#[test]
 fn test_close_tab_group_removes_group_and_members() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 

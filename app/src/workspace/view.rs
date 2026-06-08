@@ -418,6 +418,7 @@ use crate::themes::theme_deletion_modal::{ThemeDeletionModal, ThemeDeletionModal
 use crate::tips::{TipsEvent, TipsView};
 use crate::ui_components::avatar::{Avatar, AvatarContent, StatusElementTypes};
 use crate::ui_components::buttons::{combo_inner_button, icon_button_with_color};
+use crate::ui_components::color_dot::color_dot_picker_menu_item;
 use crate::ui_components::red_notification_dot::RedNotificationDot;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
 use crate::ui_components::{blended_colors, icons};
@@ -6852,6 +6853,19 @@ impl Workspace {
         }
     }
 
+    /// Sets (or clears, with `None`) the accent color of the given tab group.
+    pub fn set_tab_group_color(
+        &mut self,
+        group_id: TabGroupId,
+        color: Option<AnsiColorIdentifier>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(group) = self.tab_groups.get_mut(&group_id) {
+            group.color = color;
+            ctx.notify();
+        }
+    }
+
     /// Opens the inline rename editor over the given group's header.
     pub fn rename_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
         let Some(group) = self.tab_groups.get(&group_id) else {
@@ -9435,6 +9449,13 @@ impl Workspace {
             items
         };
 
+        let color_section = {
+            let current_color = self.tab_groups.get(&group_id).and_then(|group| group.color);
+            vec![color_dot_picker_menu_item(current_color, move |color| {
+                WorkspaceAction::SetTabGroupColor { group_id, color }
+            })]
+        };
+
         let mut menu_items = vec![];
         for section_items in [
             vec![
@@ -9449,6 +9470,7 @@ impl Workspace {
             vec![MenuItemFields::new("Rename")
                 .with_on_select_action(WorkspaceAction::RenameTabGroup(group_id))
                 .into_item()],
+            color_section,
             close_section,
         ] {
             if section_items.is_empty() {
@@ -22687,6 +22709,9 @@ impl TypedActionView for Workspace {
             CloseTabGroup(group_id) => self.close_tab_group(*group_id, ctx),
             ToggleTabGroupCollapsed(group_id) => self.toggle_tab_group_collapsed(*group_id, ctx),
             RenameTabGroup(group_id) => self.rename_tab_group(*group_id, ctx),
+            SetTabGroupColor { group_id, color } => {
+                self.set_tab_group_color(*group_id, *color, ctx)
+            }
             NewTabGroupFromTab(tab_index) => self.new_tab_group_from_tab(*tab_index, ctx),
             MoveTabToGroup {
                 tab_index,

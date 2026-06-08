@@ -2523,6 +2523,12 @@ fn render_grouped_tabs_header(
     let main_text_color = theme.main_text_color(theme.background());
     let sub_text_color = theme.sub_text_color(theme.background());
     let group_id = group.id;
+    // Resolved accent color for the group, if one is set. Drives the tinted
+    // chevron and the colored header row (background tint + border).
+    let group_color: Option<ColorU> = group
+        .color
+        .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
+    let group_color_fill: Option<WarpThemeFill> = group_color.map(WarpThemeFill::Solid);
 
     let chevron_icon = if is_collapsed {
         WarpIcon::ChevronRight
@@ -2532,7 +2538,7 @@ fn render_grouped_tabs_header(
     let chevron_button = render_tab_group_header_icon_button(
         chevron_icon,
         TAB_GROUP_ICON_SIZE,
-        main_text_color,
+        group_color_fill.unwrap_or(main_text_color),
         internal_colors::fg_overlay_2(theme),
         mouse_states.chevron.clone(),
         Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
@@ -2636,17 +2642,32 @@ fn render_grouped_tabs_header(
         .finish();
 
     let mut hoverable = Hoverable::new(mouse_states.header.clone(), move |state| {
-        let border_fill = if is_header_selected {
-            internal_colors::fg_overlay_3(theme)
-        } else {
-            WarpThemeFill::Solid(ColorU::transparent_black())
-        };
+        let hovered = is_header_selected || state.is_hovered();
         let mut container = Container::new(row)
             .with_padding(Padding::uniform(GROUP_HORIZONTAL_PADDING))
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
-            .with_border(Border::all(1.).with_border_fill(border_fill));
-        if is_header_selected || state.is_hovered() {
-            container = container.with_background(internal_colors::fg_overlay_2(theme));
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
+        if let Some(color) = group_color {
+            // Colored group: tint the whole header row with the accent color,
+            // brightening the fill on hover/selection. The border uses the full
+            // accent color so the group reads as colored at a glance.
+            let background = if hovered {
+                coloru_with_opacity(color, 26)
+            } else {
+                coloru_with_opacity(color, 16)
+            };
+            container = container
+                .with_border(Border::all(1.).with_border_fill(WarpThemeFill::Solid(color)))
+                .with_background(WarpThemeFill::Solid(background));
+        } else {
+            let border_fill = if is_header_selected {
+                internal_colors::fg_overlay_3(theme)
+            } else {
+                WarpThemeFill::Solid(ColorU::transparent_black())
+            };
+            container = container.with_border(Border::all(1.).with_border_fill(border_fill));
+            if hovered {
+                container = container.with_background(internal_colors::fg_overlay_2(theme));
+            }
         }
         container.finish()
     })

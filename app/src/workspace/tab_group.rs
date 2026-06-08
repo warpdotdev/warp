@@ -3,6 +3,8 @@
 use uuid::Uuid;
 use warpui::elements::DraggableState;
 
+use crate::themes::theme::AnsiColorIdentifier;
+
 /// Stable identity for a tab group.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct TabGroupId(pub Uuid);
@@ -26,16 +28,21 @@ pub struct TabGroup {
     pub id: TabGroupId,
     pub name: Option<String>,
     pub collapsed: bool,
+    /// Optional accent color for the group, shown in the group header. `None`
+    /// renders the default (uncolored) header. Drawn from the same eight ANSI
+    /// terminal colors used for per-tab colors.
+    pub color: Option<AnsiColorIdentifier>,
     pub draggable_state: DraggableState,
 }
 
 impl TabGroup {
-    /// Creates a new, untitled, expanded tab group with a fresh id.
+    /// Creates a new, untitled, expanded, uncolored tab group with a fresh id.
     pub fn new() -> Self {
         Self {
             id: TabGroupId::new(),
             name: None,
             collapsed: false,
+            color: None,
             draggable_state: Default::default(),
         }
     }
