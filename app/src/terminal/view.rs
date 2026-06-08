@@ -4659,6 +4659,7 @@ impl TerminalView {
                     | RemoteServerManagerEvent::HostConnected { .. }
                     | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                     | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
+                    | RemoteServerManagerEvent::ProjectSkillFilesUpdated { .. }
                     | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
                     | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }

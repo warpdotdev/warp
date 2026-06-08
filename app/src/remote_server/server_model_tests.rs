@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::fs;
 use std::sync::Arc;
 
+use tempfile::TempDir;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
@@ -11,7 +13,10 @@ use super::super::proto::{
 };
 use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
-use super::{ConnectionId, PendingFileOps, ServerModel};
+use super::{
+    read_project_skill_file_contents, ConnectionId, PendingFileOps, ServerModel,
+    DEFAULT_PROJECT_SKILL_FILE_BYTES, DEFAULT_PROJECT_SKILL_TOTAL_BYTES,
+};
 use crate::auth::auth_state::AuthState;
 use crate::code_review::diff_state::DiffMode;
 use crate::remote_server::diff_state_tracker::DiffModelKey;
@@ -39,6 +44,61 @@ fn test_key(repo: &str, mode: DiffMode) -> DiffModelKey {
         repo_path: StandardizedPath::try_new(repo).unwrap(),
         mode,
     }
+}
+
+#[test]
+fn project_skill_file_defaults_are_bounded() {
+    assert_eq!(DEFAULT_PROJECT_SKILL_FILE_BYTES, 1_000_000);
+    assert_eq!(DEFAULT_PROJECT_SKILL_TOTAL_BYTES, 8_000_000);
+}
+
+#[tokio::test]
+async fn project_skill_file_reads_return_successes_and_per_file_failures() {
+    let temp_dir = TempDir::new().unwrap();
+    let good = temp_dir.path().join("good.md");
+    let too_large = temp_dir.path().join("too-large.md");
+    let invalid_utf8 = temp_dir.path().join("invalid-utf8.md");
+    let missing = temp_dir.path().join("missing.md");
+    fs::write(&good, "skill").unwrap();
+    fs::write(&too_large, "skills").unwrap();
+    fs::write(&invalid_utf8, [0xff, 0xfe]).unwrap();
+
+    let response =
+        read_project_skill_file_contents(vec![good, too_large, invalid_utf8, missing], 5, 8).await;
+
+    assert_eq!(response.files.len(), 1);
+    assert_eq!(response.files[0].content, "skill");
+    assert_eq!(response.failed_files.len(), 3);
+    assert!(response.failed_files.iter().any(|failed| failed
+        .error
+        .as_ref()
+        .is_some_and(|error| error.message.contains("per-file byte limit"))));
+    assert!(response.failed_files.iter().any(|failed| failed
+        .error
+        .as_ref()
+        .is_some_and(|error| error.message.contains("UTF-8"))));
+    assert!(response.failed_files.iter().any(|failed| failed
+        .error
+        .as_ref()
+        .is_some_and(|error| error.message.contains("stat"))));
+}
+
+#[tokio::test]
+async fn project_skill_file_reads_enforce_total_byte_budget() {
+    let temp_dir = TempDir::new().unwrap();
+    let first = temp_dir.path().join("first.md");
+    let second = temp_dir.path().join("second.md");
+    fs::write(&first, "12345").unwrap();
+    fs::write(&second, "6789").unwrap();
+
+    let response = read_project_skill_file_contents(vec![first, second], 10, 5).await;
+
+    assert_eq!(response.files.len(), 1);
+    assert_eq!(response.failed_files.len(), 1);
+    assert!(response.failed_files[0]
+        .error
+        .as_ref()
+        .is_some_and(|error| error.message.contains("remaining total byte limit")));
 }
 
 #[test]

@@ -172,6 +172,7 @@ impl Sessions {
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
                 | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                 | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
+                | RemoteServerManagerEvent::ProjectSkillFilesUpdated { .. }
                 | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
                 | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
                 | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }

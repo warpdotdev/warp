@@ -154,6 +154,7 @@ fn every_host_scoped_request_has_a_response_disposition() {
             M::DiscardFiles(_) => "host_response::discard_files_result",
             // Richer responses parsed at the manager call site.
             M::ReadFileContext(_) => "manager::read_file_context",
+            M::FindProjectSkillFiles(_) => "manager::find_project_skill_files",
             M::GetFragmentMetadataFromHash(_) => "manager::get_fragment_metadata_from_hash",
             M::UploadHandoffSnapshot(_) => "manager::upload_handoff_snapshot",
             M::GetBranches(_) => "manager::get_branches",

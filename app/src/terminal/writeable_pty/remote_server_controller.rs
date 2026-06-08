@@ -141,6 +141,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::NavigatedToDirectory { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
+            | RemoteServerManagerEvent::ProjectSkillFilesUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusUpdated { .. }

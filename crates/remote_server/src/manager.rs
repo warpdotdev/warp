@@ -135,6 +135,7 @@ pub enum RemoteServerOperation {
     DiscardFiles,
     GetBranches,
     UploadHandoffSnapshot,
+    FindProjectSkillFiles,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -262,6 +263,7 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
         ClientEvent::Disconnected => "disconnected",
         ClientEvent::RepoMetadataSnapshotReceived { .. } => "repo_metadata_snapshot",
         ClientEvent::RepoMetadataUpdated { .. } => "repo_metadata_updated",
+        ClientEvent::ProjectSkillFilesUpdated { .. } => "project_skill_files_updated",
         ClientEvent::CodebaseIndexStatusesSnapshotReceived { .. } => {
             "codebase_index_statuses_snapshot"
         }
@@ -468,6 +470,8 @@ pub enum RemoteServerManagerEvent {
         host_id: HostId,
         update: RepoMetadataUpdate,
     },
+    /// Project skill files changed on the remote host and should be re-fetched.
+    ProjectSkillFilesUpdated { remote_path: RemotePath },
     /// A `LoadRepoMetadataDirectory` response was received from the server.
     RepoMetadataDirectoryLoaded {
         host_id: HostId,
@@ -616,6 +620,7 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::HostDisconnected { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
+            | RemoteServerManagerEvent::ProjectSkillFilesUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusesSnapshot { .. }
             | RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
@@ -833,6 +838,36 @@ impl HostRequestHandle {
             Some(crate::proto::server_message::Message::ReadFileContextResponse(resp)) => Ok(resp),
             other => {
                 log::error!("Unexpected response variant for ReadFileContext: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Finds project skill files on the remote host and returns their UTF-8
+    /// contents. Per-file failures are returned in the response.
+    pub async fn find_project_skill_files(
+        &self,
+        repo_path: String,
+        max_file_bytes: Option<u32>,
+        max_total_bytes: Option<u32>,
+    ) -> Result<crate::proto::FindProjectSkillFilesResponse, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::FindProjectSkillFiles(
+                    crate::proto::FindProjectSkillFiles {
+                        repo_path,
+                        max_file_bytes,
+                        max_total_bytes,
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::FindProjectSkillFilesResponse(resp)) => {
+                Ok(resp)
+            }
+            other => {
+                log::error!("Unexpected response variant for FindProjectSkillFiles: {other:?}");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -2803,6 +2838,11 @@ impl RemoteServerManager {
             }
             ClientEvent::RepoMetadataUpdated { update } => {
                 ctx.emit(RemoteServerManagerEvent::RepoMetadataUpdated { host_id, update });
+            }
+            ClientEvent::ProjectSkillFilesUpdated { repo_path } => {
+                ctx.emit(RemoteServerManagerEvent::ProjectSkillFilesUpdated {
+                    remote_path: RemotePath::new(host_id, repo_path),
+                });
             }
             ClientEvent::CodebaseIndexStatusesSnapshotReceived { statuses } => {
                 let statuses = statuses

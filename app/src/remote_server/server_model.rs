@@ -10,6 +10,7 @@ use ::ai::index::full_source_code_embedding::manager::{
 use ::ai::index::full_source_code_embedding::{
     ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
 };
+use async_fs::{metadata, read_to_string};
 use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
@@ -41,17 +42,19 @@ use super::proto::{
     CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
     DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
     DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    FileContextProto, FileOperationError, FindProjectSkillFiles, FindProjectSkillFilesResponse,
+    FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
     GetFragmentMetadataFromHashSuccess, IndexCodebase, Initialize, InitializeResponse,
     MissingFragmentMetadata, NavigatedToDirectory, NavigatedToDirectoryResponse, OpenBuffer,
-    OpenBufferResponse, ReadFileContextResponse, ResolveConflict, ResolveConflictResponse,
-    ResolveConflictSuccess, ResyncCodebase, RunCommandError, RunCommandErrorCode,
-    RunCommandRequest, RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse,
-    SaveBufferSuccess, ServerMessage, SessionBootstrapped, TextEdit, UploadHandoffSnapshot,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    OpenBufferResponse, ProjectSkillFileProto, ProjectSkillFilesUpdatedPush,
+    ReadFileContextResponse, ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess,
+    ResyncCodebase, RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse,
+    RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage,
+    SessionBootstrapped, TextEdit, UploadHandoffSnapshot, WriteFile, WriteFileResponse,
+    WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -65,6 +68,10 @@ pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 
 /// Prevents a client from forcing the daemon to enumerate an arbitrarily
 /// large ref list.
 const MAX_BRANCH_COUNT_CAP: usize = 500;
+/// Default per-file cap for project skill files returned by the daemon.
+const DEFAULT_PROJECT_SKILL_FILE_BYTES: usize = 1_000_000;
+/// Default total cap for project skill file content returned by the daemon.
+const DEFAULT_PROJECT_SKILL_TOTAL_BYTES: usize = 8_000_000;
 
 /// Unique identifier for a connected proxy session in daemon mode.
 pub type ConnectionId = uuid::Uuid;
@@ -359,12 +366,28 @@ impl ServerModel {
                         }
                     }
                 }
+                RepoMetadataEvent::ProjectSkillFilesUpdated {
+                    id: RepositoryIdentifier::Local(path),
+                } => {
+                    me.send_server_message(
+                        None,
+                        None,
+                        server_message::Message::ProjectSkillFilesUpdated(
+                            ProjectSkillFilesUpdatedPush {
+                                repo_path: path.to_string(),
+                            },
+                        ),
+                    );
+                }
                 RepoMetadataEvent::RepositoryRemoved { .. }
                 | RepoMetadataEvent::FileTreeUpdated { .. }
                 | RepoMetadataEvent::FileTreeEntryUpdated { .. }
                 | RepoMetadataEvent::StandingQueryResultsUpdated { .. }
                 | RepoMetadataEvent::UpdatingRepositoryFailed { .. }
                 | RepoMetadataEvent::RepositoryUpdated {
+                    id: RepositoryIdentifier::Remote(_),
+                }
+                | RepoMetadataEvent::ProjectSkillFilesUpdated {
                     id: RepositoryIdentifier::Remote(_),
                 } => {}
             });
@@ -715,6 +738,9 @@ impl ServerModel {
                     }
                     Some(host_scoped_request::Message::ReadFileContext(m)) => {
                         self.handle_read_file_context(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::FindProjectSkillFiles(m)) => {
+                        self.handle_find_project_skill_files(m, &request_id, conn_id, ctx)
                     }
                     Some(host_scoped_request::Message::SaveBuffer(m)) => {
                         self.handle_save_buffer(m, &request_id, conn_id, ctx)
@@ -2149,6 +2175,75 @@ impl ServerModel {
         HandlerOutcome::Async(Some(handle))
     }
 
+    /// Handles `FindProjectSkillFiles` by reading the paths discovered by repo
+    /// metadata's dedicated project-skills sidecar. Reads are UTF-8 only and
+    /// bounded by per-file and total byte budgets.
+    fn handle_find_project_skill_files(
+        &mut self,
+        msg: FindProjectSkillFiles,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling FindProjectSkillFiles repo={} (request_id={request_id})",
+            msg.repo_path
+        );
+
+        let repo_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path))
+        {
+            Ok(path) => path,
+            Err(error) => {
+                return HandlerOutcome::Sync(
+                    server_message::Message::FindProjectSkillFilesResponse(
+                        FindProjectSkillFilesResponse {
+                            files: vec![],
+                            failed_files: vec![failed_file_read(
+                                msg.repo_path,
+                                format!("Invalid repo_path: {error}"),
+                            )],
+                        },
+                    ),
+                );
+            }
+        };
+        let id = RepositoryIdentifier::local(repo_path);
+        let paths = RepoMetadataModel::handle(ctx)
+            .as_ref(ctx)
+            .get_project_skills(&id, ctx)
+            .map(|skills| {
+                skills
+                    .iter()
+                    .map(|skill| skill.path.to_local_path_lossy())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let max_file_bytes = msg
+            .max_file_bytes
+            .map(|bytes| bytes as usize)
+            .unwrap_or(DEFAULT_PROJECT_SKILL_FILE_BYTES);
+        let max_total_bytes = msg
+            .max_total_bytes
+            .map(|bytes| bytes as usize)
+            .unwrap_or(DEFAULT_PROJECT_SKILL_TOTAL_BYTES);
+        let request_id_for_response = request_id.clone();
+
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            read_project_skill_file_contents(paths, max_file_bytes, max_total_bytes),
+            move |me, response, _ctx| {
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::FindProjectSkillFilesResponse(response),
+                );
+            },
+            ctx,
+        );
+
+        HandlerOutcome::Async(Some(handle))
+    }
+
     /// Handles `OpenBuffer` by opening the file via `GlobalBufferModel`.
     /// The response is sent asynchronously when `BufferLoaded` fires.
     ///
@@ -2858,6 +2953,89 @@ fn canonicalize_index_repo_path(repo_path: &str) -> Result<PathBuf, String> {
     Ok(standardized_path
         .to_local_path()
         .unwrap_or_else(|| standardized_path.to_local_path_lossy()))
+}
+
+fn failed_file_read(path: String, message: String) -> FailedFileRead {
+    FailedFileRead {
+        path,
+        error: Some(FileOperationError { message }),
+    }
+}
+
+async fn read_project_skill_file_contents(
+    paths: Vec<PathBuf>,
+    max_file_bytes: usize,
+    max_total_bytes: usize,
+) -> FindProjectSkillFilesResponse {
+    let mut files = Vec::new();
+    let mut failed_files = Vec::new();
+    let mut remaining_total_bytes = max_total_bytes;
+
+    for path in paths {
+        let path_string = path.to_string_lossy().to_string();
+        let file_size = match metadata(&path).await {
+            Ok(metadata) => metadata.len() as usize,
+            Err(error) => {
+                failed_files.push(failed_file_read(
+                    path_string,
+                    format!("Failed to stat file: {error}"),
+                ));
+                continue;
+            }
+        };
+        if file_size > max_file_bytes {
+            failed_files.push(failed_file_read(
+                path_string,
+                format!("File exceeds per-file byte limit of {max_file_bytes} bytes"),
+            ));
+            continue;
+        }
+        if file_size > remaining_total_bytes {
+            failed_files.push(failed_file_read(
+                path_string,
+                format!("File exceeds remaining total byte limit of {remaining_total_bytes} bytes"),
+            ));
+            continue;
+        }
+
+        match read_to_string(&path).await {
+            Ok(content) => {
+                let content_bytes = content.len();
+                if content_bytes > max_file_bytes {
+                    failed_files.push(failed_file_read(
+                        path_string,
+                        format!("File exceeds per-file byte limit of {max_file_bytes} bytes"),
+                    ));
+                    continue;
+                }
+                if content_bytes > remaining_total_bytes {
+                    failed_files.push(failed_file_read(
+                        path_string,
+                        format!(
+                            "File exceeds remaining total byte limit of {remaining_total_bytes} bytes"
+                        ),
+                    ));
+                    continue;
+                }
+                remaining_total_bytes -= content_bytes;
+                files.push(ProjectSkillFileProto {
+                    path: path_string,
+                    content,
+                });
+            }
+            Err(error) => {
+                failed_files.push(failed_file_read(
+                    path_string,
+                    format!("Failed to read UTF-8 file: {error}"),
+                ));
+            }
+        }
+    }
+
+    FindProjectSkillFilesResponse {
+        files,
+        failed_files,
+    }
 }
 
 fn missing_fragment_metadata(content_hash: String, message: String) -> MissingFragmentMetadata {

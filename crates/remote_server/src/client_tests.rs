@@ -8,8 +8,8 @@ use crate::proto::{
     client_message, host_scoped_request, notification, run_command_response, server_message,
     session_scoped_request, ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState,
     CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, ErrorCode, GetDiffStateResponse,
-    InitializeResponse, OpenBufferResponse, RunCommandResponse, RunCommandSuccess, ServerMessage,
-    WriteFile,
+    InitializeResponse, OpenBufferResponse, ProjectSkillFilesUpdatedPush, RunCommandResponse,
+    RunCommandSuccess, ServerMessage, WriteFile,
 };
 use crate::protocol;
 
@@ -18,6 +18,41 @@ fn unwrap_session_scoped(msg: &ClientMessage) -> &session_scoped_request::Messag
     match &msg.message {
         Some(client_message::Message::SessionScoped(w)) => w.message.as_ref().unwrap(),
         other => panic!("Expected SessionScoped, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn project_skill_files_updated_push_becomes_client_event() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    drop(server_read);
+
+    let executor = executor::Background::default();
+    let (_client, event_rx, _failure_rx, _host_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+    let mut writer = server_write.compat_write();
+
+    protocol::write_server_message(
+        &mut writer,
+        &ServerMessage {
+            request_id: String::new(),
+            message: Some(server_message::Message::ProjectSkillFilesUpdated(
+                ProjectSkillFilesUpdatedPush {
+                    repo_path: "/repo".to_string(),
+                },
+            )),
+        },
+    )
+    .await
+    .unwrap();
+    writer.flush().await.unwrap();
+
+    match event_rx.recv().await.unwrap() {
+        ClientEvent::ProjectSkillFilesUpdated { repo_path } => {
+            assert_eq!(repo_path.to_string(), "/repo");
+        }
+        other => panic!("Expected ProjectSkillFilesUpdated, got {other:?}"),
     }
 }
 

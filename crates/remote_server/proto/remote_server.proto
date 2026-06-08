@@ -43,6 +43,7 @@ message HostScopedRequest {
     GetBranches get_branches = 12;
     ResyncCodebase resync_codebase = 13;
     UploadHandoffSnapshot upload_handoff_snapshot = 14;
+    FindProjectSkillFiles find_project_skill_files = 15;
   }
 }
 
@@ -106,6 +107,8 @@ message ServerMessage {
     GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
     GetBranchesResponse get_branches_response = 25;
     UploadHandoffSnapshotResponse upload_handoff_snapshot_response = 26;
+    FindProjectSkillFilesResponse find_project_skill_files_response = 27;
+    ProjectSkillFilesUpdatedPush project_skill_files_updated = 28;
   }
 }
 
@@ -391,6 +394,29 @@ message FileContextProto {
   uint32 line_count = 7;
 }
 
+// ── Project skill files ───────────────────────────────────────────
+
+// Client → server: read the contents of project skill files discovered by
+// repo metadata's dedicated project-skills sidecar.
+message FindProjectSkillFiles {
+  string repo_path = 1;
+  // Per-file byte limit. Absent = use server default.
+  optional uint32 max_file_bytes = 2;
+  // Cumulative byte budget across all files. Absent = use server default.
+  optional uint32 max_total_bytes = 3;
+}
+
+// Server → client: readable project skill files and any per-file failures.
+message FindProjectSkillFilesResponse {
+  repeated ProjectSkillFileProto files = 1;
+  repeated FailedFileRead failed_files = 2;
+}
+
+message ProjectSkillFileProto {
+  string path = 1;
+  string content = 2;
+}
+
 // ── Remote codebase indexing status ───────────────────────────────
 
 message IndexCodebase {
@@ -503,6 +529,12 @@ message RepoMetadataUpdatePush {
   repeated string remove_entries = 2;
   repeated RepoMetadataEntryUpdate update_entries = 3;
   StandingQueryResultsDelta standing_results_delta = 4;
+}
+
+// Project skill sidecar contents changed for a repository. Clients should
+// re-fetch them with FindProjectSkillFiles.
+message ProjectSkillFilesUpdatedPush {
+  string repo_path = 1;
 }
 
 // ── Buffer syncing ────────────────────────────────────────────────

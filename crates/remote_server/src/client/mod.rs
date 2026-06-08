@@ -75,6 +75,8 @@ pub enum ClientEvent {
     RepoMetadataUpdated {
         update: repo_metadata::RepoMetadataUpdate,
     },
+    /// Project skill files changed for a repository on the remote host.
+    ProjectSkillFilesUpdated { repo_path: StandardizedPath },
     /// A full remote codebase-index status snapshot was pushed by the server.
     CodebaseIndexStatusesSnapshotReceived {
         statuses: Vec<RemoteCodebaseIndexStatus>,
@@ -563,6 +565,16 @@ impl RemoteServerClient {
             server_message::Message::RepoMetadataUpdate(push) => {
                 let update = proto_to_repo_metadata_update(&push)?;
                 Some(ClientEvent::RepoMetadataUpdated { update })
+            }
+            server_message::Message::ProjectSkillFilesUpdated(push) => {
+                let Some(repo_path) = StandardizedPath::try_new(&push.repo_path).ok() else {
+                    log::warn!(
+                        "ProjectSkillFilesUpdatedPush: invalid repo_path: {}",
+                        push.repo_path
+                    );
+                    return None;
+                };
+                Some(ClientEvent::ProjectSkillFilesUpdated { repo_path })
             }
             server_message::Message::CodebaseIndexStatusesSnapshot(snapshot) => {
                 let statuses = proto_to_codebase_index_statuses_snapshot(&snapshot);
