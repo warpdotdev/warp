@@ -73,7 +73,6 @@ fn test_keybinding_name_to_display_string() {
     });
 }
 
-
 #[test]
 fn test_orchestration_cycle_bindings_are_editable() {
     App::test((), |mut app| async move {
