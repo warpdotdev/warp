@@ -168,6 +168,71 @@ fn test_detect_possible_local_git_repo_nested_repo_created_after_parent_registra
 
 #[test]
 #[cfg(feature = "local_fs")]
+fn test_detect_possible_local_git_repo_invalidates_cached_root_when_git_dir_removed() {
+    VirtualFS::test("detect_removed_git_dir", |dirs, mut vfs| {
+        stub_git_repository(&mut vfs, "repo");
+
+        let repo_path = dirs.tests().join("repo");
+        let repo_canonical_path = StandardizedPath::from_local_canonicalized(&repo_path).unwrap();
+
+        App::test((), |mut app| async move {
+            app.add_singleton_model(DirectoryWatcher::new);
+            let repo_handle = app.add_model(|_| DetectedRepositories::default());
+
+            repo_handle
+                .update(&mut app, |repo, ctx| {
+                    std::mem::drop(repo.detect_possible_local_git_repo(
+                        &repo_path.to_string_lossy(),
+                        RepoDetectionSource::TerminalNavigation,
+                        ctx,
+                    ));
+                    let future_id = repo.spawned_futures().last().unwrap();
+                    ctx.await_spawned_future(*future_id)
+                })
+                .await;
+
+            repo_handle.read(&app, |repo, _ctx| {
+                assert!(repo
+                    .get_root_for_path(&LocalOrRemotePath::Local(
+                        repo_canonical_path.to_local_path().unwrap(),
+                    ))
+                    .is_some());
+            });
+
+            fs::remove_dir_all(repo_path.join(".git")).expect("remove .git directory");
+            let spawned_future_count = repo_handle.read(&app, |repo, _ctx| {
+                let key = LocalOrRemotePath::Local(repo_canonical_path.to_local_path().unwrap());
+                assert!(repo.repository_roots.contains(&key));
+                repo.spawned_futures().len()
+            });
+
+            repo_handle.update(&mut app, |repo, ctx| {
+                std::mem::drop(repo.detect_possible_local_git_repo(
+                    &repo_path.to_string_lossy(),
+                    RepoDetectionSource::TerminalNavigation,
+                    ctx,
+                ));
+            });
+
+            let future_id = repo_handle.read(&app, |repo, _ctx| {
+                assert_eq!(repo.spawned_futures().len(), spawned_future_count + 1);
+                *repo.spawned_futures().last().unwrap()
+            });
+            repo_handle
+                .update(&mut app, |_repo, ctx| ctx.await_spawned_future(future_id))
+                .await;
+
+            repo_handle.read(&app, |repo, _ctx| {
+                let key = LocalOrRemotePath::Local(repo_canonical_path.to_local_path().unwrap());
+                assert!(!repo.repository_roots.contains(&key));
+                assert!(repo.get_root_for_path(&key).is_none());
+            });
+        });
+    });
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
 fn test_find_git_repo_with_worktree() {
     VirtualFS::test("find_git_repo_worktree", |dirs, mut vfs| {
         // Set up a primary repository with a worktree directory.

@@ -630,6 +630,138 @@ fn test_git_status_change_updates_chip_value() {
 
 #[cfg(feature = "local_fs")]
 #[test]
+fn test_git_status_metadata_none_clears_git_chip_values() {
+    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [
+                    ContextChipKind::ShellGitBranch,
+                    ContextChipKind::GitDiffStats,
+                    ContextChipKind::GithubPullRequest,
+                ],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let repo_handle = watcher_handle.update(&mut app, |watcher, ctx| {
+            watcher
+                .add_directory(
+                    warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                        temp_dir.path(),
+                    )
+                    .unwrap(),
+                    ctx,
+                )
+                .unwrap()
+        });
+
+        let git_status = app.add_model(move |_| {
+            GitRepoStatusModel::new_for_test(
+                repo_handle,
+                Some(GitStatusMetadata {
+                    current_branch_name: "feature-a".to_string(),
+                    main_branch_name: "main".to_string(),
+                    stats_against_head: DiffStats {
+                        files_changed: 1,
+                        total_additions: 4,
+                        total_deletions: 2,
+                    },
+                }),
+            )
+        });
+        let github_repo_model = {
+            let git_status = git_status.clone();
+            app.add_model(move |_| GitHubRepoModel::new_for_test(git_status))
+        };
+
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |cp, ctx| {
+            cp.set_git_repo_status(Some(git_status.downgrade()), ctx);
+            cp.set_github_repo_model(Some(github_repo_model.downgrade()), ctx);
+            cp.update_states_with_new_context(ctx);
+        });
+
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(
+                Some(GitStatusMetadata {
+                    current_branch_name: "feature-a".to_string(),
+                    main_branch_name: "main".to_string(),
+                    stats_against_head: DiffStats {
+                        files_changed: 1,
+                        total_additions: 4,
+                        total_deletions: 2,
+                    },
+                }),
+                ctx,
+            );
+        });
+        github_repo_model.update(&mut app, |model, ctx| {
+            model.set_pr_info_for_test(
+                Some(PrInfo {
+                    number: 123,
+                    url: "https://github.com/warp/warp/pull/123".to_string(),
+                    state: "OPEN".to_string(),
+                    draft: false,
+                    base_branch: "main".to_string(),
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let cp = current_prompt.as_ref(ctx);
+            assert_eq!(
+                cp.latest_chip_value(&ContextChipKind::ShellGitBranch),
+                Some(&crate::context_chips::ChipValue::Text(
+                    "feature-a".to_string(),
+                )),
+            );
+            assert!(cp
+                .latest_chip_value(&ContextChipKind::GitDiffStats)
+                .is_some());
+            assert_eq!(
+                cp.latest_chip_value(&ContextChipKind::GithubPullRequest),
+                Some(&crate::context_chips::ChipValue::Text(
+                    "https://github.com/warp/warp/pull/123".to_string(),
+                )),
+            );
+        });
+
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(None, ctx);
+        });
+
+        app.read(|ctx| {
+            let cp = current_prompt.as_ref(ctx);
+            assert_eq!(cp.latest_chip_value(&ContextChipKind::ShellGitBranch), None);
+            assert_eq!(cp.latest_chip_value(&ContextChipKind::GitDiffStats), None);
+            assert_eq!(
+                cp.latest_chip_value(&ContextChipKind::GithubPullRequest),
+                None
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
 fn test_git_status_pr_info_updates_github_pr_chip_value() {
     let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
     App::test((), |mut app| async move {
