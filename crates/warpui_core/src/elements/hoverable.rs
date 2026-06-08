@@ -23,7 +23,7 @@ type ClickWithModifiersHandler =
     Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F, ModifiersState)>;
 
 /// Mouse-down handler that additionally receives the keyboard modifiers held
-/// at press time, captured from the `LeftMouseDown` event. 
+/// at press time, captured from the `LeftMouseDown` event.
 type MouseDownWithModifiersHandler =
     Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F, ModifiersState)>;
 
