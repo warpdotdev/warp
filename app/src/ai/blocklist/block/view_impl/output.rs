@@ -1220,7 +1220,7 @@ fn should_render_stopped_output(props: Props, app: &AppContext) -> bool {
 
     let status = props.model.status(app);
     let cancellation_reason = status.cancellation_reason().cloned();
-    if cancellation_reason.is_some_and(|reason| reason.is_follow_up_for_same_conversation()) {
+    if cancellation_reason.is_some_and(|reason| reason.should_preserve_in_progress_status()) {
         return false;
     }
 

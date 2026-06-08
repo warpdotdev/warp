@@ -2104,8 +2104,10 @@ impl AIConversation {
         self.write_updated_conversation_state(ctx);
 
         // Don't mark the conversation as Cancelled if we're just cancelling to send a follow-up
-        // on the same conversation. The conversation will be immediately set back to InProgress.
-        if !reason.is_follow_up_for_same_conversation() {
+        // on the same conversation (it will be immediately set back to InProgress), or if the
+        // user manually took over the long-running command (the conversation remains in progress
+        // and will resume once the command finishes or control is handed back).
+        if !reason.should_preserve_in_progress_status() {
             self.update_status(ConversationStatus::Cancelled, terminal_view_id, ctx);
         }
         Ok(())

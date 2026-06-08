@@ -1262,7 +1262,7 @@ impl BlocklistAIActionModel {
             .get(&conversation_id)
             .is_none_or(|actions| actions.is_empty())
         {
-            if !cancellation_reason.is_some_and(|r| r.is_follow_up_for_same_conversation()) {
+            if !cancellation_reason.is_some_and(|r| r.should_preserve_in_progress_status()) {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                     let status = if self
                         .finished_action_results
