@@ -1577,6 +1577,24 @@ impl RichTextEditorView {
         ctx.notify();
     }
 
+    /// Returns whether the editor has scroll-header chrome for integration assertions.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn has_scroll_header_renderer_for_integration_test(&self) -> bool {
+        self.scroll_header_renderer.is_some()
+    }
+
+    /// Returns the hidden header height currently consumed by scrolling.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn scroll_header_scroll_top_for_integration_test(&self) -> Pixels {
+        self.scroll_header_scroll_top
+    }
+
+    /// Returns the editor content scroll offset for integration assertions.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn content_scroll_top_for_integration_test(&self, ctx: &AppContext) -> Pixels {
+        self.content_scroll_top(ctx)
+    }
+
     pub fn markdown(&self, ctx: &AppContext) -> String {
         self.model.as_ref(ctx).markdown(ctx)
     }
