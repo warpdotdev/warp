@@ -1112,8 +1112,8 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED) & id!(flags::ACTIVE_AGENT_VIEW),
         )
-        .with_mac_key_binding("ctrl-alt-tab")
-        .with_linux_or_windows_key_binding("ctrl-alt-tab"),
+        .with_mac_key_binding("ctrl-alt-]")
+        .with_linux_or_windows_key_binding("ctrl-alt-]"),
         EditableBinding::new(
             CYCLE_PREVIOUS_ORCHESTRATION_CHILD_AGENT_KEYBINDING,
             "Cycle to previous orchestration session",
@@ -1123,8 +1123,8 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(
             id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED) & id!(flags::ACTIVE_AGENT_VIEW),
         )
-        .with_mac_key_binding("ctrl-alt-shift-tab")
-        .with_linux_or_windows_key_binding("ctrl-alt-shift-tab"),
+        .with_mac_key_binding("ctrl-alt-[")
+        .with_linux_or_windows_key_binding("ctrl-alt-["),
     ]);
 
     // Register bindings for starting a new cloud agent conversation.
