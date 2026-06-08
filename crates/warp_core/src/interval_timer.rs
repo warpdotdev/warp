@@ -37,8 +37,10 @@ impl IntervalTimer {
     }
 
     pub fn mark_interval_end(&mut self, name: impl Into<String>) {
+        let name = name.into();
+        tracing::info!(name);
         self.intervals
-            .push(TimingInterval::new(name.into(), Instant::now()))
+            .push(TimingInterval::new(name, Instant::now()))
     }
 
     pub fn compute_duration_for_interval(&self, name: &str) -> Option<Duration> {

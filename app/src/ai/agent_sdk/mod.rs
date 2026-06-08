@@ -120,7 +120,7 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
 }
 
 /// Run a Warp CLI command.
-#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+#[tracing::instrument(name = "agent_sdk::run", skip_all, err, fields(tags.cloud_agent = true))]
 pub fn run(
     ctx: &mut AppContext,
     command: CliCommand,
@@ -1441,7 +1441,7 @@ impl AgentDriverRunner {
                 driver.add_share_requests(share_requests, ctx);
             }
             let span =
-                tracing::info_span!("run", tags.cloud_agent = true, ?task.model, ?task.harness);
+                tracing::info_span!("AgentDriver::run", tags.cloud_agent = true, ?task.model, ?task.harness);
             let agent_future = driver.run(task, ctx).instrument(span);
 
             ctx.spawn(agent_future, |_, result, ctx| match result {

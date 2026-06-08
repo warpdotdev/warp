@@ -580,6 +580,7 @@ fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
 }
 
 /// Runs the app. If a subcommand was requested, it'll be run instead of the main application.
+#[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub fn run() -> Result<()> {
     // Perform any necessary platform-specific initialization.
     platform::init();
@@ -795,6 +796,11 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         .needs_profiling()
         .then(tracing::init)
         .transpose()?;
+
+    // Start the `run_internal` span here - we can't do it before this point
+    // because we need the tracing initialization to be complete first.
+    let span = ::tracing::info_span!("run_internal", tags.cloud_agent = true);
+    let _enter = span.enter();
 
     let log_destination = launch_mode.log_destination();
     let is_cli = log_destination.is_some();
@@ -1077,6 +1083,7 @@ pub struct UpdateQuakeModeEventArg {
     active_window_id: Option<WindowId>,
 }
 
+#[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 pub(crate) fn initialize_app(
     launch_mode: &LaunchMode,
     mut timer: IntervalTimer,
@@ -2547,6 +2554,8 @@ fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {
             .query_pairs()
             .any(|(key, value)| key == "source" && value == "web_home")
 }
+
+#[::tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
 fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode: LaunchMode) {
     IntervalTimer::handle(ctx).update(ctx, |timer, _ctx| {
         timer.mark_interval_end("APP_LAUNCHED");

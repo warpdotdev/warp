@@ -14960,6 +14960,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
+ "tracing",
  "url",
  "warp_features",
  "warp_util",
