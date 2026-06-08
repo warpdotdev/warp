@@ -6879,6 +6879,14 @@ impl Workspace {
         }
     }
 
+    /// Ensures the group is expanded (not collapsed). No-op if the group does
+    /// not exist or is already expanded.
+    fn expand_tab_group(&mut self, group_id: TabGroupId) {
+        if let Some(group) = self.tab_groups.get_mut(&group_id) {
+            group.collapsed = false;
+        }
+    }
+
     /// Opens the inline rename editor over the given group's header.
     pub fn rename_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
         let Some(group) = self.tab_groups.get(&group_id) else {
@@ -6981,6 +6989,7 @@ impl Workspace {
             .map(|i| i + 1)
             .unwrap_or(self.tabs.len());
         self.tabs[tab_index].group_id = Some(group_id);
+        self.expand_tab_group(group_id);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
         if let Some(prev) = previous_group_id {
@@ -7067,6 +7076,7 @@ impl Workspace {
             }
             self.move_tab_to_index(new_idx, target_index, ctx);
         }
+        self.expand_tab_group(group_id);
         ctx.notify();
     }
 
@@ -12102,7 +12112,22 @@ impl Workspace {
                         .push(self.tabs.last().unwrap().pane_group.id());
                     self.activate_tab_internal(self.tab_count() - 1, ctx);
                 } else {
-                    let insert_idx = self.active_tab_index + 1;
+                    // When the new tab won't inherit the active tab's group
+                    // (e.g. settings, notebooks, or other restoration-based tabs)
+                    // but the active tab is inside a group, land after the group's
+                    // last member so the group isn't split in two.
+                    let insert_idx = if active_tab_group_id.is_none() {
+                        active_tab
+                            .and_then(|t| t.group_id)
+                            .and_then(|gid| {
+                                group_member_indices(&self.tabs, gid)
+                                    .last()
+                                    .map(|last| last + 1)
+                            })
+                            .unwrap_or(self.active_tab_index + 1)
+                    } else {
+                        self.active_tab_index + 1
+                    };
                     self.tabs.insert(insert_idx, TabData::new(new_pane_group));
                     self.tab_mru_order
                         .push(self.tabs[insert_idx].pane_group.id());
@@ -12111,12 +12136,13 @@ impl Workspace {
             }
         }
 
-        // Inherit the active tab's group membership. D
+        // Inherit the active tab's group membership.
         if let Some(group_id) = active_tab_group_id {
             let new_idx = self.active_tab_index;
             if let Some(new_tab) = self.tabs.get_mut(new_idx) {
                 new_tab.group_id = Some(group_id);
             }
+            self.expand_tab_group(group_id);
         }
 
         if !is_restoration {
