@@ -325,7 +325,6 @@ fn pane_row_background(
     is_in_multi_selection: bool,
     is_hovered: bool,
     is_being_dragged: bool,
-    tab_highlight_active: bool,
     theme: &WarpTheme,
 ) -> Option<ThemeFill> {
     if let Some(color) = pane_color {
@@ -341,13 +340,6 @@ fn pane_row_background(
         // Hovering a multi-selected row steps one shade darker so the hover
         // stays visually distinguishable from the in-selection highlight.
         Some(internal_colors::fg_overlay_2(theme))
-    } else if tab_highlight_active && is_hovered {
-        // GroupedTabs: hovered row pops out from highlighted siblings.
-        Some(internal_colors::fg_overlay_2(theme))
-    } else if tab_highlight_active {
-        // GroupedTabs: base highlight on sibling rows when the tab is
-        // active or hovered, so all panes read as one unit.
-        Some(internal_colors::fg_overlay_1(theme))
     } else if is_in_multi_selection || is_being_dragged || is_hovered {
         Some(internal_colors::fg_overlay_1(theme))
     } else {
@@ -383,7 +375,6 @@ fn render_pane_row_element(
         is_focused,
         typed: _,
         is_being_dragged,
-        tab_highlight_active,
         row_corner_radius,
         is_in_multi_selection,
         is_in_multi_tab_selection,
@@ -416,7 +407,6 @@ fn render_pane_row_element(
             is_in_multi_selection,
             state.is_hovered(),
             is_being_dragged,
-            tab_highlight_active,
             theme,
         ) {
             container = container.with_background(background);
@@ -781,9 +771,6 @@ struct PaneProps<'a> {
     is_focused: bool,
     typed: TypedPane<'a>,
     is_being_dragged: bool,
-    /// GroupedTabs: tab is in a group and active or hovered; drives the
-    /// sibling base-highlight in `pane_row_background`.
-    tab_highlight_active: bool,
     /// Corner radius for this row's background. Defaults to fully rounded;
     /// build_rows narrows it when stacking panes flush.
     row_corner_radius: CornerRadius,
@@ -1160,7 +1147,6 @@ impl VerticalTabsPanelState {
                                 pane_id,
                                 tab.pane_group.id(),
                                 *tab_index == active_tab_index,
-                                false,
                                 false,
                                 false,
                                 PaneRowState {
@@ -1732,7 +1718,6 @@ fn render_groups(
                                     tab_index == workspace.active_tab_index,
                                     false,
                                     false,
-                                    false,
                                     PaneRowState {
                                         mouse_state: ms,
                                         title_mouse_state: None,
@@ -1760,7 +1745,6 @@ fn render_groups(
                                 pane_id,
                                 tab.pane_group.id(),
                                 tab_index == workspace.active_tab_index,
-                                false,
                                 false,
                                 false,
                                 PaneRowState {
@@ -2055,11 +2039,6 @@ fn render_tab_group_internal(
         } else {
             GROUP_ITEM_SPACING
         };
-        // GroupedTabs: compensate for the suppressed outer container by
-        // highlighting sibling rows when the tab is active or hovered.
-        let tab_highlight_active = FeatureFlag::GroupedTabs.is_enabled()
-            && in_tab_group
-            && (is_active || group_state.is_hovered());
         let build_rows = || {
             let mut rows = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
@@ -2086,7 +2065,6 @@ fn render_tab_group_internal(
                     is_active,
                     is_in_multi_selection,
                     is_in_multi_tab_selection,
-                    tab_highlight_active,
                     PaneRowState {
                         mouse_state: row_mouse_state.clone(),
                         title_mouse_state: None,
@@ -2143,7 +2121,6 @@ fn render_tab_group_internal(
                     is_active,
                     is_in_multi_selection,
                     is_in_multi_tab_selection,
-                    tab_highlight_active,
                     PaneRowState {
                         mouse_state: row_mouse_state.clone(),
                         title_mouse_state: title_mouse_states.get(pane_id).cloned(),
@@ -2234,9 +2211,11 @@ fn render_tab_group_internal(
             // hover/active state for the whole group, so suppress the
             // per-tab background here and let each row show its own
             // selected/hovered state.
+            let allow_per_tab_highlight =
+                !in_tab_group || FeatureFlag::GroupedTabs.is_enabled();
             let background = if is_drag_target {
                 internal_colors::fg_overlay_2(theme)
-            } else if !in_tab_group && (is_active || group_state.is_hovered()) {
+            } else if allow_per_tab_highlight && (is_active || group_state.is_hovered()) {
                 internal_colors::fg_overlay_1(theme)
             } else {
                 ThemeFill::Solid(ColorU::transparent_black())
@@ -2251,14 +2230,16 @@ fn render_tab_group_internal(
                 GROUP_BODY_BOTTOM_PADDING
             };
             let mut container = Container::new(build_rows()).with_background(background);
-            if needs_action_button_band {
-                container = container
-                    .with_padding(Padding::uniform(0.).with_top(action_button_band));
+            if FeatureFlag::GroupedTabs.is_enabled() && stack_panes_flush {
+                container = container.with_corner_radius(default_row_corner_radius());
             }
             if is_drag_target {
                 container = container.with_border(
                     Border::all(1.).with_border_fill(ThemeFill::Solid(theme.accent().into())),
                 );
+            }
+            if needs_action_button_band {
+                container = container.with_margin_top(action_button_band);
             }
             container.finish()
         };
@@ -3484,7 +3465,6 @@ impl<'a> PaneProps<'a> {
         is_active_tab: bool,
         is_in_multi_selection: bool,
         is_in_multi_tab_selection: bool,
-        tab_highlight_active: bool,
         pane_row_state: PaneRowState,
         detail_hover_state: VerticalTabsDetailHoverState,
         display_granularity: VerticalTabsDisplayGranularity,
@@ -3535,7 +3515,6 @@ impl<'a> PaneProps<'a> {
             is_focused: pane_group.focused_pane_id(app) == pane_id,
             typed,
             is_being_dragged: pane.is_pane_being_dragged(app),
-            tab_highlight_active,
             row_corner_radius: default_row_corner_radius(),
             is_in_multi_selection,
             is_in_multi_tab_selection,
@@ -6297,7 +6276,6 @@ fn detail_pane_props<'a>(
         pane_group,
         pane_id,
         pane_group_id,
-        false,
         false,
         false,
         false,
