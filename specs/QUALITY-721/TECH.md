@@ -1,0 +1,42 @@
+# TECH: Orchestrated agents can read plans by explicit ID
+## Context
+Orchestrated child agents need to read parent-created plans when explicitly given a plan ID. Plan availability is backed by Warp Drive rather than inherited launch metadata or copied markdown.
+## Architecture
+### Publish parent plans before fan-out
+Before `RunAgentsExecutor` dispatches children, it asks `AIDocumentModel` to publish every document owned by the parent conversation.
+- Unbacked plans start Warp Drive creation.
+- Plans already being created refresh their queued or client-backed notebook content before remaining in the wait set.
+- Server-backed plans immediately queue their latest content for update instead of waiting for the normal two-second document save throttle.
+- Newly created or saving plans receive concurrent, bounded waits for server backing.
+- Publication failures and timeouts are logged per plan, and child launch always continues.
+- Cancelling `run_agents` during publication removes the pending launch, so publication completion cannot fan out children. Cancellation after fan-out preserves the existing spawning aggregation lifecycle.
+`RunAgentsRequest.plan_id` remains the orchestration-config key. It is not treated as inherited child context, and no plan IDs or plan content are added to child launch requests, prompts, server task metadata, or driver options.
+### Read plans by explicit ID
+`ReadDocumentsExecutor` first reads requested IDs from the local `AIDocumentModel`. If a requested plan is absent, it attempts Warp Drive hydration only when the acting conversation participates in orchestration:
+- the conversation identifies itself as a child through a local parent conversation ID or remote parent run ID; or
+- `BlocklistAIHistoryModel` knows child conversations for it.
+Hydration uses `AIDocumentModel::hydrate_saved_plan_from_warp_drive`, then retries the complete read so result ordering and all-or-nothing behavior remain unchanged. Missing IDs in non-orchestrated conversations, or IDs still missing after hydration, return the existing clear `Document(s) not found` error.
+Hydrated plans retain ordinary `EditDocumentsExecutor` behavior. No inherited-document write policy or stale-revision policy is introduced.
+## Removed transport
+QUALITY-721 does not add inherited plan fields to:
+- `StartAgentRequest` or `StartAgentExecutor::dispatch`;
+- local or remote child startup;
+- `SpawnAgentRequest`, ambient tasks, agent driver options, or task metadata;
+- child prompt attachments or synthetic plan-reference formatting;
+- server request, task, or execution schemas.
+Local and remote Oz children discover plans when an explicit plan ID in their assigned prompt is passed to `read_plans`, which lazily hydrates it when the acting conversation is orchestrated. Third-party harnesses do not expose Warp document tools; their assigned context must still forward the explicit ID, and required plan content must be supplied through a harness-appropriate prompt or context path.
+## Testing and validation
+Focused Rust coverage verifies:
+- `RunAgentsExecutor` starts publication for every plan owned by the parent conversation before dispatch, without publishing unrelated plans;
+- saving-plan publication refreshes content edited after Warp Drive creation began;
+- cancellation during the publication wait prevents child dispatch;
+- a remote child with only a parent run ID can lazily hydrate and read a requested saved plan;
+- a non-orchestrated conversation retains the missing-document error;
+Validation uses `cargo fmt` and targeted `cargo check`. Do not run the app, nextest, or presubmit for this change.
+## Risks and mitigations
+Warp Drive creation or update can be slow or unavailable.
+- Publication uses bounded waits only for plans that are not yet server-backed.
+- Failures and timeouts are logged per plan and never block child launch indefinitely.
+Explicit-ID discovery depends on the child receiving a relevant plan ID in its task prompt.
+- No implicit plan selection is attempted.
+- A missing or unavailable ID produces a clear `read_plans` error.

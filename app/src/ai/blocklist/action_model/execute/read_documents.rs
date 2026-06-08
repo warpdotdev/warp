@@ -1,12 +1,14 @@
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, DocumentContext, ReadDocumentsRequest, ReadDocumentsResult,
 };
-use crate::ai::document::ai_document_model::AIDocumentModel;
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 
 pub struct ReadDocumentsExecutor;
 
@@ -29,7 +31,10 @@ impl ReadDocumentsExecutor {
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
     ) -> impl Into<AnyActionExecution> {
-        let ExecuteActionInput { action, .. } = input;
+        let ExecuteActionInput {
+            action,
+            conversation_id,
+        } = input;
         let AIAgentAction {
             action: AIAgentActionType::ReadDocuments(ReadDocumentsRequest { document_ids }),
             ..
@@ -38,22 +43,36 @@ impl ReadDocumentsExecutor {
             return ActionExecution::<ReadDocumentsResult>::InvalidAction;
         };
 
-        // Access the model synchronously before the async block
-        let model = AIDocumentModel::handle(ctx);
-        let documents: Vec<DocumentContext> = document_ids
-            .iter()
-            .filter_map(|id| {
-                let model = model.as_ref(ctx);
-                let content = model.get_document_content(id, ctx)?;
-                let version = model.get_current_document(id)?.version;
-                Some(DocumentContext {
-                    document_id: *id,
-                    content,
-                    line_ranges: vec![],
-                    document_version: version,
-                })
-            })
-            .collect();
+        let (mut documents, mut missing_documents) = read_documents(document_ids, ctx);
+        if !missing_documents.is_empty()
+            && conversation_participates_in_orchestration(conversation_id, ctx)
+        {
+            AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
+                for document_id in &missing_documents {
+                    if let Err(error) = model.hydrate_saved_plan_from_warp_drive(
+                        *document_id,
+                        conversation_id,
+                        ctx,
+                    ) {
+                        log::warn!(
+                            "Failed to hydrate requested plan document {document_id} from Warp Drive: {error}"
+                        );
+                    }
+                }
+            });
+            (documents, missing_documents) = read_documents(document_ids, ctx);
+        }
+
+        if !missing_documents.is_empty() {
+            let missing_list = missing_documents
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return ActionExecution::Sync(
+                ReadDocumentsResult::Error(format!("Document(s) not found: {missing_list}")).into(),
+            );
+        }
 
         ActionExecution::Sync(ReadDocumentsResult::Success { documents }.into())
     }
@@ -70,3 +89,48 @@ impl ReadDocumentsExecutor {
 impl Entity for ReadDocumentsExecutor {
     type Event = ();
 }
+/// Reads requested documents and returns the IDs that are not loaded locally.
+fn read_documents(
+    document_ids: &[AIDocumentId],
+    ctx: &AppContext,
+) -> (Vec<DocumentContext>, Vec<AIDocumentId>) {
+    let model = AIDocumentModel::as_ref(ctx);
+    let mut documents = Vec::with_capacity(document_ids.len());
+    let mut missing_documents = Vec::new();
+    for id in document_ids {
+        let Some(content) = model.get_document_content(id, ctx) else {
+            missing_documents.push(*id);
+            continue;
+        };
+        let Some(current_document) = model.get_current_document(id) else {
+            missing_documents.push(*id);
+            continue;
+        };
+        documents.push(DocumentContext {
+            document_id: *id,
+            content,
+            line_ranges: vec![],
+            document_version: current_document.version,
+        });
+    }
+    (documents, missing_documents)
+}
+
+/// Returns whether a conversation is a parent or child in orchestration.
+fn conversation_participates_in_orchestration(
+    conversation_id: AIConversationId,
+    ctx: &AppContext,
+) -> bool {
+    let history = BlocklistAIHistoryModel::as_ref(ctx);
+    let has_parent = history
+        .conversation(&conversation_id)
+        .is_some_and(|conversation| conversation.is_child_agent_conversation());
+    has_parent
+        || !history
+            .child_conversation_ids_of(&conversation_id)
+            .is_empty()
+}
+
+#[cfg(test)]
+#[path = "read_documents_tests.rs"]
+mod tests;

@@ -286,6 +286,72 @@ impl AIDocumentModel {
         }
     }
 
+    /// Publishes every document owned by a conversation before child-agent launch.
+    pub(in crate::ai) fn publish_documents_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Vec<AIDocumentId> {
+        let document_ids = self
+            .documents
+            .iter()
+            .filter_map(|(document_id, document)| {
+                (document.conversation_id == conversation_id).then_some(*document_id)
+            })
+            .collect::<Vec<_>>();
+        let mut awaiting_server_backing = Vec::new();
+
+        for document_id in document_ids {
+            match self.get_document_save_status(&document_id) {
+                AIDocumentSaveStatus::Saved => {
+                    self.maybe_update_cloud_notebook_data(&document_id, ctx);
+                }
+                AIDocumentSaveStatus::Saving => {
+                    self.refresh_saving_document_content(&document_id, ctx);
+                    awaiting_server_backing.push(document_id);
+                }
+                AIDocumentSaveStatus::NotSaved => {
+                    if !self.sync_to_warp_drive(document_id, ctx) {
+                        log::error!(
+                            "Failed to publish plan document {document_id} to Warp Drive before child-agent launch."
+                        );
+                    } else if !self.get_document_save_status(&document_id).is_saved() {
+                        awaiting_server_backing.push(document_id);
+                    }
+                }
+            }
+        }
+
+        awaiting_server_backing
+    }
+
+    /// Refreshes the latest content for a plan whose Warp Drive creation is in progress.
+    fn refresh_saving_document_content(
+        &mut self,
+        document_id: &AIDocumentId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(document) = self.documents.get(document_id) else {
+            return;
+        };
+        let title = document.title.clone();
+        let content = document.editor.as_ref(ctx).markdown(ctx);
+        let sync_id = document.sync_id;
+
+        for pending in self
+            .pending_document_queue
+            .iter_mut()
+            .filter(|pending| pending.id == *document_id)
+        {
+            pending.title.clone_from(&title);
+            pending.content.clone_from(&content);
+        }
+
+        if sync_id.is_some_and(|sync_id| CloudModel::as_ref(ctx).get_notebook(&sync_id).is_some()) {
+            self.maybe_update_cloud_notebook_data(document_id, ctx);
+        }
+    }
+
     fn handle_update_manager_event(
         &mut self,
         event: &UpdateManagerEvent,
@@ -410,6 +476,58 @@ impl AIDocumentModel {
                 ai_document_id,
             ));
         }
+    }
+
+    /// Hydrates a saved plan notebook into the target conversation.
+    pub(in crate::ai) fn hydrate_saved_plan_from_warp_drive(
+        &mut self,
+        ai_document_id: AIDocumentId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), String> {
+        let notebook = CloudModel::as_ref(ctx)
+            .get_all_active_notebooks()
+            .find(|notebook| notebook.model().ai_document_id.as_ref() == Some(&ai_document_id))
+            .map(|notebook| {
+                (
+                    notebook.id,
+                    notebook.model().title.clone(),
+                    notebook.model().data.clone(),
+                )
+            })
+            .ok_or_else(|| {
+                format!("Plan document {ai_document_id} was not found in Warp Drive.")
+            })?;
+        let (sync_id, title, content) = notebook;
+        if sync_id.into_server().is_none() {
+            return Err(format!(
+                "Plan document {ai_document_id} is not backed by a saved Warp Drive notebook."
+            ));
+        }
+
+        self.latest_document_id_by_conversation_id
+            .insert(conversation_id, ai_document_id);
+
+        if let Some(document) = self.documents.get_mut(&ai_document_id) {
+            if document.sync_id != Some(sync_id) {
+                document.sync_id = Some(sync_id);
+                ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(
+                    ai_document_id,
+                ));
+            }
+            return Ok(());
+        }
+
+        self.create_document_from_notebook(
+            ai_document_id,
+            sync_id,
+            title,
+            content,
+            conversation_id,
+            None,
+            ctx,
+        );
+        Ok(())
     }
 
     fn create_document_internal(

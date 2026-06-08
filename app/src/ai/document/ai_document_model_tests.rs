@@ -2,12 +2,13 @@ use std::ops::Range;
 
 use ai::diff_validation::DiffDelta;
 use chrono::Local;
-use warpui::App;
+use warpui::{App, SingletonEntity};
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::server::ids::SyncId;
 use crate::test_util::settings::initialize_settings_for_tests;
 
 fn initialize_app_for_ai_document_tests(app: &mut App) {
@@ -46,6 +47,59 @@ fn test_create_document() {
 
             // Should have no versions initially
             assert!(model.get_earlier_document_versions(&doc_id).is_none());
+        });
+    });
+}
+
+#[test]
+fn publish_refreshes_pending_saving_document_content() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let document_id = model_handle.update(&mut app, |model, ctx| {
+            let document_id =
+                model.create_document("Plan", "# Initial", conversation_id, None, ctx);
+            let editor = model
+                .documents
+                .get(&document_id)
+                .expect("document should exist")
+                .editor
+                .clone();
+            model
+                .documents
+                .get_mut(&document_id)
+                .expect("document should exist")
+                .sync_id = Some(SyncId::ClientId(ClientId::new()));
+            model.pending_document_queue.push(PendingDocument {
+                id: document_id,
+                title: "Plan".to_string(),
+                content: "# Initial".to_string(),
+            });
+            editor.update(ctx, |editor, ctx| {
+                editor.reset_with_markdown("# Latest", ctx);
+            });
+            document_id
+        });
+
+        model_handle.update(&mut app, |model, ctx| {
+            let latest_content = model
+                .documents
+                .get(&document_id)
+                .expect("document should exist")
+                .editor
+                .as_ref(ctx)
+                .markdown(ctx);
+            assert_eq!(
+                model.publish_documents_for_conversation(conversation_id, ctx),
+                vec![document_id]
+            );
+            let pending = model
+                .pending_document_queue
+                .iter()
+                .find(|pending| pending.id == document_id)
+                .expect("pending document should exist");
+            assert_eq!(pending.content, latest_content);
         });
     });
 }

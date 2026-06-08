@@ -17,6 +17,7 @@ use futures::FutureExt;
 use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
+use warpui::r#async::FutureExt as WarpFutureExt;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
@@ -30,12 +31,14 @@ use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentModelEvent};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
 /// rather than hanging the "Spawning agents" UI indefinitely.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
+const PLAN_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Snapshot of an in-flight dispatch, carried through
 /// [`RunAgentsExecutorEvent::SpawningStarted`].
@@ -45,7 +48,11 @@ pub struct RunAgentsSpawningSnapshot {
 }
 
 /// In-flight tracking per `RunAgents` action (idempotency guard).
-struct PendingRunAgents;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingRunAgents {
+    Publishing,
+    Spawning,
+}
 #[derive(Debug, Clone)]
 struct ExistingLaunchedAgent {
     name: String,
@@ -91,6 +98,23 @@ impl RunAgentsExecutor {
         self.pending.contains_key(action_id)
     }
 
+    /// Cancels a pending run so publication completion cannot fan out children.
+    pub(super) fn cancel_execution(
+        &mut self,
+        action_id: &AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if matches!(
+            self.pending.get(action_id),
+            Some(PendingRunAgents::Publishing)
+        ) {
+            self.pending.remove(action_id);
+            ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
+                action_id: action_id.clone(),
+            });
+        }
+    }
+
     fn record_launched_agents(
         &mut self,
         conversation_id: AIConversationId,
@@ -130,9 +154,7 @@ impl RunAgentsExecutor {
         )
     }
 
-    /// Fans out a prepared request into per-child dispatches and returns a
-    /// receiver for the aggregate `RunAgentsResult`. Validation failures
-    /// short-circuit synchronously.
+    /// Publishes parent plans and dispatches children after a bounded best-effort wait.
     fn dispatch_prepared_run_agents(
         &mut self,
         action_id: AIAgentActionId,
@@ -153,16 +175,66 @@ impl RunAgentsExecutor {
             let _ = sender.try_send(RunAgentsResult::Failure { error });
             return receiver;
         }
+        let pending_plan_publications = prepare_plan_publications(parent_conversation_id, ctx);
 
         let snapshot = RunAgentsSpawningSnapshot {
             agent_count: request.agent_run_configs.len(),
         };
-        self.pending.insert(action_id.clone(), PendingRunAgents);
+        self.pending
+            .insert(action_id.clone(), PendingRunAgents::Publishing);
         ctx.emit(RunAgentsExecutorEvent::SpawningStarted {
             action_id: action_id.clone(),
             snapshot,
         });
 
+        if pending_plan_publications.is_empty() {
+            self.dispatch_children_for_prepared_request(
+                action_id,
+                request,
+                parent_conversation_id,
+                sender,
+                ctx,
+            );
+        } else {
+            let action_id_for_wait = action_id.clone();
+            ctx.spawn(
+                async move {
+                    futures::future::join_all(
+                        pending_plan_publications
+                            .into_iter()
+                            .map(wait_for_plan_publication),
+                    )
+                    .await;
+                    request
+                },
+                move |me, request, ctx| {
+                    if !me.is_pending(&action_id_for_wait) {
+                        return;
+                    }
+                    me.dispatch_children_for_prepared_request(
+                        action_id_for_wait.clone(),
+                        request,
+                        parent_conversation_id,
+                        sender,
+                        ctx,
+                    )
+                },
+            );
+        }
+
+        receiver
+    }
+
+    fn dispatch_children_for_prepared_request(
+        &mut self,
+        action_id: AIAgentActionId,
+        request: RunAgentsRequest,
+        parent_conversation_id: AIConversationId,
+        sender: async_channel::Sender<RunAgentsResult>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.pending
+            .insert(action_id.clone(), PendingRunAgents::Spawning);
         let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&parent_conversation_id)
             .and_then(|c| c.run_id());
@@ -303,8 +375,6 @@ impl RunAgentsExecutor {
                 let _ = sender.try_send(result);
             },
         );
-
-        receiver
     }
 
     pub(super) fn execute(
@@ -385,6 +455,80 @@ mod tests;
 enum ChildSlot {
     Failed(String),
     Pending(async_channel::Receiver<StartAgentOutcome>),
+}
+
+struct PendingPlanPublication {
+    document_id: AIDocumentId,
+    save_wait: async_channel::Receiver<()>,
+}
+
+/// Publishes parent-owned plans and prepares waits for plans still being created.
+fn prepare_plan_publications(
+    parent_conversation_id: AIConversationId,
+    ctx: &mut ModelContext<RunAgentsExecutor>,
+) -> Vec<PendingPlanPublication> {
+    let document_model = AIDocumentModel::handle(ctx);
+    let awaiting_server_backing = document_model.update(ctx, |model, ctx| {
+        model.publish_documents_for_conversation(parent_conversation_id, ctx)
+    });
+
+    awaiting_server_backing
+        .into_iter()
+        .filter_map(|document_id| {
+            let (save_tx, save_rx) = async_channel::bounded(1);
+            ctx.subscribe_to_model(&document_model, move |_, event, ctx| {
+                let AIDocumentModelEvent::DocumentSaveStatusUpdated(saved_document_id) = event
+                else {
+                    return;
+                };
+                if *saved_document_id != document_id {
+                    return;
+                }
+                if AIDocumentModel::as_ref(ctx)
+                    .get_document_save_status(&document_id)
+                    .is_saved()
+                {
+                    let _ = save_tx.try_send(());
+                }
+            });
+            if document_model
+                .as_ref(ctx)
+                .get_document_save_status(&document_id)
+                .is_saved()
+            {
+                None
+            } else {
+                Some(PendingPlanPublication {
+                    document_id,
+                    save_wait: save_rx,
+                })
+            }
+        })
+        .collect()
+}
+
+/// Waits briefly for one plan to become server-backed without blocking launch on failure.
+async fn wait_for_plan_publication(pending: PendingPlanPublication) {
+    match pending
+        .save_wait
+        .recv()
+        .with_timeout(PLAN_PUBLICATION_TIMEOUT)
+        .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => {
+            log::error!(
+                "Stopped waiting for plan document {} before it became server-backed.",
+                pending.document_id
+            );
+        }
+        Err(_) => {
+            log::error!(
+                "Timed out waiting for plan document {} to become server-backed before child-agent launch.",
+                pending.document_id
+            );
+        }
+    }
 }
 
 fn approved_orchestration_config_can_autoexecute(
