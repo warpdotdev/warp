@@ -474,6 +474,8 @@ impl BlocklistAIController {
 
             let is_lrc_command_completed =
                 cancellation_reason.is_some_and(|reason| reason.is_lrc_command_completed());
+            let should_preserve_in_progress_status = cancellation_reason
+                .is_some_and(|reason| reason.should_preserve_in_progress_status());
             let should_trigger_follow_up_request = (!is_passive_code_diff
                 && !is_lrc_command_completed
                 && finished_action_results
@@ -481,6 +483,9 @@ impl BlocklistAIController {
                     .any(|result| result.result.should_trigger_request_upon_completion()))
                 || has_manual_follow_up;
             if !should_trigger_follow_up_request {
+                if should_preserve_in_progress_status {
+                    return;
+                }
                 // We also check if there's an in-flight req, because it's possible that this
                 // subscription callback was queued in response to auto-cancelling pending actions
                 // in the process of constructing a request. In such cases, we don't want to update
@@ -2737,12 +2742,13 @@ impl BlocklistAIController {
 
                 if let Some(stream_cancellation) = &cancellation {
                     // If this is a shared session, send a synthetic StreamFinished event to notify viewers
-                    // of any user-initiated cancellation. We skip FollowUpSubmitted because that's an internal
-                    // cancellation for continuing the conversation.
+                    // of any user-initiated cancellation. We skip internal cancellations that preserve
+                    // the conversation's InProgress status, such as follow-ups and CLI subagent user
+                    // takeover, because those do not end the conversation.
                     if FeatureFlag::AgentSharedSessions.is_enabled()
                         && !stream_cancellation
                             .reason
-                            .is_follow_up_for_same_conversation()
+                            .should_preserve_in_progress_status()
                     {
                         self.send_cancellation_to_viewers(ctx);
                     }
@@ -2757,7 +2763,11 @@ impl BlocklistAIController {
                         );
                     });
 
-                    if !was_passive_request {
+                    if !was_passive_request
+                        && !stream_cancellation
+                            .reason
+                            .should_preserve_in_progress_status()
+                    {
                         self.set_input_mode_for_cancellation(ctx);
                     }
                 } else if is_any_exchange_unfinished {
