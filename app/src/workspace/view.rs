@@ -11368,7 +11368,7 @@ impl Workspace {
         self.tab_mru_order.retain(|id| *id != removed_pane_group_id);
 
         // If the closed tab was a group member, prune the group when it now
-        // has no remaining members. 
+        // has no remaining members.
         if let Some(group_id) = tab_data.group_id {
             self.prune_empty_tab_group(group_id, ctx);
         }
