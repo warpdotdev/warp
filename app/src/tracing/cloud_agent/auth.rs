@@ -523,5 +523,5 @@ impl Entity for AuthRefreshCoordinator {
 impl SingletonEntity for AuthRefreshCoordinator {}
 
 #[cfg(test)]
-#[path = "cloud_agent_auth_tests.rs"]
+#[path = "auth_tests.rs"]
 mod tests;

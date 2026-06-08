@@ -1,15 +1,9 @@
-#[cfg(not(target_family = "wasm"))]
-use std::time::Duration;
-
 use tracing::subscriber;
 
 #[cfg(not(target_family = "wasm"))]
-mod cloud_agent_auth;
-#[cfg(not(target_family = "wasm"))]
-mod native;
+mod cloud_agent;
 
-#[cfg(not(target_family = "wasm"))]
-const DEFAULT_EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Initializes tracing and any purpose-scoped integrations selected by their configuration.
 
 pub fn init() -> anyhow::Result<Initialization> {
     #[cfg(target_family = "wasm")]
@@ -19,7 +13,11 @@ pub fn init() -> anyhow::Result<Initialization> {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    native::init()
+    {
+        Ok(Initialization {
+            cloud_agent: cloud_agent::init()?,
+        })
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -32,7 +30,7 @@ pub fn start_auth_refresh(
     client: std::sync::Arc<dyn warp_managed_secrets::client::ManagedSecretsClient>,
     ctx: &mut warpui::AppContext,
 ) {
-    native::start_auth_refresh(client, ctx);
+    cloud_agent::start_auth_refresh(client, ctx);
 }
 
 fn install_no_subscriber() -> anyhow::Result<()> {
@@ -45,63 +43,27 @@ fn install_no_subscriber() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Retains lifecycle state for the purpose-scoped tracing integrations that opted in at startup.
+#[derive(Default)]
 pub struct Initialization {
-    initialization_warning: Option<anyhow::Error>,
     #[cfg(not(target_family = "wasm"))]
-    active_spans: Option<native::ActiveSpanRegistry>,
-    #[cfg(not(target_family = "wasm"))]
-    provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
-    #[cfg(not(target_family = "wasm"))]
-    shutdown_timeout: std::time::Duration,
-}
-
-impl Default for Initialization {
-    fn default() -> Self {
-        Self {
-            initialization_warning: None,
-            #[cfg(not(target_family = "wasm"))]
-            active_spans: None,
-            #[cfg(not(target_family = "wasm"))]
-            provider: None,
-            #[cfg(not(target_family = "wasm"))]
-            shutdown_timeout: DEFAULT_EXPORT_TIMEOUT,
-        }
-    }
+    cloud_agent: Option<cloud_agent::Initialization>,
 }
 
 impl Initialization {
+    /// Logs delayed initialization warnings after application logging is available.
     pub fn log_initialization_warning(&mut self) {
-        if let Some(err) = self.initialization_warning.take() {
-            log::warn!("Failed to initialize cloud-agent OpenTelemetry exporting: {err:#}");
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(cloud_agent) = self.cloud_agent.as_mut() {
+            cloud_agent.log_initialization_warning();
         }
     }
 
+    /// Shuts down each tracing integration that opted in during initialization.
     pub(crate) fn shutdown(&mut self) {
         #[cfg(not(target_family = "wasm"))]
-        {
-            match (self.active_spans.take(), self.provider.take()) {
-                (Some(active_spans), Some(provider)) => {
-                    if let Err(err) = active_spans.shutdown(&provider, self.shutdown_timeout) {
-                        log::warn!(
-                            "Failed to shut down cloud-agent OpenTelemetry exporting: {err}"
-                        );
-                    }
-                }
-                (None, Some(provider)) => {
-                    if let Err(err) = provider.shutdown_with_timeout(self.shutdown_timeout) {
-                        log::warn!(
-                            "Failed to shut down cloud-agent OpenTelemetry exporting: {err}"
-                        );
-                    }
-                }
-                (Some(_), None) | (None, None) => {}
-            }
+        if let Some(cloud_agent) = self.cloud_agent.as_mut() {
+            cloud_agent.shutdown();
         }
-    }
-}
-
-impl Drop for Initialization {
-    fn drop(&mut self) {
-        self.shutdown();
     }
 }

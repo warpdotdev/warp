@@ -65,8 +65,9 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-use super::cloud_agent_auth::{self, AuthContext};
-use super::Initialization;
+mod auth;
+
+use self::auth::AuthContext;
 use crate::channel::ChannelState;
 use crate::tracing::install_no_subscriber;
 use warp_managed_secrets::client::ManagedSecretsClient;
@@ -79,6 +80,8 @@ const CLOUD_AGENT_MARKER: &str = "tags.cloud_agent";
 const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
 /// The environment variable used to configure the OTel service name.
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
+/// The default amount of time allowed for cloud-agent export shutdown.
+const DEFAULT_EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum interval between local export failure diagnostics.
 const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
 /// Retains bootstrap authentication only when the endpoint and dispatch credential enabled export.
@@ -95,7 +98,7 @@ static AUTH_CONTEXT: OnceLock<AuthContext> = OnceLock::new();
 /// dispatch token. When either is absent or the exporter cannot be constructed, a no-op subscriber
 /// is installed so tracing instrumentation remains safe without producing output or partially
 /// initializing export.
-pub fn init() -> anyhow::Result<Initialization> {
+pub(super) fn init() -> anyhow::Result<Option<Initialization>> {
     // INFO is the default because this is a global subscriber and DEBUG-level application spans
     // would otherwise create substantial work even though only marked cloud-agent spans are
     // exported. RUST_LOG can still override this when deeper tracing is needed.
@@ -108,11 +111,11 @@ pub fn init() -> anyhow::Result<Initialization> {
         .filter(|endpoint| !endpoint.trim().is_empty())
     else {
         install_no_subscriber()?;
-        return Ok(Initialization::default());
+        return Ok(None);
     };
     let Ok(auth_context) = AuthContext::from_environment() else {
         install_no_subscriber()?;
-        return Ok(Initialization::default());
+        return Ok(None);
     };
 
     let shutdown_timeout = export_timeout();
@@ -120,12 +123,12 @@ pub fn init() -> anyhow::Result<Initialization> {
         Ok(provider) => provider,
         Err(err) => {
             install_no_subscriber()?;
-            return Ok(Initialization {
+            return Ok(Some(Initialization {
                 initialization_warning: Some(err),
                 active_spans: None,
                 provider: None,
                 shutdown_timeout,
-            });
+            }));
         }
     };
     let _ = AUTH_CONTEXT.set(auth_context);
@@ -138,12 +141,12 @@ pub fn init() -> anyhow::Result<Initialization> {
         .with(tracing_opentelemetry::layer().with_tracer(tracer));
     subscriber::set_global_default(subscriber)?;
 
-    Ok(Initialization {
+    Ok(Some(Initialization {
         initialization_warning: None,
         active_spans: Some(active_spans),
         provider: Some(provider),
         shutdown_timeout,
-    })
+    }))
 }
 
 /// Builds the SDK provider and its batch exporter.
@@ -200,7 +203,7 @@ fn build_provider(
 /// retained [`AUTH_CONTEXT`] and remain no-ops here.
 pub(super) fn start_auth_refresh(client: Arc<dyn ManagedSecretsClient>, ctx: &mut AppContext) {
     if let Some(auth_context) = AUTH_CONTEXT.get() {
-        cloud_agent_auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
+        auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
     }
 }
 
@@ -237,15 +240,58 @@ fn export_timeout() -> Duration {
             .and_then(|value| value.parse::<u64>().ok())
             .map(Duration::from_millis)
     })
-    .unwrap_or(super::DEFAULT_EXPORT_TIMEOUT)
+    .unwrap_or(DEFAULT_EXPORT_TIMEOUT)
 }
 
+/// Retains lifecycle state for an opted-in cloud-agent tracing integration.
+///
+/// A value exists only when the endpoint and valid dispatch credential selected this integration.
+/// It owns delayed initialization diagnostics and provider shutdown ordering so generic tracing
+/// initialization does not need to understand cloud-agent exporter internals.
+pub(super) struct Initialization {
+    initialization_warning: Option<anyhow::Error>,
+    active_spans: Option<ActiveSpanRegistry>,
+    provider: Option<SdkTracerProvider>,
+    shutdown_timeout: Duration,
+}
+
+impl Initialization {
+    /// Logs a delayed exporter-construction warning after application logging is available.
+    pub(super) fn log_initialization_warning(&mut self) {
+        if let Some(err) = self.initialization_warning.take() {
+            log::warn!("Failed to initialize cloud-agent OpenTelemetry exporting: {err:#}");
+        }
+    }
+
+    /// Ends reachable active spans before shutting down the cloud-agent provider.
+    pub(super) fn shutdown(&mut self) {
+        match (self.active_spans.take(), self.provider.take()) {
+            (Some(active_spans), Some(provider)) => {
+                if let Err(err) = active_spans.shutdown(&provider, self.shutdown_timeout) {
+                    log::warn!("Failed to shut down cloud-agent OpenTelemetry exporting: {err}");
+                }
+            }
+            (None, Some(provider)) => {
+                if let Err(err) = provider.shutdown_with_timeout(self.shutdown_timeout) {
+                    log::warn!("Failed to shut down cloud-agent OpenTelemetry exporting: {err}");
+                }
+            }
+            (Some(_), None) | (None, None) => {}
+        }
+    }
+}
+
+impl Drop for Initialization {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
 /// A registry of started SDK spans used for best-effort ending before provider shutdown.
 ///
 /// This registry belongs beside the provider in [`Initialization`]. It stores only weak references
 /// so a span that ends normally can be dropped without first unregistering itself.
 #[derive(Clone, Debug, Default)]
-pub(super) struct ActiveSpanRegistry {
+struct ActiveSpanRegistry {
     state: Arc<Mutex<ActiveSpanRegistryState>>,
 }
 
@@ -293,11 +339,7 @@ impl ActiveSpanRegistry {
     /// that no SDK span can be built between the final end attempt and the provider becoming unable
     /// to accept ended spans. It does not synchronize with the final drop of a span whose weak
     /// reference can no longer be upgraded, so ending previously built spans remains best-effort.
-    pub(super) fn shutdown(
-        &self,
-        provider: &SdkTracerProvider,
-        timeout: Duration,
-    ) -> OTelSdkResult {
+    fn shutdown(&self, provider: &SdkTracerProvider, timeout: Duration) -> OTelSdkResult {
         let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
         state.shutting_down = true;
         let spans = std::mem::take(&mut state.spans);
