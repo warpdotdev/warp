@@ -203,6 +203,10 @@ fn begin_conversation_rename_updates_title_and_cached_metadata() {
 
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "server-conversation-token".to_string(),
+            );
             let metadata = AIConversationMetadata::from(
                 model
                     .conversation(&conversation_id)
@@ -211,9 +215,10 @@ fn begin_conversation_rename_updates_title_and_cached_metadata() {
             model
                 .all_conversations_metadata
                 .insert(conversation_id, metadata);
-            model
+            let server_conversation_token = model
                 .begin_conversation_rename(conversation_id, "Manual title".to_string(), ctx)
                 .expect("rename should begin");
+            assert_eq!(server_conversation_token, "server-conversation-token");
         });
 
         history_model.read(&app, |model, _| {
@@ -234,6 +239,62 @@ fn begin_conversation_rename_updates_title_and_cached_metadata() {
                 Some("Manual title"),
             );
             assert!(model
+                .in_flight_conversation_renames
+                .contains_key(&conversation_id));
+        });
+    });
+}
+
+#[test]
+fn begin_conversation_rename_rejects_conversation_without_server_token() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let conversation = AIConversation::new_restored(
+            conversation_id,
+            vec![warp_multi_agent_api::Task {
+                id: "root-task".to_string(),
+                messages: vec![],
+                dependencies: None,
+                description: "Generated title".to_string(),
+                summary: String::new(),
+                server_data: String::new(),
+            }],
+            None,
+        )
+        .expect("conversation should restore");
+
+        let result = history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            let metadata = AIConversationMetadata::from(
+                model
+                    .conversation(&conversation_id)
+                    .expect("conversation should exist"),
+            );
+            model
+                .all_conversations_metadata
+                .insert(conversation_id, metadata);
+            model.begin_conversation_rename(conversation_id, "Manual title".to_string(), ctx)
+        });
+
+        assert_eq!(
+            result,
+            Err(BeginConversationRenameError::MissingServerConversationToken)
+        );
+        history_model.read(&app, |model, _| {
+            let conversation = model
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert_eq!(conversation.title().as_deref(), Some("Generated title"));
+            assert_eq!(
+                model
+                    .get_conversation_metadata(&conversation_id)
+                    .map(|metadata| metadata.title.as_str()),
+                Some("Generated title"),
+            );
+            assert!(!model
                 .in_flight_conversation_renames
                 .contains_key(&conversation_id));
         });
@@ -302,6 +363,10 @@ fn complete_conversation_rename_applies_normalized_title_and_clears_in_flight_st
 
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "server-conversation-token".to_string(),
+            );
             let metadata = AIConversationMetadata::from(
                 model
                     .conversation(&conversation_id)
@@ -367,6 +432,10 @@ fn fail_conversation_rename_reverts_title_and_cached_metadata() {
 
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "server-conversation-token".to_string(),
+            );
             let metadata = AIConversationMetadata::from(
                 model
                     .conversation(&conversation_id)
@@ -428,6 +497,10 @@ fn begin_conversation_rename_rejects_second_rename_while_in_flight() {
 
         let second_result = history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "server-conversation-token".to_string(),
+            );
             model
                 .begin_conversation_rename(conversation_id, "Manual title".to_string(), ctx)
                 .expect("rename should begin");

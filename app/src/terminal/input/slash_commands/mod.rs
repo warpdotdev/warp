@@ -543,26 +543,18 @@ impl Input {
                 };
 
                 let history = BlocklistAIHistoryModel::handle(ctx);
-                let Some(server_conversation_id) = history
-                    .as_ref(ctx)
-                    .conversation(&conversation_id)
-                    .and_then(|conversation| {
-                        conversation
-                            .server_conversation_token()
-                            .map(|token| token.as_str().to_owned())
-                    })
-                else {
-                    show_error_toast(
-                        "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again."
-                            .to_owned(),
-                        ctx,
-                    );
-                    return true;
-                };
-                match history.update(ctx, |history, ctx| {
+                let server_conversation_id = match history.update(ctx, |history, ctx| {
                     history.begin_conversation_rename(conversation_id, title.clone(), ctx)
                 }) {
-                    Ok(()) => {}
+                    Ok(server_conversation_id) => server_conversation_id,
+                    Err(BeginConversationRenameError::MissingServerConversationToken) => {
+                        show_error_toast(
+                            "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again."
+                                .to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
                     Err(BeginConversationRenameError::RenameInProgress) => {
                         show_error_toast(
                             "A rename is already in progress for this conversation".to_owned(),
@@ -585,7 +577,7 @@ impl Input {
                         );
                         return true;
                     }
-                }
+                };
 
                 let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
                 ctx.spawn(

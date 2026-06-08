@@ -187,6 +187,8 @@ pub enum UpdateHistoryError {
 pub(crate) enum BeginConversationRenameError {
     #[error("conversation not found")]
     ConversationNotFound,
+    #[error("conversation has no server token")]
+    MissingServerConversationToken,
     #[error("conversation is not ready to rename")]
     ConversationNotReady,
     #[error("conversation rename already in progress")]
@@ -561,7 +563,7 @@ impl BlocklistAIHistoryModel {
         conversation_id: AIConversationId,
         title: String,
         ctx: &mut ModelContext<Self>,
-    ) -> Result<(), BeginConversationRenameError> {
+    ) -> Result<String, BeginConversationRenameError> {
         if self
             .in_flight_conversation_renames
             .contains_key(&conversation_id)
@@ -573,6 +575,11 @@ impl BlocklistAIHistoryModel {
             .conversations_by_id
             .get(&conversation_id)
             .ok_or(BeginConversationRenameError::ConversationNotFound)?;
+        let server_conversation_token = conversation
+            .server_conversation_token()
+            .ok_or(BeginConversationRenameError::MissingServerConversationToken)?
+            .as_str()
+            .to_owned();
         let root_task = conversation
             .get_root_task()
             .ok_or(BeginConversationRenameError::ConversationNotReady)?;
@@ -598,8 +605,7 @@ impl BlocklistAIHistoryModel {
             },
         );
         self.apply_conversation_title(conversation_id, title, ctx);
-
-        Ok(())
+        Ok(server_conversation_token)
     }
 
     /// Completes an in-flight rename and applies any server-normalized title.
