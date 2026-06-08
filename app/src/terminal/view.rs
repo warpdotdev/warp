@@ -2804,8 +2804,7 @@ pub struct TerminalView {
     agent_view_controller: ModelHandle<AgentViewController>,
     agent_view_back_button: ViewHandle<ActionButton>,
     /// Pill bar shown above the agent view header listing the orchestrator and
-    /// child agents. Gated by `FeatureFlag::OrchestrationPillBar`. The view is
-    /// always constructed; render-time guards control whether it draws anything.
+    /// child agents. Always constructed; render-time guards control whether it draws anything.
     orchestration_pill_bar: ViewHandle<OrchestrationPillBar>,
     /// `true` when this view hosts a child agent split off into its own
     /// pane/tab. Drives breadcrumb-vs-pill-bar rendering in the pane header.
@@ -5124,10 +5123,6 @@ impl TerminalView {
 
             let mut finish_reason: Option<FinishReason> = None;
             if let Some(active_ai_block) = self.active_ai_block(ctx) {
-                // Focus the block so that the user can interact
-                // with any blocking actions (if any).
-                self.focus_ai_block_if_self_focused(active_ai_block, ctx);
-
                 // A new exchange is already active, so callbacks for the
                 // just-finished exchange will be skipped. Clear any pending
                 // user query now to prevent its callback from firing when
@@ -7993,6 +7988,20 @@ impl TerminalView {
         ctx.notify();
     }
 
+    fn current_long_running_command_agent_interaction_state(
+        &self,
+    ) -> LongRunningCommandAgentInteractionState {
+        let model = self.model.lock();
+        let active_block = model.block_list().active_block();
+        if active_block.is_agent_in_control() {
+            LongRunningCommandAgentInteractionState::InControl
+        } else if active_block.is_agent_tagged_in() {
+            LongRunningCommandAgentInteractionState::TaggedIn
+        } else {
+            LongRunningCommandAgentInteractionState::NotInteracting
+        }
+    }
+
     fn emit_long_running_command_agent_interaction_state_changed(
         &self,
         agent_has_control: bool,
@@ -8013,10 +8022,6 @@ impl TerminalView {
                 LongRunningCommandAgentInteractionState::NotInteracting
             }
         };
-        log::info!(
-            "emit_long_running_command_agent_interaction_state_changed: \
-             agent_has_control={agent_has_control}, emitting state={state:?}"
-        );
         ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged { state });
     }
 
@@ -8026,6 +8031,10 @@ impl TerminalView {
         state: LongRunningCommandAgentInteractionState,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.current_long_running_command_agent_interaction_state() == state {
+            return;
+        }
+        log::info!("Applying shared-session LRC interaction_state={state:?}");
         match state {
             LongRunningCommandAgentInteractionState::InControl => {
                 self.cli_subagent_controller.update(ctx, |controller, ctx| {

@@ -2178,10 +2178,6 @@ impl TerminalManager {
                     if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
-                        log::info!(
-                            "[sharer] UniversalDeveloperInputContextUpdated: \
-                             applying LRC interaction_state={interaction_state:?}"
-                        );
                         terminal_view.update(ctx, |view, ctx| {
                             view.apply_long_running_command_agent_interaction_state(
                                 interaction_state,

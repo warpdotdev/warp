@@ -105,7 +105,6 @@ fn on_view_detached_closed_clears_orchestration_viewer_model_slot() {
     // streamer registration so the ancestor SSE can be torn down.
     App::test((), |mut app| async move {
         let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
 
@@ -149,7 +148,6 @@ fn on_view_detached_hidden_for_close_keeps_orchestration_viewer_model_alive() {
     // the pill bar restores seamlessly if the user undoes the close.
     App::test((), |mut app| async move {
         let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
 
@@ -180,7 +178,6 @@ fn on_view_detached_moved_keeps_orchestration_viewer_model_alive() {
     // bar on the moved pane.
     App::test((), |mut app| async move {
         let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-        let _pill = FeatureFlag::OrchestrationViewerPillBar.override_enabled(true);
 
         initialize_app_for_terminal_view(&mut app);
 

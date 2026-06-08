@@ -88,7 +88,7 @@ use crate::{
     experiments, workspace, AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions,
 };
 
-fn initialize_app(app: &mut App) {
+pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
     // Add the necessary singleton models to the App
@@ -238,7 +238,7 @@ fn initialize_app(app: &mut App) {
     app.update(workspace::init);
 }
 
-fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
+pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     let global_resource_handles = GlobalResourceHandles::mock(app);
     let active_window_id = app.read(|ctx| ctx.windows().active_window());
     let (_, workspace) = app.add_window(WindowStyle::NotStealFocus, |ctx| {

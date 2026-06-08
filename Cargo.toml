@@ -52,6 +52,7 @@ integration = { path = "crates/integration" }
 ipc = { path = "crates/ipc" }
 jsonrpc = { path = "crates/jsonrpc" }
 languages = { path = "crates/languages" }
+local_control = { path = "crates/local_control" }
 lsp = { path = "crates/lsp" }
 markdown_parser = { path = "crates/markdown_parser" }
 mcp = { path = "crates/mcp" }
