@@ -658,13 +658,6 @@ impl RenderableAIError {
         error.status().is_none()
     }
 
-    fn request_failed_error(value: &AIApiError) -> Self {
-        Self::Other {
-            error_message: format!("Request failed with error: {value:?}"),
-            will_attempt_resume: false,
-            waiting_for_network: false,
-        }
-    }
     pub fn is_invalid_api_key(&self) -> bool {
         matches!(self, Self::InvalidApiKey { .. })
     }
@@ -700,7 +693,11 @@ impl From<&AIApiError> for RenderableAIError {
             {
                 Self::transient_network_error(false, false)
             }
-            _ => Self::request_failed_error(value),
+            _ => Self::Other {
+                error_message: format!("Request failed with error: {value:?}"),
+                will_attempt_resume: false,
+                waiting_for_network: false,
+            },
         }
     }
 }
