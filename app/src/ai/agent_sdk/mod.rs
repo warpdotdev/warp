@@ -832,7 +832,9 @@ impl AgentDriverRunner {
         }
 
         if task_id_str.parse::<AmbientAgentTaskId>().is_err() {
-            log::debug!("Skipping git credentials bootstrap: could not parse task ID '{task_id_str}'");
+            log::debug!(
+                "Skipping git credentials bootstrap: could not parse task ID '{task_id_str}'"
+            );
             return Ok(());
         }
 

@@ -1,4 +1,3 @@
-use super::{command_requires_auth, command_to_telemetry_event, reconcile_task_harness};
 use serde_json::json;
 use warp_cli::agent::Harness;
 use warp_cli::artifact::{
@@ -7,6 +6,8 @@ use warp_cli::artifact::{
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_cli::CliCommand;
 use warp_core::telemetry::TelemetryEvent;
+
+use super::{command_requires_auth, command_to_telemetry_event, reconcile_task_harness};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 
