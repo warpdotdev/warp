@@ -6,8 +6,9 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
 use super::convert_to::convert_input;
-use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
+use super::{ConvertToAPITypeError, RequestParams, ResponseStream, ServerConversationToken};
 use crate::ai::agent::redaction;
+use crate::ai::agent::AIAgentInput;
 use crate::server::server_api::ServerApi;
 use crate::terminal::model::session::SessionType;
 
@@ -52,6 +53,12 @@ pub async fn generate_multi_agent_output(
     if params.should_redact_secrets {
         redaction::redact_inputs(&mut params.input);
     }
+
+    maybe_prepend_conversation_handoff(
+        &mut params.input,
+        params.conversation_token.as_ref(),
+        params.forked_from_conversation_token.as_ref(),
+    );
 
     let api_keys = api_keys_with_warp_credit_fallback_setting(
         params.api_keys,
@@ -144,6 +151,38 @@ pub async fn generate_multi_agent_output(
             let _ = tx.send(Err(e)).await;
             Ok(Box::pin(rx))
         }
+    }
+}
+
+/// Prepends a `ConversationHandoff` marker to the first local request after a cloud conversation
+/// is continued locally, so the server unwinds any inherited CLI subagent stack back to PRIMARY
+/// before routing the query. The marker rides in the same `UserInputs` batch as the user query.
+fn maybe_prepend_conversation_handoff(
+    inputs: &mut Vec<AIAgentInput>,
+    conversation_token: Option<&ServerConversationToken>,
+    forked_from_conversation_token: Option<&ServerConversationToken>,
+) {
+    if !FeatureFlag::ExplicitConversationHandoff.is_enabled() {
+        return;
+    }
+
+    // The forked-from token is only carried on the initial post-fork request, before the server
+    // assigns the forked conversation a new token.
+    let is_initial_forked_request =
+        conversation_token.is_none() && forked_from_conversation_token.is_some();
+    let has_normal_user_query = inputs.iter().any(|input| {
+        matches!(
+            input,
+            AIAgentInput::UserQuery {
+                static_query_type: None,
+                running_command: None,
+                ..
+            }
+        )
+    });
+
+    if is_initial_forked_request && has_normal_user_query {
+        inputs.insert(0, AIAgentInput::ConversationHandoff);
     }
 }
 

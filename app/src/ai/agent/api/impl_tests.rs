@@ -1,12 +1,16 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use warp_core::features::FeatureFlag;
 use warp_core::HostId;
 use warp_multi_agent_api as api;
 
 use super::{
-    api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
-    supports_orchestration_v2,
+    api_keys_with_warp_credit_fallback_setting, convert_input, get_supported_cli_agent_tools,
+    get_supported_tools, maybe_prepend_conversation_handoff, supports_orchestration_v2,
 };
-use crate::ai::agent::api::RequestParams;
+use crate::ai::agent::api::{RequestParams, ServerConversationToken};
+use crate::ai::agent::{AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
 use crate::terminal::model::session::SessionType;
@@ -194,4 +198,69 @@ fn remote_supported_tools_omit_search_codebase_when_remote_is_not_connected() {
 
     assert!(!supported_tools.contains(&api::ToolType::SearchCodebase));
     assert!(!supported_cli_agent_tools.contains(&api::ToolType::SearchCodebase));
+}
+
+fn normal_user_query_input(query: &str) -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: query.to_string(),
+        context: Arc::from(Vec::new()),
+        static_query_type: None,
+        referenced_attachments: HashMap::new(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+    }
+}
+
+#[test]
+fn forked_first_request_prepends_and_converts_conversation_handoff() {
+    let _flag = FeatureFlag::ExplicitConversationHandoff.override_enabled(true);
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.forked_from_conversation_token =
+        Some(ServerConversationToken::new("cloud-token".to_string()));
+    params.input = vec![normal_user_query_input("continue here")];
+
+    maybe_prepend_conversation_handoff(
+        &mut params.input,
+        params.conversation_token.as_ref(),
+        params.forked_from_conversation_token.as_ref(),
+    );
+
+    assert_eq!(params.input.len(), 2);
+    assert!(matches!(
+        params.input.first(),
+        Some(AIAgentInput::ConversationHandoff)
+    ));
+
+    let converted = convert_input(params.input).expect("inputs should convert");
+    let Some(api::request::input::Type::UserInputs(user_inputs)) = converted.r#type else {
+        panic!("expected a UserInputs batch");
+    };
+    assert!(matches!(
+        user_inputs.inputs[0].input,
+        Some(api::request::input::user_inputs::user_input::Input::ConversationHandoff(_))
+    ));
+    assert!(matches!(
+        user_inputs.inputs[1].input,
+        Some(api::request::input::user_inputs::user_input::Input::UserQuery(_))
+    ));
+}
+
+#[test]
+fn non_forked_request_does_not_prepend_conversation_handoff() {
+    let _flag = FeatureFlag::ExplicitConversationHandoff.override_enabled(true);
+    let mut params = request_params_with_ask_user_question_enabled(false);
+    params.input = vec![normal_user_query_input("hello")];
+
+    maybe_prepend_conversation_handoff(
+        &mut params.input,
+        params.conversation_token.as_ref(),
+        params.forked_from_conversation_token.as_ref(),
+    );
+
+    assert_eq!(params.input.len(), 1);
+    assert!(matches!(
+        params.input.first(),
+        Some(AIAgentInput::UserQuery { .. })
+    ));
 }
