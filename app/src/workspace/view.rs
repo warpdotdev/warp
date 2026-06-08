@@ -6883,8 +6883,10 @@ impl Workspace {
             });
     }
 
-    /// Creates a new group containing the tab and moves it to the top of
-    /// the tab list.
+    /// Creates a new group containing the tab, anchored at the tab's original
+    /// position. If the tab was pulled out of an existing group, leaving it in
+    /// place would split that group's contiguous run, so the new group lands
+    /// just past the old group's last remaining member instead.
     fn new_tab_group_from_tab(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return;
@@ -6900,8 +6902,21 @@ impl Workspace {
         self.tab_groups.insert(group_id, group);
 
         self.tabs[tab_index].group_id = Some(group_id);
-        self.move_tab_to_index(tab_index, 0, ctx);
-        self.set_active_tab_index(0, ctx);
+
+        // When the tab leaves an existing group, reposition it just past that
+        // group's last remaining member so the old group stays contiguous.
+        if let Some(prev_group_id) = previous_group_id {
+            if let Some(last) = group_member_indices(&self.tabs, prev_group_id).last() {
+                self.move_tab_to_index(tab_index, last + 1, ctx);
+            }
+        }
+
+        // The move above may have shifted the tab; the new group has exactly
+        // one member, so its position is the new active index.
+        let new_active = group_member_indices(&self.tabs, group_id)
+            .next()
+            .unwrap_or(tab_index);
+        self.set_active_tab_index(new_active, ctx);
 
         if let Some(prev_group_id) = previous_group_id {
             self.prune_empty_tab_group(prev_group_id, ctx);

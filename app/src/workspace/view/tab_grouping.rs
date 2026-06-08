@@ -160,8 +160,11 @@ impl Workspace {
     }
 
     /// "Create group from tabs" menu action. Group membership requires
-    /// tabs to be contiguous in the bar, so we relocate the selected tabs
-    /// to the top as a single block before binding them to the new group.
+    /// tabs to be contiguous in the bar, so we gather the selected tabs into
+    /// a single block anchored at the earliest selected tab's position before
+    /// binding them to the new group. When that earliest tab was itself in a
+    /// group, the block is placed just past that group's last remaining
+    /// member so the existing group stays contiguous instead of being split.
     pub(super) fn new_tab_group_from_selected_tabs(&mut self, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return;
@@ -195,6 +198,12 @@ impl Workspace {
             .get(self.active_tab_index)
             .map(|tab| tab.pane_group.id());
 
+        // Anchor the group block at the earliest selected tab. `selected_indices`
+        // is ascending, so its first entry is the earliest tab in the list, and
+        // we remember the group it currently belongs to (if any).
+        let anchor_index = selected_indices[0];
+        let anchor_previous_group_id = self.tabs[anchor_index].group_id;
+
         // Assign membership and clear flags for every selected tab.
         for &index in &selected_indices {
             let tab = &mut self.tabs[index];
@@ -203,12 +212,40 @@ impl Workspace {
         }
 
         // Split tabs into the new group's members and all other tabs.
-        let (selected_tabs, other_tabs): (Vec<_>, Vec<_>) = self
+        let (selected_tabs, mut other_tabs): (Vec<_>, Vec<_>) = self
             .tabs
             .drain(..)
             .partition(|tab| tab.group_id == Some(group_id));
-        // Place the group block at the top, with the rest of the tabs after.
-        self.tabs = selected_tabs.into_iter().chain(other_tabs).collect();
+
+        // Compute where to splice the new group block into `other_tabs`.
+        //
+        // Simple case — anchor tab was NOT in a group:
+        //   Every tab before `anchor_index` in the original list was unselected
+        //   (because `anchor_index` is the smallest selected index), so those
+        //   tabs are still at the front of `other_tabs` in their original order.
+        //   Inserting at `anchor_index` in `other_tabs` places the block exactly
+        //   where the anchor tab used to be.
+        //
+        // Edge case — anchor tab WAS in an existing group G:
+        //   Other surviving members of G are still in `other_tabs`. Inserting at
+        //   `anchor_index` could land in the middle of G's run and split it.
+        //   Example: tabs = [A(G), B(G), C(G), D] and we select B and D.
+        //   other_tabs = [A(G), C(G), D]. anchor_index = 1, which points at C —
+        //   inserting there would produce [A(G), B(new), D(new), C(G)], breaking
+        //   G's contiguity. Instead we search other_tabs from the right for the
+        //   last surviving G member (C, at index 1) and insert after it (index 2),
+        //   giving [A(G), C(G), B(new), D(new)].
+        let insert_at = anchor_previous_group_id
+            .and_then(|prev_group_id| {
+                other_tabs
+                    .iter()
+                    .rposition(|tab| tab.group_id == Some(prev_group_id))
+                    .map(|last| last + 1)
+            })
+            .unwrap_or(anchor_index);
+
+        other_tabs.splice(insert_at..insert_at, selected_tabs);
+        self.tabs = other_tabs;
 
         self.restore_active_tab_index(active_pane_group_id);
 

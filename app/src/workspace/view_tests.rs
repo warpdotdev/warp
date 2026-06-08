@@ -3248,6 +3248,215 @@ fn test_create_new_tab_group_groups_active_tab() {
 }
 
 #[test]
+fn test_new_tab_group_from_tab_keeps_tab_in_place() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Build a three-tab workspace (starts with one tab).
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            // Target the last tab so a move-to-top would be observable.
+            let target_index = workspace.tab_count() - 1;
+            let target_id = workspace.tabs[target_index].pane_group.id();
+
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(target_index), ctx);
+
+            // The tab stays at its original index instead of jumping to the top.
+            assert_eq!(workspace.tabs[target_index].pane_group.id(), target_id);
+            assert_eq!(workspace.active_tab_index(), target_index);
+
+            let group_id = workspace.tabs[target_index]
+                .group_id
+                .expect("target tab should be assigned to the new group");
+            assert!(workspace.tab_groups.contains_key(&group_id));
+
+            // The other tabs remain ungrouped.
+            assert!(workspace.tabs[0].group_id.is_none());
+            assert!(workspace.tabs[1].group_id.is_none());
+        });
+    });
+}
+
+#[test]
+fn test_new_tab_group_from_selected_tabs_anchors_at_earliest_tab() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Build a four-tab workspace (starts with one tab).
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 4);
+
+            let id0 = workspace.tabs[0].pane_group.id();
+            let id1 = workspace.tabs[1].pane_group.id();
+            let id2 = workspace.tabs[2].pane_group.id();
+            let id3 = workspace.tabs[3].pane_group.id();
+
+            // Select two non-adjacent tabs (indices 1 and 3) with the active
+            // tab among the selection so no extra tab is pulled in.
+            workspace.activate_tab(1, ctx);
+            workspace.tabs[1].in_multi_selection = true;
+            workspace.tabs[3].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromSelectedTabs, ctx);
+
+            // The group block lands at the earliest selected tab's position
+            // (index 1), preserving the relative order of its members.
+            let order: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert_eq!(order, vec![id0, id1, id3, id2]);
+
+            // Both selected tabs share the new group; the others stay ungrouped.
+            let group_id = workspace.tabs[1]
+                .group_id
+                .expect("earliest selected tab should join the new group");
+            assert_eq!(workspace.tabs[2].group_id, Some(group_id));
+            assert!(workspace.tabs[0].group_id.is_none());
+            assert!(workspace.tabs[3].group_id.is_none());
+
+            // Selection flags are cleared after grouping.
+            assert!(workspace.tabs.iter().all(|tab| !tab.in_multi_selection));
+        });
+    });
+}
+
+#[test]
+fn test_new_tab_group_from_tab_in_group_anchors_after_group() {
+    // Pulling a tab out of the middle of an existing group must not split
+    // that group: the new single-tab group should land just past the old
+    // group's last remaining member.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Build a four-tab workspace (starts with one tab).
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 4);
+
+            // Group the first three tabs (indices 0, 1, 2) into one group,
+            // leaving the last tab ungrouped.
+            let group = TabGroup::new();
+            let existing_group_id = group.id;
+            workspace.tab_groups.insert(existing_group_id, group);
+            for index in 0..3 {
+                workspace.tabs[index].group_id = Some(existing_group_id);
+            }
+
+            let id0 = workspace.tabs[0].pane_group.id();
+            let middle_id = workspace.tabs[1].pane_group.id();
+            let id2 = workspace.tabs[2].pane_group.id();
+            let id3 = workspace.tabs[3].pane_group.id();
+
+            // Create a new group from the middle member of the existing group.
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(1), ctx);
+
+            // The pulled tab lands right after the old group's run, so the old
+            // group's members stay contiguous: [g0, g2, new, ungrouped].
+            let order: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert_eq!(order, vec![id0, id2, middle_id, id3]);
+
+            let new_group_id = workspace.tabs[2]
+                .group_id
+                .expect("pulled tab should be in the new group");
+            assert_ne!(new_group_id, existing_group_id);
+            assert_eq!(workspace.active_tab_index(), 2);
+
+            // The old group keeps its two contiguous members.
+            assert_eq!(workspace.tabs[0].group_id, Some(existing_group_id));
+            assert_eq!(workspace.tabs[1].group_id, Some(existing_group_id));
+            assert!(workspace.tabs[3].group_id.is_none());
+        });
+    });
+}
+
+#[test]
+fn test_new_tab_group_from_selected_tabs_in_group_anchors_after_group() {
+    // When the earliest selected tab sits inside an existing group, the new
+    // group block is anchored past that group's last surviving member so the
+    // existing group is never split.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Build a five-tab workspace (starts with one tab).
+            for _ in 0..4 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+            assert_eq!(workspace.tab_count(), 5);
+
+            // Group the first three tabs (indices 0, 1, 2); leave 3 and 4 loose.
+            let group = TabGroup::new();
+            let existing_group_id = group.id;
+            workspace.tab_groups.insert(existing_group_id, group);
+            for index in 0..3 {
+                workspace.tabs[index].group_id = Some(existing_group_id);
+            }
+
+            let id0 = workspace.tabs[0].pane_group.id();
+            let id1 = workspace.tabs[1].pane_group.id();
+            let id2 = workspace.tabs[2].pane_group.id();
+            let id3 = workspace.tabs[3].pane_group.id();
+            let id4 = workspace.tabs[4].pane_group.id();
+
+            // Select the middle member of the group (index 1) and the trailing
+            // ungrouped tab (index 4), with the active tab among the selection.
+            workspace.activate_tab(1, ctx);
+            workspace.tabs[1].in_multi_selection = true;
+            workspace.tabs[4].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromSelectedTabs, ctx);
+
+            // The block is placed just past the old group's surviving run
+            // (g0, g2), keeping that group contiguous:
+            // [g0, g2, new1, new4, id3].
+            let order: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert_eq!(order, vec![id0, id2, id1, id4, id3]);
+
+            let new_group_id = workspace.tabs[2]
+                .group_id
+                .expect("selected tab should be in the new group");
+            assert_ne!(new_group_id, existing_group_id);
+            assert_eq!(workspace.tabs[3].group_id, Some(new_group_id));
+
+            // Old group stays contiguous with its two surviving members.
+            assert_eq!(workspace.tabs[0].group_id, Some(existing_group_id));
+            assert_eq!(workspace.tabs[1].group_id, Some(existing_group_id));
+            assert!(workspace.tabs[4].group_id.is_none());
+        });
+    });
+}
+
+#[test]
 fn test_toggle_tab_group_collapsed_flips_state() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 
