@@ -285,11 +285,7 @@ fn test_get_repo_contents() {
 
             // Test getting all files
             model_handle.read(&app, |model, _ctx| {
-                let args = GetContentsArgs {
-                    include_folders: false,
-                    include_ignored: false,
-                    filter: None,
-                };
+                let args = GetContentsArgs::default().exclude_folders();
                 let result = model
                     .get_repo_contents(
                         &StandardizedPath::from_local_canonicalized(&test_repo).unwrap(),
@@ -303,11 +299,7 @@ fn test_get_repo_contents() {
 
                 // Test with non-existent repository
                 let non_existent = StandardizedPath::try_new("/non_existent_repo").unwrap();
-                let args = GetContentsArgs {
-                    include_folders: false,
-                    include_ignored: false,
-                    filter: None,
-                };
+                let args = GetContentsArgs::default().exclude_folders();
                 let non_existent_result = model.get_repo_contents(&non_existent, args);
                 assert!(matches!(
                     non_existent_result,
@@ -343,14 +335,7 @@ fn test_get_repo_contents_truncates_to_max_results() {
         .insert(repo_path.clone(), IndexedRepoState::Indexed(state));
 
     let result = model
-        .get_repo_contents(
-            &repo_path,
-            GetContentsArgs {
-                include_folders: false,
-                include_ignored: false,
-                filter: None,
-            },
-        )
+        .get_repo_contents(&repo_path, GetContentsArgs::default().exclude_folders())
         .unwrap();
 
     // The result is capped and flagged as truncated rather than erroring.
@@ -359,6 +344,59 @@ fn test_get_repo_contents_truncates_to_max_results() {
         crate::local_model::MAX_REPO_CONTENTS_RESULTS
     );
     assert!(result.truncated);
+}
+
+/// A query-style traversal filter must be evaluated *before* an entry counts
+/// toward the result cap, so a matching file that sorts well past the cap in
+/// traversal order is still returned. This is the core guarantee that keeps
+/// file search from truncating matches away.
+#[test]
+fn test_get_repo_contents_filter_applies_before_cap() {
+    let base = std::env::temp_dir().join("filter_before_cap_repo");
+    let repo_path = StandardizedPath::try_from_local(&base).unwrap();
+
+    // Many non-matching files, then a single matching "needle" file placed last
+    // so it is well beyond the default result cap in traversal order.
+    let noise_count = crate::local_model::MAX_REPO_CONTENTS_RESULTS + 50;
+    let mut children: Vec<Entry> = (0..noise_count)
+        .map(|i| Entry::File(FileMetadata::new(base.join(format!("file{i}.txt")), false)))
+        .collect();
+    children.push(Entry::File(FileMetadata::new(
+        base.join("needle.rs"),
+        false,
+    )));
+    let root = Entry::Directory(DirectoryEntry {
+        path: repo_path.clone(),
+        children,
+        ignored: false,
+        loaded: true,
+    });
+    let state = FileTreeState::new(root, Vec::new(), None);
+
+    let mut model = LocalRepoMetadataModel::new_for_test();
+    model
+        .repositories
+        .insert(repo_path.clone(), IndexedRepoState::Indexed(state));
+
+    let args = GetContentsArgs::default().with_filter(|content| match content {
+        crate::RepoContent::File(file) => file
+            .path
+            .to_local_path_lossy()
+            .to_string_lossy()
+            .contains("needle"),
+        crate::RepoContent::Directory(_) => false,
+    });
+    let result = model.get_repo_contents(&repo_path, args).unwrap();
+
+    // The single matching file is returned despite sorting past the cap, and
+    // the result is not truncated because only one entry matched.
+    assert_eq!(result.contents.len(), 1);
+    assert!(!result.truncated);
+    assert!(matches!(
+        &result.contents[0],
+        crate::RepoContent::File(file)
+            if file.path.to_local_path_lossy() == base.join("needle.rs")
+    ));
 }
 
 #[cfg(feature = "local_fs")]
@@ -732,11 +770,7 @@ fn test_get_repo_contents_include_ignored() {
 
             // Test with include_ignored = false (should exclude ignored files and directories)
             model_handle.read(&app, |model, _ctx| {
-                let args = GetContentsArgs {
-                    include_folders: true,
-                    include_ignored: false,
-                    filter: None,
-                };
+                let args = GetContentsArgs::default();
                 let contents = model
                     .get_repo_contents(
                         &StandardizedPath::from_local_canonicalized(&test_repo).unwrap(),
@@ -766,11 +800,7 @@ fn test_get_repo_contents_include_ignored() {
 
             // Test with include_ignored = true (should include everything)
             model_handle.read(&app, |model, _ctx| {
-                let args = GetContentsArgs {
-                    include_folders: true,
-                    include_ignored: true,
-                    filter: None,
-                };
+                let args = GetContentsArgs::default().include_ignored();
                 let contents = model
                     .get_repo_contents(
                         &StandardizedPath::from_local_canonicalized(&test_repo).unwrap(),
