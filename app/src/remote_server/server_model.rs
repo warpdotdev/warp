@@ -81,7 +81,6 @@ use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
 use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
-use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::code_review::git_actions;
 use crate::features::FeatureFlag;
@@ -3196,28 +3195,13 @@ impl ServerModel {
         let handle = self.spawn_request_handler(
             request_id.clone(),
             async move {
-                let diff = git::get_diff_for_commit_message(&repo_path, include_unstaged).await?;
-                // Skip the AI round trip when there's nothing to summarize
-                // (mirrors the local open-time `has_changes` gate). The client
-                // treats this error as "no draft" and shows the manual-type
-                // placeholder, no toast.
-                if diff.trim().is_empty() {
-                    anyhow::bail!("no changes to generate a commit message from");
-                }
-                let generated = ai_client
-                    .generate_code_review_content(GenerateCodeReviewContentRequest {
-                        output_type: OutputType::CommitMessage,
-                        diff,
-                        branch_name,
-                        commit_messages: Vec::new(),
-                    })
-                    .await?
-                    .content;
-                let trimmed = generated.trim();
-                if trimmed.is_empty() {
-                    anyhow::bail!("AI returned an empty commit message");
-                }
-                anyhow::Ok(trimmed.to_string())
+                git_actions::generate_commit_message(
+                    &repo_path,
+                    &branch_name,
+                    include_unstaged,
+                    ai_client.as_ref(),
+                )
+                .await
             },
             move |me, result, _ctx| {
                 let message = match result {

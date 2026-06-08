@@ -839,7 +839,7 @@ impl RemoteDiffStateModel {
     /// is set, the daemon AI-generates the PR title/body (falling back to
     /// `gh pr create --fill`); `branch` is passed as context for that generation.
     #[allow(clippy::too_many_arguments)]
-    pub fn create_pr_remote(
+    pub fn create_pr(
         &self,
         branch: String,
         autogenerate_content: bool,

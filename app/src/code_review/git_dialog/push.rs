@@ -18,12 +18,10 @@ use warpui::elements::{
 use warpui::platform::Cursor;
 use warpui::ViewContext;
 
-use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::{add_color, remove_color};
-use crate::code_review::git_actions;
 use crate::code_review::git_dialog::{
-    interactive_path_future, render_branch_section, render_chevron_icon, render_file_list,
-    show_toast, user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode,
+    render_branch_section, render_chevron_icon, render_file_list, show_toast,
+    user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode,
 };
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
@@ -110,33 +108,9 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
 
     me.set_loading(loading_label(publish), ctx);
 
-    match me.repo_location().clone() {
-        LocalOrRemotePath::Local(repo_path) => {
-            let path_future = interactive_path_future(ctx);
-            ctx.spawn(
-                async move {
-                    let path_env = path_future.await;
-                    git_actions::run_push(&repo_path, &branch, path_env.as_deref()).await
-                },
-                move |me, result, ctx| match result {
-                    Ok((commits, upstream)) => {
-                        me.diff_state_model().update(ctx, |m, ctx| {
-                            m.apply_git_op_delta(commits, upstream, ctx);
-                        });
-                        finish_push(me, publish, Ok(()), ctx);
-                    }
-                    Err(err) => finish_push(me, publish, Err(err), ctx),
-                },
-            );
-        }
-        LocalOrRemotePath::Remote(_) => {
-            // Dispatched via the manager; the result arrives asynchronously
-            // as a GitOpCompleted event.
-            me.diff_state_model().update(ctx, |m, ctx| {
-                m.git_push(branch, ctx);
-            });
-        }
-    }
+    me.diff_state_model().update(ctx, |m, ctx| {
+        m.git_push(branch, ctx);
+    });
 }
 
 /// Shared push completion: toast + telemetry + close.

@@ -11,17 +11,13 @@ use warpui::elements::{
 };
 use warpui::{SingletonEntity, ViewContext};
 
-use crate::code::buffer_location::LocalOrRemotePath;
-use crate::code_review::git_actions;
 use crate::code_review::git_dialog::{
-    interactive_path_future, render_branch_section, render_file_changes_box,
-    should_send_git_ops_ai_request, show_toast, user_facing_git_error, GitDialog, GitDialogAction,
-    GitDialogEvent, GitDialogMode,
+    render_branch_section, render_file_changes_box, should_send_git_ops_ai_request, show_toast,
+    user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode,
 };
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
 };
-use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::icons::Icon;
 use crate::util::git::{FileChangeEntry, PrInfo};
 use crate::view_components::{DismissibleToast, ToastLink};
@@ -123,41 +119,15 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
         return;
     };
     let branch_name = me.branch_name().to_string();
+    // AI-generate the PR title/body when the user has it enabled; falls back to
+    // `gh pr create --fill`.
+    let autogenerate_content = should_send_git_ops_ai_request(ctx);
 
     me.set_loading(loading_label_for(), ctx);
 
-    match me.repo_location().clone() {
-        LocalOrRemotePath::Local(repo_path) => {
-            // AI title/body autogen is gated client-side; capture the client
-            // here (only when enabled) and pass it into the shared action.
-            let code_review_ai = should_send_git_ops_ai_request(ctx)
-                .then(|| ServerApiProvider::handle(ctx).read(ctx, |p, _| p.get_ai_client()));
-            let path_future = interactive_path_future(ctx);
-            ctx.spawn(
-                async move {
-                    let path_env = path_future.await;
-                    git_actions::create_pr(
-                        &repo_path,
-                        &branch_name,
-                        code_review_ai.as_deref(),
-                        path_env.as_deref(),
-                    )
-                    .await
-                },
-                move |me, result, ctx| finish_create_pr(me, result, ctx),
-            );
-        }
-        LocalOrRemotePath::Remote(_) => {
-            // Have the daemon AI-generate the PR title/body when autogen is on
-            // (mirrors the local arm); it falls back to `gh pr create --fill`.
-            let autogenerate_content = should_send_git_ops_ai_request(ctx);
-            // Dispatched via the manager; the result arrives asynchronously
-            // as a GitOpCompleted event.
-            me.diff_state_model().update(ctx, |m, ctx| {
-                m.create_pr_remote(branch_name, autogenerate_content, ctx);
-            });
-        }
-    }
+    me.diff_state_model().update(ctx, |m, ctx| {
+        m.create_pr(branch_name, autogenerate_content, ctx);
+    });
 }
 
 /// Shared create-PR completion: toast (with Open PR link) + telemetry +

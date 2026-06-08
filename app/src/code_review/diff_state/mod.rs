@@ -739,15 +739,7 @@ impl DiffStateModel {
         }
     }
 
-    // ── Remote git operations (async; results arrive via events) ─────
-    //
-    // These dispatch the op and return immediately; the outcome is not
-    // fire-and-forget but arrives later as a `DiffStateModelEvent` that the
-    // dialog/view observes (`GitOpCompleted` / `MetadataRefreshed` /
-    // `CommitMessageGenerated` / `BranchesReceived`).
-
-    /// Runs a commit chain on the remote host. The result arrives via
-    /// `DiffStateModelEvent::GitOpCompleted`. No-op for local repos.
+    /// Runs a commit chain (commit, then optionally push/create-PR).
     pub(crate) fn git_commit_chain(
         &self,
         mode: CommitChainMode,
@@ -758,9 +750,18 @@ impl DiffStateModel {
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
-            Self::Local(_) => {}
-            Self::Remote(model) => model.update(ctx, |model, ctx| {
-                model.git_commit_chain(
+            Self::Local(local) => local.update(ctx, |local, ctx| {
+                local.git_commit_chain(
+                    mode,
+                    message,
+                    include_unstaged,
+                    branch,
+                    autogenerate_pr_content,
+                    ctx,
+                );
+            }),
+            Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
+                remote.git_commit_chain(
                     mode,
                     message,
                     include_unstaged,
@@ -772,9 +773,7 @@ impl DiffStateModel {
         }
     }
 
-    /// Issues an AI commit-message generation request on the remote host. The
-    /// result arrives via `DiffStateModelEvent::CommitMessageGenerated`. No-op
-    /// for local repos, which generate the message client-side in the dialog.
+    /// Issues an AI commit-message generation request.
     pub(crate) fn generate_commit_message(
         &self,
         include_unstaged: bool,
@@ -782,40 +781,43 @@ impl DiffStateModel {
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
-            Self::Local(_) => {}
-            Self::Remote(model) => model.update(ctx, |model, ctx| {
-                model.generate_commit_message(include_unstaged, branch_name, ctx);
+            Self::Local(local) => local.update(ctx, |local, ctx| {
+                local.generate_commit_message(include_unstaged, branch_name, ctx);
+            }),
+            Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
+                remote.generate_commit_message(include_unstaged, branch_name, ctx);
             }),
         }
     }
 
-    /// Pushes the branch on the remote host. The result arrives via
-    /// `DiffStateModelEvent::GitOpCompleted`. No-op for local repos.
+    /// Pushes the given git branch to the remote origin.
     pub(crate) fn git_push(&self, branch: String, ctx: &mut ModelContext<Self>) {
         match self {
-            Self::Local(_) => {}
-            Self::Remote(model) => model.update(ctx, |model, ctx| {
-                model.git_push(branch, ctx);
+            Self::Local(local) => local.update(ctx, |local, ctx| {
+                local.git_push(branch, ctx);
+            }),
+            Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
+                remote.git_push(branch, ctx);
             }),
         }
     }
 
-    /// Creates a PR on the remote host. The result arrives via
-    /// `DiffStateModelEvent::GitOpCompleted`. No-op for local repos.
+    /// Creates a PR for the current branch.
     ///
-    /// When `autogenerate_content` is set, the daemon AI-generates the PR
-    /// title/body (falling back to `gh pr create --fill`). `branch` is passed
-    /// as context for that generation.
-    pub(crate) fn create_pr_remote(
+    /// When `autogenerate_content` is set, the PR title/body are AI-generated,
+    /// otherwise fallback to `gh pr create --fill`.
+    pub(crate) fn create_pr(
         &self,
         branch: String,
         autogenerate_content: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         match self {
-            Self::Local(_) => {}
-            Self::Remote(model) => model.update(ctx, |model, ctx| {
-                model.create_pr_remote(branch, autogenerate_content, ctx);
+            Self::Local(local) => local.update(ctx, |local, ctx| {
+                local.create_pr(branch, autogenerate_content, ctx);
+            }),
+            Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
+                remote.create_pr(branch, autogenerate_content, ctx);
             }),
         }
     }
@@ -846,25 +848,6 @@ impl DiffStateModel {
             }),
             Self::Remote(model) => model.update(ctx, |model, ctx| {
                 model.fetch_committed_branch_files(ctx);
-            }),
-        }
-    }
-
-    /// Applies the post-git-operation delta (refreshed unpushed commits +
-    /// upstream ref) returned by a commit/push so the header updates
-    /// immediately. Dispatches to the active backend's `apply_git_op_delta`.
-    pub(crate) fn apply_git_op_delta(
-        &self,
-        unpushed_commits: Vec<Commit>,
-        upstream_ref: Option<String>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match self {
-            Self::Local(local) => local.update(ctx, |local, ctx| {
-                local.apply_git_op_delta(unpushed_commits, upstream_ref, ctx);
-            }),
-            Self::Remote(remote) => remote.update(ctx, |remote, ctx| {
-                remote.apply_git_op_delta(unpushed_commits, upstream_ref, ctx);
             }),
         }
     }

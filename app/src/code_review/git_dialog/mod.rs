@@ -36,8 +36,6 @@ use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
 };
 use crate::settings::AISettings;
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_shell::LocalShellState;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::ui_components::icons::Icon;
 use crate::util::git::{Commit, FileChangeEntry};
@@ -70,25 +68,6 @@ pub fn init(ctx: &mut AppContext) {
         GitDialogAction::Cancel,
         warpui::id!("GitDialog"),
     )]);
-}
-
-/// Future that resolves to the user's interactive-shell `PATH` (or `None`
-/// if capture failed). Result is cached in `LocalShellState`.
-#[cfg(feature = "local_tty")]
-pub(super) fn interactive_path_future(
-    ctx: &mut ViewContext<GitDialog>,
-) -> futures::future::BoxFuture<'static, Option<String>> {
-    LocalShellState::handle(ctx).update(ctx, |shell_state, ctx| {
-        shell_state.get_interactive_path_env_var(ctx)
-    })
-}
-
-#[cfg(not(feature = "local_tty"))]
-pub(super) fn interactive_path_future(
-    _ctx: &mut ViewContext<GitDialog>,
-) -> futures::future::BoxFuture<'static, Option<String>> {
-    use futures::FutureExt;
-    futures::future::ready(None).boxed()
 }
 
 /// Top-level action dispatched to `GitDialog`.
@@ -529,10 +508,10 @@ impl GitDialog {
             cancel_button,
             close_button,
         };
-        // Remote repos generate the open-time commit message on the daemon
-        // (the local path does it inline in `commit::new_state`). The result
+        // Open-time AI commit-message autogen runs for both backends; the model
+        // generates it (local in-process, remote on the daemon) and the result
         // returns via the diff-state subscription wired up just above.
-        commit::maybe_start_remote_commit_message_autogen(&this, ctx);
+        commit::maybe_start_commit_message_autogen(&this, ctx);
         // Remote repos source the Changes box from synced metadata (the local
         // path loads it from the working tree in `commit::new_state`).
         commit::refresh_remote_file_changes(&mut this, ctx);
@@ -680,8 +659,8 @@ impl GitDialog {
                     GitDialogMode::Commit(state) => state.intent,
                     _ => return,
                 };
-                // Shares the local arm's completion path (toast + telemetry +
-                // close); the model already applied the delta / PR info to
+                // Unified completion path (toast + telemetry + close) for both
+                // backends; the model already applied the delta / PR info to
                 // metadata before emitting this event.
                 commit::finish_commit_chain(self, intent, result.clone(), ctx);
             }

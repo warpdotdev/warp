@@ -80,8 +80,38 @@ pub async fn create_pr(
 
 /// Fetches PR info for the current branch (the "view PR" action). Returns
 /// `Ok(None)` when the branch has no open PR.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub async fn get_pr(repo_path: &Path, path_env: Option<&str>) -> anyhow::Result<Option<PrInfo>> {
     git::get_pr_for_branch(repo_path, path_env).await
+}
+
+/// Generates an AI commit message for the working-tree changes.
+/// Bails when there's nothing to summarize (empty diff) or the model returns an empty message.
+pub async fn generate_commit_message(
+    repo_path: &Path,
+    branch_name: &str,
+    include_unstaged: bool,
+    ai_client: &dyn AIClient,
+) -> anyhow::Result<String> {
+    let diff = git::get_diff_for_commit_message(repo_path, include_unstaged).await?;
+    // Skip the AI round trip when there's nothing to summarize.
+    if diff.trim().is_empty() {
+        anyhow::bail!("no changes to generate a commit message from");
+    }
+    let generated = ai_client
+        .generate_code_review_content(GenerateCodeReviewContentRequest {
+            output_type: OutputType::CommitMessage,
+            diff,
+            branch_name: branch_name.to_string(),
+            commit_messages: Vec::new(),
+        })
+        .await?
+        .content;
+    let trimmed = generated.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("AI returned an empty commit message");
+    }
+    Ok(trimmed.to_string())
 }
 
 /// Generates PR title and body via AI (in parallel) and creates the PR.

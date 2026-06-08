@@ -181,11 +181,6 @@ message DiffMetadata {
   repeated Commit unpushed_commits = 6;
   optional string upstream_ref = 7;
   optional PrInfo pr_info = 8;
-  // Field 9 (has_staged_changes) was removed once the commit dialog stopped
-  // gating Confirm on a synced staged-changes bit; the daemon-side commit is
-  // the authoritative backstop. Reserved to avoid accidental reuse.
-  reserved 9;
-  reserved "has_staged_changes";
 }
 
 // Mirrors FileStatusInfo in Rust. Identifies a file and its git status

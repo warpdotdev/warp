@@ -14,15 +14,11 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
-use crate::ai::generate_code_review_content::api::{GenerateCodeReviewContentRequest, OutputType};
-use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code_review::diff_state::CommitChainMode;
-use crate::code_review::git_actions;
 use crate::code_review::git_dialog::pr::show_pr_created_toast;
 use crate::code_review::git_dialog::{
-    interactive_path_future, render_branch_section, render_file_changes_box,
-    should_send_git_ops_ai_request, show_toast, user_facing_git_error, GitDialog, GitDialogAction,
-    GitDialogEvent, GitDialogMode,
+    render_branch_section, render_file_changes_box, should_send_git_ops_ai_request, show_toast,
+    user_facing_git_error, GitDialog, GitDialogAction, GitDialogEvent, GitDialogMode,
 };
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
@@ -31,11 +27,8 @@ use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, InteractionState,
     PropagateAndNoOpNavigationKeys, TextOptions,
 };
-use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::icons::Icon;
-use crate::util::git::{
-    get_diff_for_commit_message, get_file_change_entries, FileChangeEntry, PrInfo,
-};
+use crate::util::git::{get_file_change_entries, FileChangeEntry, PrInfo};
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 
 /// Commit-specific sub-actions, dispatched wrapped in `GitDialogAction::Commit`.
@@ -169,11 +162,8 @@ pub(super) fn new_state(
     };
 
     let include_unstaged = true;
-    // Local repos load the changes list + run open-time AI autogen from the
-    // working tree here. Remote repos source the Changes box from synced
-    // metadata (`refresh_remote_file_changes`) and generate the commit message
-    // on the daemon (`maybe_start_remote_commit_message_autogen`) instead —
-    // both wired up in `GitDialog::new_for_commit`.
+    // Local repos load the changes list from the working tree here; remote
+    // repos source the Changes box from synced metadata.
     if let Some(repo_path) = local_repo_path {
         let repo_path_for_load = repo_path.to_path_buf();
         ctx.spawn(
@@ -182,30 +172,12 @@ pub(super) fn new_state(
                 let GitDialogMode::Commit(state) = &mut me.mode else {
                     return;
                 };
-                let has_changes = match result {
-                    Ok(entries) => {
-                        let has_changes = !entries.is_empty();
-                        state.file_changes = entries;
-                        has_changes
-                    }
-                    Err(err) => {
-                        log::warn!("Failed to load file changes: {err}");
-                        false
-                    }
-                };
+                match result {
+                    Ok(entries) => state.file_changes = entries,
+                    Err(err) => log::warn!("Failed to load file changes: {err}"),
+                }
                 me.refresh_confirm_enabled(ctx);
                 ctx.notify();
-                if ai_autogen_enabled && has_changes {
-                    if let Some(repo_path) = me.repo_location().to_local_path() {
-                        let repo_path = repo_path.to_path_buf();
-                        generate_commit_message(
-                            &repo_path,
-                            me.branch_name(),
-                            include_unstaged,
-                            ctx,
-                        );
-                    }
-                }
             },
         );
     }
@@ -263,46 +235,8 @@ pub(super) fn confirm_tooltip(state: &CommitState, app: &AppContext) -> Option<&
     None
 }
 
-/// Kicks off an open-time AI commit-message generation. On success, writes
-/// the result into the message editor (unless the user has already typed
-/// something). On failure, silently swaps the placeholder to the manual
-/// prompt so the user can type their own — no toast because the failure
-/// isn't retryable and the empty editor already tells the story.
-fn generate_commit_message(
-    repo_path: &Path,
-    branch_name: &str,
-    include_unstaged: bool,
-    ctx: &mut ViewContext<GitDialog>,
-) {
-    let repo_path = repo_path.to_path_buf();
-    let branch_name = branch_name.to_string();
-    let code_review_ai = ServerApiProvider::handle(ctx).read(ctx, |p, _| p.get_ai_client());
-
-    ctx.spawn(
-        async move {
-            let diff = get_diff_for_commit_message(&repo_path, include_unstaged).await?;
-            let generated = code_review_ai
-                .generate_code_review_content(GenerateCodeReviewContentRequest {
-                    output_type: OutputType::CommitMessage,
-                    diff,
-                    branch_name,
-                    commit_messages: Vec::new(),
-                })
-                .await?
-                .content;
-            if generated.trim().is_empty() {
-                anyhow::bail!("AI returned an empty commit message");
-            }
-            anyhow::Ok(generated)
-        },
-        |me, result, ctx| {
-            apply_generated_commit_message(me, result.map_err(|e| e.to_string()), ctx);
-        },
-    );
-}
-
 /// Populates the commit message editor from an AI-generated message. Shared
-/// by the local open-time autogen (above) and the remote
+/// by both backends, whose open-time autogen arrives via the
 /// `CommitMessageGenerated` model event, so both behave identically: on
 /// success, fill the editor unless the user already typed; on failure, swap
 /// to the manual-type placeholder (no toast — the empty editor tells the
@@ -342,17 +276,11 @@ pub(super) fn apply_generated_commit_message(
     }
 }
 
-/// For remote repos, kicks off daemon-side AI commit-message generation at
-/// dialog open. The local path generates inline in `new_state` (it reads the
-/// working tree directly); remote generation runs on the daemon and the
-/// result returns via `DiffStateModelEvent::CommitMessageGenerated`, applied
-/// by `apply_generated_commit_message`. No-op when AI autogen is disabled or
-/// the repo is local.
-pub(super) fn maybe_start_remote_commit_message_autogen(
-    me: &GitDialog,
-    ctx: &mut ViewContext<GitDialog>,
-) {
-    if !me.repo_location().is_remote() || !should_send_git_ops_ai_request(ctx) {
+/// Kicks off AI commit-message autogen request. 
+/// The model runs the generation (local in-process, remote on the daemon) and  
+/// the result returns via `DiffStateModelEvent::CommitMessageGenerated`, applied by `apply_generated_commit_message`.
+pub(super) fn maybe_start_commit_message_autogen(me: &GitDialog, ctx: &mut ViewContext<GitDialog>) {
+    if !should_send_git_ops_ai_request(ctx) {
         return;
     }
     // Generate from the same scope that will be committed (the "include
@@ -445,6 +373,9 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
     let include_unstaged = state.include_unstaged;
     let message_editor = state.message_editor.clone();
     let branch_name = me.branch_name().to_string();
+    // When the chain includes create-PR, AI-generate the PR title/body when the
+    // user has it enabled (ignored for commit-only / commit-and-push).
+    let autogenerate_pr_content = should_send_git_ops_ai_request(ctx);
 
     me.set_loading(LOADING_LABEL, ctx);
 
@@ -453,72 +384,20 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
         editor.set_interaction_state(InteractionState::Disabled, ctx);
     });
 
-    match me.repo_location().clone() {
-        LocalOrRemotePath::Local(repo_path) => {
-            // AI title/body autogen is gated client-side; capture the client
-            // here (only when enabled) and pass it into the shared action.
-            let code_review_ai = should_send_git_ops_ai_request(ctx)
-                .then(|| ServerApiProvider::handle(ctx).read(ctx, |p, _| p.get_ai_client()));
-            let path_future = interactive_path_future(ctx);
-            ctx.spawn(
-                async move {
-                    let path_env = path_future.await;
-                    git_actions::run_commit_chain(
-                        &repo_path,
-                        intent,
-                        &message,
-                        include_unstaged,
-                        &branch_name,
-                        code_review_ai.as_deref(),
-                        path_env.as_deref(),
-                    )
-                    .await
-                },
-                move |me, result, ctx| {
-                    // Apply the post-op delta directly for an immediate header
-                    // refresh (mirrors the remote arm); the FS watcher
-                    // reconciles diffs + the rest.
-                    let result = match result {
-                        Ok((commits, upstream, pr_info)) => {
-                            me.diff_state_model().update(ctx, |m, ctx| {
-                                m.apply_git_op_delta(commits, upstream, ctx);
-                            });
-                            Ok(pr_info)
-                        }
-                        Err(e) => Err(e.to_string()),
-                    };
-                    finish_commit_chain(me, intent, result, ctx);
-                },
-            );
-        }
-        LocalOrRemotePath::Remote(_) => {
-            // When the chain includes create-PR, have the daemon AI-generate
-            // the PR title/body (mirrors the local arm's gating). Ignored by
-            // the daemon for commit-only / commit-and-push.
-            let autogenerate_pr_content = should_send_git_ops_ai_request(ctx);
-            // Dispatched via the manager; the result arrives asynchronously
-            // as a GitOpCompleted event handled by
-            // GitDialog::handle_diff_state_event.
-            me.diff_state_model().update(ctx, |m, ctx| {
-                m.git_commit_chain(
-                    intent,
-                    message,
-                    include_unstaged,
-                    branch_name,
-                    autogenerate_pr_content,
-                    ctx,
-                );
-            });
-        }
-    }
+    me.diff_state_model().update(ctx, |m, ctx| {
+        m.git_commit_chain(
+            intent,
+            message,
+            include_unstaged,
+            branch_name,
+            autogenerate_pr_content,
+            ctx,
+        );
+    });
 }
 
-/// Shared commit-chain completion for both backends: toast + telemetry +
-/// close. Called from the local spawn callback and the remote
-/// `GitOpCompleted` event in `GitDialog::handle_diff_state_event`. `Ok(Some)`
-/// means create-PR ran; `Ok(None)` is a plain commit / commit-and-push. The
-/// filesystem watcher (local) or server push (remote) reconciles the
-/// diff/metadata afterward.
+/// Shared commit-chain completion for both backends: toast + telemetry + close.
+/// `Ok(Some)` means create-PR ran; `Ok(None)` is a plain commit / commit-and-push.
 pub(super) fn finish_commit_chain(
     me: &GitDialog,
     intent: CommitChainMode,
