@@ -5154,10 +5154,10 @@ impl CodeReviewView {
         let theme = appearance.theme();
 
         let diff_size = file.file_diff.size;
-        if diff_size == DiffSize::Unrenderable {
+        if let DiffSize::Unrenderable(reason) = diff_size {
             return Self::styled_file_content_container(
                 Text::new(
-                    "Diff is too large to render",
+                    reason.to_string(),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )

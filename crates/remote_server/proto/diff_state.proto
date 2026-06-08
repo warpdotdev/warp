@@ -101,7 +101,12 @@ enum DiffSize {
   DIFF_SIZE_UNSPECIFIED = 0;
   DIFF_SIZE_NORMAL = 1;
   DIFF_SIZE_LARGE = 2;
-  DIFF_SIZE_UNRENDERABLE = 3;
+  // The diff/patch itself is too large to render. (Was DIFF_SIZE_UNRENDERABLE;
+  // value 3 is preserved for wire compatibility.)
+  DIFF_SIZE_UNRENDERABLE_DIFF_TOO_LARGE = 3;
+  // The base file content was withheld because it exceeded the per-file wire
+  // budget; the client renders a "file too large" placeholder.
+  DIFF_SIZE_UNRENDERABLE_FILE_TOO_LARGE = 4;
 }
 
 // Mirrors FileDiff + FileDiffAndContent in Rust.
@@ -117,8 +122,9 @@ message FileDiff {
   bool has_hidden_bidi_chars = 7;
   DiffSize size = 8;
   // File content at HEAD or merge-base, used by the code review editor to
-  // render inline diff decorations (set_base). Absent for binary files or
-  // when git show fails.
+  // render inline diff decorations (set_base). Absent for binary files, for
+  // files whose content exceeds the per-file wire budget (size =
+  // DIFF_SIZE_UNRENDERABLE_FILE_TOO_LARGE), or when git show fails.
   optional string content_at_base = 9;
 }
 
