@@ -170,6 +170,14 @@ pub struct AppArgs {
     /// URLs to open in Warp.
     #[arg(hide = true)]
     pub urls: Vec<Url>,
+
+    /// Path to a tab config file to open on startup.
+    #[arg(long = "tab-config", hide = true)]
+    pub tab_config: Option<String>,
+
+    /// Parameter values for the tab config (format: key=value). Can be specified multiple times.
+    #[arg(long = "param", hide = true)]
+    pub params: Vec<String>,
 }
 
 impl Args {

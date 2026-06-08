@@ -746,10 +746,34 @@ pub fn run() -> Result<()> {
     }
 
     let api_key = args.api_key().cloned();
-    run_internal(LaunchMode::App {
-        args: args.into_app_args(),
-        api_key,
-    })
+    let mut app_args = args.into_app_args();
+
+    // If --tab-config is provided, synthesize a warp://tab_config URI and append it.
+    if let Some(tab_config) = app_args.tab_config.take() {
+        let mut uri = url::Url::parse(&format!(
+            "{}://tab_config/{}",
+            ChannelState::url_scheme(),
+            tab_config
+        ))
+        .unwrap_or_else(|_| {
+            // Fallback: try to encode the path as a URI path segment.
+            let mut url = url::Url::parse(&format!("{}://tab_config/", ChannelState::url_scheme()))
+                .expect("valid base URL");
+            url.set_path(&format!("/{}", tab_config));
+            url
+        });
+
+        // Append any --param values as query parameters.
+        for param in app_args.params.drain(..) {
+            if let Some((key, value)) = param.split_once('=') {
+                let _ = uri.query_pairs_mut().append_pair(key, value);
+            }
+        }
+
+        app_args.urls.push(uri);
+    }
+
+    run_internal(LaunchMode::App { args: app_args, api_key })
 }
 
 /// Runs an integration test using the provided test driver.

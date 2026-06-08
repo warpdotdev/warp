@@ -6668,10 +6668,39 @@ impl Workspace {
         tab_config: crate::tab_configs::TabConfig,
         ctx: &mut ViewContext<Self>,
     ) {
-        if tab_config.params.is_empty() {
-            let is_worktree_config = tab_config.is_worktree();
+        self.open_tab_config_with_prefilled_params(tab_config, None, ctx);
+    }
+
+    /// Opens a tab config, optionally pre-filling parameters from the caller.
+    ///
+    /// When `prefilled_params` is provided, any declared tab config params that
+    /// are present in the map are filled in. If all params are satisfied (either
+    /// by the caller or by their default value) the tab opens directly. Otherwise
+    /// the modal is shown with any pre-filled values already entered.
+    pub(crate) fn open_tab_config_with_prefilled_params(
+        &mut self,
+        tab_config: crate::tab_configs::TabConfig,
+        prefilled_params: Option<HashMap<String, String>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let is_worktree_config = tab_config.is_worktree();
+        let mut param_values = tab_config.default_param_values();
+
+        if let Some(prefilled) = &prefilled_params {
+            for (k, v) in prefilled {
+                if tab_config.params.contains_key(k) {
+                    param_values.insert(k.clone(), v.clone());
+                }
+            }
+        }
+
+        let has_unfilled_params = tab_config.params.iter().any(|(name, param)| {
+            param_values.get(name).map_or(true, |v| v.is_empty())
+                && param.default.is_none()
+        });
+
+        if !has_unfilled_params {
             let worktree_branch_name = self.maybe_generate_worktree_name(&tab_config);
-            let param_values = tab_config.default_param_values();
             self.open_tab_config_with_params(
                 tab_config,
                 param_values,
@@ -6696,7 +6725,7 @@ impl Workspace {
             self.tab_config_params_modal.view.update(ctx, |modal, ctx| {
                 modal.body().update(ctx, |body, ctx| {
                     body.set_title(modal_title);
-                    body.on_open(tab_config, cwd, ctx);
+                    body.on_open(tab_config, cwd, prefilled_params, ctx);
                 });
             });
             self.tab_config_params_modal.open();

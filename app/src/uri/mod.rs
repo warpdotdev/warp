@@ -114,7 +114,9 @@ impl FromStr for UriHost {
             "mcp" => Ok(Self::Mcp),
             "codex" => Ok(Self::Codex),
             "linear" => Ok(Self::Linear),
-            "tab_config" if FeatureFlag::TabConfigs.is_enabled() => Ok(Self::TabConfig),
+            "tab_config" | "tab-config" if FeatureFlag::TabConfigs.is_enabled() => {
+                Ok(Self::TabConfig)
+            }
             "session" => Ok(Self::Session),
             _ => Err(anyhow!("Received url with unexpected host: {}", s)),
         }
@@ -753,6 +755,13 @@ fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &m
         .query_pairs()
         .any(|(k, v)| k == "new_window" && matches!(v.as_ref(), "1" | "true"));
 
+    // Extract query parameters that correspond to tab config params (excluding known keys).
+    let provided_params: HashMap<String, String> = url
+        .query_pairs()
+        .filter(|(k, _)| k != "new_window")
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
     let target_window_id = if force_new_window {
         None
     } else {
@@ -776,7 +785,7 @@ fn handle_tab_config_uri(primary_window_id: Option<WindowId>, url: &Url, ctx: &m
     };
 
     workspace.update(ctx, |workspace, ctx| {
-        workspace.open_tab_config(config, ctx);
+        workspace.open_tab_config_with_prefilled_params(config, Some(provided_params), ctx);
     });
 }
 
