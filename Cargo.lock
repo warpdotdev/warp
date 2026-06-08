@@ -7545,6 +7545,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d873d7c67ce09b42110d801813efbc9364414e356be9935700d368351657487"
 
 [[package]]
+name = "local_control"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "command",
+ "libc",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
 name = "locale_config"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14528,6 +14545,7 @@ dependencies = [
  "libc",
  "libsqlite3-sys",
  "line-ending",
+ "local_control",
  "log",
  "log-panics",
  "lsp",
@@ -14762,7 +14780,9 @@ dependencies = [
  "color-print",
  "humantime",
  "jaq-all",
+ "local_control",
  "serde",
+ "serde_json",
  "serial_test",
  "url",
  "uuid",

@@ -40,8 +40,7 @@ pub(crate) struct HiddenChildAgentConversationRequest {
     /// When `Yes`, the child pane's terminal is asked to share its session
     /// using the embedded `SessionSourceType` once the shell bootstraps.
     /// The dispatch helpers in `terminal_pane.rs` compute this from the host
-    /// terminal's own shared-session state (gated on
-    /// `FeatureFlag::OrchestrationViewerPillBar`).
+    /// terminal's own shared-session state.
     pub is_shared_session_creator: IsSharedSessionCreator,
 }
 
