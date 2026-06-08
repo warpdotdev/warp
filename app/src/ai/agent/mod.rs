@@ -651,6 +651,20 @@ impl RenderableAIError {
             waiting_for_network,
         }
     }
+
+    fn is_transient_network_transport_error(error: &reqwest::Error) -> bool {
+        // If reqwest has an HTTP status, the server responded. Preserve the existing generic
+        // rendering for those failures rather than calling them lost connections.
+        error.status().is_none()
+    }
+
+    fn request_failed_error(value: &AIApiError) -> Self {
+        Self::Other {
+            error_message: format!("Request failed with error: {value:?}"),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+        }
+    }
     pub fn is_invalid_api_key(&self) -> bool {
         matches!(self, Self::InvalidApiKey { .. })
     }
@@ -680,15 +694,15 @@ impl From<&AIApiError> for RenderableAIError {
                 user_display_message: user_display_message.clone(),
             },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
-            AIApiError::Transport(_)
-            | AIApiError::Deserialization(DeserializationError::Transport(_)) => {
-                Self::transient_network_error(false, false)
+            AIApiError::Transport(error)
+            | AIApiError::Deserialization(DeserializationError::Transport(error)) => {
+                if Self::is_transient_network_transport_error(error) {
+                    Self::transient_network_error(false, false)
+                } else {
+                    Self::request_failed_error(value)
+                }
             }
-            _ => Self::Other {
-                error_message: format!("Request failed with error: {value:?}"),
-                will_attempt_resume: false,
-                waiting_for_network: false,
-            },
+            _ => Self::request_failed_error(value),
         }
     }
 }
