@@ -2848,7 +2848,6 @@ impl SettingsWidget for CustomAppIconWidget {
             &view.app_icon_dropdown,
         );
 
-        #[cfg(target_os = "macos")]
         let show_dock_icon_toggle = render_body_item::<AppearancePageAction>(
             "Show Warp in Dock".into(),
             None,
@@ -2871,6 +2870,9 @@ impl SettingsWidget for CustomAppIconWidget {
                 .finish(),
             None,
         );
+        let show_dock_icon_is_supported = AppIconSettings::as_ref(app)
+            .show_dock_icon
+            .is_supported_on_current_platform();
 
         #[cfg(target_os = "macos")]
         {
@@ -2883,33 +2885,38 @@ impl SettingsWidget for CustomAppIconWidget {
                 && app_icon_at_startup != AppIcon::Default
             {
                 let theme = appearance.theme();
-                return Flex::column()
-                    .with_child(dropdown)
-                    .with_child(
-                        appearance
-                            .ui_builder()
-                            .wrappable_text(
-                                "You may need to restart Warp for MacOS to apply the preferred icon style.",
-                                true,
-                            )
-                            .with_style(UiComponentStyles {
-                                font_color: Some(
-                                    theme.sub_text_color(theme.background()).into_solid(),
-                                ),
-                                margin: Some(Coords::default().bottom(8.)),
-                                ..Default::default()
-                            })
-                            .build()
-                            .finish(),
-                    )
-                    .with_child(show_dock_icon_toggle)
-                    .finish();
+                let column = Flex::column().with_child(dropdown).with_child(
+                    appearance
+                        .ui_builder()
+                        .wrappable_text(
+                            "You may need to restart Warp for MacOS to apply the preferred icon style.",
+                            true,
+                        )
+                        .with_style(UiComponentStyles {
+                            font_color: Some(
+                                theme.sub_text_color(theme.background()).into_solid(),
+                            ),
+                            margin: Some(Coords::default().bottom(8.)),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish(),
+                );
+                let column = if show_dock_icon_is_supported {
+                    column.with_child(show_dock_icon_toggle)
+                } else {
+                    column
+                };
+                return column.finish();
             }
         }
 
         let column = Flex::column().with_child(dropdown);
-        #[cfg(target_os = "macos")]
-        let column = column.with_child(show_dock_icon_toggle);
+        let column = if show_dock_icon_is_supported {
+            column.with_child(show_dock_icon_toggle)
+        } else {
+            column
+        };
         column.finish()
     }
 }
