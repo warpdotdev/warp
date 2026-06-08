@@ -143,26 +143,3 @@ define_settings_group!(AppIconSettings, settings: [
         description: "Whether Warp is shown in the macOS Dock and Cmd-Tab switcher.",
     },
 ]);
-
-#[cfg(test)]
-mod tests {
-    use settings::{Setting, SupportedPlatforms, SyncToCloud};
-
-    use super::ShowDockIconState;
-
-    #[test]
-    fn show_dock_icon_setting_matches_spec() {
-        assert!(ShowDockIconState::default_value());
-        assert_eq!(ShowDockIconState::storage_key(), "ShowDockIcon");
-        assert_eq!(
-            ShowDockIconState::toml_path(),
-            Some("appearance.icon.show_dock_icon")
-        );
-        assert!(matches!(
-            ShowDockIconState::supported_platforms(),
-            SupportedPlatforms::MAC
-        ));
-        assert_eq!(ShowDockIconState::sync_to_cloud(), SyncToCloud::Never);
-        assert!(!ShowDockIconState::is_private());
-    }
-}
