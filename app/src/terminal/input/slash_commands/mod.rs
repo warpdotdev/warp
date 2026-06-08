@@ -35,8 +35,8 @@ use crate::ai::blocklist::agent_view::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryModel,
-    QueuedQueryOrigin, SlashCommandRequest,
+    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, PendingAttachment, QueuedQuery,
+    QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
 };
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -975,12 +975,21 @@ impl Input {
                     ForkedConversationDestination::SplitPane
                 };
 
+                // Collect any pending attachments so they travel with the initial prompt
+                // into the forked pane.
+                let initial_attachments: Vec<PendingAttachment> = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .pending_attachments()
+                    .to_vec();
+
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
                     fork_from_exchange: None,
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
@@ -1021,12 +1030,21 @@ impl Input {
                     ctx
                 );
 
+                // Collect any pending attachments so they travel with the initial prompt
+                // into the continued local pane.
+                let initial_attachments: Vec<PendingAttachment> = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .pending_attachments()
+                    .to_vec();
+
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
                     fork_from_exchange: None,
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
@@ -1055,6 +1073,7 @@ impl Input {
                     summarize_after_fork: true,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments: vec![],
                     destination,
                 });
             }
