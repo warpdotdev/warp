@@ -2804,8 +2804,7 @@ pub struct TerminalView {
     agent_view_controller: ModelHandle<AgentViewController>,
     agent_view_back_button: ViewHandle<ActionButton>,
     /// Pill bar shown above the agent view header listing the orchestrator and
-    /// child agents. Gated by `FeatureFlag::OrchestrationPillBar`. The view is
-    /// always constructed; render-time guards control whether it draws anything.
+    /// child agents. Always constructed; render-time guards control whether it draws anything.
     orchestration_pill_bar: ViewHandle<OrchestrationPillBar>,
     /// `true` when this view hosts a child agent split off into its own
     /// pane/tab. Drives breadcrumb-vs-pill-bar rendering in the pane header.
@@ -5124,10 +5123,6 @@ impl TerminalView {
 
             let mut finish_reason: Option<FinishReason> = None;
             if let Some(active_ai_block) = self.active_ai_block(ctx) {
-                // Focus the block so that the user can interact
-                // with any blocking actions (if any).
-                self.focus_ai_block_if_self_focused(active_ai_block, ctx);
-
                 // A new exchange is already active, so callbacks for the
                 // just-finished exchange will be skipped. Clear any pending
                 // user query now to prevent its callback from firing when

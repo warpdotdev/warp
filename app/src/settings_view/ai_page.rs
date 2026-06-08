@@ -82,11 +82,11 @@ use crate::settings::{
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
     CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
     IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, PromptSubmissionMode,
-    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
-    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
+    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
+    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
+    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
+    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
+    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -327,6 +327,35 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                     mode.command_palette_description(),
                     builder(SettingsAction::AI(
                         AISettingsPageAction::SetThinkingDisplayMode(mode),
+                    )),
+                    ai_context.clone() & !id!(context_flag),
+                )
+                .with_group(bindings::BindingGroup::WarpAi.as_str())
+            })
+            .collect();
+        app.register_fixed_bindings(mode_bindings);
+    }
+    {
+        use warpui::keymap::FixedBinding;
+
+        let ai_context = context.clone() & id!(flags::IS_ANY_AI_ENABLED);
+        let mode_bindings: Vec<FixedBinding> = OrchestrationMessageDisplayMode::iter()
+            .map(|mode| {
+                let context_flag = match mode {
+                    OrchestrationMessageDisplayMode::ShowAndCollapse => {
+                        flags::ORCHESTRATION_MESSAGE_DISPLAY_SHOW_AND_COLLAPSE
+                    }
+                    OrchestrationMessageDisplayMode::AlwaysShow => {
+                        flags::ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_SHOW
+                    }
+                    OrchestrationMessageDisplayMode::AlwaysCollapse => {
+                        flags::ORCHESTRATION_MESSAGE_DISPLAY_ALWAYS_COLLAPSE
+                    }
+                };
+                FixedBinding::empty(
+                    mode.command_palette_description(),
+                    builder(SettingsAction::AI(
+                        AISettingsPageAction::SetOrchestrationMessageDisplayMode(mode),
                     )),
                     ai_context.clone() & !id!(context_flag),
                 )
@@ -641,6 +670,7 @@ pub struct AISettingsPageView {
     dragged_context_window_value: Option<u32>,
 
     thinking_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    orchestration_message_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     default_prompt_submission_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     #[cfg(feature = "local_fs")]
     conversation_layout_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
@@ -782,6 +812,17 @@ impl AISettingsPageView {
             thinking_display_mode_dropdown.update(ctx, |dropdown, ctx| {
                 dropdown.set_selected_by_action(
                     AISettingsPageAction::SetThinkingDisplayMode(current_mode),
+                    ctx,
+                );
+            });
+        }
+        let orchestration_message_display_mode_dropdown =
+            OtherAIWidget::create_orchestration_message_display_mode_dropdown(ctx);
+        {
+            let current_mode = AISettings::as_ref(ctx).orchestration_message_display_mode;
+            orchestration_message_display_mode_dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_action(
+                    AISettingsPageAction::SetOrchestrationMessageDisplayMode(current_mode),
                     ctx,
                 );
             });
@@ -1198,6 +1239,18 @@ impl AISettingsPageView {
                         .update(ctx, |dropdown, ctx| {
                             dropdown.set_selected_by_action(
                                 AISettingsPageAction::SetThinkingDisplayMode(current_mode),
+                                ctx,
+                            );
+                        });
+                }
+                AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
+                    let current_mode = AISettings::as_ref(ctx).orchestration_message_display_mode;
+                    me.orchestration_message_display_mode_dropdown
+                        .update(ctx, |dropdown, ctx| {
+                            dropdown.set_selected_by_action(
+                                AISettingsPageAction::SetOrchestrationMessageDisplayMode(
+                                    current_mode,
+                                ),
                                 ctx,
                             );
                         });
@@ -1734,6 +1787,7 @@ impl AISettingsPageView {
             mcp_denylist_dropdown,
             mcp_denylist_mouse_state_handles,
             thinking_display_mode_dropdown,
+            orchestration_message_display_mode_dropdown,
             default_prompt_submission_mode_dropdown,
             #[cfg(feature = "local_fs")]
             conversation_layout_dropdown,
@@ -2836,6 +2890,7 @@ pub enum AISettingsPageAction {
     ToggleShowAgentTips,
     ToggleShowOzUpdatesInZeroState,
     SetThinkingDisplayMode(ThinkingDisplayMode),
+    SetOrchestrationMessageDisplayMode(OrchestrationMessageDisplayMode),
     SetPromptSubmissionMode(PromptSubmissionMode),
     AttemptLoginGatedUpgrade,
     RemoveCLIAgentToolbarEnabledCommand(String),
@@ -3292,6 +3347,14 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::SetThinkingDisplayMode(mode) => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.thinking_display_mode.set_value(*mode, ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetOrchestrationMessageDisplayMode(mode) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .orchestration_message_display_mode
+                        .set_value(*mode, ctx));
                 });
                 ctx.notify();
             }
@@ -6367,13 +6430,36 @@ impl OtherAIWidget {
             dropdown
         })
     }
+
+    fn create_orchestration_message_display_mode_dropdown(
+        ctx: &mut ViewContext<AISettingsPageView>,
+    ) -> ViewHandle<Dropdown<AISettingsPageAction>> {
+        let items: Vec<DropdownItem<AISettingsPageAction>> =
+            OrchestrationMessageDisplayMode::iter()
+                .map(|mode| {
+                    DropdownItem::new(
+                        mode.display_name(),
+                        AISettingsPageAction::SetOrchestrationMessageDisplayMode(mode),
+                    )
+                })
+                .collect();
+
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            dropdown.add_items(items, ctx);
+            dropdown
+        })
+    }
 }
 
 impl SettingsWidget for OtherAIWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show hide conversation history"
+        "other oz updates zero state empty changelog new conversation agent what's new use agent footer toolbar layout chip chips rearrange re-arrange thinking expanded reasoning collapse never show orchestration messages child agents collapse expand hide conversation history"
     }
 
     fn render(
@@ -6457,6 +6543,21 @@ impl SettingsWidget for OtherAIWidget {
             ),
             (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
             &view.thinking_display_mode_dropdown,
+        ));
+
+        column.add_child(render_dropdown_item(
+            appearance,
+            "Orchestration message display",
+            Some("Controls whether orchestration messages stay expanded."),
+            None,
+            LocalOnlyIconState::for_setting(
+                OrchestrationMessageDisplayMode::storage_key(),
+                OrchestrationMessageDisplayMode::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
+            &view.orchestration_message_display_mode_dropdown,
         ));
 
         // TODO: OpenConversationLayoutPreference should not depend on local_fs, but it lives under the external editor settings

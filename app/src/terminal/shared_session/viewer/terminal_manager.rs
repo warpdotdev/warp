@@ -101,7 +101,7 @@ pub struct TerminalManager {
     /// agent run. Lazily created in `JoinedSuccessfully` on the first
     /// ambient session join. `Arc<FairMutex<Option<...>>>` matches
     /// `current_network` so the network-event closure can write into it
-    /// without `&mut self`. Behind `FeatureFlag::OrchestrationViewerPillBar`.
+    /// without `&mut self`.
     orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
     /// `true` for the root viewer pane of an orchestrator, `false` for
     /// per-child viewer panes. Skipping polling on children avoids
@@ -797,7 +797,6 @@ impl TerminalManager {
                 }
 
                 if enable_orchestration_polling
-                    && FeatureFlag::OrchestrationViewerPillBar.is_enabled()
                     && orchestration_viewer_model.lock().is_none()
                 {
                     if let Some(task_id) = ambient_task_id {

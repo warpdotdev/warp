@@ -43,6 +43,8 @@ mod gpu_state;
 mod input_classifier;
 mod interval_timer;
 mod linear;
+#[cfg(not(target_family = "wasm"))]
+mod local_control;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod login_item;
 mod menu;
@@ -585,6 +587,11 @@ pub fn run() -> Result<()> {
 
     // Ensure feature flags are initialized before parsing command-line arguments.
     features::init_feature_flags();
+    if let Some(args) = warp_cli::local_control::ControlArgs::from_control_mode_env() {
+        #[cfg(windows)]
+        warp_util::windows::attach_to_parent_console();
+        warp_cli::local_control::run_and_exit(args);
+    }
 
     // Parse command-line arguments.
     let args = warp_cli::Args::from_env();
@@ -1997,7 +2004,7 @@ pub(crate) fn initialize_app(
         };
 
         let codebase_limits = AIRequestUsageModel::as_ref(ctx).codebase_context_limits();
-        let codebase_index_config = CodebaseIndexManagerConfig::new(
+        let mut codebase_index_config = CodebaseIndexManagerConfig::new(
             indices_to_restore,
             codebase_limits.max_indices_allowed,
             codebase_limits.max_files_per_repo,
@@ -2005,6 +2012,9 @@ pub(crate) fn initialize_app(
             server_api_provider.as_ref(ctx).get(),
             launch_mode.supports_indexing(),
         );
+        if matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. }) {
+            codebase_index_config = codebase_index_config.defer_persisted_index_restore();
+        }
         #[cfg(feature = "local_fs")]
         if let Some(snapshot_storage) = daemon_codebase_index_snapshot_storage(launch_mode) {
             return CodebaseIndexManager::new_with_snapshot_storage(
@@ -2058,6 +2068,15 @@ pub(crate) fn initialize_app(
         ];
         http_server::HttpServer::new(routers, ctx)
     });
+    #[cfg(not(target_family = "wasm"))]
+    if matches!(
+        launch_mode,
+        LaunchMode::App { .. } | LaunchMode::Test { .. }
+    ) && FeatureFlag::WarpControlCli.is_enabled()
+    {
+        ctx.add_singleton_model(local_control::LocalControlBridge::new);
+        ctx.add_singleton_model(local_control::LocalControlServer::new);
+    }
 
     app_state
 }

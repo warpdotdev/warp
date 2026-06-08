@@ -7545,6 +7545,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d873d7c67ce09b42110d801813efbc9364414e356be9935700d368351657487"
 
 [[package]]
+name = "local_control"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "command",
+ "libc",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
 name = "locale_config"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11867,15 +11884,15 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.145"
+version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "402a6f66d8c709116cf22f558eab210f5a50187f702eb4d7e5ef38d9a7f1c79c"
+checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
  "itoa",
  "memchr",
- "ryu",
  "serde",
  "serde_core",
+ "zmij",
 ]
 
 [[package]]
@@ -13204,7 +13221,7 @@ dependencies = [
 [[package]]
 name = "tink-core"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "digest 0.10.7",
  "hkdf",
@@ -13233,7 +13250,7 @@ dependencies = [
 [[package]]
 name = "tink-hybrid"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "p256",
  "tink-aead",
@@ -13273,7 +13290,7 @@ dependencies = [
 [[package]]
 name = "tink-proto"
 version = "0.3.0"
-source = "git+https://github.com/warpdotdev/tink-rust?branch=warpdotdev%2Fmain#0141035f04a5e262b955c450857b689cff877469"
+source = "git+https://github.com/warpdotdev/tink-rust?rev=54b9ac9af93b0c08b446a7bc0582836c9403a71b#54b9ac9af93b0c08b446a7bc0582836c9403a71b"
 dependencies = [
  "base64 0.22.1",
  "prost 0.14.3",
@@ -14528,6 +14545,7 @@ dependencies = [
  "libc",
  "libsqlite3-sys",
  "line-ending",
+ "local_control",
  "log",
  "log-panics",
  "lsp",
@@ -14762,7 +14780,9 @@ dependencies = [
  "color-print",
  "humantime",
  "jaq-all",
+ "local_control",
  "serde",
+ "serde_json",
  "serial_test",
  "url",
  "uuid",
@@ -17123,6 +17143,12 @@ dependencies = [
  "memchr",
  "typed-path 0.12.2",
 ]
+
+[[package]]
+name = "zmij"
+version = "1.0.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zopfli"

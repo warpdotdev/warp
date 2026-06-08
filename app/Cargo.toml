@@ -264,6 +264,7 @@ rmcp.workspace = true
 warp_isolation_platform.workspace = true
 warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
+local_control.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true
@@ -658,8 +659,7 @@ default = [
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
-    "orchestration_pill_bar",
-    "orchestration_viewer_pill_bar",
+    "run_agents_tool",
     "orchestration_viewer_streamer",
     "pending_user_query_indicator",
     "queue_slash_command",
@@ -958,9 +958,9 @@ file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-orchestration_pill_bar = []
-orchestration_viewer_pill_bar = []
+run_agents_tool = []
 orchestration_viewer_streamer = []
+owner_orchestration_ancestor_streamer = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
@@ -972,6 +972,7 @@ vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
 grouped_tabs = []
+warp_control_cli = []
 agent_harness = []
 oz_handoff = []
 handoff_local_cloud = []

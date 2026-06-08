@@ -493,23 +493,12 @@ impl TerminalView {
         parent_conversation_header_card: Option<Box<dyn Element>>,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        // When `OrchestrationPillBar` is on, the pill bar takes the place of the
-        // parent navigation card (the parent pill is the "back to parent" link)
-        // and is shown for the orchestrator and the swap-target child panes.
-        // Split-off panes ("Open in new pane" / "Open in new tab") instead
-        // render a parent→child breadcrumb row so the user has a clear way
-        // back to the orchestrator without rendering the full sibling pill
-        // list a second time alongside the orchestrator's own pill bar.
-        //
-        // `OrchestrationViewerPillBar` is the parallel flag for shared
-        // session viewers (web + native). Children are registered via the
-        // REST data fetch in `OrchestrationViewerModel`; when none have
-        // arrived yet, `OrchestrationPillBar::pill_specs` returns `None`
-        // and the pill bar's `render` short-circuits to `Empty`, so the
-        // gate here is intentionally permissive.
-        if (FeatureFlag::OrchestrationPillBar.is_enabled()
-            || FeatureFlag::OrchestrationViewerPillBar.is_enabled())
-            && FeatureFlag::AgentView.is_enabled()
+        // The pill bar is shown for the orchestrator and swap-target child panes.
+        // Split-off panes ("Open in new pane" / "Open in new tab") render a
+        // breadcrumb row instead. When no children have arrived yet,
+        // `OrchestrationPillBar::pill_specs` returns `None` and the pill
+        // bar's `render` short-circuits to `Empty`.
+        if FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(app).is_fullscreen()
         {
             // The wrapping `Flex::column` would otherwise pass an infinite
