@@ -78,13 +78,15 @@ use warpui::AppContext;
 const CLOUD_AGENT_MARKER: &str = "tags.cloud_agent";
 /// The environment variable used to configure the cloud agent OTLP endpoint.
 const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
+/// Selects task-identity authentication or explicitly unauthenticated trace export.
+const CLOUD_AGENT_OTLP_AUTH_MODE: &str = "WARP_CLOUD_AGENT_OTLP_AUTH_MODE";
 /// The environment variable used to configure the OTel service name.
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 /// The default amount of time allowed for cloud-agent export shutdown.
 const DEFAULT_EXPORT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The minimum interval between local export failure diagnostics.
 const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
-/// Retains bootstrap authentication only when the endpoint and dispatch credential enabled export.
+/// Retains bootstrap authentication only when task-identity export initialized successfully.
 ///
 /// The exporter is built once during [`init`], while the stored context later starts dynamic
 /// credential refresh after authenticated application services become available, and this static
@@ -92,12 +94,68 @@ const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 static AUTH_CONTEXT: OnceLock<AuthContext> = OnceLock::new();
 
+/// Controls whether cloud-agent OTLP requests use task-identity authentication.
+///
+/// Missing configuration intentionally preserves the authenticated behavior. Invalid or empty
+/// values are errors rather than implicit unauthenticated downgrades.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuthMode {
+    /// Requires the dispatch token, expiry, immutable run ID, dynamic bearer client, and refresh.
+    TaskIdentity,
+    /// Bypasses all task-identity credentials and refresh for an intentionally unauthenticated
+    /// endpoint.
+    None,
+}
+
+impl AuthMode {
+    /// Reads the mode without exposing an invalid configured value in the returned diagnostic.
+    fn from_environment() -> anyhow::Result<Self> {
+        match std::env::var(CLOUD_AGENT_OTLP_AUTH_MODE) {
+            Ok(value) => Self::parse(Some(&value)),
+            Err(std::env::VarError::NotPresent) => Self::parse(None),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Err(anyhow!("Cloud-agent OTLP auth mode is not valid UTF-8"))
+            }
+        }
+    }
+
+    /// Parses a mode while treating missing configuration as task identity, never as no auth.
+    fn parse(value: Option<&str>) -> anyhow::Result<Self> {
+        match value.map(str::trim) {
+            None | Some("task_identity") => Ok(Self::TaskIdentity),
+            Some("none") => Ok(Self::None),
+            Some(_) => Err(anyhow!(
+                "Cloud-agent OTLP auth mode must be `task_identity` or `none`"
+            )),
+        }
+    }
+}
+
+/// Supplies either the dynamic task-identity client or the standard unauthenticated OTLP client.
+enum Transport {
+    /// Injects the latest task-identity bearer credential and enables runtime refresh.
+    TaskIdentity(AuthContext),
+    /// Uses standard OTLP HTTP behavior without task-identity headers or refresh.
+    Unauthenticated,
+}
+
+/// Selects transport without allowing task-identity bootstrap failures to downgrade authentication.
+fn select_transport(
+    auth_mode: AuthMode,
+    task_identity: impl FnOnce() -> anyhow::Result<AuthContext>,
+) -> anyhow::Result<Transport> {
+    match auth_mode {
+        AuthMode::TaskIdentity => task_identity().map(Transport::TaskIdentity),
+        AuthMode::None => Ok(Transport::Unauthenticated),
+    }
+}
+
 /// Installs the native tracing subscriber and optional cloud-agent OTLP exporter.
 ///
-/// Export is deliberately opt-in through [`CLOUD_AGENT_OTLP_ENDPOINT`] plus a currently valid
-/// dispatch token. When either is absent or the exporter cannot be constructed, a no-op subscriber
-/// is installed so tracing instrumentation remains safe without producing output or partially
-/// initializing export.
+/// Export is deliberately opt-in through [`CLOUD_AGENT_OTLP_ENDPOINT`]. The default
+/// [`AuthMode::TaskIdentity`] additionally requires a currently valid dispatch credential and never
+/// downgrades when credentials are unavailable. [`AuthMode::None`] must be explicitly selected for
+/// local or intentionally unauthenticated collectors; it is not restricted to loopback endpoints.
 pub(super) fn init() -> anyhow::Result<Option<Initialization>> {
     // INFO is the default because this is a global subscriber and DEBUG-level application spans
     // would otherwise create substantial work even though only marked cloud-agent spans are
@@ -113,25 +171,31 @@ pub(super) fn init() -> anyhow::Result<Option<Initialization>> {
         install_no_subscriber()?;
         return Ok(None);
     };
-    let Ok(auth_context) = AuthContext::from_environment() else {
-        install_no_subscriber()?;
-        return Ok(None);
-    };
-
     let shutdown_timeout = export_timeout();
-    let provider = match build_provider(base_endpoint.trim(), &auth_context) {
+    let auth_mode = match AuthMode::from_environment() {
+        Ok(auth_mode) => auth_mode,
+        Err(err) => {
+            install_no_subscriber()?;
+            return Ok(Some(Initialization::warning(err, shutdown_timeout)));
+        }
+    };
+    let transport = match select_transport(auth_mode, AuthContext::from_environment) {
+        Ok(transport) => transport,
+        Err(_) => {
+            install_no_subscriber()?;
+            return Ok(None);
+        }
+    };
+    let provider = match build_provider(base_endpoint.trim(), &transport) {
         Ok(provider) => provider,
         Err(err) => {
             install_no_subscriber()?;
-            return Ok(Some(Initialization {
-                initialization_warning: Some(err),
-                active_spans: None,
-                provider: None,
-                shutdown_timeout,
-            }));
+            return Ok(Some(Initialization::warning(err, shutdown_timeout)));
         }
     };
-    let _ = AUTH_CONTEXT.set(auth_context);
+    if let Transport::TaskIdentity(auth_context) = transport {
+        let _ = AUTH_CONTEXT.set(auth_context);
+    }
 
     let active_spans = ActiveSpanRegistry::default();
     let tracer =
@@ -155,20 +219,22 @@ pub(super) fn init() -> anyhow::Result<Option<Initialization>> {
 /// by [`Initialization`] so application termination can explicitly shut it down after attempting
 /// to end registered active spans. Exported resources include Warp's version and channel alongside
 /// standard environment-detected OpenTelemetry attributes, with [`OTEL_SERVICE_NAME`] taking
-/// precedence over the default service name. The exporter is built once with a dynamic HTTP client
-/// so credential refresh can update requests without reconstructing provider state.
-fn build_provider(
-    base_endpoint: &str,
-    auth_context: &AuthContext,
-) -> anyhow::Result<SdkTracerProvider> {
+/// precedence over the default service name. Task-identity mode builds the exporter once with a
+/// dynamic HTTP client so credential refresh can update requests without reconstructing provider
+/// state; unauthenticated mode uses the standard OTLP HTTP client without task-identity headers.
+fn build_provider(base_endpoint: &str, transport: &Transport) -> anyhow::Result<SdkTracerProvider> {
     let endpoint = traces_endpoint(base_endpoint)?;
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
-        .with_http_client(auth_context.http_client())
         .with_protocol(Protocol::HttpBinary)
-        .with_endpoint(endpoint)
-        .build()
-        .context("Failed to build the OTLP span exporter")?;
+        .with_endpoint(endpoint);
+    let exporter = match transport {
+        Transport::TaskIdentity(auth_context) => exporter
+            .with_http_client(auth_context.http_client())
+            .build(),
+        Transport::Unauthenticated => exporter.build(),
+    }
+    .context("Failed to build the OTLP span exporter")?;
 
     let resource = Resource::builder_empty()
         .with_service_name("warp-cloud-agent")
@@ -199,8 +265,8 @@ fn build_provider(
 
 /// Starts the single refresh coordinator after the authenticated server client exists.
 ///
-/// Processes that did not opt in with both an endpoint and valid dispatch credential have no
-/// retained [`AUTH_CONTEXT`] and remain no-ops here.
+/// Only task-identity export retains [`AUTH_CONTEXT`]. Unauthenticated export and processes that
+/// did not opt in remain no-ops here.
 pub(super) fn start_auth_refresh(client: Arc<dyn ManagedSecretsClient>, ctx: &mut AppContext) {
     if let Some(auth_context) = AUTH_CONTEXT.get() {
         auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
@@ -256,6 +322,15 @@ pub(super) struct Initialization {
 }
 
 impl Initialization {
+    /// Retains a delayed warning when configured cloud-agent export could not initialize.
+    fn warning(initialization_warning: anyhow::Error, shutdown_timeout: Duration) -> Self {
+        Self {
+            initialization_warning: Some(initialization_warning),
+            active_spans: None,
+            provider: None,
+            shutdown_timeout,
+        }
+    }
     /// Logs a delayed exporter-construction warning after application logging is available.
     pub(super) fn log_initialization_warning(&mut self) {
         if let Some(err) = self.initialization_warning.take() {
@@ -564,3 +639,7 @@ fn filter_cloud_agent_span(mut span: SpanData) -> Option<SpanData> {
     }
     Some(span)
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

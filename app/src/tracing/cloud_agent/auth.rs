@@ -1,10 +1,10 @@
-//! Provides authenticated OTLP trace transport and credential refresh for opted-in cloud agents.
+//! Provides task-identity OTLP transport and credential refresh for opted-in cloud agents.
 //!
 //! Dispatch bootstraps tracing with a bearer token and expiry in the process environment. The
 //! exporter is built once around [`AuthenticatedHttpClient`], which reads a shared token snapshot
 //! immediately before every request so refresh never requires rebuilding the exporter. Processes
-//! without the endpoint switch or a currently valid dispatch credential never initialize this
-//! module.
+//! selecting unauthenticated export do not initialize this module, while task-identity processes
+//! without the endpoint switch or a currently valid dispatch credential remain no-ops.
 //!
 //! Refresh begins only after the application has an authenticated managed-secrets client. A
 //! successful mint replaces the dispatch credential only after the returned JWT's unverified
