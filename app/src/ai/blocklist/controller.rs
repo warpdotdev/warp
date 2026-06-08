@@ -2765,14 +2765,9 @@ impl BlocklistAIController {
                         "generate_multi_agent_output stream ended without emitting StreamFinished event."
                     );
 
-                    let error_message = "Request did not successfully complete";
                     history_model.update(ctx, |history_model, ctx| {
                         history_model.mark_response_stream_completed_with_error(
-                            RenderableAIError::Other {
-                                error_message: error_message.to_string(),
-                                will_attempt_resume: false,
-                                waiting_for_network: false,
-                            },
+                            RenderableAIError::transient_network_error(false, false),
                             &stream_id,
                             conversation_id,
                             self.terminal_view_id,
