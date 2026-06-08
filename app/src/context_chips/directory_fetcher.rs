@@ -150,6 +150,14 @@ impl Entity for DirectoryFetcher {
     type Event = DirectoryFetcherEvent;
 }
 
+impl Drop for DirectoryFetcher {
+    fn drop(&mut self) {
+        if let Some(handle) = self.fetch_handle.take() {
+            handle.abort();
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub enum DirectoryType {
     Directory,

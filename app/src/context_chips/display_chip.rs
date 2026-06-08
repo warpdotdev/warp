@@ -671,17 +671,16 @@ impl DisplayChip {
                 });
 
                 // Subscribe to DirectoryFetcher events to update menu
-                let directory_fetcher_clone = directory_fetcher.clone();
                 ctx.subscribe_to_model(
                     &directory_fetcher,
-                    move |display_chip, _model, event, ctx| {
+                    move |display_chip, model, event, ctx| {
                         match event {
                             DirectoryFetcherEvent::DirectoryContentsUpdated => {
                                 // Update the existing menu with new directory contents
                                 if let DisplayChipKind::WorkingDirectory { menu, .. } =
                                     &mut display_chip.display_chip_kind
                                 {
-                                    let new_files = directory_fetcher_clone
+                                    let new_files = model
                                         .read(ctx, |fetcher, _| fetcher.cached_files().to_vec());
                                     // Update the existing menu with new content instead of recreating it
                                     menu.update(ctx, |menu_view, menu_ctx| {
