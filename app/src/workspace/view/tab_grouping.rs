@@ -169,7 +169,7 @@ impl Workspace {
         let selected_indices = self.selected_tab_indices();
 
         // Should be unreachable: the multi-tab menu only opens when 2+ tabs
-        // are selected. 
+        // are selected.
         if selected_indices.len() < 2 {
             log::warn!(
                 "new_tab_group_from_selected_tabs called with {} selected tab(s); expected at least 2",
@@ -237,7 +237,7 @@ impl Workspace {
         let selected_indices = self.selected_tab_indices();
 
         // Should be unreachable: the multi-tab menu only opens when 2+ tabs
-        // are selected. 
+        // are selected.
         if selected_indices.len() < 2 {
             log::warn!(
                 "move_selected_tabs_to_group called with {} selected tab(s); expected at least 2",
@@ -246,7 +246,7 @@ impl Workspace {
             return;
         }
 
-        // Store all groups that tabs previously belonged to, excluding the 
+        // Store all groups that tabs previously belonged to, excluding the
         // group that we are moving tabs to. In order to prune these groups later.
         let previous_group_ids: HashSet<TabGroupId> = selected_indices
             .iter()
@@ -343,13 +343,16 @@ impl Workspace {
 
         // Split tabs by index into the removed (selected) block and the rest.
         let (removed, mut rest): (Vec<_>, Vec<_>) =
-            self.tabs.drain(..).enumerate().partition_map(|(index, tab)| {
-                if selected_set.contains(&index) {
-                    Either::Left(tab)
-                } else {
-                    Either::Right(tab)
-                }
-            });
+            self.tabs
+                .drain(..)
+                .enumerate()
+                .partition_map(|(index, tab)| {
+                    if selected_set.contains(&index) {
+                        Either::Left(tab)
+                    } else {
+                        Either::Right(tab)
+                    }
+                });
         // Anchor the removed block just after the group's remaining members;
         // if none remain, fall back to the pre-computed prefix position.
         let insert_at = match rest.iter().rposition(|tab| tab.group_id == Some(group_id)) {
