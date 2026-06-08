@@ -6810,6 +6810,7 @@ impl Workspace {
             self.active_tab_index = 0;
         }
 
+        self.sync_tab_group_pane_groups(ctx);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
 
@@ -6907,6 +6908,7 @@ impl Workspace {
             self.prune_empty_tab_group(prev_group_id, ctx);
         }
 
+        self.sync_tab_group_pane_groups(ctx);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
 
@@ -6945,6 +6947,7 @@ impl Workspace {
             self.prune_empty_tab_group(prev, ctx);
         }
 
+        self.sync_tab_group_pane_groups(ctx);
         self.focus_active_tab(ctx);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -6971,6 +6974,7 @@ impl Workspace {
 
         self.prune_empty_tab_group(previous_group_id, ctx);
 
+        self.sync_tab_group_pane_groups(ctx);
         self.focus_active_tab(ctx);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -6986,6 +6990,7 @@ impl Workspace {
             }
         }
         self.tab_groups.remove(&group_id);
+        self.sync_tab_group_pane_groups(ctx);
         ctx.notify();
     }
 
@@ -7024,6 +7029,7 @@ impl Workspace {
             }
             self.move_tab_to_index(new_idx, target_index, ctx);
         }
+        self.sync_tab_group_pane_groups(ctx);
         ctx.notify();
     }
 
@@ -7206,6 +7212,7 @@ impl Workspace {
             self.prune_empty_tab_group(previous_group_id, ctx);
         }
 
+        self.sync_tab_group_pane_groups(ctx);
         ctx.notify();
     }
 
@@ -7215,6 +7222,22 @@ impl Workspace {
         if !has_members {
             self.tab_groups.remove(&group_id);
             ctx.notify();
+        }
+    }
+
+    /// Syncs each tab's `pane_group.is_in_tab_group` flag to match the tab's
+    /// current `group_id`. Call this after any mutation that changes group
+    /// membership so the pane group UI can update its spacing and hover state.
+    fn sync_tab_group_pane_groups(&mut self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return;
+        }
+        for tab in &self.tabs {
+            let is_in_tab_group = tab.group_id.is_some();
+            let handle = tab.pane_group.clone();
+            handle.update(ctx, |pane_group, ctx| {
+                pane_group.set_is_in_tab_group(is_in_tab_group, ctx);
+            });
         }
     }
 
@@ -12037,12 +12060,13 @@ impl Workspace {
             }
         }
 
-        // Inherit the active tab's group membership. D
+        // Inherit the active tab's group membership.
         if let Some(group_id) = active_tab_group_id {
             let new_idx = self.active_tab_index;
             if let Some(new_tab) = self.tabs.get_mut(new_idx) {
                 new_tab.group_id = Some(group_id);
             }
+            self.sync_tab_group_pane_groups(ctx);
         }
 
         if !is_restoration {
