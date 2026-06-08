@@ -35,7 +35,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
 
-use super::select_unique_pane_kinds;
+use super::{render_group_member_icon_collage, select_unique_pane_kinds};
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -2502,9 +2502,14 @@ fn render_tab_group_header_icon_button(
     .finish()
 }
 
-/// Renders the header row for a tab group: chevron, title + "N tabs", and (on hover)
-/// kebab + close buttons. Single-clicking outside the per-button regions toggles collapse;
-/// double-clicking opens the inline rename editor.
+/// Renders the header row for a tab group: leading icon (chevron when expanded,
+/// member icon collage when collapsed), title + "N tabs", and (on hover) kebab
+/// + close buttons. Single-clicking outside the per-button regions toggles
+/// collapse; double-clicking opens the inline rename editor.
+///
+/// `collapsed_member_kinds` is the deduped list of pane kinds used to build the
+/// icon collage shown in place of the chevron when the group is collapsed.
+/// Pass `None` when the group is expanded; the chevron is rendered instead.
 #[allow(clippy::too_many_arguments)]
 fn render_grouped_tabs_header(
     group: &TabGroup,
@@ -2515,6 +2520,7 @@ fn render_grouped_tabs_header(
     show_action_buttons: bool,
     is_being_renamed: bool,
     rename_editor: Option<&ViewHandle<EditorView>>,
+    collapsed_member_kinds: Option<&[SummaryPaneKind]>,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
@@ -2524,31 +2530,34 @@ fn render_grouped_tabs_header(
     let sub_text_color = theme.sub_text_color(theme.background());
     let group_id = group.id;
 
-    let chevron_icon = if is_collapsed {
-        WarpIcon::ChevronRight
+    // Collapsed groups show the icon collage (same component as horizontal tab
+    // groups) in place of the chevron, sized to VERTICAL_TABS_ICON_SIZE so
+    // the 2-icon variant matches the tab Summary Pair layout exactly.
+    let leading_slot = if is_collapsed {
+        let kinds = collapsed_member_kinds.unwrap_or(&[]);
+        render_group_member_icon_collage(kinds, VERTICAL_TABS_ICON_SIZE, appearance)
     } else {
-        WarpIcon::ChevronDown
-    };
-    let chevron_button = render_tab_group_header_icon_button(
-        chevron_icon,
-        TAB_GROUP_ICON_SIZE,
-        main_text_color,
-        internal_colors::fg_overlay_2(theme),
-        mouse_states.chevron.clone(),
-        Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
-    );
-    // Center the chevron in a `VERTICAL_TABS_ICON_SIZE` slot so the title aligns with member rows.
-    let chevron_slot = ConstrainedBox::new(
+        let chevron_button = render_tab_group_header_icon_button(
+            WarpIcon::ChevronDown,
+            TAB_GROUP_ICON_SIZE,
+            main_text_color,
+            internal_colors::fg_overlay_2(theme),
+            mouse_states.chevron.clone(),
+            Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
+        );
+        // Center the chevron in a `VERTICAL_TABS_ICON_SIZE` slot so the
+        // title aligns with member rows.
         Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::Center)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(chevron_button)
-            .finish(),
-    )
-    .with_width(VERTICAL_TABS_ICON_SIZE)
-    .with_height(VERTICAL_TABS_ICON_SIZE)
-    .finish();
+            .finish()
+    };
+    let leading_slot = ConstrainedBox::new(leading_slot)
+        .with_width(VERTICAL_TABS_ICON_SIZE)
+        .with_height(VERTICAL_TABS_ICON_SIZE)
+        .finish();
 
     let title_element: Box<dyn Element> =
         if let Some(editor) = rename_editor.filter(|_| is_being_renamed) {
@@ -2626,7 +2635,7 @@ fn render_grouped_tabs_header(
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(ICON_WITH_STATUS_GAP)
-                    .with_child(chevron_slot)
+                    .with_child(leading_slot)
                     .with_child(Shrinkable::new(1., text_column).finish())
                     .finish(),
             )
@@ -2716,6 +2725,10 @@ fn render_grouped_tab_container(
             .current_workspace_state
             .is_tab_group_being_renamed(group.id);
         let rename_editor = is_being_renamed.then(|| workspace.tab_group_rename_editor.clone());
+        // Compute member kinds only when collapsed — the collage is only
+        // rendered then, so this skips the per-tab pane walk when expanded.
+        let collapsed_member_kinds =
+            is_collapsed.then(|| workspace.compute_group_member_kinds(group.id, app));
         content.add_child(render_grouped_tabs_header(
             &group,
             member_count,
@@ -2725,6 +2738,7 @@ fn render_grouped_tab_container(
             hover_state.is_hovered(),
             is_being_renamed,
             rename_editor.as_ref(),
+            collapsed_member_kinds.as_deref(),
             app,
         ));
 

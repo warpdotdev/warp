@@ -113,9 +113,8 @@ use warpui::{
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
     htab_group_position_id, pane_summary_kind, render_detail_sidecar, render_settings_popup,
-    render_summary_pane_kind_icon_circle, render_summary_pane_kind_icons, vtab_group_position_id,
-    SummaryPaneKind, SummaryPaneKindIcons, VerticalTabsPanelState,
-    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
+    render_summary_pane_kind_icons, vtab_group_position_id, SummaryPaneKind, SummaryPaneKindIcons,
+    VerticalTabsPanelState, VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::action::AutoCloudHandoffTrigger;
@@ -18994,7 +18993,8 @@ impl Workspace {
         let header_selected = is_collapsed && any_member_active;
 
         let member_kinds = self.compute_group_member_kinds(group.id, ctx);
-        let icon_circle = render_group_member_icon_collage(&member_kinds, appearance);
+        let icon_circle =
+            render_group_member_icon_collage(&member_kinds, GROUP_ICON_COLLAGE_SIZE, appearance);
 
         let is_being_renamed = self
             .current_workspace_state
@@ -27193,10 +27193,6 @@ fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool
 
 /// Total width/height of the collage area in the group header.
 const GROUP_ICON_COLLAGE_SIZE: f32 = 22.0;
-/// Size of each icon when the collage shows 3 or 4 of them.
-const GROUP_ICON_COLLAGE_MINI_SIZE: f32 = 12.0;
-/// How far inside the collage area each mini icon's center sits.
-const GROUP_ICON_COLLAGE_CENTER_INSET: f32 = 2.0;
 
 /// Renders the icon block for a tab-group header from 0-4 deduped pane kinds.
 /// 1 or 2 icons reuse the vertical Summary `Single`/`Pair` layout so the
@@ -27205,19 +27201,20 @@ const GROUP_ICON_COLLAGE_CENTER_INSET: f32 = 2.0;
 /// define a layout beyond 2 icons.
 fn render_group_member_icon_collage(
     kinds: &[SummaryPaneKind],
+    total_size: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let count = kinds.len().min(4);
     if count == 0 {
         return ConstrainedBox::new(Empty::new().finish())
-            .with_width(GROUP_ICON_COLLAGE_SIZE)
-            .with_height(GROUP_ICON_COLLAGE_SIZE)
+            .with_width(total_size)
+            .with_height(total_size)
             .finish();
     }
     if count == 1 {
         return render_summary_pane_kind_icons(
             SummaryPaneKindIcons::Single(kinds[0].clone()),
-            GROUP_ICON_COLLAGE_SIZE,
+            total_size,
             appearance,
         );
     }
@@ -27227,43 +27224,68 @@ fn render_group_member_icon_collage(
                 primary: kinds[0].clone(),
                 secondary: kinds[1].clone(),
             },
-            GROUP_ICON_COLLAGE_SIZE,
+            total_size,
             appearance,
         );
     }
 
-    // Corners at radius/sqrt(2) on each axis; bottom-middle (3-icon) at radius.
-    let radius = GROUP_ICON_COLLAGE_SIZE / 2.0 - GROUP_ICON_COLLAGE_CENTER_INSET;
-    let diag = radius / std::f32::consts::SQRT_2;
+    // icon_diameter = total/2 - 1 gives a constant 2 px gap between adjacent circles.
+    let icon_diameter = total_size / 2.0 - 1.0;
+    // Distance from the collage center to each icon center; keeps icon edges within bounds.
+    let icon_center_offset = total_size / 2.0 - icon_diameter / 2.0;
+
+    // 3 icons: equilateral triangle (one vertex down), vertically centered.
+    // 4 icons: 2×2 grid. This maps (number of icons, index of icon) -> position.
+    let positions: [Vector2F; 4] = if count == 3 {
+        let sqrt_3 = 3.0_f32.sqrt();
+        let r = 2.0 * icon_center_offset / sqrt_3;
+        [
+            vec2f(-r * sqrt_3 / 2.0, -0.75 * r),
+            vec2f(r * sqrt_3 / 2.0, -0.75 * r),
+            vec2f(0.0, 0.75 * r),
+            vec2f(0.0, 0.0), // unused
+        ]
+    } else {
+        [
+            vec2f(-icon_center_offset, -icon_center_offset),
+            vec2f(icon_center_offset, -icon_center_offset),
+            vec2f(-icon_center_offset, icon_center_offset),
+            vec2f(icon_center_offset, icon_center_offset),
+        ]
+    };
 
     let mut stack = Stack::new().with_child(
         ConstrainedBox::new(Empty::new().finish())
-            .with_width(GROUP_ICON_COLLAGE_SIZE)
-            .with_height(GROUP_ICON_COLLAGE_SIZE)
+            .with_width(total_size)
+            .with_height(total_size)
             .finish(),
     );
     for (idx, kind) in kinds.iter().take(count).enumerate() {
-        let mini = render_summary_pane_kind_icon_circle(
+        let mini = vertical_tabs::render_summary_pane_kind_icon_circle(
             kind.clone(),
-            GROUP_ICON_COLLAGE_MINI_SIZE,
+            icon_diameter,
             appearance,
         );
-        // Placement mapping for each icon.
-        // (number of icons, index of icon) -> position.
-        let offset = match (count, idx) {
-            (3, 0) => vec2f(-diag, -diag),
-            (3, 1) => vec2f(diag, -diag),
-            (3, 2) => vec2f(0.0, radius),
-            (4, 0) => vec2f(-diag, -diag),
-            (4, 1) => vec2f(diag, -diag),
-            (4, 2) => vec2f(-diag, diag),
-            (4, 3) => vec2f(diag, diag),
-            _ => vec2f(0.0, 0.0),
+
+        // Ambient icons place their brand circle at the top-left of a total_size
+        // element (leaving room for the cloud badge). Shift right-down by
+        // (1 - CIRCLE_RATIO)/2 * icon_diameter so the circle centers on the grid point.
+        let collage_pos = match &kind {
+            SummaryPaneKind::OzAgent { is_ambient: true }
+            | SummaryPaneKind::CLIAgent {
+                is_ambient: true, ..
+            } => {
+                let shift = icon_diameter
+                    * (1.0 - crate::ui_components::icon_with_status::CIRCLE_RATIO)
+                    / 2.0;
+                positions[idx] + vec2f(shift, shift)
+            }
+            _ => positions[idx],
         };
         stack.add_positioned_child(
             mini,
             OffsetPositioning::offset_from_parent(
-                offset,
+                collage_pos,
                 ParentOffsetBounds::Unbounded,
                 ParentAnchor::Center,
                 ChildAnchor::Center,
