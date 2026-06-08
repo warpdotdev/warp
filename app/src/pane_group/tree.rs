@@ -512,15 +512,10 @@ impl PaneData {
         self.len == 0
     }
 
-    pub fn render(
-        &self,
-        theme: &WarpTheme,
-        in_tab_group: bool,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
+    pub fn render(&self, theme: &WarpTheme, app: &AppContext) -> Box<dyn Element> {
         match &self.root {
             PaneNode::Leaf(pane) => pane.render(app),
-            PaneNode::Branch(node) => node.render(theme, in_tab_group, &self.hidden_panes, app),
+            PaneNode::Branch(node) => node.render(theme, &self.hidden_panes, app),
         }
     }
 
@@ -724,7 +719,6 @@ impl PaneNode {
     fn render(
         &self,
         theme: &WarpTheme,
-        in_tab_group: bool,
         hidden_panes: &Vec<HiddenPane>,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -741,7 +735,7 @@ impl PaneNode {
                     })
                     .finish()
             }
-            PaneNode::Branch(branch) => branch.render(theme, in_tab_group, hidden_panes, app),
+            PaneNode::Branch(branch) => branch.render(theme, hidden_panes, app),
         }
     }
 
@@ -1061,7 +1055,6 @@ impl PaneBranch {
     fn render(
         &self,
         theme: &WarpTheme,
-        in_tab_group: bool,
         hidden_panes: &Vec<HiddenPane>,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -1069,10 +1062,6 @@ impl PaneBranch {
             SplitDirection::Horizontal => Flex::row(),
             SplitDirection::Vertical => Flex::column(),
         };
-
-        // When the tab is in a tab group, omit the inter-pane dividers so split
-        // panes appear flush against each other.
-        let omit_dividers = in_tab_group && FeatureFlag::GroupedTabs.is_enabled();
 
         // Iterate through all the panes, skipping nodes that have no visible children
         // except when children are hidden for move operations (we need empty drop targets)
@@ -1099,17 +1088,10 @@ impl PaneBranch {
             }
 
             parent.add_child(
-                Shrinkable::new(
-                    flex_value,
-                    node.render(theme, in_tab_group, hidden_panes, app),
-                )
-                .finish(),
+                Shrinkable::new(flex_value, node.render(theme, hidden_panes, app)).finish(),
             );
             if let Some(divider) = dividers.next() {
                 if matches!(node, PaneNode::Leaf(id) if pane_hidden_for_move(hidden_panes, id)) {
-                    continue;
-                }
-                if omit_dividers {
                     continue;
                 }
                 // Store a position index to render the actual divider at after we've rendered all pane content.

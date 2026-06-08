@@ -25,15 +25,14 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_terminal::shell::{ShellName, ShellType};
 use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 use warp_util::remote_path::RemotePath;
 use warpui::elements::{
-    Border, ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler,
-    Flex, Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Rect, Shrinkable, Stack,
+    ChildView, Clipped, CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Flex,
+    MainAxisSize, ParentElement, Shrinkable, Stack,
 };
 use warpui::keymap::{Context, EditableBinding, FixedBinding};
 use warpui::notification::NotificationSendError;
@@ -935,15 +934,6 @@ pub struct PaneGroup {
 
     /// Tab-level custom title set via the rename-tab flow.
     custom_title: Option<String>,
-
-    /// Whether the tab containing this pane group belongs to a tab group.
-    /// Updated by the workspace whenever group membership changes.
-    /// Gated by `FeatureFlag::GroupedTabs`.
-    is_in_tab_group: bool,
-
-    /// Mouse state used to track hover over the entire pane group when it
-    /// belongs to a tab group, so sibling panes highlight together.
-    tab_group_hover_state: MouseStateHandle,
 }
 
 /// Origin metadata for a split-off child agent tab; used to re-adopt the
@@ -3119,8 +3109,6 @@ impl PaneGroup {
             transitively_shared_child_panes: HashMap::new(),
             child_agent_origin: None,
             custom_title: None,
-            is_in_tab_group: false,
-            tab_group_hover_state: Default::default(),
         };
 
         // Notify any restored panes that they belong to this pane group.
@@ -4190,15 +4178,6 @@ impl PaneGroup {
     /// Only considers visible panes (excludes panes hidden for close, move, job, etc.).
     pub fn pane_id_by_index(&self, pane_index: usize) -> Option<PaneId> {
         self.panes.visible_pane_ids().get(pane_index).copied()
-    }
-
-    /// Updates whether this pane group's tab belongs to a tab group.
-    /// Triggers a re-render when the value changes.
-    pub fn set_is_in_tab_group(&mut self, is_in_tab_group: bool, ctx: &mut ViewContext<Self>) {
-        if self.is_in_tab_group != is_in_tab_group {
-            self.is_in_tab_group = is_in_tab_group;
-            ctx.notify();
-        }
     }
 
     pub fn set_dim_even_if_focused_for_all_panes(
@@ -7896,17 +7875,6 @@ impl View for PaneGroup {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let in_tab_group = FeatureFlag::GroupedTabs.is_enabled() && self.is_in_tab_group;
-
-        // Read hover state synchronously before building the element tree.
-        // When hovered (and in a tab group), a subtle border is drawn around
-        // the entire pane group to make it clear all panes share the same tab.
-        let is_group_hovered = in_tab_group
-            && self
-                .tab_group_hover_state
-                .lock()
-                .expect("tab group hover state lock poisoned")
-                .is_hovered();
 
         let mut column = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -7923,7 +7891,7 @@ impl View for PaneGroup {
         let main_content = if self.is_focused_pane_maximized(app) {
             self.focused_pane_id(app).render(app)
         } else {
-            EventHandler::new(self.panes.render(appearance.theme(), in_tab_group, app))
+            EventHandler::new(self.panes.render(appearance.theme(), app))
                 .on_mouse_dragged(move |ctx, _, position| {
                     ctx.dispatch_typed_action(PaneGroupAction::ResizeMove(position));
                     DispatchEventResult::StopPropagation
@@ -8015,30 +7983,7 @@ impl View for PaneGroup {
             }
         }
 
-        // When hovered inside a tab group, overlay a subtle 1px border so the
-        // user can clearly see which panes belong to the same tab.
-        if is_group_hovered {
-            let border_color = internal_colors::neutral_3(appearance.theme());
-            stack.add_child(
-                Rect::new()
-                    .with_border(Border::all(1.).with_border_color(border_color))
-                    .finish(),
-            );
-        }
-
-        let element = stack.finish();
-
-        // Wrap in Hoverable so that mouse-over/out changes trigger a re-render
-        // and update the border overlay above. Only active when the tab is in a
-        // tab group; no overhead otherwise.
-        if in_tab_group {
-            let hover_state = self.tab_group_hover_state.clone();
-            Hoverable::new(hover_state, move |_| element)
-                .on_hover(|_, ctx, _, _| ctx.notify())
-                .finish()
-        } else {
-            element
-        }
+        stack.finish()
     }
 
     fn on_window_transferred(
