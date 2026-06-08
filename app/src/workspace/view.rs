@@ -11367,6 +11367,12 @@ impl Workspace {
         let removed_pane_group_id = tab_data.pane_group.id();
         self.tab_mru_order.retain(|id| *id != removed_pane_group_id);
 
+        // If the closed tab was a group member, prune the group when it now
+        // has no remaining members. 
+        if let Some(group_id) = tab_data.group_id {
+            self.prune_empty_tab_group(group_id, ctx);
+        }
+
         // Re-adopted child tabs leave no useful tab contents to restore; the
         // live pane already moved back.
         if add_to_undo_stack && !re_adopted {
