@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context as _};
 use async_channel::{Receiver, Sender};
 use async_trait::async_trait;
+use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use futures_util::stream::AbortHandle;
 use http::header::{HeaderValue, AUTHORIZATION};
@@ -15,6 +16,7 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 const CLOUD_AGENT_OTLP_TOKEN: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN";
 const CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT";
+const OZ_RUN_ID: &str = "OZ_RUN_ID";
 const COLLECTOR_AUDIENCE: &str = "warp-cloud-agent-otel";
 const REFRESHED_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 const PROACTIVE_REFRESH_BUFFER: Duration = Duration::from_secs(20 * 60);
@@ -27,6 +29,7 @@ const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub(super) struct AuthContext {
     token_store: TokenStore,
+    expected_run_id: Option<Arc<str>>,
     refresh_hint_sender: Sender<()>,
     refresh_hint_receiver: Arc<Mutex<Option<Receiver<()>>>>,
 }
@@ -52,11 +55,15 @@ impl AuthContext {
             expires_at > Utc::now(),
             "Cloud-agent OTLP token is already expired"
         );
+        let expected_run_id = std::env::var(OZ_RUN_ID)
+            .ok()
+            .filter(|run_id| !run_id.trim().is_empty());
 
         let token_store = TokenStore::new(token, expires_at)?;
         let (refresh_hint_sender, refresh_hint_receiver) = async_channel::bounded(1);
         Ok(Self {
             token_store,
+            expected_run_id: expected_run_id.map(Into::into),
             refresh_hint_sender,
             refresh_hint_receiver: Arc::new(Mutex::new(Some(refresh_hint_receiver))),
         })
@@ -113,6 +120,16 @@ impl TokenStore {
         *self.inner.write().unwrap_or_else(|err| err.into_inner()) = snapshot;
         Ok(())
     }
+
+    fn replace_refreshed(
+        &self,
+        token: String,
+        expires_at: DateTime<Utc>,
+        expected_run_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        validate_refreshed_token_run_id(&token, expected_run_id)?;
+        self.replace(token, expires_at)
+    }
 }
 
 impl fmt::Debug for TokenStore {
@@ -150,6 +167,50 @@ impl fmt::Debug for TokenSnapshot {
             .field("expires_at", &self.expires_at)
             .finish()
     }
+}
+
+/// Checks the unverified refreshed-token payload as a rejection-only sanity gate.
+///
+/// The collector remains responsible for cryptographically verifying the token.
+fn validate_refreshed_token_run_id(
+    token: &str,
+    expected_run_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let expected_run_id = expected_run_id
+        .filter(|run_id| !run_id.trim().is_empty())
+        .context("Expected cloud-agent run ID is missing or empty")?;
+
+    let mut segments = token.split('.');
+    let _header = segments
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .context("Refreshed cloud-agent OTLP token is not a valid JWT")?;
+    let payload = segments
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .context("Refreshed cloud-agent OTLP token is not a valid JWT")?;
+    let _signature = segments
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .context("Refreshed cloud-agent OTLP token is not a valid JWT")?;
+    anyhow::ensure!(
+        segments.next().is_none(),
+        "Refreshed cloud-agent OTLP token is not a valid JWT"
+    );
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| anyhow!("Refreshed cloud-agent OTLP token payload is not valid base64"))?;
+    let payload: serde_json::Value = serde_json::from_slice(&payload)
+        .map_err(|_| anyhow!("Refreshed cloud-agent OTLP token payload is not valid JSON"))?;
+    let run_id = payload
+        .get("run_id")
+        .and_then(serde_json::Value::as_str)
+        .context("Refreshed cloud-agent OTLP token has no string run ID")?;
+    anyhow::ensure!(
+        run_id == expected_run_id,
+        "Refreshed cloud-agent OTLP token run ID does not match"
+    );
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -226,12 +287,19 @@ pub(super) fn start_refresh_coordinator(
         return;
     };
     ctx.add_singleton_model(move |ctx| {
-        AuthRefreshCoordinator::new(auth_context.token_store, refresh_hint_receiver, client, ctx)
+        AuthRefreshCoordinator::new(
+            auth_context.token_store,
+            auth_context.expected_run_id,
+            refresh_hint_receiver,
+            client,
+            ctx,
+        )
     });
 }
 
 struct AuthRefreshCoordinator {
     token_store: TokenStore,
+    expected_run_id: Option<Arc<str>>,
     client: Arc<dyn ManagedSecretsClient>,
     refresh_in_flight: bool,
     consecutive_failures: u32,
@@ -242,12 +310,14 @@ struct AuthRefreshCoordinator {
 impl AuthRefreshCoordinator {
     fn new(
         token_store: TokenStore,
+        expected_run_id: Option<Arc<str>>,
         refresh_hint_receiver: Receiver<()>,
         client: Arc<dyn ManagedSecretsClient>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut coordinator = Self {
             token_store,
+            expected_run_id,
             client,
             refresh_in_flight: false,
             consecutive_failures: 0,
@@ -295,7 +365,11 @@ impl AuthRefreshCoordinator {
         match result {
             Ok(token) => {
                 let expires_at = token.expires_at;
-                if self.token_store.replace(token.token, expires_at).is_ok() {
+                if self
+                    .token_store
+                    .replace_refreshed(token.token, expires_at, self.expected_run_id.as_deref())
+                    .is_ok()
+                {
                     self.consecutive_failures = 0;
                     log::info!("Cloud-agent OTLP authorization refreshed");
                     self.schedule_proactive_refresh(expires_at, ctx);
@@ -372,9 +446,16 @@ impl SingletonEntity for AuthRefreshCoordinator {}
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
     use chrono::TimeDelta;
 
     use super::*;
+    fn jwt_with_payload(payload: serde_json::Value) -> String {
+        let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let header = encoder.encode(br#"{"alg":"none"}"#);
+        let payload = encoder.encode(serde_json::to_vec(&payload).unwrap());
+        format!("{header}.{payload}.test-signature")
+    }
 
     fn client_with_expiry(token: &str, expires_at: DateTime<Utc>) -> AuthenticatedHttpClient {
         let (refresh_hint_sender, _) = async_channel::bounded(1);
@@ -451,5 +532,74 @@ mod tests {
         assert!(!headers_debug.contains("secret-request-test-token"));
         assert!(request_debug.contains("Sensitive"));
         assert!(headers_debug.contains("Sensitive"));
+    }
+
+    #[test]
+    fn refreshed_token_run_id_exactly_matches() {
+        let token = jwt_with_payload(serde_json::json!({ "run_id": "expected-run-id" }));
+
+        validate_refreshed_token_run_id(&token, Some("expected-run-id")).unwrap();
+    }
+
+    #[test]
+    fn refreshed_token_run_id_is_required() {
+        let token = jwt_with_payload(serde_json::json!({}));
+        assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
+    }
+
+    #[test]
+    fn expected_run_id_is_required() {
+        let token = jwt_with_payload(serde_json::json!({ "run_id": "expected-run-id" }));
+
+        assert!(validate_refreshed_token_run_id(&token, None).is_err());
+        assert!(validate_refreshed_token_run_id(&token, Some("")).is_err());
+    }
+
+    #[test]
+    fn refreshed_token_run_id_must_match() {
+        let token = jwt_with_payload(serde_json::json!({ "run_id": "wrong-run-id" }));
+
+        assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
+    }
+
+    #[test]
+    fn refreshed_token_run_id_must_be_a_string() {
+        let token = jwt_with_payload(serde_json::json!({ "run_id": 123 }));
+        assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
+    }
+
+    #[test]
+    fn malformed_refreshed_tokens_are_rejected() {
+        let invalid_json = {
+            let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            let payload = encoder.encode(b"not-json");
+            format!("header.{payload}.signature")
+        };
+
+        for token in ["not-a-jwt", "header.!!!.signature", &invalid_json] {
+            assert!(validate_refreshed_token_run_id(token, Some("expected-run-id")).is_err());
+        }
+    }
+
+    #[test]
+    fn rejected_refreshed_token_preserves_previous_token() {
+        let token_store = TokenStore::new(
+            "current-test-token".to_owned(),
+            Utc::now() + TimeDelta::try_minutes(5).unwrap(),
+        )
+        .unwrap();
+        let wrong_run_token = jwt_with_payload(serde_json::json!({ "run_id": "wrong-run-id" }));
+
+        assert!(token_store
+            .replace_refreshed(
+                wrong_run_token,
+                Utc::now() + TimeDelta::try_minutes(5).unwrap(),
+                Some("expected-run-id"),
+            )
+            .is_err());
+        assert_eq!(
+            token_store.valid_authorization_header().unwrap(),
+            "Bearer current-test-token"
+        );
     }
 }
