@@ -235,12 +235,15 @@ impl RenderDecoration {
 /// Wrapper around a reference to the underlying render state sumtree.
 /// This is so we could define an interface that returns objects with the same lifetime as the inner
 /// reference with interior mutability.
-pub struct RenderContentTreeRef<'a>(Ref<'a, SumTree<BlockItem>>);
+pub struct RenderContentTreeRef<'a> {
+    content: Ref<'a, SumTree<BlockItem>>,
+    top_inset: Pixels,
+}
 
 impl<'a> RenderContentTreeRef<'a> {
     pub fn block_items(&self) -> impl Iterator<Item = &BlockItem> {
-        let mut cursor = self.0.cursor::<(), ()>();
-        cursor.descend_to_first_item(&self.0, |_| true);
+        let mut cursor = self.content.cursor::<(), ()>();
+        cursor.descend_to_first_item(&self.content, |_| true);
         std::iter::from_fn(move || {
             let item = cursor.item()?;
             cursor.next();
@@ -259,7 +262,7 @@ impl<'a> RenderContentTreeRef<'a> {
         scroll_top: Pixels,
     ) -> impl Iterator<Item = (ViewportItem, &BlockItem)> {
         ViewportIterator::new(
-            &self.0,
+            &self.content,
             scroll_top,
             viewport_height,
             viewport_width,
@@ -276,7 +279,7 @@ impl<'a> RenderContentTreeRef<'a> {
         top_inset: Pixels,
     ) -> impl Iterator<Item = (ViewportItem, &BlockItem)> {
         ViewportIterator::new(
-            &self.0,
+            &self.content,
             scroll_top,
             viewport_height,
             viewport_width,
@@ -287,16 +290,18 @@ impl<'a> RenderContentTreeRef<'a> {
     /// Describe only the content of the rendering model.
     #[cfg(test)]
     pub fn describe_content(&self) -> impl fmt::Display + '_ {
-        self.0.describe()
+        self.content.describe()
     }
 
     pub fn block_at_height(&self, height: f64) -> Option<Positioned<'_, BlockItem>> {
-        let height = Height(OrderedFloat(height));
+        let height = Height(OrderedFloat(
+            (height - self.top_inset.as_f32() as f64).max(0.),
+        ));
 
-        let mut cursor = self.0.cursor::<Height, LayoutSummary>();
+        let mut cursor = self.content.cursor::<Height, LayoutSummary>();
         // For height, we don't need to seek to exactly the starting height of the block.
         cursor.seek(&height, SeekBias::Right);
-        cursor.positioned_item()
+        self.with_top_inset(cursor.positioned_item())
     }
 
     /// Returns the 0-based index of the temporary block at the given content-
@@ -312,7 +317,7 @@ impl<'a> RenderContentTreeRef<'a> {
         let height = Height(OrderedFloat(height));
 
         // Seek by height to find the target temporary block.
-        let mut height_cursor = self.0.cursor::<Height, LayoutSummary>();
+        let mut height_cursor = self.content.cursor::<Height, LayoutSummary>();
         height_cursor.seek(&height, SeekBias::Right);
 
         // Verify we landed on a temporary block.
@@ -327,7 +332,7 @@ impl<'a> RenderContentTreeRef<'a> {
         // bias this lands on the last non-temporary block before the run
         // (temporary blocks have content_length == 0, so they don't advance
         // the CharOffset dimension).
-        let mut offset_cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        let mut offset_cursor = self.content.cursor::<CharOffset, LayoutSummary>();
         offset_cursor.seek(&boundary_offset, SeekBias::Left);
 
         // If the offset cursor itself landed on a temporary block, the run
@@ -344,9 +349,9 @@ impl<'a> RenderContentTreeRef<'a> {
     }
 
     pub fn block_at_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
-        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        let mut cursor = self.content.cursor::<CharOffset, LayoutSummary>();
         if cursor.seek(&offset, SeekBias::Right) {
-            cursor.positioned_item()
+            self.with_top_inset(cursor.positioned_item())
         } else {
             // If we can't seek exactly to the starting CharOffset of the block, the render model
             // has probably changed since this item was created. To be safe, fail the lookup.
@@ -374,8 +379,8 @@ impl<'a> RenderContentTreeRef<'a> {
     }
 
     pub fn mermaid_block_ranges(&self) -> Vec<Range<CharOffset>> {
-        let mut cursor = self.0.cursor::<(), LayoutSummary>();
-        cursor.descend_to_first_item(&self.0, |_| true);
+        let mut cursor = self.content.cursor::<(), LayoutSummary>();
+        cursor.descend_to_first_item(&self.content, |_| true);
 
         let mut ranges = Vec::new();
         while let Some(item) = cursor.item() {
@@ -394,13 +399,23 @@ impl<'a> RenderContentTreeRef<'a> {
     ///
     /// When `line >= total_lines`, returns the total content height.
     pub fn y_offset_at_line(&self, line: LineCount) -> Pixels {
-        let summary = self.0.summary();
+        let summary = self.content.summary();
         if line >= summary.lines {
             return (summary.height as f32).into_pixels();
         }
-        let mut cursor = self.0.cursor::<LineCount, LayoutSummary>();
+        let mut cursor = self.content.cursor::<LineCount, LayoutSummary>();
         cursor.seek_clamped(&line, SeekBias::Right);
         (cursor.start().height as f32).into_pixels()
+    }
+
+    fn with_top_inset<'b>(
+        &self,
+        positioned: Option<Positioned<'b, BlockItem>>,
+    ) -> Option<Positioned<'b, BlockItem>> {
+        positioned.map(|mut positioned| {
+            positioned.start_y_offset += self.top_inset;
+            positioned
+        })
     }
 }
 
@@ -1854,7 +1869,10 @@ impl RenderState {
 
     /// Returns reference to the underlying content tree.
     pub fn content(&self) -> RenderContentTreeRef<'_> {
-        RenderContentTreeRef(self.content.borrow())
+        RenderContentTreeRef {
+            content: self.content.borrow(),
+            top_inset: self.top_inset,
+        }
     }
 
     pub fn with_width_setting(mut self, setting: WidthSetting) -> Self {

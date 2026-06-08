@@ -463,6 +463,11 @@ impl<V: EditorView> RichTextElement<V> {
         self
     }
 
+    /// Sets the non-buffer header inset before the first rendered block.
+    pub fn set_top_inset(&mut self, top_inset: impl IntoPixels) {
+        self.top_inset = top_inset.into_pixels();
+    }
+
     /// The size of the viewport.
     fn viewport_size(&self) -> Option<Vector2F> {
         self.viewport_size_info.map(|info| info.viewport_size)

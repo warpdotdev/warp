@@ -1,13 +1,10 @@
-use std::cell::Cell;
 use std::collections::HashSet;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use markdown_parser::{parse_html, parse_markdown, FormattedText};
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use string_offset::CharOffset;
 use warp_editor::content::anchor::Anchor;
 use warp_editor::content::text::{BufferTextStyle, CodeBlockType, TextStyles};
@@ -93,59 +90,67 @@ const GUTTER_WIDTH: f32 = ICON_DIMENSIONS + 4.;
 
 /// Builds an optional header element that scrolls before editor content.
 pub type ScrollHeaderRenderer = Box<dyn Fn(&AppContext) -> Option<Box<dyn Element>>>;
-
-struct ScrollHeaderElement {
-    child: Box<dyn Element>,
-    measured_height: Rc<Cell<f32>>,
-    scroll_top: f32,
-    height_changed: bool,
-    size: Option<pathfinder_geometry::vector::Vector2F>,
+struct RichTextWithScrollHeaderElement {
+    header: Option<Box<dyn Element>>,
+    rich_text: RichTextElement<RichTextEditorView>,
+    size: Option<Vector2F>,
     origin: Option<Point>,
 }
 
-impl ScrollHeaderElement {
-    /// Creates a scroll-positioned header that reports its laid-out height.
-    fn new(child: Box<dyn Element>, measured_height: Rc<Cell<f32>>, scroll_top: f32) -> Self {
+impl RichTextWithScrollHeaderElement {
+    /// Creates a rich text element with optional scroll-positioned header chrome.
+    fn new(
+        header: Option<Box<dyn Element>>,
+        rich_text: RichTextElement<RichTextEditorView>,
+    ) -> Self {
         Self {
-            child,
-            measured_height,
-            scroll_top,
-            height_changed: false,
+            header,
+            rich_text,
             size: None,
             origin: None,
         }
     }
 }
 
-impl Element for ScrollHeaderElement {
+impl Element for RichTextWithScrollHeaderElement {
     fn layout(
         &mut self,
         constraint: SizeConstraint,
         ctx: &mut LayoutContext,
         app: &AppContext,
-    ) -> pathfinder_geometry::vector::Vector2F {
-        let size = self.child.layout(constraint, ctx, app);
-        let height = size.y();
-        self.height_changed = self.measured_height.replace(height) != height;
+    ) -> Vector2F {
+        let header_height = self.header.as_mut().map_or(0., |header| {
+            let header_constraint = SizeConstraint::new(
+                vec2f(constraint.max.x(), 0.),
+                vec2f(constraint.max.x(), constraint.max.y()),
+            );
+            header.layout(header_constraint, ctx, app).y()
+        });
+        self.rich_text.set_top_inset(header_height);
+        let size = self.rich_text.layout(constraint, ctx, app);
         self.size = Some(size);
         size
     }
 
     fn after_layout(&mut self, ctx: &mut AfterLayoutContext, app: &AppContext) {
-        self.child.after_layout(ctx, app);
+        self.rich_text.after_layout(ctx, app);
+        if let Some(header) = &mut self.header {
+            header.after_layout(ctx, app);
+        }
     }
 
-    fn paint(
-        &mut self,
-        origin: pathfinder_geometry::vector::Vector2F,
-        ctx: &mut PaintContext,
-        app: &AppContext,
-    ) {
-        let scrolled_origin = origin - vec2f(0., self.scroll_top);
-        self.origin = Some(Point::from_vec2f(scrolled_origin, ctx.scene.z_index()));
-        self.child.paint(scrolled_origin, ctx, app);
-        if self.height_changed {
-            ctx.repaint_after(Duration::ZERO);
+    fn paint(&mut self, origin: Vector2F, ctx: &mut PaintContext, app: &AppContext) {
+        self.origin = Some(Point::from_vec2f(origin, ctx.scene.z_index()));
+        self.rich_text.paint(origin, ctx, app);
+        if let Some(header) = &mut self.header {
+            let scroll_top = self
+                .rich_text
+                .model
+                .as_ref(app)
+                .viewport()
+                .scroll_top()
+                .as_f32();
+            header.paint(origin - vec2f(0., scroll_top), ctx, app);
         }
     }
 
@@ -155,15 +160,34 @@ impl Element for ScrollHeaderElement {
         ctx: &mut EventContext,
         app: &AppContext,
     ) -> bool {
-        self.child.dispatch_event(event, ctx, app)
+        if let Some(header) = &mut self.header {
+            if header.dispatch_event(event, ctx, app) {
+                return true;
+            }
+        }
+        self.rich_text.dispatch_event(event, ctx, app)
     }
 
-    fn size(&self) -> Option<pathfinder_geometry::vector::Vector2F> {
+    fn size(&self) -> Option<Vector2F> {
         self.size
     }
 
     fn origin(&self) -> Option<Point> {
         self.origin
+    }
+}
+
+impl ScrollableElement for RichTextWithScrollHeaderElement {
+    fn scroll_data(&self, app: &AppContext) -> Option<warpui::elements::ScrollData> {
+        ScrollableElement::scroll_data(&self.rich_text, app)
+    }
+
+    fn scroll(&mut self, delta: Pixels, ctx: &mut EventContext) {
+        ScrollableElement::scroll(&mut self.rich_text, delta, ctx);
+    }
+
+    fn should_handle_scroll_wheel(&self) -> bool {
+        ScrollableElement::should_handle_scroll_wheel(&self.rich_text)
     }
 }
 
@@ -1151,7 +1175,6 @@ pub struct RichTextEditorView {
     disable_block_insertion_menu: bool,
 
     scroll_header_renderer: Option<ScrollHeaderRenderer>,
-    scroll_header_height: Rc<Cell<f32>>,
 }
 
 #[derive(Default)]
@@ -1260,7 +1283,6 @@ impl RichTextEditorView {
             disable_scrolling: config.disable_scrolling,
             disable_block_insertion_menu: config.disable_block_insertion_menu,
             scroll_header_renderer: None,
-            scroll_header_height: Rc::new(Cell::new(0.)),
         }
     }
 
@@ -1534,9 +1556,6 @@ impl RichTextEditorView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.scroll_header_renderer = renderer;
-        if self.scroll_header_renderer.is_none() {
-            self.scroll_header_height.set(0.);
-        }
         ctx.notify();
     }
 
@@ -2754,10 +2773,6 @@ impl View for RichTextEditorView {
             .scroll_header_renderer
             .as_ref()
             .and_then(|renderer| renderer(app));
-        if scroll_header.is_none() {
-            self.scroll_header_height.set(0.);
-        }
-        let scroll_header_height = self.scroll_header_height.get();
 
         let display_options = DisplayOptions {
             // If there's a command selection, show that instead of the text cursor.
@@ -2782,9 +2797,9 @@ impl View for RichTextEditorView {
             None,       // Not currently supporting vim in notebooks
             Vec::new(), // Not currently supporting vim in notebooks
         )
-        .with_max_width(self.max_width)
-        .with_top_inset(scroll_header_height)
-        .finish_scrollable();
+        .with_max_width(self.max_width);
+        let rich_text =
+            RichTextWithScrollHeaderElement::new(scroll_header, rich_text).finish_scrollable();
 
         // When disable_scrolling is true, don't wrap in Scrollable to allow scroll events
         // to propagate to the parent (used for embedded editors like comment chips).
@@ -2804,17 +2819,6 @@ impl View for RichTextEditorView {
 
         let mut main_stack = Stack::new();
         main_stack.add_child(main_content);
-
-        if let Some(header) = scroll_header {
-            main_stack.add_child(
-                ScrollHeaderElement::new(
-                    header,
-                    self.scroll_header_height.clone(),
-                    render_state.as_ref(app).viewport().scroll_top().as_f32(),
-                )
-                .finish(),
-            );
-        }
 
         self.render_block_insertion_menu(&mut main_stack, app);
 
