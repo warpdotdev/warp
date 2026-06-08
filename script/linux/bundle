@@ -245,15 +245,15 @@ if [[ "$BUILD" == "true" ]]; then
   cp "$EXECUTABLE_PATH" "$DEBUG_EXECUTABLE_PATH"
 
   echo "Stripping debug symbols from '$EXECUTABLE_PATH'"
-  if [[ $RELEASE_CHANNEL = "dev" || ",$FEATURES," == *",heap_usage_tracking,"* ]]; then
-    # Only strip debug sections, keeping the symbol table, for dev builds and
-    # any build with heap profiling enabled. In-process jemalloc heap-profile
-    # symbolization resolves addresses against the running binary's own
-    # symbols, so a fully stripped binary would produce unsymbolized profiles.
+  if [[ $RELEASE_CHANNEL = "dev" ]]; then
+    # For dev builds, only strip debug symbols, as we want to keep some
+    # symbols for profiling purposes.
     strip --strip-debug "$EXECUTABLE_PATH"
   else
     # For production builds, strip all symbols, to keep the binary size
-    # smaller.
+    # smaller. Heap profiles are raw (unsymbolized) pprof and are symbolized
+    # offline against the debug-info file uploaded to Sentry (matched by
+    # build-id), so the shipped binary does not need to keep its symbol table.
     strip --strip-all "$EXECUTABLE_PATH"
   fi
 else

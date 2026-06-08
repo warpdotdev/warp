@@ -63,10 +63,13 @@ pub fn dump_dhat_heap_profile() {
 
 /// Dumps a jemalloc heap profile and sends it to Sentry.
 ///
-/// On Linux the profile is produced (and symbolized) in-process via the
-/// `jemalloc_pprof` crate.  On other platforms it spawns the bundled `pprof`
-/// binary to fetch and symbolicate the heap profile from the local HTTP
-/// server.  Either way, the resulting profile is attached to a Sentry event.
+/// On Linux the profile is produced in-process via the `jemalloc_pprof` crate
+/// as a raw (unsymbolized) pprof -- sample addresses + mappings + GNU build-id
+/// -- and is symbolized offline against the debug-info file uploaded to Sentry
+/// by the release process (matched by build-id).  On other platforms it spawns
+/// the bundled `pprof` binary to fetch and symbolicate the heap profile from
+/// the local HTTP server.  Either way, the resulting profile is attached to a
+/// Sentry event.
 #[cfg(feature = "heap_usage_tracking")]
 pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
     use sentry::protocol::{Attachment, AttachmentType};
@@ -116,12 +119,14 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
 async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "linux")] {
-            // `jemalloc_pprof` only supports Linux and we build it with the
-            // `symbolize` feature, so `dump_pprof()` already returns a
-            // symbolized, gzipped pprof profile.  Dump it directly in-process
-            // -- no external `pprof`/Go binary, HTTP round-trip, or port
-            // dependency required (the latter matter for the headless remote
-            // server daemon, which has no bundled helpers next to it).
+            // `jemalloc_pprof` only supports Linux. We build it WITHOUT the
+            // `symbolize` feature, so `dump_pprof()` returns a raw, gzipped
+            // pprof (sample addresses + mappings + GNU build-id) that is
+            // symbolized offline against the debug-info file by build-id.  Dump
+            // it directly in-process -- no external `pprof`/Go binary, HTTP
+            // round-trip, or port dependency required (the latter matter for
+            // the headless remote server daemon, which has no bundled helpers
+            // next to it).
             dump_jemalloc_pprof_bytes().await
         } else {
             use anyhow::Context as _;
@@ -154,8 +159,10 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
     }
 }
 
-/// Produces a symbolized, gzipped pprof heap profile directly from the
-/// in-process jemalloc profiler.
+/// Produces a raw (unsymbolized), gzipped pprof heap profile directly from the
+/// in-process jemalloc profiler. The profile carries sample addresses,
+/// mappings, and the GNU build-id, and is symbolized offline against the
+/// matching debug-info file (by build-id).
 ///
 /// This is the same dump that [`handle_get_heap`] serves over HTTP, but
 /// invoked directly so callers don't need to reach the local HTTP server.

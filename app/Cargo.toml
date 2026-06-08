@@ -123,9 +123,12 @@ image.workspace = true
 infer = "0.19.0"
 jaq-json.workspace = true
 jaq-all.workspace = true
-jemalloc_pprof = { version = "0.8.1", optional = true, features = [
-    "symbolize",
-] }
+# Built WITHOUT the `symbolize` feature: `dump_pprof()` then returns a raw
+# pprof (sample addresses + mappings + GNU build-id), which is symbolized
+# offline against the debug-info file uploaded to Sentry by the release
+# process (matched by build-id). This keeps the shipped binary fully
+# strippable.
+jemalloc_pprof = { version = "0.8.1", optional = true }
 lsp-types = "0.97.0"
 indexmap = { version = "2.0.2", features = ["serde"] }
 input_classifier.workspace = true
