@@ -59,7 +59,7 @@ impl GitBranchOnClickValue {
                     .map(str::to_string);
                 Self::linked_worktree(branch_name, worktree_path)
             }
-            _ => Self::new(value.to_string()),
+            _ => Self::new(branch_name),
         }
     }
 }
@@ -179,70 +179,32 @@ fn parse_git_worktree_paths(lines: &[String]) -> HashMap<String, String> {
     branch_to_worktree_path
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_git_branch_on_click_value_round_trips_through_encode_decode() {
-        let values = [
-            GitBranchOnClickValue::new("feature-a".to_string()),
-            GitBranchOnClickValue::linked_worktree(
-                "feature-b".to_string(),
-                Some("/repo/feature-b".to_string()),
-            ),
-            GitBranchOnClickValue::linked_worktree("feature-c".to_string(), None),
-        ];
-
-        for value in values {
-            assert_eq!(GitBranchOnClickValue::decode(&value.encode()), value);
-        }
+/// Returns `true` when `name` looks like a plausible git branch name that can
+/// be created via `git checkout -b`.
+///
+/// We err on the side of letting git itself reject borderline cases: this
+/// helper only filters out the most obviously broken inputs so that the
+/// "Create new branch …" affordance does not appear for clearly invalid
+/// queries (e.g. an empty string after the user backspaces, or whitespace).
+/// Anything we accept here may still be rejected by `git check-ref-format`,
+/// in which case the user sees the failure in the terminal.
+pub(crate) fn is_plausible_new_branch_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return false;
     }
-
-    #[test]
-    fn test_git_branch_on_click_values_resolve_linked_worktree_paths() {
-        let values = Some(vec![
-            "  feature-a".to_string(),
-            "+ linked-worktree".to_string(),
-            "* main".to_string(),
-            "".to_string(),
-            "  +literal-plus".to_string(),
-            WORKTREE_LIST_SEPARATOR.to_string(),
-            "worktree /repo".to_string(),
-            "branch refs/heads/main".to_string(),
-            "".to_string(),
-            "worktree /repo-linked".to_string(),
-            "branch refs/heads/linked-worktree".to_string(),
-        ]);
-
-        let values = filter_git_branch_on_click_values(values).unwrap();
-        let values: Vec<_> = values
-            .iter()
-            .map(|value| GitBranchOnClickValue::decode(value))
-            .collect();
-
-        assert_eq!(
-            values,
-            vec![
-                GitBranchOnClickValue::new("main".to_string()),
-                GitBranchOnClickValue::new("feature-a".to_string()),
-                GitBranchOnClickValue::linked_worktree(
-                    "linked-worktree".to_string(),
-                    Some("/repo-linked".to_string()),
-                ),
-                GitBranchOnClickValue::new("+literal-plus".to_string()),
-            ]
-        );
+    // git rejects names beginning with `-` outright, and they would also be
+    // ambiguous with `git checkout -b` flags, so don't offer the affordance.
+    if trimmed.starts_with('-') {
+        return false;
     }
-
-    #[test]
-    fn test_git_branch_on_click_values_keep_linked_marker_without_path() {
-        let values = filter_git_branch_on_click_values(Some(vec!["+ feature".to_string()]))
-            .expect("expected parsed branch values");
-        let value = GitBranchOnClickValue::decode(&values[0]);
-
-        assert_eq!(value.branch_name, "feature");
-        assert_eq!(value.worktree_path, None);
-        assert!(value.is_linked_worktree);
+    // git refuses whitespace (other than as a separator) inside refs.
+    if trimmed.chars().any(char::is_whitespace) {
+        return false;
     }
+    true
 }
+
+#[cfg(test)]
+#[path = "git_branch_on_click_tests.rs"]
+mod tests;

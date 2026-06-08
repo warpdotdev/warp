@@ -1,7 +1,5 @@
-use std::{
-    cmp::Ordering,
-    fmt::{Display, Formatter, Result},
-};
+use std::cmp::Ordering;
+use std::fmt::{Display, Formatter, Result};
 
 use uuid::Uuid;
 

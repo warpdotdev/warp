@@ -1,18 +1,17 @@
-use super::*;
-use crate::{
-    elements::{
-        ChildAnchor, ConstrainedBox, DispatchEventResult, EventHandler, Hoverable,
-        MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Rect,
-        Stack, ZIndex,
-    },
-    platform::WindowStyle,
-    App, AppContext, Entity, Event, Presenter, TypedActionView, ViewContext, WindowInvalidation,
-};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
 use pathfinder_geometry::vector::vec2f;
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-    rc::Rc,
+
+use super::*;
+use crate::elements::{
+    ChildAnchor, ConstrainedBox, DispatchEventResult, EventHandler, Hoverable, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Rect, Stack, ZIndex,
+};
+use crate::platform::WindowStyle;
+use crate::{
+    App, AppContext, Entity, Event, Presenter, TypedActionView, ViewContext, WindowInvalidation,
 };
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]

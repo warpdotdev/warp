@@ -1,35 +1,31 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
-
-use crate::{
-    ai::{
-        agent::conversation::AIConversationId,
-        execution_profiles::{
-            profiles::{AIExecutionProfilesModel, ClientProfileId},
-            AIExecutionProfile, ActionPermission, AskUserQuestionPermission, WriteToPtyPermission,
-        },
-    },
-    report_if_error,
-    settings::{AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate},
-    workspaces::{user_workspaces::UserWorkspaces, workspace::AiAutonomySettings},
-};
-use warp_core::execution_mode::AppExecutionMode;
-
-use crate::ai::mcp::mcp_provider_from_file_path;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::mcp::TemplatableMCPServerManager;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use warp_completer::parsers::simple::decompose_command;
+use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
+use warp_core::settings::Setting;
 use warp_core::user_preferences::GetUserPreferences;
-use warp_core::{features::FeatureFlag, settings::Setting};
 use warp_util::path::EscapeChar;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::BlocklistAIHistoryModel;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId};
+use crate::ai::execution_profiles::{
+    AIExecutionProfile, ActionPermission, AskUserQuestionPermission, WriteToPtyPermission,
+};
+use crate::ai::mcp::mcp_provider_from_file_path;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::mcp::TemplatableMCPServerManager;
+use crate::report_if_error;
+use crate::settings::{
+    AISettings, AgentModeCodingPermissionsType, AgentModeCommandExecutionPredicate,
+};
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::AiAutonomySettings;
 
 /// Whether or not a command can be auto-executed, along with a detailed reason.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize)]
@@ -198,6 +194,7 @@ impl BlocklistAIPermissions {
             mcp_denylist: self.get_mcp_denylist_for_profile(ctx, profile_id),
             computer_use: self.get_computer_use_setting_for_profile(ctx, profile_id),
             ask_user_question: self.get_ask_user_question_setting_for_profile(ctx, profile_id),
+            run_agents: self.get_run_agents_setting_for_profile(ctx, profile_id),
 
             // Some fields are read directly from the profile.
             name: profile_data.name.clone(),
@@ -634,6 +631,29 @@ impl BlocklistAIPermissions {
         let active_profile =
             AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
         self.get_ask_user_question_setting_for_profile(ctx, *active_profile.id())
+    }
+
+    pub fn get_run_agents_setting_for_profile(
+        &self,
+        ctx: &AppContext,
+        profile_id: ClientProfileId,
+    ) -> crate::ai::execution_profiles::RunAgentsPermission {
+        let profiles_model = AIExecutionProfilesModel::as_ref(ctx);
+        profiles_model
+            .get_profile_by_id(profile_id, ctx)
+            .unwrap_or_else(|| profiles_model.default_profile(ctx))
+            .data()
+            .run_agents
+    }
+
+    pub fn get_run_agents_setting(
+        &self,
+        ctx: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> crate::ai::execution_profiles::RunAgentsPermission {
+        let active_profile =
+            AIExecutionProfilesModel::as_ref(ctx).active_profile(terminal_view_id, ctx);
+        self.get_run_agents_setting_for_profile(ctx, *active_profile.id())
     }
 
     /// Returns whether or not Agent Mode can auto-read the given files.

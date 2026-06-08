@@ -1,15 +1,13 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 
-use crate::{
-    event::DispatchedEvent,
-    text::{word_boundaries::WordBoundariesPolicy, IsRect, SelectionDirection, SelectionType},
-};
-
 use super::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext, Point,
     SelectableElement, Selection, SelectionFragment, SizeConstraint,
 };
+use crate::event::DispatchedEvent;
+use crate::text::word_boundaries::WordBoundariesPolicy;
+use crate::text::{IsRect, SelectionDirection, SelectionType};
 
 /// `MinSize` ensures that it takes up *at least* the minimum size constraint specified by its
 /// parent. It's similar to [`super::Align`] but will not grow to fill the maximum space available.

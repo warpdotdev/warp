@@ -140,6 +140,9 @@ integration_tests! {
     test_open_input_context_menu,
     test_copy_all_from_input_context_menu,
     test_cut_paste_from_input_context_menu,
+    test_inline_model_selector_restores_prompt_on_dismissal,
+    test_inline_model_selector_restores_prompt_on_model_selection,
+    test_inline_model_selector_restores_prompt_on_chip_toggle_close,
     test_paste_and_type_characters_before_bootstrap,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_anchor_preserved_when_inserting_above,
@@ -231,7 +234,7 @@ integration_tests! {
     test_close_notebook_tab,
     test_open_in_warp_banner,
     test_close_notebook_window,
-    test_backspace_inside_rendered_mermaid_block_is_atomic,
+    test_backspace_inside_raw_mermaid_block_edits_text_without_removing_block,
 
     test_open_workflow_in_pane,
     test_create_personal_workflow_pane_from_command_palette,
@@ -324,6 +327,8 @@ integration_tests! {
     test_goto_line_jumps_to_line,
     test_goto_line_with_column,
     test_goto_line_clamps_out_of_range,
+    test_code_editor_line_numbers_default_to_absolute,
+    test_code_editor_relative_line_numbers_follow_cursor,
 
     // Keyboard protocol tests
     test_keyboard_protocol_disabled_shift_enter,
@@ -339,4 +344,9 @@ integration_tests! {
     // Video recording test — requires real display, run manually
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
+
+    // Rich Input Ctrl+Enter submit toggle (issue #11588)
+    test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits,
+    // Regression: Enter must accept inline menus (not insert newline) when toggle=true
+    test_rich_input_enter_accepts_menu_item_when_toggle_is_true,
 }

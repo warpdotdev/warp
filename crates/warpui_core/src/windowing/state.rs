@@ -1,18 +1,15 @@
-use pathfinder_geometry::rect::RectF;
-use std::{
-    collections::VecDeque,
-    fmt::{Display, Formatter},
-};
+use std::collections::VecDeque;
+use std::fmt::{Display, Formatter};
 
-use crate::{
-    geometry,
-    platform::{self, FullscreenState, TerminationMode, WindowFocusBehavior},
-    scene::{CornerRadius, Radius},
-    windowing, DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow,
-    SingletonEntity, WindowId,
-};
+use pathfinder_geometry::rect::RectF;
 
 use super::WindowCallbacks;
+use crate::platform::{self, FullscreenState, TerminationMode, WindowFocusBehavior};
+use crate::scene::{CornerRadius, Radius};
+use crate::{
+    geometry, windowing, DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow,
+    SingletonEntity, WindowId,
+};
 
 /// Description of the current stage in the lifecycle of the app.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]

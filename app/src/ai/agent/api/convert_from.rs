@@ -2,35 +2,33 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use ai::agent::action::{LifecycleEventType as StartAgentLifecycleEventType, ReadSkillRequest};
+use ai::agent::action_result::StartAgentVersion;
+use ai::agent::convert::ToolToAIAgentActionError;
+use ai::agent::UnknownCitationTypeError;
+use ai::skills::{
+    skill_reference_from_api_skill_ref, skill_reference_from_read_skill_ref, SkillPathOrigin,
+};
+use api::ask_user_question::question::QuestionType;
+use warp_core::channel::ChannelState;
+use warp_multi_agent_api as api;
+
 use crate::ai::agent::api::convert_conversation::{
     convert_input_context, convert_tool_call_result_to_input,
 };
 use crate::ai::agent::comment::CodeReview;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::todos::AIAgentTodoList;
+use crate::ai::agent::util::parse_markdown_into_text_and_code_sections;
 use crate::ai::agent::{
-    util::parse_markdown_into_text_and_code_sections, AIAgentAction, AIAgentActionType,
-    AIAgentCitation, AIAgentInput, AIAgentOutputMessage, AIAgentText, AIAgentTodo,
-    ArtifactCreatedData, MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode,
-    RunAgentsRequest, StartAgentExecutionMode, SuggestedAgentModeWorkflow, SuggestedRule,
-    Suggestions, TodoOperation,
-};
-use crate::ai::agent::{
-    CloneRepositoryURL, SubagentCall, SubagentType, SummarizationType, WebFetchStatus,
-    WebSearchStatus,
+    AIAgentAction, AIAgentActionType, AIAgentAttachment, AIAgentCitation, AIAgentInput,
+    AIAgentOutputMessage, AIAgentText, AIAgentTodo, ArtifactCreatedData, CloneRepositoryURL,
+    MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest,
+    StartAgentExecutionMode, SubagentCall, SubagentType, SuggestedAgentModeWorkflow, SuggestedRule,
+    Suggestions, SummarizationType, TodoOperation, UserQueryMode, WebFetchStatus, WebSearchStatus,
 };
 use crate::ai::artifact_download::sanitized_basename;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
-use ai::agent::action::LifecycleEventType as StartAgentLifecycleEventType;
-use ai::agent::action_result::StartAgentVersion;
-use ai::agent::convert::ToolToAIAgentActionError;
-use ai::agent::UnknownCitationTypeError;
-use ai::skills::SkillReference;
-use api::ask_user_question::question::QuestionType;
-use warp_core::channel::ChannelState;
-use warp_multi_agent_api as api;
-
-use crate::ai::agent::{AIAgentAttachment, UserQueryMode};
 
 impl TryFrom<api::Attachment> for AIAgentAttachment {
     type Error = anyhow::Error;
@@ -52,6 +50,18 @@ impl TryFrom<api::Attachment> for AIAgentAttachment {
             _ => anyhow::bail!("Unsupported attachment type for conversion"),
         }
     }
+}
+
+fn convert_read_skill(
+    read_skill: api::message::tool_call::ReadSkill,
+    skill_path_origin: &SkillPathOrigin,
+) -> Result<AIAgentActionType, ToolToAIAgentActionError> {
+    let Some(reference) = read_skill.skill_reference else {
+        return Err(ToolToAIAgentActionError::MissingSkillReference);
+    };
+    let skill = skill_reference_from_read_skill_ref(reference, skill_path_origin)
+        .map_err(|_| ToolToAIAgentActionError::MissingSkillReference)?;
+    Ok(AIAgentActionType::ReadSkill(ReadSkillRequest { skill }))
 }
 
 /// Converts proto UserQueryMode to the internal UserQueryMode type
@@ -124,7 +134,10 @@ fn convert_run_agents_execution_mode(
     }
 }
 
-fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
+fn convert_run_agents(
+    run_agents: api::RunAgents,
+    skill_path_origin: &SkillPathOrigin,
+) -> AIAgentActionType {
     let api::RunAgents {
         summary,
         base_prompt,
@@ -133,13 +146,14 @@ fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
         harness,
         agent_run_configs,
         execution_mode,
+        plan_id,
     } = run_agents;
     AIAgentActionType::RunAgents(RunAgentsRequest {
         summary,
         base_prompt,
         skills: skills
             .into_iter()
-            .filter_map(convert_skill_reference)
+            .filter_map(|skill| skill_reference_from_api_skill_ref(skill, skill_path_origin))
             .collect(),
         model_id,
         harness_type: convert_run_agents_harness(harness.as_ref()).unwrap_or_default(),
@@ -152,11 +166,17 @@ fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
                 title: config.title,
             })
             .collect(),
+        plan_id,
+        // Auth secret is a client-side dispatch concern populated by the
+        // confirmation card from `CloudAgentSettings.last_selected_auth_secret`
+        // before Accept. The proto does not carry it.
+        harness_auth_secret_name: None,
     })
 }
 
 fn convert_start_agent_v2_execution_mode(
     execution_mode: Option<api::start_agent_v2::ExecutionMode>,
+    skill_path_origin: &SkillPathOrigin,
 ) -> StartAgentExecutionMode {
     match execution_mode.and_then(|execution_mode| execution_mode.mode) {
         Some(api::start_agent_v2::execution_mode::Mode::Remote(remote)) => {
@@ -165,7 +185,9 @@ fn convert_start_agent_v2_execution_mode(
                 skill_references: remote
                     .skills
                     .into_iter()
-                    .filter_map(convert_skill_reference)
+                    .filter_map(|skill| {
+                        skill_reference_from_api_skill_ref(skill, skill_path_origin)
+                    })
                     .collect(),
                 model_id: remote.model_id,
                 computer_use_enabled: remote.computer_use_enabled,
@@ -173,6 +195,9 @@ fn convert_start_agent_v2_execution_mode(
                 harness_type: convert_start_agent_v2_harness_type(remote.harness)
                     .unwrap_or_default(),
                 title: remote.title,
+                // Auth secret is plumbed client-side via `RunAgentsRequest`;
+                // StartAgentV2 from the server never carries it.
+                auth_secret_name: None,
             }
         }
         Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
@@ -181,16 +206,6 @@ fn convert_start_agent_v2_execution_mode(
                 .unwrap_or_else(StartAgentExecutionMode::local_with_defaults)
         }
         None => StartAgentExecutionMode::local_with_defaults(),
-    }
-}
-
-fn convert_skill_reference(skill_ref: api::SkillRef) -> Option<SkillReference> {
-    match skill_ref.skill_reference {
-        Some(api::skill_ref::SkillReference::Path(path)) => Some(SkillReference::Path(path.into())),
-        Some(api::skill_ref::SkillReference::BundledSkillId(id)) => {
-            Some(SkillReference::BundledSkillId(id))
-        }
-        None => None,
     }
 }
 
@@ -228,6 +243,7 @@ pub struct ConversionParams<'a> {
     pub task_id: &'a TaskId,
     pub current_todo_list: Option<&'a AIAgentTodoList>,
     pub active_code_review: Option<&'a CodeReview>,
+    pub skill_path_origin: &'a SkillPathOrigin,
 }
 
 /// Trait for converting an [`api::Message`] to an [`AIAgentOutputMessage`].
@@ -756,6 +772,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(request_computer_use.into())
             }
             api::message::tool_call::Tool::Subagent(subagent) => {
+                use api::message::tool_call::subagent::conversation_search_metadata::Target;
                 use api::message::tool_call::subagent::Metadata;
                 let subagent_type = match subagent.metadata {
                     Some(Metadata::Cli(_)) => SubagentType::Cli,
@@ -769,14 +786,23 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                         } else {
                             Some(cs_meta.query)
                         };
-                        let conversation_id = if cs_meta.conversation_id.is_empty() {
-                            None
-                        } else {
-                            Some(cs_meta.conversation_id)
+                        let (conversation_id, agent_run_id) = match cs_meta.target {
+                            Some(Target::ConversationId(conversation_id))
+                                if !conversation_id.is_empty() =>
+                            {
+                                (Some(conversation_id), None)
+                            }
+                            Some(Target::AgentRunId(agent_run_id)) if !agent_run_id.is_empty() => {
+                                (None, Some(agent_run_id))
+                            }
+                            Some(Target::ConversationId(_))
+                            | Some(Target::AgentRunId(_))
+                            | None => (None, None),
                         };
                         SubagentType::ConversationSearch {
                             query,
                             conversation_id,
+                            agent_run_id,
                         }
                     }
                     Some(Metadata::WarpDocumentationSearch(_)) => {
@@ -813,6 +839,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                     prompt: start_agent.prompt,
                     execution_mode: convert_start_agent_v2_execution_mode(
                         start_agent.execution_mode,
+                        params.skill_path_origin,
                     ),
                     lifecycle_subscription: start_agent.lifecycle_subscription.map(
                         |subscription| {
@@ -826,7 +853,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 })
             }
             api::message::tool_call::Tool::RunAgents(orchestrate) => {
-                create_standard_action(convert_run_agents(orchestrate))
+                create_standard_action(convert_run_agents(orchestrate, params.skill_path_origin))
             }
             api::message::tool_call::Tool::SendMessageToAgent(send_message) => {
                 create_standard_action(AIAgentActionType::SendMessageToAgent {
@@ -839,7 +866,7 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                 create_standard_action(insert_review_comments.into())
             }
             api::message::tool_call::Tool::ReadSkill(read_skill) => {
-                create_standard_action(read_skill.try_into()?)
+                create_standard_action(convert_read_skill(read_skill, params.skill_path_origin)?)
             }
             api::message::tool_call::Tool::FetchConversation(fetch_conversation) => {
                 create_standard_action(fetch_conversation.into())

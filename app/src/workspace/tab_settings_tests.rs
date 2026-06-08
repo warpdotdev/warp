@@ -1,8 +1,9 @@
+use settings::Setting;
+use warpui::{App, SingletonEntity};
+
 use super::*;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
-use settings::Setting;
-use warpui::{App, SingletonEntity};
 
 #[test]
 fn use_latest_user_prompt_as_conversation_title_in_tab_names_defaults_to_false() {
@@ -55,6 +56,33 @@ fn show_vertical_tab_panel_in_restored_windows_uses_vertical_tabs_path() {
     assert_eq!(
         ShowVerticalTabPanelInRestoredWindows::toml_key(),
         "show_panel_in_restored_windows"
+    );
+}
+
+#[test]
+fn hide_title_bar_search_bar_in_vertical_tabs_defaults_to_false() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(!*settings.hide_title_bar_search_bar_in_vertical_tabs);
+        });
+    });
+}
+
+#[test]
+fn hide_title_bar_search_bar_in_vertical_tabs_uses_vertical_tabs_path() {
+    assert_eq!(
+        HideTitleBarSearchBarInVerticalTabs::toml_path(),
+        Some("appearance.vertical_tabs.hide_title_bar_search_bar")
+    );
+    assert_eq!(
+        HideTitleBarSearchBarInVerticalTabs::hierarchy(),
+        Some("appearance.vertical_tabs")
+    );
+    assert_eq!(
+        HideTitleBarSearchBarInVerticalTabs::toml_key(),
+        "hide_title_bar_search_bar"
     );
 }
 

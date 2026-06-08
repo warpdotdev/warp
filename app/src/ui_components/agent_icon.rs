@@ -9,15 +9,13 @@
 //! [`render_icon_with_status`]. The pure inner functions in this module are exercised
 //! directly by the cross-surface consistency tests in `agent_icon_tests.rs`.
 use warp_cli::agent::Harness;
-use warpui::AppContext;
-use warpui::SingletonEntity;
+use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
     AgentRunDisplayStatus,
 };
-use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalView;
 use crate::terminal::CLIAgent;
@@ -73,7 +71,7 @@ pub(crate) fn terminal_view_agent_icon_variant(
             agent: session.agent,
             has_listener: session.listener.is_some(),
             status: session.status.to_conversation_status(),
-            supports_rich_status: agent_supports_rich_status(&session.agent),
+            supports_rich_status: session.supports_rich_status(),
         }),
         selected_third_party_cli_agent: terminal_view
             .ambient_agent_view_model()
@@ -88,16 +86,16 @@ pub(crate) fn terminal_view_agent_icon_variant(
 
 pub(crate) fn agent_conversation_entry_icon_variant(
     entry: &AgentConversationEntry,
-) -> Option<IconWithStatusVariant> {
+) -> IconWithStatusVariant {
     let status = entry.display.status.to_conversation_status();
     let is_ambient = matches!(entry.provenance, AgentConversationProvenance::AmbientRun)
         || entry.backing.has_ambient_run
         || entry.identity.ambient_agent_task_id.is_some();
-    Some(agent_icon_variant_for_run(
+    agent_icon_variant_for_run(
         entry.display.harness.unwrap_or(Harness::Oz),
         status,
         is_ambient,
-    ))
+    )
 }
 
 /// Primitive inputs to the terminal-view waterfall, gathered once from the live
@@ -178,7 +176,7 @@ fn agent_icon_variant_from_terminal_inputs(
 /// [`IconWithStatusVariant`]. Falls back to the Oz variant for [`Harness::Oz`] and
 /// [`Harness::Unknown`], the latter so a future-server harness this client doesn't
 /// recognize doesn't render an unbranded gray circle.
-fn agent_icon_variant_for_run(
+pub(crate) fn agent_icon_variant_for_run(
     harness: Harness,
     status: ConversationStatus,
     is_ambient: bool,

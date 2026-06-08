@@ -103,6 +103,7 @@ popd > /dev/null
 if [[ ",$FEATURES," =~ ",cocoa_sentry," ]]; then
   echo "Copying Sentry framework into app bundle..."
   SENTRY_FRAMEWORK="app/frameworks/dev/Sentry-Dynamic-WithARM64e.xcframework/macos-arm64_arm64e_x86_64/Sentry.framework"
+  mkdir -p "$WARP_APP_PATH/Contents/Frameworks"
   cp -a "$SENTRY_FRAMEWORK" "$WARP_APP_PATH/Contents/Frameworks/"
 fi
 echo "Adding rpath to support mac frameworks (e.g. Sentry)"
@@ -134,7 +135,15 @@ if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
         echo "Launching with MacOS application launcher"
         PATH="" /usr/bin/open "./$WARP_APP_PATH"
-        tail -f ~/Library/Logs/warp_local.log
+        if [ "$WARP_CHANNEL" = "local" ]; then
+            LOG_FILE=~/Library/Logs/warp_local.log
+        elif [ "$WARP_CHANNEL" = "oss" ]; then
+            LOG_FILE=~/Library/Logs/warp-oss.log
+        else
+            echo "Warning: unrecognized WARP_CHANNEL '$WARP_CHANNEL', defaulting to OSS log path" >&2
+            LOG_FILE=~/Library/Logs/warp-oss.log
+        fi
+        tail -F "$LOG_FILE"
     else
         echo "Opening app at ./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
         "./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"

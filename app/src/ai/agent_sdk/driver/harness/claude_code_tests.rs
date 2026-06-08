@@ -1,18 +1,18 @@
-use mockall::predicate::eq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+use mockall::predicate::eq;
 use tempfile::TempDir;
 use uuid::Uuid;
 use warp_cli::{OZ_HARNESS_ENV, OZ_PARENT_RUN_ID_ENV, OZ_RUN_ID_ENV};
 
 use super::*;
-use crate::ai::agent_events::MessageHydrator;
+use crate::ai::agent_events::{AgentMessageEventMetadata, MessageHydrator};
 use crate::ai::agent_sdk::driver::harness::claude_transcript::encode_cwd;
 use crate::ai::agent_sdk::driver::OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV;
-use crate::server::server_api::ai::{MockAIClient, ReadAgentMessageResponse};
+use crate::server::server_api::ai::{AIClient, MockAIClient, ReadAgentMessageResponse};
 use crate::server::server_api::ServerApiProvider;
 
 fn sample_parent_bridge_message(
@@ -669,6 +669,72 @@ fn prepare_claude_config_none_suffix_preserves_existing_responses() {
 
 #[test]
 #[serial_test::serial]
+fn prepare_claude_environment_config_without_config_dir_uses_home_global_config() {
+    let home_dir = TempDir::new().unwrap();
+    let old_home = std::env::var_os("HOME");
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    std::env::set_var("HOME", home_dir.path());
+    std::env::remove_var("CLAUDE_CONFIG_DIR");
+
+    let working_dir = home_dir.path().join("workspace/project");
+    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+
+    assert!(home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
+    assert!(home_dir
+        .path()
+        .join(".claude")
+        .join(CLAUDE_SETTINGS_FILE_NAME)
+        .exists());
+    assert!(!home_dir
+        .path()
+        .join(".claude")
+        .join(CLAUDE_JSON_FILE_NAME)
+        .exists());
+
+    match old_home {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+    match old_config_dir {
+        Some(dir) => std::env::set_var("CLAUDE_CONFIG_DIR", dir),
+        None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
+    let home_dir = TempDir::new().unwrap();
+    let claude_config_dir = TempDir::new().unwrap();
+    let old_home = std::env::var_os("HOME");
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    std::env::set_var("HOME", home_dir.path());
+    std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path());
+
+    let working_dir = home_dir.path().join("workspace/project");
+    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+
+    assert!(claude_config_dir
+        .path()
+        .join(CLAUDE_JSON_FILE_NAME)
+        .exists());
+    assert!(claude_config_dir
+        .path()
+        .join(CLAUDE_SETTINGS_FILE_NAME)
+        .exists());
+    assert!(!home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
+
+    match old_home {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+    match old_config_dir {
+        Some(dir) => std::env::set_var("CLAUDE_CONFIG_DIR", dir),
+        None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+    }
+}
+#[test]
+#[serial_test::serial]
 fn resolve_suffix_from_resolved_env_vars() {
     std::env::remove_var(ANTHROPIC_API_KEY_ENV);
     let key = "sk-ant-api03-abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij1234567890QLWn-dUnuwQ-hIhDiAAA";
@@ -727,6 +793,7 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
         Some(parent_run_id.clone()),
         Some(working_dir.clone()),
         remote,
+        None,
     ))
     .unwrap();
 
@@ -761,7 +828,10 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
         restored_envelope.entries,
         vec![serde_json::json!({"type": "assistant", "text": "done"})]
     );
-    assert!(home_dir.path().join(".claude.json").exists());
+    assert!(claude_config_dir
+        .path()
+        .join(CLAUDE_JSON_FILE_NAME)
+        .exists());
     assert!(claude_config_dir
         .path()
         .join(CLAUDE_SETTINGS_FILE_NAME)
@@ -772,6 +842,72 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
     std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV);
 }
 
+#[tokio::test]
+async fn prime_parent_bridge_staged_for_self_managed_wake_keeps_message_in_staged() {
+    let tmp = TempDir::new().unwrap();
+    let state_dir = tmp.path().join("session-123");
+    ensure_parent_bridge_state_dir(&state_dir).unwrap();
+
+    let stale = sample_parent_bridge_message(
+        41,
+        "stale-msg",
+        "Old direction",
+        "This message should be returned to staged.",
+    );
+    write_surfaced_parent_bridge_message(&state_dir, &stale);
+    fs::write(parent_bridge_hook_output_file(&state_dir), "stale context").unwrap();
+    fs::write(parent_bridge_hook_output_ack_file(&state_dir), "").unwrap();
+
+    let wake_message = AgentMessageEventMetadata {
+        sequence: 42,
+        message_id: "msg-123".to_string(),
+        occurred_at: "2026-04-17T15:47:00Z".to_string(),
+    };
+    let expected = sample_parent_bridge_message(
+        42,
+        "msg-123",
+        "Please pivot",
+        "Inspect the failing tests first.",
+    );
+
+    let mut ai_client = MockAIClient::new();
+    let expected_message = expected.clone();
+    ai_client
+        .expect_read_agent_message()
+        .with(eq("msg-123"))
+        .times(1)
+        .returning(move |_| {
+            Ok(ReadAgentMessageResponse {
+                message_id: expected_message.message_id.clone(),
+                sender_run_id: expected_message.sender_run_id.clone(),
+                subject: expected_message.subject.clone(),
+                body: expected_message.body.clone(),
+                sent_at: "2026-04-17T15:46:00Z".to_string(),
+                delivered_at: None,
+                read_at: Some("2026-04-17T15:46:02Z".to_string()),
+            })
+        });
+    let hydrator = MessageHydrator::new(Arc::new(ai_client) as Arc<dyn AIClient>);
+    prime_parent_bridge_staged_for_self_managed_wake(&hydrator, &state_dir, Some(&wake_message))
+        .await
+        .unwrap();
+
+    assert_eq!(read_parent_bridge_event_cursor(&state_dir).unwrap(), 42);
+    assert!(!parent_bridge_hook_output_file(&state_dir).exists());
+    assert!(!parent_bridge_hook_output_ack_file(&state_dir).exists());
+    assert!(parent_bridge_staged_message_path(&state_dir, 41, "stale-msg").exists());
+    assert!(!parent_bridge_surfaced_message_path(&state_dir, 41, "stale-msg").exists());
+
+    let staged_path = parent_bridge_staged_message_path(&state_dir, 42, "msg-123");
+    assert!(staged_path.exists());
+    assert!(!parent_bridge_surfaced_message_path(&state_dir, 42, "msg-123").exists());
+
+    let staged_record: MessageBridgeMessageRecord =
+        serde_json::from_slice(&fs::read(&staged_path).unwrap()).unwrap();
+    assert_eq!(staged_record.subject, expected.subject);
+    assert_eq!(staged_record.body, expected.body);
+    assert_eq!(staged_record.occurred_at, wake_message.occurred_at);
+}
 #[test]
 #[serial_test::serial]
 fn suffix_uses_worker_injected_env_when_present() {

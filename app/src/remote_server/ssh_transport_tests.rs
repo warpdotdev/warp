@@ -1,5 +1,6 @@
-use super::*;
 use warpui::r#async::BoxFuture;
+
+use super::*;
 
 fn static_auth_context() -> Arc<RemoteServerAuthContext> {
     Arc::new(RemoteServerAuthContext::new(

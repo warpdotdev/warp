@@ -1,6 +1,7 @@
-use crate::workflows::workflow::Workflow;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+
+use crate::workflows::workflow::Workflow;
 
 #[derive(Clone, Debug)]
 /// Result of fuzzy matching a [`Workflow`].

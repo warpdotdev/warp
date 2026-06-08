@@ -1,20 +1,19 @@
 use std::collections::HashMap;
 use std::ops::Range;
+
 use string_offset::ByteOffset;
 use urlocator::{UrlLocation, UrlLocator};
-use warpui::elements::PartialClickableElement;
-
+use warpui::elements::{MouseStateHandle, PartialClickableElement};
 use warpui::platform::Cursor;
+use warpui::text::char_slice;
+use warpui::Action;
 
 use crate::ai::agent::{AIAgentActionType, AIAgentOutput, AIAgentTextSection, ReadFilesRequest};
 use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
 use crate::ai::blocklist::block::TextLocation;
 use crate::terminal::links::should_directly_open_link;
-use crate::terminal::model::grid::grid_handler::FILE_LINK_SEPARATORS;
+use crate::terminal::model::grid::grid_handler::is_file_link_separator;
 use crate::terminal::ShellLaunchData;
-use warpui::elements::MouseStateHandle;
-use warpui::text::char_slice;
-use warpui::Action;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
@@ -219,7 +218,7 @@ fn addr_of(s: &str) -> usize {
 /// - macOS PATH_MAX: 1024 bytes.
 /// - Windows long-path cap: 32,767 UTF-16 units = 98,301 bytes.
 const MAX_WORD_LEN_FOR_FILE_PATH: usize = 96 * 1024;
-/// Maximum [`FILE_LINK_SEPARATORS`] characters per token, to bound candidate substrings.
+/// Maximum [`is_file_link_separator`] characters per token, to bound candidate substrings.
 /// 256 keeps per-token allocations under ~1 MiB and is far above any real path.
 const MAX_SEPARATORS_PER_WORD: usize = 256;
 
@@ -244,7 +243,7 @@ fn separator_byte_ranges_for_file_path_search(word: &str) -> Vec<SeparatorByteRa
     // We use char_indices() to get byte indices of each char which are used to index the string,
     // rather than chars().enumerate() would give char indices.
     for (i, c) in word.char_indices() {
-        if FILE_LINK_SEPARATORS.contains(&c) {
+        if is_file_link_separator(c) {
             if separator_byte_ranges.len() > MAX_SEPARATORS_PER_WORD {
                 return Vec::new();
             }
@@ -266,8 +265,8 @@ fn separator_byte_ranges_for_file_path_search(word: &str) -> Vec<SeparatorByteRa
 }
 
 /// Given a word with no whitespace in it, returns all the possible file paths within the word
-/// from longest to shortest. File paths within a word can be split by a list of FILE_LINK_SEPARATORS,
-/// and those separators may be part of file paths themselves.
+/// from longest to shortest. File paths within a word can be split by [`is_file_link_separator`]
+/// characters, and those separators may be part of file paths themselves.
 /// Possible file paths begin after a separator and end before a separator.
 /// For example, given /path/to/file:16:hello, it will return
 /// ["/path/to/file:16:hello", "/path/to/file:16", "/path/to/file", "16:hello", "hello"]

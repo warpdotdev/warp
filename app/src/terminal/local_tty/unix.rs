@@ -2,6 +2,32 @@
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
 //! TTY related functionality.
+use std::collections::HashMap;
+use std::ffi::{CStr, OsString};
+use std::fs::{DirBuilder, File};
+use std::mem::MaybeUninit;
+use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::path::{Path, PathBuf};
+use std::{io, ptr};
+
+use anyhow::{Context as _, Error, Result};
+use command::blocking::Command;
+use itertools::Itertools;
+use libc::{self, c_int, winsize, TIOCSCTTY};
+use mio::unix::SourceFd;
+use mio::Interest;
+use nix::pty::openpty;
+use nix::sys::termios::{self, InputFlags, SetArg};
+use serde::{Deserialize, Serialize};
+use signal_hook_mio::v1_0::Signals;
+use warp_core::channel::ChannelState;
+use warp_core::features::FeatureFlag;
+use warpui::{AppContext, SingletonEntity};
+
+use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
+use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
+use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
 use crate::terminal::local_tty::docker_sandbox::{
@@ -12,43 +38,9 @@ use crate::terminal::local_tty::shell::{
 };
 use crate::terminal::model::session::command_executor::shell_escape_single_quotes;
 use crate::terminal::shell::ShellType;
-use crate::ASSETS;
-use warp_core::features::FeatureFlag;
+use crate::{report_if_error, ASSETS};
 
-use crate::report_if_error;
-use itertools::Itertools;
-
-use super::event_loop::{PTY_TOKEN, SIGNALS_TOKEN};
-use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
-use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
-use anyhow::{Context as _, Error, Result};
-use libc::{self, c_int, winsize, TIOCSCTTY};
-
-use mio::unix::SourceFd;
-use mio::Interest;
-use nix::{
-    pty::openpty,
-    sys::termios::{self, InputFlags, SetArg},
-};
-use serde::{Deserialize, Serialize};
-use signal_hook_mio::v1_0::Signals;
-
-use command::blocking::Command;
-use std::{
-    collections::HashMap,
-    ffi::{CStr, OsString},
-    fs::{DirBuilder, File},
-    io,
-    mem::MaybeUninit,
-    os::unix::{
-        fs::DirBuilderExt,
-        io::{AsRawFd, FromRawFd, RawFd},
-    },
-    path::{Path, PathBuf},
-    ptr,
-};
-use warp_core::channel::ChannelState;
-use warpui::{AppContext, SingletonEntity};
+const BASH_HISTORY_SIZE_SENTINEL: &str = "57265949261";
 
 /// Get raw fds for leader/follower ends of a new PTY.
 fn make_pty(size: winsize) -> Result<(RawFd, RawFd)> {
@@ -340,13 +332,14 @@ fn build_host_shell_command(
     builder.env("WARP_PATH_APPEND", path_append);
 
     if matches!(shell_starter.shell_type(), ShellType::Bash) {
-        // Set an initial very large value for HISTFILESIZE so that it
-        // doesn't get truncated on startup.
-        let sentinel_value = "57265949261";
-        builder.env("HISTFILESIZE", sentinel_value);
-        // Set a second environment variable that we can use to know whether
-        // the user rcfiles set HISTFILESIZE or not.
-        builder.env("WARP_INITIAL_HISTFILESIZE", sentinel_value);
+        // Set initial very large values so bash imports the user's existing
+        // history without truncating the file or in-memory list on startup.
+        builder.env("HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+        // Set second environment variables that we can use to know whether
+        // the user rcfiles set these variables or not.
+        builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+        builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     }
 
     // Pass the desired initial working directory as an environment variable
@@ -808,9 +801,10 @@ fn build_docker_sandbox_command(
     builder.env("WARP_PATH_APPEND", path_append);
     // Sandbox shell is always bash (per the container image convention),
     // matching the host-shell path's behavior for bash shells.
-    let sentinel_value = "57265949261";
-    builder.env("HISTFILESIZE", sentinel_value);
-    builder.env("WARP_INITIAL_HISTFILESIZE", sentinel_value);
+    builder.env("HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("WARP_INITIAL_HISTFILESIZE", BASH_HISTORY_SIZE_SENTINEL);
+    builder.env("WARP_INITIAL_HISTSIZE", BASH_HISTORY_SIZE_SENTINEL);
     // Intentionally do NOT set `WARP_INITIAL_WORKING_DIR` for sandboxes:
     // the container's init script cds into the sandbox home dir, not
     // the host's startup dir.
@@ -876,6 +870,10 @@ fn prepare_docker_sandbox(starter: &DockerSandboxShellStarter) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "unix_tests.rs"]
+mod tests;
 
 /// A set of platform helper utilities copied directly from std::sys.
 ///

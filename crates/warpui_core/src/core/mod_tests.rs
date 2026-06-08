@@ -1,25 +1,25 @@
-use std::{
-    cell::RefCell,
-    pin::Pin,
-    rc::Rc,
-    sync::atomic::AtomicBool,
-    sync::Arc,
-    task::{Context, Poll},
-};
+use std::cell::RefCell;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use crate::r#async::Timer;
 use anyhow::Result;
 use futures_util::{stream, Stream};
 use parking_lot::Mutex;
 
 use super::*;
-use crate::{
-    elements::*,
-    keymap::{macros::*, Keystroke},
-};
+use crate::elements::*;
+use crate::keymap::macros::*;
+use crate::keymap::Keystroke;
+use crate::r#async::Timer;
 
 #[path = "transfer_view_tests.rs"]
 mod transfer_view_tests;
+
+#[path = "ref_count_tests.rs"]
+mod ref_count_tests;
 
 #[test]
 fn test_subscribe_and_emit_from_model() {

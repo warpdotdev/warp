@@ -1,5 +1,6 @@
 #![allow(deprecated)]
 
+mod alert;
 mod app;
 pub mod clipboard;
 pub mod delegate;
@@ -15,28 +16,27 @@ pub mod utils;
 mod window;
 
 pub use app::{App, AppExt};
+use clipboard::*;
+use cocoa::base::{id, nil};
+use cocoa::foundation::NSAutoreleasePool;
 pub use delegate::{AppDelegate, IntegrationTestDelegate};
 pub use fonts::FontDB;
-pub use rendering::is_low_power_gpu_available;
-pub use window::Window;
-pub use window::WindowExt;
-
-use clipboard::*;
-
 use geometry::*;
-
-use cocoa::{
-    base::{id, nil},
-    foundation::{NSAutoreleasePool, NSString},
-};
 use objc::{msg_send, sel, sel_impl};
+use objc2::rc::Retained;
+use objc2_foundation::NSString;
+pub use rendering::is_low_power_gpu_available;
+pub use window::{Window, WindowExt};
 
 /// Create an autoreleased NSString from a string reference.
 pub fn make_nsstring<S>(s: S) -> id
 where
     S: AsRef<str>,
 {
-    unsafe { NSString::alloc(nil).init_str(s.as_ref()).autorelease() }
+    // `NSString::from_str` returns a +1-retained `Retained<NSString>`.
+    // `autorelease_ptr` hands that retain count to the innermost autorelease
+    // pool and returns the raw pointer.
+    Retained::autorelease_ptr(NSString::from_str(s.as_ref())).cast()
 }
 
 /// Holds a Cocoa autorelease pool and drains it when the guard is dropped.

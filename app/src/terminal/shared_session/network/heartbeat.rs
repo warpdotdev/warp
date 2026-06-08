@@ -1,5 +1,6 @@
-use futures::stream::AbortHandle;
 use std::time::Duration;
+
+use futures::stream::AbortHandle;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext};
 
@@ -46,6 +47,14 @@ impl Heartbeat {
     pub fn start(&mut self, ctx: &mut ModelContext<Self>) {
         self.reset_idle_timeout(ctx);
         self.periodic_ping(ctx);
+    }
+    pub fn stop(&mut self) {
+        if let Some(handle) = self.idle_timeout_abort_handle.take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.periodic_ping_abort_handle.take() {
+            handle.abort();
+        }
     }
 
     /// Resets the idle timeout to expire after [`Self::idle_timeout`] from now.

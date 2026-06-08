@@ -2,10 +2,10 @@ use std::future::Future;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use warpui::duration_with_jitter;
 use warpui::r#async::Timer;
-use warpui::RetryOption;
+use warpui::{duration_with_jitter, RetryOption};
 
+use crate::server::graphql::GraphQLError;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 
 /// Common duration for a periodic poll. In our app, we generally have the following to update the same data:
@@ -55,10 +55,40 @@ pub(crate) fn is_transient_http_error(e: &anyhow::Error) -> bool {
     // the top-level error object — walk the chain.
     for cause in e.chain() {
         if let Some(http_err) = cause.downcast_ref::<HttpStatusError>() {
-            return matches!(http_err.status, 408 | 429 | 500..=599);
+            return is_transient_status(http_err.status);
         }
     }
     true
+}
+
+/// Classify GraphQL/public-API status errors as transient or permanent.
+///
+/// Unlike [`is_transient_http_error`], errors without a typed HTTP/GraphQL transport
+/// cause are treated as permanent. This is intended for GraphQL operations where
+/// user-facing GraphQL errors are converted into plain `anyhow` errors at the
+/// operation layer and should not be retried or placed into transient cooldowns.
+pub(crate) fn is_transient_graphql_or_http_error(e: &anyhow::Error) -> bool {
+    for cause in e.chain() {
+        if let Some(graphql_err) = cause.downcast_ref::<GraphQLError>() {
+            return match graphql_err {
+                GraphQLError::RequestError(_) => true,
+                GraphQLError::HttpError { status, .. } => is_transient_status(status.as_u16()),
+                GraphQLError::StagingAccessBlocked
+                | GraphQLError::IapChallengeBlocked
+                | GraphQLError::ResponseError(_) => false,
+            };
+        }
+
+        if let Some(http_err) = cause.downcast_ref::<HttpStatusError>() {
+            return is_transient_status(http_err.status);
+        }
+    }
+
+    false
+}
+
+fn is_transient_status(status: u16) -> bool {
+    matches!(status, 408 | 429 | 500..=599)
 }
 
 /// Maximum total attempts per operation (initial attempt plus retries on transient errors).

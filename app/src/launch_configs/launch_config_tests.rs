@@ -1,15 +1,12 @@
 use std::path::PathBuf;
 
-use crate::{
-    app_state::{
-        AppState, BranchSnapshot, LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneFlex,
-        PaneNodeSnapshot, SplitDirection, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
-    },
-    drive::OpenWarpDriveObjectSettings,
-    tab::SelectedTabColor,
-};
-
 use super::{LaunchConfig, PaneMode, PaneTemplateType};
+use crate::app_state::{
+    AppState, BranchSnapshot, LeafContents, LeafSnapshot, NotebookPaneSnapshot, PaneFlex,
+    PaneNodeSnapshot, SplitDirection, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot,
+};
+use crate::drive::OpenWarpDriveObjectSettings;
+use crate::tab::SelectedTabColor;
 
 fn single_tab_snapshot(root: PaneNodeSnapshot) -> AppState {
     AppState {

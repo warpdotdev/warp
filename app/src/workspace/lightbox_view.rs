@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+pub use lightbox::LightboxImage;
 use pathfinder_geometry::vector::Vector2F;
 use ui_components::{lightbox, Component as _};
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
@@ -9,8 +10,6 @@ use warpui::prelude::*;
 use warpui::{AppContext, BlurContext, Element, Entity, SingletonEntity, View, ViewContext};
 
 use crate::appearance::Appearance;
-
-pub use lightbox::LightboxImage;
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;

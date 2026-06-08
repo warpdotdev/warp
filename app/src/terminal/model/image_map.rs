@@ -1,14 +1,13 @@
-use itertools::Itertools;
-use pathfinder_geometry::vector::Vector2F;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Bound::Included;
 
-use super::{
-    grid::grid_handler::{AbsolutePoint, AbsoluteRectangle},
-    iterm_image::ITermImageMetadata,
-    kitty::KittyImageMetadata,
-};
+use itertools::Itertools;
+use pathfinder_geometry::vector::Vector2F;
+
+use super::grid::grid_handler::{AbsolutePoint, AbsoluteRectangle};
+use super::iterm_image::ITermImageMetadata;
+use super::kitty::KittyImageMetadata;
 
 /// This image cache stores the absolute positions of points, relative to the number of rows
 /// that haven't been truncated yet. Stored absolute points are nearly always stale as we store

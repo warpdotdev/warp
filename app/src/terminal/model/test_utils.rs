@@ -6,33 +6,30 @@
 //! is marked as no_run only  because it's currently not possible
 //! to reference `#[cfg(test)]` symbols from doctests.
 
-use std::{collections::HashMap, io::sink, sync::Arc};
+use std::collections::HashMap;
+use std::io::sink;
+use std::sync::Arc;
 
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::command::ExitCode;
 use warpui::r#async::executor::Background;
 
+use super::ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Processor};
+use super::block::{Block, BlockId, BlockSize};
+use super::blocks::BlockList;
+use super::bootstrap::BootstrapStage;
+use super::image_map::StoredImageMetadata;
+use super::iterm_image::{ITermImage, ITermImageDimensionUnit, ITermImageMetadata};
+use super::kitty::{
+    KittyAction, KittyImage, KittyImageMetadata, KittyPixelDataFormat, KittyPlacementData,
+    KittyTransmissionMedium, StoreAndDisplay, StoreOnly,
+};
+use super::terminal_model::BlockIndex;
+use super::{ObfuscateSecrets, TerminalModel};
 use crate::ai::blocklist::SerializedBlockListItem;
-use crate::terminal::{
-    color::{self, Colors},
-    event_listener::ChannelEventListener,
-    BlockPadding, SizeInfo,
-};
-
-use super::{
-    ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Processor},
-    block::{Block, BlockId, BlockSize},
-    blocks::BlockList,
-    bootstrap::BootstrapStage,
-    image_map::StoredImageMetadata,
-    iterm_image::{ITermImage, ITermImageDimensionUnit, ITermImageMetadata},
-    kitty::{
-        KittyAction, KittyImage, KittyImageMetadata, KittyPixelDataFormat, KittyPlacementData,
-        KittyTransmissionMedium, StoreAndDisplay, StoreOnly,
-    },
-    terminal_model::BlockIndex,
-    ObfuscateSecrets, TerminalModel,
-};
+use crate::terminal::color::{self, Colors};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::{BlockPadding, SizeInfo};
 
 pub fn block_size() -> BlockSize {
     BlockSize {

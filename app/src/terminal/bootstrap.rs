@@ -5,16 +5,14 @@ use lazy_static::lazy_static;
 use memo_map::MemoMap;
 use warpui::{AppContext, AssetProvider, SingletonEntity};
 
-use crate::{
-    env_vars::EnvVar,
-    terminal::{session_settings::SessionSettings, shell::ShellType},
-};
-
 #[cfg(feature = "local_fs")]
 use super::{
     model::session::{BootstrapSessionType, SessionInfo},
     warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
+use crate::env_vars::{EnvVar, EnvVarExt};
+use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::shell::ShellType;
 
 lazy_static! {
     /// A memoized cache of the fully-interpolated bootstrap script for each
@@ -26,6 +24,18 @@ lazy_static! {
 /// This can sometimes appear in the beginning of files. If it gets written into the PTY, it causes
 /// errors
 const BYTE_ORDER_MARK: &str = "\u{FEFF}";
+
+#[cfg(feature = "local_fs")]
+pub fn is_container_subshell(session_info: &SessionInfo) -> bool {
+    session_info.subshell_info.as_ref().is_some_and(|info| {
+        let first_token = info
+            .spawning_command
+            .split_ascii_whitespace()
+            .next()
+            .unwrap_or("");
+        first_token == "docker" || first_token == "podman"
+    })
+}
 
 /// Returns `true` if Warp should use an RC-file based bootstrap (e.g. dump the bootstrap script to
 /// a temp file and `source` it) for a newly spawned session with the given `shell_type`, and
@@ -56,6 +66,12 @@ pub fn should_use_rc_file_bootstrap_method(
     session_info: &SessionInfo,
 ) -> bool {
     use super::ShellLaunchData;
+
+    // Container subshells cannot access host temp files, so the RC-file
+    // method is never viable for them.
+    if is_container_subshell(session_info) {
+        return false;
+    }
 
     let session_type = &session_info.session_type;
     match session_type {

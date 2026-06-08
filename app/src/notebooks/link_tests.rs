@@ -1,24 +1,24 @@
-use std::{
-    io::ErrorKind,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
+use settings::Setting as _;
 use tempfile::tempdir;
 use url::Url;
 use warp_util::path::LineAndColumnArg;
-use warpui::{App, ModelHandle, WindowId};
-
-use crate::{
-    notebooks::{file::is_markdown_file, link::LinkEvent},
-    terminal::{model::session::Session, shell::ShellType},
-    util::openable_file_type::FileTarget,
-    workspace::ActiveSession,
-};
+use warpui::{App, ModelHandle, SingletonEntity, WindowId};
 
 use super::{LinkTarget, NotebookLinks, ResolveError, SessionSource};
+use crate::notebooks::file::is_markdown_file;
+use crate::notebooks::link::LinkEvent;
+use crate::terminal::model::session::Session;
+use crate::terminal::shell::ShellType;
+use crate::test_util::settings::initialize_settings_for_tests;
+use crate::util::file::external_editor::EditorSettings;
+use crate::util::openable_file_type::FileTarget;
+use crate::workspace::ActiveSession;
 
 fn url(s: &str) -> LinkTarget {
     LinkTarget::Url(Url::parse(s).expect("Invalid URL"))
@@ -60,6 +60,8 @@ lazy_static! {
 /// Initialize the app and link resolver. For test purposes, we only care about the base
 /// directory's value, not how it was obtained.
 fn init_link_model(app: &mut App, base_directory: Option<&Path>) -> ModelHandle<NotebookLinks> {
+    initialize_settings_for_tests(app);
+
     let window_id = WindowId::new();
     let source = match base_directory {
         Some(dir) => SessionSource::Target {
@@ -359,7 +361,7 @@ fn test_resolve_file_with_line() {
 }
 
 #[test]
-fn test_open_markdown_file() {
+fn test_open_markdown_file_uses_viewer_when_preferred() {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if !root.join("README.md").exists() {
         root = root.parent().unwrap().to_path_buf();
@@ -395,6 +397,57 @@ fn test_open_markdown_file() {
                 assert!(Arc::ptr_eq(&TEST_SESSION, session));
             }
             other => panic!("Expected OpenFileNotebook event, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn test_open_markdown_file_respects_disabled_viewer_preference() {
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if !root.join("README.md").exists() {
+        root = root.parent().unwrap().to_path_buf();
+    }
+
+    App::test((), |mut app| async move {
+        let links = init_link_model(&mut app, Some(&root));
+
+        EditorSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .prefer_markdown_viewer
+                .set_value(false, ctx)
+                .unwrap();
+        });
+
+        let events = Arc::new(Mutex::new(vec![]));
+        {
+            let events = events.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&links, move |_, event, _| {
+                    events.lock().push(event.clone());
+                })
+            });
+        }
+
+        links
+            .update(&mut app, |links, ctx| {
+                let future = links.resolve_and_open("./README.md", ctx);
+                ctx.await_spawned_future(future.future_id())
+            })
+            .await;
+
+        let events = events.lock();
+        assert_eq!(events.len(), 1);
+        match events.first() {
+            Some(LinkEvent::OpenFileWithTarget {
+                path,
+                target,
+                line_col,
+            }) => {
+                assert_eq!(path, &root.join("README.md"));
+                assert_eq!(target, &FileTarget::SystemDefault);
+                assert_eq!(line_col, &None);
+            }
+            other => panic!("Expected OpenFileWithTarget event, got {other:?}"),
         }
     });
 }

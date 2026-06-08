@@ -1,27 +1,25 @@
-use super::{elements::Axis, Event};
-use crate::assets::asset_cache::AssetHandle;
-use crate::elements::{DropTargetPosition, Selection};
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::time::Duration;
 
-use crate::fonts;
-use crate::zoom::Scale;
-use crate::{
-    elements::Point,
-    event::DispatchedEvent,
-    fonts::Cache as FontCache,
-    platform::Cursor,
-    scene::{Scene, ZIndex},
-    text_layout::LayoutCache,
-    Action, AppContext, ClipBounds, EntityId, TaskId, View, ViewHandle, WindowId,
-    WindowInvalidation,
-};
 use instant::Instant;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-    marker::PhantomData,
-    rc::Rc,
-    time::Duration,
+
+use super::elements::Axis;
+use super::Event;
+use crate::assets::asset_cache::AssetHandle;
+use crate::elements::{DropTargetPosition, Point, Selection};
+use crate::event::DispatchedEvent;
+use crate::fonts::Cache as FontCache;
+use crate::platform::Cursor;
+use crate::scene::{Scene, ZIndex};
+use crate::text_layout::LayoutCache;
+use crate::zoom::Scale;
+use crate::{
+    fonts, Action, AppContext, ClipBounds, EntityId, TaskId, View, ViewHandle, WindowId,
+    WindowInvalidation,
 };
 
 pub struct Presenter {
@@ -238,6 +236,8 @@ pub struct EventContext<'a> {
     /// Flag indicating the soft keyboard should be shown.
     /// Used on mobile WASM to trigger the keyboard in user gesture context.
     soft_keyboard_requested: bool,
+    /// Set by a nested `Draggable` claiming mouse-down; read by outer `Draggable`s to defer.
+    descendant_draggable_initiated: bool,
 }
 
 impl<'a> EventContext<'a> {
@@ -506,6 +506,7 @@ impl Presenter {
             notify_timers_to_clear: Default::default(),
             cursor_update: Default::default(),
             soft_keyboard_requested: false,
+            descendant_draggable_initiated: false,
         }
     }
 
@@ -755,6 +756,14 @@ impl EventContext<'_> {
     /// This is used on mobile WASM to trigger the keyboard when a text input area is tapped.
     pub fn request_soft_keyboard(&mut self) {
         self.soft_keyboard_requested = true;
+    }
+
+    pub fn descendant_draggable_initiated(&self) -> bool {
+        self.descendant_draggable_initiated
+    }
+
+    pub fn mark_descendant_draggable_initiated(&mut self) {
+        self.descendant_draggable_initiated = true;
     }
 }
 

@@ -1,8 +1,25 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use ai::agent::action::InsertReviewComment;
+use chrono::Local;
+use lsp::LspManagerModel;
+use repo_metadata::repositories::DetectedRepositories;
+use warp_core::features::FeatureFlag;
+use warp_core::ui::appearance::Appearance;
+use warp_editor::content::buffer::InitialBufferState;
+use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_editor::render::model::LineCount;
+use warpui::elements::{Empty, MouseStateHandle};
+use warpui::platform::WindowStyle;
+use warpui::{App, ViewHandle};
+
 use super::*;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::comments::{
@@ -13,11 +30,12 @@ use crate::code_review::comments::{
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
 use crate::code_review::editor_state::CodeReviewEditorState;
+use crate::code_review::git_status_update::GitStatusUpdateModel;
 use crate::code_review::GlobalCodeReviewModel;
 use crate::pane_group::WorkingDirectoriesModel;
-use crate::server::server_api::{
-    team::MockTeamClient, workspace::MockWorkspaceClient, ServerApiProvider,
-};
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::local_shell::LocalShellState;
@@ -27,20 +45,6 @@ use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ActiveSession;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::NotebookKeybindings;
-use ai::agent::action::InsertReviewComment;
-use chrono::Local;
-use lsp::LspManagerModel;
-use repo_metadata::repositories::DetectedRepositories;
-use std::path::PathBuf;
-use std::sync::Arc;
-use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warp_editor::render::model::LineCount;
-use warpui::elements::{Empty, MouseStateHandle};
-use warpui::platform::WindowStyle;
-use warpui::{App, ViewHandle};
 
 #[derive(Default)]
 struct TestView;
@@ -73,6 +77,7 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(|_| VimRegisters::new());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
     app.add_singleton_model(|_| DetectedRepositories::default());
+    app.add_singleton_model(|_| GitStatusUpdateModel::new());
     app.add_singleton_model(|_| LspManagerModel::new());
     app.add_singleton_model(|_| LocalShellState::NotLoaded);
     app.add_singleton_model(PersistedWorkspace::new_for_test);
@@ -161,7 +166,7 @@ fn create_line_comment(
         id: CommentId::new(),
         content: comment_content.to_string(),
         target: AttachedReviewCommentTarget::Line {
-            absolute_file_path: file_path.into(),
+            absolute_file_path: LocalOrRemotePath::Local(file_path.into()),
             line: EditorLineLocation::Current {
                 line_number: line_count,
                 line_range: line_count..LineCount::from(line_number + 1),
@@ -189,7 +194,7 @@ fn create_file_comment(
         id: CommentId::new(),
         content: comment_content.to_string(),
         target: AttachedReviewCommentTarget::File {
-            absolute_file_path: file_path.into(),
+            absolute_file_path: LocalOrRemotePath::Local(file_path.into()),
         },
         last_update_time: Local::now(),
         base: None,
@@ -243,6 +248,7 @@ use crate::view_components::action_button::{ActionButton, NakedTheme};
 /// Test context that holds all common test state
 struct TestContext {
     repo_path: PathBuf,
+    repo_location: LocalOrRemotePath,
     #[allow(dead_code)]
     window_id: warpui::WindowId,
     state: LoadedState,
@@ -251,26 +257,28 @@ struct TestContext {
 
 impl TestContext {
     /// Initialize common test state with a single file editor
-    fn new(app: &mut App, file_path: PathBuf, editor_content: &str) -> Self {
+    fn new(app: &mut App, file_path: impl Into<String>, editor_content: &str) -> Self {
         initialize_test_app(app);
 
         let editor = create_editor_with_content(app, editor_content);
         let repo_path = PathBuf::from("/repo");
 
         let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
-        let state = create_loaded_state_with_editors(app, window_id, vec![(file_path, editor)]);
+        let state =
+            create_loaded_state_with_editors(app, window_id, vec![(file_path.into(), editor)]);
 
         let diff_state_model = app.add_model(DiffStateModel::new_for_test);
 
         let working_directories_model = app.add_model(|_| WorkingDirectoriesModel::new());
+        let repo_key = LocalOrRemotePath::Local(repo_path.clone());
         let code_review_comment_batch =
             working_directories_model.update(app, |working_directories, ctx| {
-                working_directories.get_or_create_code_review_comments(repo_path.as_path(), ctx)
+                working_directories.get_or_create_code_review_comments(&repo_key, ctx)
             });
 
         let code_review_view = app.add_view(window_id, |ctx| {
             CodeReviewView::new(
-                Some(repo_path.clone()),
+                Some(repo_key.clone()),
                 diff_state_model,
                 code_review_comment_batch,
                 None,
@@ -279,7 +287,8 @@ impl TestContext {
         });
 
         Self {
-            repo_path,
+            repo_path: repo_path.clone(),
+            repo_location: LocalOrRemotePath::Local(repo_path),
             window_id,
             state,
             code_review_view,
@@ -292,7 +301,7 @@ impl TestContext {
 fn create_loaded_state_with_editors(
     app: &mut App,
     window_id: warpui::WindowId,
-    file_editors: Vec<(PathBuf, ViewHandle<LocalCodeEditorView>)>,
+    file_editors: Vec<(String, ViewHandle<LocalCodeEditorView>)>,
 ) -> LoadedState {
     let file_states = file_editors
         .into_iter()
@@ -339,17 +348,13 @@ fn create_loaded_state_with_editors(
 #[test]
 fn test_relocate_comments_empty_input() {
     App::test((), |mut app| async move {
-        let ctx = TestContext::new(
-            &mut app,
-            PathBuf::from("test.txt"),
-            "line 1\nline 2\nline 3",
-        );
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
             let RelocateCommentsResult {
                 comments: relocated,
                 fallback_count: fallbacks,
-            } = CodeReviewView::relocate_comments(vec![], &ctx.state, &ctx.repo_path, view_ctx);
+            } = CodeReviewView::relocate_comments(vec![], &ctx.state, &ctx.repo_location, view_ctx);
 
             assert!(
                 relocated.is_empty(),
@@ -363,11 +368,7 @@ fn test_relocate_comments_empty_input() {
 #[test]
 fn test_relocate_comments_general_comment_passes_through() {
     App::test((), |mut app| async move {
-        let ctx = TestContext::new(
-            &mut app,
-            PathBuf::from("test.txt"),
-            "line 1\nline 2\nline 3",
-        );
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         let general_comment = create_general_comment("This is a general comment");
         let original_id = general_comment.id;
@@ -379,7 +380,7 @@ fn test_relocate_comments_general_comment_passes_through() {
             } = CodeReviewView::relocate_comments(
                 vec![general_comment],
                 &ctx.state,
-                &ctx.repo_path,
+                &ctx.repo_location,
                 view_ctx,
             );
 
@@ -400,11 +401,11 @@ fn test_relocate_comments_general_comment_passes_through() {
 #[test]
 fn test_relocate_comments_file_comment_passes_through() {
     App::test((), |mut app| async move {
-        let file_path = PathBuf::from("test.txt");
-        let ctx = TestContext::new(&mut app, file_path.clone(), "line 1\nline 2\nline 3");
+        let file_path = "test.txt";
+        let ctx = TestContext::new(&mut app, file_path, "line 1\nline 2\nline 3");
 
         let file_comment =
-            create_file_comment(ctx.repo_path.join(&file_path), "This is a file comment");
+            create_file_comment(ctx.repo_path.join(file_path), "This is a file comment");
         let original_id = file_comment.id;
 
         ctx.code_review_view.update(&mut app, |_view, view_ctx| {
@@ -414,7 +415,7 @@ fn test_relocate_comments_file_comment_passes_through() {
             } = CodeReviewView::relocate_comments(
                 vec![file_comment],
                 &ctx.state,
-                &ctx.repo_path,
+                &ctx.repo_location,
                 view_ctx,
             );
 
@@ -438,11 +439,7 @@ fn test_relocate_comments_line_comment_no_matching_editor_marked_outdated() {
         let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
 
         // Editor is for "test.txt" but comment is for "other.txt"
-        let ctx = TestContext::new(
-            &mut app,
-            PathBuf::from("test.txt"),
-            "line 1\nline 2\nline 3",
-        );
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         let line_comment =
             create_line_comment("/repo/other.txt", 1, "line 1", "Comment on other file");
@@ -455,7 +452,7 @@ fn test_relocate_comments_line_comment_no_matching_editor_marked_outdated() {
             } = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
-                &ctx.repo_path,
+                &ctx.repo_location,
                 view_ctx,
             );
 
@@ -480,11 +477,11 @@ fn test_relocate_comments_line_comment_no_matching_editor_marked_outdated() {
 #[test]
 fn test_relocate_comments_multiple_comment_types() {
     App::test((), |mut app| async move {
-        let file_path = PathBuf::from("test.txt");
-        let ctx = TestContext::new(&mut app, file_path.clone(), "line 1\nline 2\nline 3");
+        let file_path = "test.txt";
+        let ctx = TestContext::new(&mut app, file_path, "line 1\nline 2\nline 3");
 
         let general_comment = create_general_comment("General comment");
-        let file_comment = create_file_comment(ctx.repo_path.join(&file_path), "File comment");
+        let file_comment = create_file_comment(ctx.repo_path.join(file_path), "File comment");
         let line_comment = create_line_comment("/repo/test.txt", 1, "line 1", "Line comment");
 
         let general_id = general_comment.id;
@@ -496,7 +493,12 @@ fn test_relocate_comments_multiple_comment_types() {
             let RelocateCommentsResult {
                 comments: relocated,
                 fallback_count: _,
-            } = CodeReviewView::relocate_comments(comments, &ctx.state, &ctx.repo_path, view_ctx);
+            } = CodeReviewView::relocate_comments(
+                comments,
+                &ctx.state,
+                &ctx.repo_location,
+                view_ctx,
+            );
 
             assert_eq!(
                 relocated.len(),
@@ -528,8 +530,7 @@ fn test_relocate_comments_multiple_comment_types() {
 #[test]
 fn test_relocate_comments_line_comment_with_absolute_path() {
     App::test((), |mut app| async move {
-        let file_path = PathBuf::from("test.txt");
-        let ctx = TestContext::new(&mut app, file_path.clone(), "line 1\nline 2\nline 3");
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         // Comment with absolute path matching the editor's file
         let line_comment = create_line_comment("/repo/test.txt", 1, "line 1", "Line comment");
@@ -542,7 +543,7 @@ fn test_relocate_comments_line_comment_with_absolute_path() {
             } = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
-                &ctx.repo_path,
+                &ctx.repo_location,
                 view_ctx,
             );
 
@@ -587,7 +588,8 @@ fn test_attach_pending_imported_comment_formats_body_and_uses_absolute_path() {
         },
     );
 
-    let attached = attach_pending_imported_comments(vec![pending], repo_path.as_path());
+    let repo_location = LocalOrRemotePath::Local(repo_path.clone());
+    let attached = attach_pending_imported_comments(vec![pending], &repo_location);
 
     assert_eq!(attached.len(), 1);
     assert_eq!(attached[0].content, "**@alice**:\nHello world");
@@ -596,7 +598,10 @@ fn test_attach_pending_imported_comment_formats_body_and_uses_absolute_path() {
         AttachedReviewCommentTarget::Line {
             absolute_file_path, ..
         } => {
-            assert_eq!(*absolute_file_path, repo_path.join("test.txt"));
+            assert_eq!(
+                *absolute_file_path,
+                LocalOrRemotePath::Local(repo_path.join("test.txt")),
+            );
         }
         _ => panic!("expected line comment target"),
     }
@@ -667,9 +672,10 @@ fn test_attach_pending_imported_thread_flattens_depth_first_sorted_by_timestamp(
 
     let latest_timestamp = reply_nested.last_update_time;
 
+    let repo_location = LocalOrRemotePath::Local(repo_path.clone());
     let attached = attach_pending_imported_comments(
         vec![reply_late, root, reply_nested, reply_early],
-        repo_path.as_path(),
+        &repo_location,
     );
 
     assert_eq!(attached.len(), 1);
@@ -683,7 +689,10 @@ fn test_attach_pending_imported_thread_flattens_depth_first_sorted_by_timestamp(
         AttachedReviewCommentTarget::Line {
             absolute_file_path, ..
         } => {
-            assert_eq!(*absolute_file_path, repo_path.join("test.txt"));
+            assert_eq!(
+                *absolute_file_path,
+                LocalOrRemotePath::Local(repo_path.join("test.txt")),
+            );
         }
         _ => panic!("expected root line target to be preserved"),
     }
@@ -695,11 +704,7 @@ fn test_relocate_comments_file_comment_no_matching_editor_marked_outdated() {
         let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
 
         // Editor is for "test.txt" but comment is for "other.txt"
-        let ctx = TestContext::new(
-            &mut app,
-            PathBuf::from("test.txt"),
-            "line 1\nline 2\nline 3",
-        );
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         let file_comment = create_file_comment("/repo/other.txt", "Comment on other file");
         let original_id = file_comment.id;
@@ -711,7 +716,7 @@ fn test_relocate_comments_file_comment_no_matching_editor_marked_outdated() {
             } = CodeReviewView::relocate_comments(
                 vec![file_comment],
                 &ctx.state,
-                &ctx.repo_path,
+                &ctx.repo_location,
                 view_ctx,
             );
 
@@ -740,8 +745,7 @@ fn test_relocate_comments_line_removed_marked_outdated() {
 
         // Editor has "line 1\nline 3" (line 2 was removed)
         // Comment was attached to "line 2" which no longer exists
-        let file_path = PathBuf::from("test.txt");
-        let ctx = TestContext::new(&mut app, file_path.clone(), "line 1\nline 3");
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 3");
 
         // Create a comment that was attached to "line 2" at line index 1
         let line_comment =
@@ -755,7 +759,7 @@ fn test_relocate_comments_line_removed_marked_outdated() {
             } = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
-                &ctx.repo_path,
+                &ctx.repo_location,
                 view_ctx,
             );
 
@@ -780,19 +784,24 @@ fn test_relocate_comments_line_removed_marked_outdated() {
 #[test]
 fn test_setup_dropdown_with_branches_includes_all_items() {
     App::test((), |mut app| async move {
-        let ctx = TestContext::new(
-            &mut app,
-            PathBuf::from("test.txt"),
-            "line 1\nline 2\nline 3",
-        );
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         // Populate branches and compute targets via the selector's build method.
         let target_count = ctx.code_review_view.update(&mut app, |view, view_ctx| {
             if let Some(repo) = view.active_repo.as_mut() {
                 repo.available_branches = vec![
-                    ("main".to_string(), true),
-                    ("feature-1".to_string(), false),
-                    ("feature-2".to_string(), false),
+                    BranchEntry {
+                        name: "main".to_string(),
+                        is_main: true,
+                    },
+                    BranchEntry {
+                        name: "feature-1".to_string(),
+                        is_main: false,
+                    },
+                    BranchEntry {
+                        name: "feature-2".to_string(),
+                        is_main: false,
+                    },
                 ];
             }
             view.build_diff_targets(view_ctx).len()
@@ -813,11 +822,7 @@ fn test_setup_dropdown_with_branches_includes_all_items() {
 #[test]
 fn test_setup_dropdown_without_branches_only_has_uncommitted_changes() {
     App::test((), |mut app| async move {
-        let ctx = TestContext::new(
-            &mut app,
-            PathBuf::from("test.txt"),
-            "line 1\nline 2\nline 3",
-        );
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         // Ensure branches are empty (simulates the bug state) and count targets.
         let target_count = ctx.code_review_view.update(&mut app, |view, view_ctx| {
@@ -837,18 +842,22 @@ fn test_setup_dropdown_without_branches_only_has_uncommitted_changes() {
 #[test]
 fn test_on_close_then_on_open_reinitializes_repo_state() {
     App::test((), |mut app| async move {
-        let ctx = TestContext::new(
-            &mut app,
-            PathBuf::from("test.txt"),
-            "line 1\nline 2\nline 3",
-        );
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
         let repo_path = ctx.repo_path.clone();
 
         // Populate branches to simulate a working state
         let target_count_before = ctx.code_review_view.update(&mut app, |view, view_ctx| {
             if let Some(repo) = view.active_repo.as_mut() {
-                repo.available_branches =
-                    vec![("main".to_string(), true), ("feature-1".to_string(), false)];
+                repo.available_branches = vec![
+                    BranchEntry {
+                        name: "main".to_string(),
+                        is_main: true,
+                    },
+                    BranchEntry {
+                        name: "feature-1".to_string(),
+                        is_main: false,
+                    },
+                ];
             }
             view.build_diff_targets(view_ctx).len()
         });
@@ -866,8 +875,8 @@ fn test_on_close_then_on_open_reinitializes_repo_state() {
 
             assert!(view.is_open, "View should be open after on_open");
             assert_eq!(
-                view.repo_path(),
-                Some(&repo_path),
+                view.repo_path().and_then(LocalOrRemotePath::to_local_path),
+                Some(repo_path.as_path()),
                 "Repo path should be preserved after on_open (set at construction)"
             );
         });
@@ -877,12 +886,11 @@ fn test_on_close_then_on_open_reinitializes_repo_state() {
 #[test]
 fn test_handle_edit_comment_scrolls_with_buffer() {
     App::test((), |mut app| async move {
-        let file_path = PathBuf::from("test.txt");
         let content = (0..100)
             .map(|i| format!("line {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let ctx = TestContext::new(&mut app, file_path.clone(), &content);
+        let ctx = TestContext::new(&mut app, "test.txt", &content);
 
         // Create a line comment targeting this file
         let line_comment = create_line_comment("/repo/test.txt", 5, "line 5", "Review comment");
@@ -930,8 +938,7 @@ fn test_active_comments_not_marked_outdated() {
     App::test((), |mut app| async move {
         let _flag_override = FeatureFlag::PRCommentsSlashCommand.override_enabled(true);
 
-        let file_path = PathBuf::from("test.txt");
-        let ctx = TestContext::new(&mut app, file_path.clone(), "line 1\nline 2\nline 3");
+        let ctx = TestContext::new(&mut app, "test.txt", "line 1\nline 2\nline 3");
 
         // Comment attached to "line 2" which exists in the editor
         let line_comment =
@@ -945,7 +952,7 @@ fn test_active_comments_not_marked_outdated() {
             } = CodeReviewView::relocate_comments(
                 vec![line_comment],
                 &ctx.state,
-                &ctx.repo_path,
+                &ctx.repo_location,
                 view_ctx,
             );
 

@@ -8,7 +8,7 @@ license.workspace = true
 
 [dependencies]
 async-channel.workspace = true
-warpui.workspace = true
+warpui_core.workspace = true
 log.workspace = true
 anyhow.workspace = true
 notify-debouncer-full.workspace = true

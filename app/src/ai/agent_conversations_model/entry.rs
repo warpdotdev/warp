@@ -1,12 +1,3 @@
-use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
-use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
-use crate::ai::conversation_navigation::ConversationNavigationData;
-use crate::auth::{AuthStateProvider, UserUid};
-use crate::workspaces::user_profiles::UserProfiles;
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
@@ -18,6 +9,17 @@ use super::{
     ConversationMetadata, CreatedOnFilter, CreatorFilter, EnvironmentFilter, HarnessFilter,
     OwnerFilter, SessionStatus, SourceFilter, StatusFilter,
 };
+use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
+use crate::ai::agent::api::ServerConversationToken;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
+use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
+use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::auth::{AuthStateProvider, UserUid};
+use crate::util::time_format::human_readable_precise_duration;
+use crate::workspace::RestoreConversationLayout;
+use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 
 const SESSION_EXPIRATION_TIME: chrono::Duration = chrono::Duration::weeks(1);
 
@@ -91,7 +93,8 @@ pub struct AgentConversationDisplayData {
     pub created_at: DateTime<Utc>,
     pub last_updated: DateTime<Utc>,
     pub status: AgentRunDisplayStatus,
-    pub creator: AgentConversationCreator,
+    pub creator: AgentConversationPrincipal,
+    pub executor: Option<AgentConversationPrincipal>,
     pub request_usage: Option<f32>,
     pub run_time: Option<String>,
     pub session_status: Option<SessionStatus>,
@@ -102,11 +105,36 @@ pub struct AgentConversationDisplayData {
     pub artifacts: Vec<Artifact>,
 }
 
-/// Creator information normalized across local conversations and ambient runs.
+/// Type of principal that created or executed a run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrincipalType {
+    User,
+    ServiceAccount,
+}
+
+impl PrincipalType {
+    /// Parse from the wire-format string sent by the server.
+    pub fn parse(s: &str) -> Option<Self> {
+        if s.eq_ignore_ascii_case("user") {
+            Some(PrincipalType::User)
+        } else if s.eq_ignore_ascii_case("service_account") || s.eq_ignore_ascii_case("agent") {
+            Some(PrincipalType::ServiceAccount)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_service_account(self) -> bool {
+        self == PrincipalType::ServiceAccount
+    }
+}
+
+/// Principal information normalized across local conversations and ambient runs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct AgentConversationCreator {
+pub struct AgentConversationPrincipal {
     pub name: Option<String>,
     pub uid: Option<String>,
+    pub principal_type: Option<PrincipalType>,
 }
 
 /// Source category that explains why an entry exists and which backing systems can refresh it.
@@ -234,6 +262,19 @@ impl AgentConversationEntry {
             HarnessFilter::Specific(harness) => self.display.harness == Some(*harness),
         }
     }
+
+    pub fn has_open_action(
+        &self,
+        restore_layout: Option<RestoreConversationLayout>,
+        app: &AppContext,
+    ) -> bool {
+        super::AgentConversationsModel::resolve_open_action(
+            AgentConversationNavigationSubject::Entry(self.id),
+            restore_layout,
+            app,
+        )
+        .is_some()
+    }
 }
 
 /// Returns the local conversation ID represented by the given task, if this task and a
@@ -302,14 +343,7 @@ fn task_session_status(task: &AmbientAgentTask) -> SessionStatus {
 }
 
 fn task_run_time(task: &AmbientAgentTask) -> Option<String> {
-    let Some(duration) = task.run_time() else {
-        return Some("Not started".to_string());
-    };
-    if duration.num_minutes() < 1 {
-        Some(format!("{} seconds", duration.num_seconds()))
-    } else {
-        Some(format!("{} minutes", duration.num_minutes()))
-    }
+    task.run_time().map(human_readable_precise_duration)
 }
 
 fn task_harness(task: &AmbientAgentTask) -> Option<Harness> {
@@ -371,6 +405,47 @@ fn conversation_artifacts(
         .unwrap_or_default()
 }
 
+fn principal_from_user_profile(profile: &UserProfileWithUID) -> AgentConversationPrincipal {
+    let name = profile
+        .display_name
+        .as_ref()
+        .filter(|name| !name.is_empty())
+        .or_else(|| (!profile.email.is_empty()).then_some(&profile.email))
+        .cloned()
+        .or_else(|| Some(profile.firebase_uid.to_string()));
+
+    AgentConversationPrincipal {
+        name,
+        uid: Some(profile.firebase_uid.to_string()),
+        principal_type: Some(PrincipalType::User),
+    }
+}
+
+fn conversation_creator(
+    metadata: &ConversationMetadata,
+    history_model: &BlocklistAIHistoryModel,
+    app: &AppContext,
+) -> AgentConversationPrincipal {
+    let server_metadata = history_model.get_server_conversation_metadata(&metadata.nav_data.id);
+    if let Some(profile) = server_metadata.and_then(|metadata| metadata.creator.as_ref()) {
+        return principal_from_user_profile(profile);
+    }
+
+    if let Some(uid) = server_metadata.and_then(|metadata| metadata.metadata.creator_uid.as_ref()) {
+        return AgentConversationPrincipal {
+            name: UserProfiles::as_ref(app).displayable_identifier_for_uid(UserUid::new(uid)),
+            uid: Some(uid.clone()),
+            principal_type: Some(PrincipalType::User),
+        };
+    }
+
+    AgentConversationPrincipal {
+        name: current_user_name(app),
+        uid: current_user_uid(app),
+        principal_type: Some(PrincipalType::User),
+    }
+}
+
 pub(super) fn entry_for_task(
     task: &AmbientAgentTask,
     history_model: &BlocklistAIHistoryModel,
@@ -418,10 +493,22 @@ pub(super) fn entry_for_task(
             created_at: task.created_at,
             last_updated: task.updated_at,
             status: status.clone(),
-            creator: AgentConversationCreator {
+            creator: AgentConversationPrincipal {
                 name: task_creator_name(task, app),
                 uid: task_creator_uid(task),
+                principal_type: task
+                    .creator
+                    .as_ref()
+                    .and_then(|c| PrincipalType::parse(&c.creator_type)),
             },
+            executor: task
+                .executor
+                .as_ref()
+                .map(|executor| AgentConversationPrincipal {
+                    name: executor.display_name.clone(),
+                    uid: Some(executor.uid.clone()),
+                    principal_type: PrincipalType::parse(&executor.creator_type),
+                }),
             request_usage: task.credits_used(),
             run_time: task_run_time(task),
             session_status: Some(task_session_status(task)),
@@ -527,10 +614,8 @@ fn entry_for_conversation_parts(
             created_at: metadata.nav_data.last_updated.into(),
             last_updated: metadata.nav_data.last_updated.into(),
             status: status.clone(),
-            creator: AgentConversationCreator {
-                name: current_user_name(app),
-                uid: current_user_uid(app),
-            },
+            creator: conversation_creator(&metadata, history_model, app),
+            executor: None,
             request_usage: conversation_request_usage(&metadata, history_model),
             run_time: None,
             session_status: None,

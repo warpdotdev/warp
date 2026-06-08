@@ -1,13 +1,15 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use fuzzy_match::match_indices_case_insensitive;
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::search::command_palette::launch_config::search_item::SearchItem;
 use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
-use fuzzy_match::match_indices_case_insensitive;
-use std::collections::HashMap;
-use std::sync::Arc;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 /// Datasource that searches against `LaunchConfig`s.
 pub struct DataSource {
@@ -64,9 +66,7 @@ impl SyncDataSource for DataSource {
             .searcher
             .search(&query.text.trim().to_lowercase())
             .map_err(|err| {
-                Box::new(DataSourceSearchError {
-                    message: err.to_string(),
-                }) as DataSourceRunErrorWrapper
+                Box::new(DataSourceSearchError::new(err.to_string())) as DataSourceRunErrorWrapper
             })?
             .into_iter()
             .map(QueryResult::from)
@@ -117,17 +117,19 @@ impl LaunchConfigSearcher for FuzzyLaunchConfigSearcher {
 
 #[cfg(not(target_family = "wasm"))]
 mod full_text_searcher {
-    use crate::define_search_schema;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use fuzzy_match::FuzzyMatchResult;
+    use warp_search_core::define_search_schema;
+    use warpui::r#async::executor::Background;
+    use warpui::{AppContext, SingletonEntity};
+
     use crate::launch_configs::launch_config::LaunchConfig;
     use crate::search::command_palette::launch_config::data_source::LaunchConfigSearcher;
     use crate::search::command_palette::launch_config::search_item::SearchItem;
     use crate::search::searcher::{AsyncSearcher, DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR};
     use crate::user_config::WarpConfig;
-    use fuzzy_match::FuzzyMatchResult;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use warpui::r#async::executor::Background;
-    use warpui::{AppContext, SingletonEntity};
 
     // The name of the launch configs are duplicated to ensure that the searcher
     // hashes the name to uniquely identify the launch config.

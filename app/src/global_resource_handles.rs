@@ -1,9 +1,12 @@
-use crate::{
-    banner::BannerState, persistence::ModelEvent, referral_theme_status::ReferralThemeStatus,
-    resource_center::TipsCompleted, settings::SettingsFileError,
-};
 use std::sync::mpsc::SyncSender;
+
 use warpui::{Entity, ModelHandle, SingletonEntity};
+
+use crate::banner::BannerState;
+use crate::persistence::ModelEvent;
+use crate::referral_theme_status::ReferralThemeStatus;
+use crate::resource_center::TipsCompleted;
+use crate::settings::SettingsFileError;
 
 /// Interfaces that allow us to interact with global resources owned by the main
 /// thread that exist throughout the app including Model handles, channel senders,

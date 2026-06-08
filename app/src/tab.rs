@@ -1,40 +1,11 @@
-use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
-use crate::appearance::Appearance;
-/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
-/// the rendering and management of tabs in general.
-use crate::editor::EditorView;
-use crate::features::FeatureFlag;
-use crate::launch_configs::launch_config::LaunchConfig;
-use crate::menu::{MenuAction, MenuItem, MenuItemFields};
-use crate::pane_group::{PaneGroup, PaneId};
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
-use settings::Setting as _;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::shared_session::render_util::shared_session_indicator_color;
-use crate::terminal::view::TerminalViewState;
-use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
-use crate::ui_components::buttons::icon_button;
-use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
-use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
-use crate::util::color::{coloru_with_opacity, Opacity};
-use crate::util::truncation::truncate_from_end;
-
-use crate::window_settings::WindowSettings;
-use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_settings::{
-    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
-};
-use crate::workspace::{
-    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
-};
-use crate::BlocklistAIHistoryModel;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use serde::{Deserialize, Serialize};
+use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::theme::color::internal_colors;
@@ -53,8 +24,41 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, SingletonEntity, ViewHandle};
 
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
+use crate::appearance::Appearance;
+/// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
+/// the rendering and management of tabs in general.
+use crate::editor::EditorView;
+use crate::features::FeatureFlag;
+use crate::launch_configs::launch_config::LaunchConfig;
+use crate::menu::{MenuAction, MenuItem, MenuItemFields};
+use crate::pane_group::{PaneGroup, PaneId};
+use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::render_util::shared_session_indicator_color;
+use crate::terminal::view::TerminalViewState;
+use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
+use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
+use crate::util::color::{coloru_with_opacity, Opacity};
+use crate::util::truncation::truncate_from_end;
+use crate::window_settings::WindowSettings;
+use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_settings::{
+    TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
+};
+use crate::workspace::{
+    PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
+};
+use crate::BlocklistAIHistoryModel;
+
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+
+/// Label for the tab right-click menu's "Move to group" submenu parent.
+pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
 /// Exposed so binding-description overrides in `workspace/mod.rs` and context-
@@ -117,6 +121,8 @@ pub enum NewSessionMenuItem {
     OpenLaunchConfig(LaunchConfig),
     OpenLaunchConfigDocs,
     CreateNewTabConfig,
+    /// Creates a new tab group. Gated by `FeatureFlag::GroupedTabs`.
+    CreateNewTabGroup,
 }
 
 #[derive(Clone, Copy)]
@@ -146,6 +152,11 @@ pub struct TabData {
     pub indicator_hover_state: MouseStateHandle,
     // Used by a later drag-tab branch to distinguish tabs that have moved into detached windows.
     pub detached: bool,
+    /// Tab group this tab belongs to, if any
+    pub group_id: Option<TabGroupId>,
+    /// True while this tab is in the active multi-selection (shift-click range
+    /// or cmd-click toggle).
+    pub in_multi_selection: bool,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
@@ -163,6 +174,8 @@ impl TabData {
             selected_color: SelectedTabColor::Unset,
             indicator_hover_state: Default::default(),
             detached: false,
+            group_id: None,
+            in_multi_selection: false,
         }
     }
 
@@ -176,15 +189,17 @@ impl TabData {
         &self,
         index: usize,
         tabs_len: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
-        self.menu_items_with_pane_name_target(index, tabs_len, None, ctx)
+        self.menu_items_with_pane_name_target(index, tabs_len, tab_groups, None, ctx)
     }
 
     pub fn menu_items_with_pane_name_target(
         &self,
         index: usize,
         tabs_len: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
         pane_name_target: Option<PaneNameMenuTarget>,
         ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
@@ -193,6 +208,7 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
+            self.tab_group_menu_items(index, tab_groups),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, tabs_len, pane_name_target, ctx),
@@ -528,6 +544,39 @@ impl TabData {
             .into_item()]
     }
 
+    /// Returns the tab-group entries for the top-level right-click menu:
+    /// `New group with tab` (always available when the FF is on),
+    /// `Move to group` (when at least one other group exists), and
+    /// `Remove from group` (only when the tab is currently in a group).
+    ///
+    /// The `Move to group` item is a submenu parent — selecting/hovering it
+    /// opens a sidecar populated by the workspace; it has no
+    /// `on_select_action` of its own.
+    fn tab_group_menu_items(
+        &self,
+        index: usize,
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
+    ) -> Vec<MenuItem<WorkspaceAction>> {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return vec![];
+        }
+        let mut menu_items = vec![MenuItemFields::new("New group with tab")
+            .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+            .into_item()];
+        let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != self.group_id);
+        if has_other_groups {
+            menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
+        }
+        if self.group_id.is_some() {
+            menu_items.push(
+                MenuItemFields::new("Remove from group")
+                    .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
+                    .into_item(),
+            );
+        }
+        menu_items
+    }
+
     fn color_option_menu_items(
         &self,
         index: usize,
@@ -719,6 +768,16 @@ pub struct TabComponent<'a> {
     ///     flicker), and
     ///   * does not act as its own draggable / drop target.
     for_drag_ghost: bool,
+    /// Set when rendered as a member of a horizontal tab group.
+    grouped_member: bool,
+    /// Set when this member is the sole tab in its group.
+    sole_grouped_member: bool,
+    /// Locator pointing at this tab's focused pane.
+    locator: PaneViewLocator,
+    /// True when this tab is part of a multi-tab (count > 1) selection. Drives
+    /// both the in-selection highlight and the right-click menu dispatch
+    /// (multi-tab menu vs single-tab menu).
+    is_in_multi_tab_selection: bool,
 }
 
 /// Structure that holds TabComponent styles.
@@ -790,14 +849,19 @@ impl<'a> TabComponent<'a> {
         let active_pane_is_ambient_agent_session = tab
             .pane_group
             .as_ref(ctx)
-            .active_session_terminal_model(ctx)
-            .map(|model| {
-                let model = model.lock();
-                model.is_shared_ambient_agent_session()
-                    || matches!(
-                        model.conversation_transcript_viewer_status(),
-                        Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(_))
-                    )
+            .active_session_view(ctx)
+            .map(|view| {
+                let view = view.as_ref(ctx);
+                view.is_ambient_agent_session(ctx) || {
+                    let model = view.model.lock();
+                    model.is_shared_ambient_agent_session()
+                        || matches!(
+                            model.conversation_transcript_viewer_status(),
+                            Some(
+                                crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus::ViewingAmbientConversation(_)
+                            )
+                        )
+                }
             })
             .unwrap_or(false);
         let active_pane_has_unsaved_code_changes = tab
@@ -856,6 +920,12 @@ impl<'a> TabComponent<'a> {
             .background_opacity
             .effective_opacity(window_id, ctx)
             .clamp(20, 100);
+        let pane_group_id = tab.pane_group.id();
+        let pane_id = tab.pane_group.as_ref(ctx).focused_pane_id(ctx);
+        let locator = PaneViewLocator {
+            pane_group_id,
+            pane_id,
+        };
         Self {
             tab: tab.clone(),
             tab_bar,
@@ -874,6 +944,10 @@ impl<'a> TabComponent<'a> {
             is_drag_target,
             background_opacity,
             for_drag_ghost: false,
+            grouped_member: false,
+            sole_grouped_member: false,
+            locator,
+            is_in_multi_tab_selection: false,
         }
     }
 
@@ -881,6 +955,24 @@ impl<'a> TabComponent<'a> {
     /// cross-window tab drag overlay. See [`TabComponent::for_drag_ghost`].
     pub fn for_drag_ghost(mut self) -> Self {
         self.for_drag_ghost = true;
+        self
+    }
+
+    /// Marks this tab as a member of a horizontal tab group. See the
+    /// [`TabComponent`] `grouped_member` field for the rendering differences.
+    /// Pass `is_sole_member = true` when this is the only tab in its group so
+    /// the per-tab `Draggable` is suppressed and the parent group drag fires.
+    pub fn for_grouped_member(mut self, is_sole_member: bool) -> Self {
+        self.grouped_member = true;
+        self.sole_grouped_member = is_sole_member;
+        self
+    }
+
+    /// Marks this tab as part of a multi-tab selection (count > 1). When set,
+    /// the tab renders with the in-selection highlight and right-clicks
+    /// dispatch the multi-tab selection menu instead of the single-tab menu.
+    pub fn with_multi_tab_selection(mut self, is_in_multi_tab_selection: bool) -> Self {
+        self.is_in_multi_tab_selection = is_in_multi_tab_selection;
         self
     }
 
@@ -1320,11 +1412,12 @@ impl<'a> TabComponent<'a> {
     ) -> Box<dyn Element> {
         let theme = self.appearance.theme();
         let is_active = self.is_active_tab();
+        let is_in_multi_tab_selection = self.is_in_multi_tab_selection;
 
         let (background_color, border_fill) = if FeatureFlag::NewTabStyling.is_enabled() {
             // If there is a custom tab background, we overlay it with varying opacities.
             let bg = if let Some(custom_background) = self.styles.background {
-                let base_opacity = if is_active {
+                let base_opacity = if is_active || is_in_multi_tab_selection {
                     60
                 } else if is_hovered {
                     40
@@ -1343,7 +1436,11 @@ impl<'a> TabComponent<'a> {
                 }
             } else if is_active {
                 internal_colors::fg_overlay_2(theme).into()
-            } else if is_hovered {
+            } else if is_in_multi_tab_selection && is_hovered {
+                // Hovering a multi-selected tab steps one shade darker so the
+                // hover stays distinguishable from the in-selection highlight.
+                internal_colors::fg_overlay_2(theme).into()
+            } else if is_in_multi_tab_selection || is_hovered {
                 internal_colors::fg_overlay_1(theme).into()
             } else {
                 Fill::None
@@ -1402,9 +1499,13 @@ impl<'a> TabComponent<'a> {
                 )
                 .finish(),
             );
-            Container::new(flex_row.finish())
-                .with_horizontal_padding(8.)
-                .finish()
+            let mut container = Container::new(flex_row.finish()).with_horizontal_padding(8.);
+            // Pad inside the Stack so the close-button overlay (anchored to
+            // the Stack) stays vertically centered within the visible pill.
+            if self.grouped_member {
+                container = container.with_vertical_padding(5.);
+            }
+            container.finish()
         };
 
         let compact_icon = {
@@ -1541,6 +1642,19 @@ impl<'a> TabComponent<'a> {
         )
         .finish();
 
+        // Grouped member: inset rounded highlight, no side dividers, no
+        // drop target (members can't be dragged currently).
+        if self.grouped_member {
+            let highlight = Container::new(stack)
+                .with_background(background_color)
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.0)))
+                .finish();
+            return Container::new(highlight)
+                .with_vertical_padding(3.)
+                .with_horizontal_padding(3.)
+                .finish();
+        }
+
         let mut tab = Container::new(stack)
             .with_vertical_padding(2.)
             .with_background(background_color);
@@ -1607,6 +1721,9 @@ impl UiComponent for TabComponent<'_> {
         let mouse_close_state = self.tab.close_mouse_state.clone();
         // Capture before `self` is moved into the Hoverable closure below.
         let for_drag_ghost = self.for_drag_ghost;
+        let sole_grouped_member = self.sole_grouped_member;
+        let locator = self.locator;
+        let is_in_multi_tab_selection = self.is_in_multi_tab_selection;
 
         // Extract values before moving self into closure
         let tooltip_text = self.tooltip_message.clone();
@@ -1744,17 +1861,25 @@ impl UiComponent for TabComponent<'_> {
             .with_hover_in_delay(Duration::from_millis(500));
         }
 
-        // Copy the values so they can be passed within the on_click and on_right_click handlers
-
         // We only want the on_click action to take effect on the tab, if it's not being renamed at a moment.
         // Note that clicking on other tabs is still ok.
         if !is_tab_being_renamed {
-            tab = tab.on_mouse_down(move |ctx, _app, _| {
-                let is_hovered = mouse_close_state
+            // Modifier-aware mouse-down: shift extends the selection range,
+            // cmd toggles a tab in/out of the selection, plain press
+            // activates.
+            tab = tab.on_mouse_down_with_modifiers(move |ctx, _, _, modifiers| {
+                let close_hovered = mouse_close_state
                     .lock()
                     .expect("lock acquired")
                     .is_hovered();
-                if !is_hovered {
+                if close_hovered {
+                    return;
+                }
+                if modifiers.shift && FeatureFlag::GroupedTabs.is_enabled() {
+                    ctx.dispatch_typed_action(WorkspaceAction::ShiftSelectTabRange { locator });
+                } else if modifiers.cmd && FeatureFlag::GroupedTabs.is_enabled() {
+                    ctx.dispatch_typed_action(WorkspaceAction::ToggleTabMultiSelection { locator });
+                } else {
                     ctx.dispatch_typed_action(WorkspaceAction::ActivateTab(tab_index));
                 }
             });
@@ -1765,12 +1890,23 @@ impl UiComponent for TabComponent<'_> {
         }
 
         tab = tab.on_right_click(move |ctx, _app, position| {
-            ctx.dispatch_typed_action(WorkspaceAction::ToggleTabRightClickMenu {
-                tab_index,
-                anchor: TabContextMenuAnchor::Pointer(position),
-            });
+            let anchor = TabContextMenuAnchor::Pointer(position);
+            if is_in_multi_tab_selection {
+                ctx.dispatch_typed_action(WorkspaceAction::ToggleTabSelectionRightClickMenu {
+                    tab_index,
+                    anchor,
+                });
+            } else {
+                // Right-clicking outside the multi-selection cancels it.
+                if FeatureFlag::GroupedTabs.is_enabled() {
+                    ctx.dispatch_typed_action(WorkspaceAction::ClearTabMultiSelection);
+                }
+                ctx.dispatch_typed_action(WorkspaceAction::ToggleTabRightClickMenu {
+                    tab_index,
+                    anchor,
+                });
+            }
         });
-
         if ContextFlag::CloseWindow.is_enabled() || !is_last_tab {
             tab = tab.on_middle_click(move |ctx, _app, _position| {
                 ctx.dispatch_typed_action(WorkspaceAction::CloseTab(tab_index));
@@ -1799,7 +1935,17 @@ impl UiComponent for TabComponent<'_> {
         // position cache, breaking `tab_insertion_index_for_cursor`.
         let full_tab: Box<dyn Element> = if for_drag_ghost {
             constrained_tab
+        } else if sole_grouped_member {
+            // Sole member of a group: skip the per-tab `Draggable` so the
+            // parent group's `Draggable` picks up the drag instead. Dragging
+            // the only member of a group drags the entire group, preventing
+            // accidental orphaning. Keep `SavePosition` so hit-testing /
+            // neighbor-rect math still works.
+            SavePosition::new(constrained_tab, &tab_position_id(tab_index)).finish()
         } else {
+            // Grouped members use the same `Draggable` wrapper as regular tabs
+            // so dragging fires `DragTab`; the workspace's `on_tab_drag`
+            // handles cross-group reassignment.
             let draggable = Draggable::new(draggable_state, constrained_tab)
                 .on_drag_start(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::StartTabDrag))
                 .on_drag(move |ctx, _, rect, _| {
@@ -1817,7 +1963,6 @@ impl UiComponent for TabComponent<'_> {
             let tab_with_drag: Box<dyn Element> = draggable.finish();
             SavePosition::new(tab_with_drag, &tab_position_id(tab_index)).finish()
         };
-
         if FeatureFlag::NewTabStyling.is_enabled() {
             Shrinkable::new(1.0, full_tab)
         } else {

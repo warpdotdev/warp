@@ -1,36 +1,31 @@
-use crate::{
-    drive::{cloud_object_styling::warp_drive_icon_color, DriveObjectType},
-    notebooks::post_process_notebook,
-    workflows::{
-        export_workflow::export_deserialize, workflow::Workflow, workflow_enum::WorkflowEnum,
-    },
-};
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::ops::{Add, AddAssign, SubAssign};
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use async_recursion::async_recursion;
 use futures_lite::StreamExt;
 use pathfinder_color::ColorU;
-use std::{
-    collections::HashMap,
-    ffi::OsStr,
-    ops::{Add, AddAssign, SubAssign},
-    path::{Path, PathBuf},
+use warpui::elements::{
+    Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
+    MouseStateHandle, ParentElement, Radius, Shrinkable,
 };
-use warpui::{
-    elements::{
-        Align, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-        MouseStateHandle, ParentElement, Radius, Shrinkable,
-    },
-    platform::Cursor,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    Element,
-};
-
-use crate::{
-    appearance::Appearance, notebooks::file::is_markdown_file, server::ids::ClientId,
-    themes::theme::Fill, ui_components::icons::Icon,
-};
+use warpui::platform::Cursor;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::Element;
 
 use super::modal_body::{ImportModalBodyAction, BASE_INDENT, IMPORT_FONT_SIZE, INDENT_MARGIN};
+use crate::appearance::Appearance;
+use crate::drive::cloud_object_styling::warp_drive_icon_color;
+use crate::drive::DriveObjectType;
+use crate::notebooks::file::is_markdown_file;
+use crate::server::ids::ClientId;
+use crate::themes::theme::Fill;
+use crate::ui_components::icons::Icon;
+use crate::workflows::export_workflow::export_deserialize;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::workflow_enum::WorkflowEnum;
 
 #[cfg(test)]
 #[path = "node_tests.rs"]
@@ -897,9 +892,7 @@ impl FileUploadState {
 
 pub(super) async fn parse_file(path: PathBuf, file_type: FileType) -> Result<FileContent> {
     match file_type {
-        FileType::Notebook => Ok(FileContent::Notebook(post_process_notebook(
-            &async_fs::read_to_string(path).await?,
-        ))),
+        FileType::Notebook => Ok(FileContent::Notebook(async_fs::read_to_string(path).await?)),
         FileType::Workflow => {
             let file = async_fs::read(path).await?;
             let mut workflow_enums: HashMap<ClientId, WorkflowEnum> = HashMap::new();
