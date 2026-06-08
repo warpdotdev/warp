@@ -661,6 +661,7 @@ default = [
     "handoff_local_cloud",
     "run_agents_tool",
     "orchestration_viewer_streamer",
+    "owner_orchestration_ancestor_streamer",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
