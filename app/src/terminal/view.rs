@@ -670,6 +670,7 @@ pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
     "https://docs.warp.dev/terminal/more-features/notifications#troubleshooting-notifications";
 
 const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
+const FIND_RERUN_DEBOUNCE_PERIOD: Duration = Duration::from_millis(100);
 
 /// Key used in user defaults to save whether the user has seen the banner.
 pub const ALIAS_EXPANSION_BANNER_SEEN_KEY: &str = "AliasExpansionBannerSeen";
@@ -2344,6 +2345,12 @@ struct TerminalViewMouseStates {
     breadcrumbs_horizontal_scroll: ClippedScrollStateHandle,
 }
 
+struct PendingFindRerun {
+    generation: u64,
+    force_full_rescan: bool,
+    abort_handle: SpawnedFutureHandle,
+}
+
 /// Where content was routed when sent to a CLI agent.
 /// Returned by [`TerminalView::try_send_text_to_cli_agent_or_rich_input`]
 /// so callers can report the correct telemetry destination without a
@@ -2727,6 +2734,8 @@ pub struct TerminalView {
     input_hoverable_handle: MouseStateHandle,
 
     find_model: ModelHandle<TerminalFindModel>,
+    pending_find_rerun: Option<PendingFindRerun>,
+    find_rerun_generation: u64,
 
     warpify_state: WarpifyState,
 
@@ -4278,6 +4287,8 @@ impl TerminalView {
             input_position_id,
             input_hoverable_handle: Default::default(),
             find_model,
+            pending_find_rerun: None,
+            find_rerun_generation: 0,
             warpify_state: Default::default(),
             cancel_command_keystroke: keybinding_name_to_keystroke(CANCEL_COMMAND_KEYBINDING, ctx),
             is_file_drop_target: false,
@@ -9012,15 +9023,73 @@ impl TerminalView {
         }
     }
 
+    fn has_active_find_query(&self, ctx: &AppContext) -> bool {
+        self.find_model.as_ref(ctx).is_find_bar_open()
+            && self
+                .find_model
+                .as_ref(ctx)
+                .active_find_options()
+                .and_then(|options| options.query.as_ref())
+                .is_some_and(|query| !query.trim().is_empty())
+    }
+
+    fn bump_find_rerun_generation(&mut self) {
+        self.find_rerun_generation = self.find_rerun_generation.wrapping_add(1);
+        if let Some(pending) = self.pending_find_rerun.take() {
+            pending.abort_handle.abort();
+        }
+    }
+
+    fn schedule_find_rerun(&mut self, force_full_rescan: bool, ctx: &mut ViewContext<Self>) {
+        if !self.has_active_find_query(ctx) {
+            return;
+        }
+
+        let generation = self.find_rerun_generation;
+        let force_full_rescan = force_full_rescan
+            || self
+                .pending_find_rerun
+                .as_ref()
+                .is_some_and(|pending| pending.force_full_rescan);
+
+        if let Some(pending) = self.pending_find_rerun.take() {
+            pending.abort_handle.abort();
+        }
+
+        let abort_handle = ctx.spawn_abortable(
+            Timer::after(FIND_RERUN_DEBOUNCE_PERIOD),
+            move |me, _, ctx| {
+                let Some(pending) = me.pending_find_rerun.take() else {
+                    return;
+                };
+
+                if pending.generation != generation
+                    || me.find_rerun_generation != generation
+                    || !me.has_active_find_query(ctx)
+                {
+                    return;
+                }
+
+                me.find_model.update(ctx, |find_model, ctx| {
+                    find_model.rerun_find_on_active_grid(pending.force_full_rescan, ctx);
+                });
+            },
+            |_, _| (),
+        );
+
+        self.pending_find_rerun = Some(PendingFindRerun {
+            generation,
+            force_full_rescan,
+            abort_handle,
+        });
+    }
+
     /// This function is invoked every time there is some form of view event
     /// such as a state change or terminal wakeup to update the view context.
     fn handle_terminal_wakeup(&mut self, _: (), ctx: &mut ViewContext<Self>) {
-        // If find bar is active, we update the matches for the last/active block or the alt screen.
-        if self.find_model.as_ref(ctx).is_find_bar_open() {
-            self.find_model.update(ctx, |find_model, ctx| {
-                find_model.rerun_find_on_active_grid(ctx);
-            });
-        }
+        // If find bar is active, schedule a coalesced rerun instead of synchronously
+        // rescanning on every wakeup.
+        self.schedule_find_rerun(false, ctx);
 
         // For simplicity, we simply rescan the entire block for block filter matches.
         self.model
@@ -15990,9 +16059,7 @@ impl TerminalView {
 
         // Update model with new size info.
         self.model.lock().resize(size_update);
-        self.find_model.update(ctx, |find_model, ctx| {
-            find_model.rerun_find_on_active_grid(ctx);
-        });
+        self.schedule_find_rerun(true, ctx);
         // Resizing the model already clears selected text, but
         // we also need to clear selections in any rich content blocks (e.g. AI blocks).
         if size_update.rows_or_columns_changed() {
@@ -19378,6 +19445,7 @@ impl TerminalView {
     }
 
     fn close_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
+        self.bump_find_rerun_generation();
         self.find_model.update(ctx, |find_model, ctx| {
             find_model.set_is_find_bar_open(false);
             // Notify rich-content child views (e.g. AI blocks) to repaint and
@@ -19386,11 +19454,9 @@ impl TerminalView {
             // separate child views that won't repaint on their own when the
             // find bar closes.
             //
-            // Uses `clear_rich_content_matches` (rich-content only) rather
-            // than the broader `clear_matches`: on the async-find path the
-            // latter drops `current_find_options`, breaking `open_find_bar`'s
-            // restore-previous-query path (it reads `active_find_options`).
-            find_model.clear_rich_content_matches(ctx);
+            // Cancel active work but preserve the previous find options so
+            // `open_find_bar` can restore the query.
+            find_model.cancel_active_scan_preserve_options(ctx);
         });
         ctx.notify();
     }
@@ -19399,7 +19465,7 @@ impl TerminalView {
         if self.find_model.as_ref(ctx).is_find_bar_open()
             && !self.model.lock().is_alt_screen_active()
         {
-            let mut find_options = self
+            let find_options = self
                 .find_model
                 .as_ref(ctx)
                 .active_find_options()
@@ -19415,20 +19481,22 @@ impl TerminalView {
             if find_options.blocks_to_include_in_results.as_ref()
                 != new_blocks_to_include_in_results.as_ref()
             {
-                self.find_bar.update(ctx, |view, ctx| {
-                    if new_blocks_to_include_in_results.is_none() {
-                        // If there aren't any selected blocks, turn off find in block
+                let find_options = find_options
+                    .with_blocks_to_include_in_results(new_blocks_to_include_in_results.clone());
+
+                if new_blocks_to_include_in_results.is_none() {
+                    self.find_bar.update(ctx, |view, ctx| {
+                        // If there aren't any selected blocks, turn off find in block.
                         view.display_find_within_block = FindWithinBlockState::Disabled;
-                    }
-
-                    find_options = find_options
-                        .with_blocks_to_include_in_results(new_blocks_to_include_in_results);
-
-                    self.find_model.update(ctx, |find_model, ctx| {
-                        find_model.run_find(find_options, ctx)
+                        ctx.notify();
                     });
-                    ctx.notify();
+                }
+
+                self.bump_find_rerun_generation();
+                self.find_model.update(ctx, |find_model, ctx| {
+                    find_model.run_find(find_options, ctx)
                 });
+                ctx.notify();
             }
         }
     }
@@ -19451,6 +19519,7 @@ impl TerminalView {
     /// Note that the meaning of "first" varies depending on whether the block list is inverted
     /// or not.
     fn run_find(&mut self, mut options: FindOptions, ctx: &mut ViewContext<Self>) {
+        self.bump_find_rerun_generation();
         let blocks_to_include_in_results = matches!(
             self.find_bar.as_ref(ctx).display_find_within_block,
             FindWithinBlockState::Enabled

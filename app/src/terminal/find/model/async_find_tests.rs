@@ -253,6 +253,71 @@ fn test_async_find_cancellation() {
 }
 
 #[test]
+fn test_cancel_active_scan_preserves_find_options_but_clears_active_find() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let mut mock_terminal_model = TerminalModel::mock(None, None);
+        mock_terminal_model.simulate_block("cmd1", "needle\r\n");
+
+        let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
+        let test_model = app.add_model(|ctx| {
+            let mut model = TerminalFindModel::new(terminal_model.clone(), ctx);
+            if model.async_find_controller.is_none() {
+                model.async_find_controller =
+                    Some(AsyncFindController::new(terminal_model.clone()));
+            }
+            model
+        });
+
+        let options = FindOptions {
+            query: Some("needle".to_owned().into()),
+            is_regex_enabled: false,
+            is_case_sensitive: false,
+            ..Default::default()
+        };
+
+        test_model.update(&mut app, |model, ctx| {
+            model.async_find_controller.as_mut().unwrap().start_find(
+                &options,
+                BlockSortDirection::MostRecentLast,
+                ctx,
+            );
+        });
+
+        test_model.update(&mut app, |model, ctx| {
+            model
+                .async_find_controller
+                .as_mut()
+                .unwrap()
+                .cancel_active_scan_preserve_options(ctx);
+        });
+
+        let (has_active_find, saved_query, status) = test_model.update(&mut app, |model, _ctx| {
+            let controller = model.async_find_controller.as_ref().unwrap();
+            (
+                controller.has_active_find(),
+                controller
+                    .find_options()
+                    .and_then(|opts| opts.query.clone()),
+                controller.status().clone(),
+            )
+        });
+
+        assert!(
+            !has_active_find,
+            "closing find should clear active config so wakeup reruns stop"
+        );
+        assert_eq!(
+            saved_query,
+            Some("needle".to_owned().into()),
+            "closing find should preserve saved options for query restore"
+        );
+        assert_eq!(status, AsyncFindStatus::Idle);
+    });
+}
+
+#[test]
 fn test_message_processing_updates_state() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

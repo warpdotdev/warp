@@ -70,7 +70,11 @@ async fn run_find_task_loop(
     };
 
     while let Ok((item, queue_drained)) = queue.pop().await {
-        match item {
+        if result_tx.is_closed() {
+            return;
+        }
+
+        let should_continue = match item {
             FindWorkItem::FullBlock { block_index } => {
                 scan_terminal_block_chunked(
                     block_index,
@@ -79,7 +83,7 @@ async fn run_find_task_loop(
                     &result_tx,
                     config.block_sort_direction,
                 )
-                .await;
+                .await
             }
             FindWorkItem::DirtyRange {
                 block_index,
@@ -99,27 +103,32 @@ async fn run_find_task_loop(
                     &dfas,
                     &result_tx,
                 )
-                .await;
+                .await
             }
             FindWorkItem::AIBlock {
                 view_id,
                 total_index,
             } => {
                 // Forward to main thread for execution.
-                let _ = result_tx
+                result_tx
                     .send(FindTaskMessage::ScanAIBlock {
                         view_id,
                         total_index,
                     })
-                    .await;
+                    .await
+                    .is_ok()
             }
+        };
+
+        if !should_continue || result_tx.is_closed() {
+            return;
         }
 
         // The emptiness flag is checked atomically with the pop inside
         // the queue lock, avoiding the TOCTOU race of a separate
         // `is_empty()` call.
-        if queue_drained {
-            let _ = result_tx.send(FindTaskMessage::Done).await;
+        if queue_drained && result_tx.send(FindTaskMessage::Done).await.is_err() {
+            return;
         }
     }
 }
@@ -131,7 +140,7 @@ async fn scan_terminal_block_chunked(
     dfas: &RegexDFAs,
     result_tx: &async_channel::Sender<FindTaskMessage>,
     block_sort_direction: crate::terminal::model::terminal_model::BlockSortDirection,
-) {
+) -> bool {
     // Determine grid order based on sort direction.
     let grid_order = match block_sort_direction {
         crate::terminal::model::terminal_model::BlockSortDirection::MostRecentFirst => {
@@ -143,7 +152,7 @@ async fn scan_terminal_block_chunked(
     };
 
     for &grid_type in grid_order {
-        scan_grid_chunked(
+        if !scan_grid_chunked(
             block_index,
             grid_type,
             0,
@@ -153,8 +162,12 @@ async fn scan_terminal_block_chunked(
             dfas,
             result_tx,
         )
-        .await;
+        .await
+        {
+            return false;
+        }
     }
+    true
 }
 
 /// Controls how each chunk's matches are sent to the main thread.
@@ -191,23 +204,27 @@ async fn scan_grid_chunked(
     terminal_model: &Arc<FairMutex<TerminalModel>>,
     dfas: &RegexDFAs,
     result_tx: &async_channel::Sender<FindTaskMessage>,
-) {
+) -> bool {
     let mut current_row = start_row;
 
     loop {
+        if result_tx.is_closed() {
+            return false;
+        }
+
         let chunk_result = {
             let lock_start = Instant::now();
             let model = terminal_model.lock();
 
             let Some(block) = model.block_list().block_at(block_index) else {
                 // Block no longer exists.
-                return;
+                return true;
             };
 
             let grid = match grid_type {
                 GridType::Output => block.output_grid(),
                 GridType::PromptAndCommand => block.prompt_and_command_grid(),
-                _ => return,
+                _ => return true,
             };
 
             let grid_handler = grid.grid_handler();
@@ -215,7 +232,7 @@ async fn scan_grid_chunked(
             let effective_end = end_row.unwrap_or(total_rows).min(total_rows);
 
             if current_row >= effective_end {
-                return;
+                return true;
             }
 
             let chunk_end = (current_row + ROWS_PER_CHUNK).min(effective_end);
@@ -239,13 +256,17 @@ async fn scan_grid_chunked(
         match &mode {
             ScanResultMode::FullBlock => {
                 if !matches.is_empty() {
-                    let _ = result_tx
+                    if result_tx
                         .send(FindTaskMessage::BlockGridMatches {
                             block_index,
                             grid_type,
                             matches,
                         })
-                        .await;
+                        .await
+                        .is_err()
+                    {
+                        return false;
+                    }
                 }
             }
             ScanResultMode::DirtyRange {
@@ -253,14 +274,18 @@ async fn scan_grid_chunked(
             } => {
                 let absolute_start = current_row as u64 + num_lines_truncated;
                 let absolute_end = (chunk_end - 1) as u64 + num_lines_truncated;
-                let _ = result_tx
+                if result_tx
                     .send(FindTaskMessage::DirtyRangeMatches {
                         block_index,
                         grid_type,
                         dirty_range: absolute_start..=absolute_end,
                         matches,
                     })
-                    .await;
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
             }
         }
 
@@ -270,11 +295,18 @@ async fn scan_grid_chunked(
 
         current_row = chunk_end;
 
-        // Yield to let other tasks run if we held the lock for a while.
-        if elapsed.as_millis() > MAX_LOCK_DURATION_MS as u128 / 2 {
-            yield_now().await;
+        // Always yield between chunks so cancellation and UI work are cooperative
+        // even when each individual chunk is fast.
+        if elapsed.as_millis() > MAX_LOCK_DURATION_MS as u128 {
+            log::trace!(
+                "[async_find] chunk held terminal model lock for {}ms",
+                elapsed.as_millis()
+            );
         }
+        yield_now().await;
     }
+
+    true
 }
 
 /// Scans a range of rows in a grid for matches.

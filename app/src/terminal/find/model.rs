@@ -444,8 +444,19 @@ impl TerminalFindModel {
 
     /// Reruns find with the same options applied to the current run, to be called if terminal
     /// contents have changed since the last find run.
-    pub fn rerun_find_on_active_grid(&mut self, ctx: &mut ModelContext<Self>) {
+    ///
+    /// `force_full_rescan` should be used for resize/reflow/query-option changes where content
+    /// coordinates may have changed even if no terminal rows are marked dirty. Wakeups from
+    /// normal output should pass `false` so unchanged grids can skip expensive sync rescans.
+    pub fn rerun_find_on_active_grid(
+        &mut self,
+        force_full_rescan: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if self.terminal_model.lock().is_alt_screen_active() {
+            if !force_full_rescan && !self.is_find_bar_open {
+                return;
+            }
             if let Some(old_find_state) = self.alt_screen_find_run.take() {
                 self.alt_screen_find_run =
                     Some(old_find_state.rerun(self.terminal_model.lock().alt_screen()));
@@ -467,45 +478,79 @@ impl TerminalFindModel {
             let mut model = self.terminal_model.lock();
             let active_block_index = model.block_list().active_block_index();
 
-            // Consume dirty ranges from both grids. We need mutable access
-            // because take_find_dirty_rows_range is destructive.
-            let active_block = model.block_list_mut().active_block_mut();
-            let output_dirty_info =
-                active_block
-                    .grid_of_type_mut(GridType::Output)
+            let (output_dirty_info, command_dirty_info) = if force_full_rescan {
+                (None, None)
+            } else {
+                // Consume dirty ranges from both grids. We need mutable access
+                // because take_find_dirty_rows_range is destructive.
+                let active_block = model.block_list_mut().active_block_mut();
+                let output_dirty_info =
+                    active_block
+                        .grid_of_type_mut(GridType::Output)
+                        .and_then(|grid| {
+                            let dirty = grid.grid_handler_mut().take_find_dirty_rows_range()?;
+                            let truncated = grid.grid_handler().num_lines_truncated();
+                            Some((dirty, GridType::Output, truncated))
+                        });
+                let command_dirty_info = active_block
+                    .grid_of_type_mut(GridType::PromptAndCommand)
                     .and_then(|grid| {
                         let dirty = grid.grid_handler_mut().take_find_dirty_rows_range()?;
                         let truncated = grid.grid_handler().num_lines_truncated();
-                        Some((dirty, GridType::Output, truncated))
+                        Some((dirty, GridType::PromptAndCommand, truncated))
                     });
-            let command_dirty_info = active_block
-                .grid_of_type_mut(GridType::PromptAndCommand)
-                .and_then(|grid| {
-                    let dirty = grid.grid_handler_mut().take_find_dirty_rows_range()?;
-                    let truncated = grid.grid_handler().num_lines_truncated();
-                    Some((dirty, GridType::PromptAndCommand, truncated))
-                });
+                (output_dirty_info, command_dirty_info)
+            };
 
             // Drop the model lock before emitting events.
             drop(model);
 
-            self.invalidate_async_find_block(active_block_index, output_dirty_info, ctx);
-            if let Some(info) = command_dirty_info {
-                self.invalidate_async_find_block(active_block_index, Some(info), ctx);
+            if force_full_rescan {
+                self.invalidate_async_find_block(active_block_index, None, ctx);
+            } else {
+                if output_dirty_info.is_none() && command_dirty_info.is_none() {
+                    return;
+                }
+                self.invalidate_async_find_block(active_block_index, output_dirty_info, ctx);
+                if let Some(info) = command_dirty_info {
+                    self.invalidate_async_find_block(active_block_index, Some(info), ctx);
+                }
             }
             return;
         }
 
         // Sync find path.
-        // Find the last block index. This is the only block whose state may change.
-        let last_block_index = self
-            .terminal_model
-            .lock()
-            .block_list()
-            .last_non_hidden_block_by_index()
-            .unwrap_or_default();
+        let (last_block_index, should_rerun) = {
+            let mut model = self.terminal_model.lock();
+            let last_block_index = model
+                .block_list()
+                .last_non_hidden_block_by_index()
+                .unwrap_or_default();
 
-        // Call find on the the last block's command and output grids.
+            let has_dirty_rows = model
+                .block_list_mut()
+                .block_at_mut(last_block_index)
+                .map(|block| {
+                    let output_dirty = block
+                        .grid_of_type_mut(GridType::Output)
+                        .and_then(|grid| grid.grid_handler_mut().take_find_dirty_rows_range())
+                        .is_some();
+                    let command_dirty = block
+                        .grid_of_type_mut(GridType::PromptAndCommand)
+                        .and_then(|grid| grid.grid_handler_mut().take_find_dirty_rows_range())
+                        .is_some();
+                    output_dirty || command_dirty
+                })
+                .unwrap_or(false);
+
+            (last_block_index, force_full_rescan || has_dirty_rows)
+        };
+
+        if !should_rerun {
+            return;
+        }
+
+        // Call find on the last block's command and output grids.
         // If the block is a new finished block, the matches are inserted at a new key, the block's index in the blocklist.
         // If the block is an active, running block, its matches are overwritten in the terminal's block_matches.
         if let Some(block) = self
@@ -572,6 +617,24 @@ impl TerminalFindModel {
         for view in self.rich_content_views.values() {
             view.clear_matches(ctx);
         }
+    }
+
+    /// Cancels active find work while preserving the most recent find options for
+    /// reopening the find bar.
+    pub fn cancel_active_scan_preserve_options(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.terminal_model.lock().is_alt_screen_active() {
+            if let Some(run) = self.alt_screen_find_run.take() {
+                self.alt_screen_find_run = Some(run.cleared());
+            }
+        } else if let Some(controller) = &mut self.async_find_controller {
+            controller.cancel_active_scan_preserve_options(ctx);
+        } else if let Some(run) = self.block_list_find_run.take() {
+            for rich_content_view in self.rich_content_views.values() {
+                rich_content_view.clear_matches(ctx);
+            }
+            self.block_list_find_run = Some(run.cleared());
+        }
+        ctx.emit(FindEvent::RanFind);
     }
 
     /// Clears matches in the active find run, if any.

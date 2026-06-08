@@ -43,6 +43,7 @@ pub struct QueueClosed;
 struct FindWorkQueueInner {
     items: VecDeque<FindWorkItem>,
     closed: bool,
+    cancelled: bool,
 }
 
 /// A shared work queue for async find operations.
@@ -63,6 +64,7 @@ impl FindWorkQueue {
             inner: Arc::new(Mutex::new(FindWorkQueueInner {
                 items: VecDeque::new(),
                 closed: false,
+                cancelled: false,
             })),
             event: Arc::new(Event::new()),
         }
@@ -145,6 +147,9 @@ impl FindWorkQueue {
             // Check for an available item or closed state.
             {
                 let mut inner = self.inner.lock().unwrap();
+                if inner.cancelled {
+                    return Err(QueueClosed);
+                }
                 if let Some(item) = inner.items.pop_front() {
                     let is_empty = inner.items.is_empty();
                     return Ok((item, is_empty));
@@ -161,6 +166,9 @@ impl FindWorkQueue {
             // Re-check after registering the listener.
             {
                 let mut inner = self.inner.lock().unwrap();
+                if inner.cancelled {
+                    return Err(QueueClosed);
+                }
                 if let Some(item) = inner.items.pop_front() {
                     let is_empty = inner.items.is_empty();
                     return Ok((item, is_empty));
@@ -178,9 +186,20 @@ impl FindWorkQueue {
     /// Closes the queue, waking any blocked [`pop`](FindWorkQueue::pop) call.
     ///
     /// After closing, `pop` will drain remaining items and then return
-    /// `Err(QueueClosed)`.
+    /// `Err(QueueClosed)`. Use [`Self::cancel`] when pending work should be
+    /// discarded immediately.
     pub fn close(&self) {
         let mut inner = self.inner.lock().unwrap();
+        inner.closed = true;
+        drop(inner);
+        self.event.notify(usize::MAX);
+    }
+
+    /// Cancels the queue and discards pending work immediately.
+    pub fn cancel(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.items.clear();
+        inner.cancelled = true;
         inner.closed = true;
         drop(inner);
         self.event.notify(usize::MAX);
@@ -200,5 +219,40 @@ impl FindWorkQueue {
     /// Returns the number of pending items.
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap().items.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_lite::future::block_on;
+
+    use super::*;
+
+    #[test]
+    fn close_drains_pending_work_before_reporting_closed() {
+        let queue = FindWorkQueue::new();
+        queue.invalidate_block(BlockIndex::zero(), None);
+
+        queue.close();
+
+        let (item, is_empty) = block_on(queue.pop()).expect("closed queue should drain first");
+        assert!(matches!(
+            item,
+            FindWorkItem::FullBlock { block_index } if block_index == BlockIndex::zero()
+        ));
+        assert!(is_empty);
+        assert!(block_on(queue.pop()).is_err());
+    }
+
+    #[test]
+    fn cancel_discards_pending_work_immediately() {
+        let queue = FindWorkQueue::new();
+        queue.invalidate_block(BlockIndex::zero(), None);
+        assert_eq!(queue.len(), 1);
+
+        queue.cancel();
+
+        assert_eq!(queue.len(), 0);
+        assert!(block_on(queue.pop()).is_err());
     }
 }
