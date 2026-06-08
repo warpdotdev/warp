@@ -110,12 +110,14 @@ impl DetectedRepositories {
                         if let Some(repository) = DirectoryWatcher::as_ref(ctx)
                             .get_watched_directory_for_path(&local_path)
                         {
-                            ctx.emit(DetectedRepositoriesEvent::DetectedGitRepo {
-                                repository: repository.clone(),
-                                source,
-                            });
-                            // Watcher is alive — use the cached result.
-                            return Either::Right(ready(path.to_local_path()));
+                            if Self::cached_local_repository_is_valid(repository.as_ref(ctx)) {
+                                ctx.emit(DetectedRepositoriesEvent::DetectedGitRepo {
+                                    repository: repository.clone(),
+                                    source,
+                                });
+                                return Either::Right(ready(path.to_local_path()));
+                            }
+                            self.repository_roots.remove(key);
                         }
                         // Watcher was cleaned up (e.g. diff state model dropped
                         // and recreated). Fall through to the full scan which
@@ -127,6 +129,7 @@ impl DetectedRepositories {
             }
 
             let local_path_for_search = path.to_local_path();
+            let path_for_stale_cleanup = path.clone();
             let (tx, rx) = oneshot::channel::<Option<PathBuf>>();
             let spawned_handle = ctx.spawn(
                 async move {
@@ -177,9 +180,11 @@ impl DetectedRepositories {
                             }
                         } else {
                             // No working tree path; do not treat git_dir_path as a repository path.
+                            me.remove_stale_local_roots_for_path(&path_for_stale_cleanup);
                             let _ = tx.send(None);
                         }
                     } else {
+                        me.remove_stale_local_roots_for_path(&path_for_stale_cleanup);
                         let _ = tx.send(None);
                     }
                 },
@@ -204,6 +209,51 @@ impl DetectedRepositories {
     #[cfg(test)]
     pub fn spawned_futures(&self) -> &[FutureId] {
         &self.spawned_futures
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn cached_local_repository_is_valid(repository: &Repository) -> bool {
+        let Some(root_dir) = repository.root_dir().to_local_path() else {
+            return false;
+        };
+
+        let dot_git_path = root_dir.join(".git");
+        let Ok(dot_git_metadata) = std::fs::metadata(&dot_git_path) else {
+            return false;
+        };
+
+        if dot_git_metadata.is_dir() {
+            return dot_git_path.join("HEAD").is_file();
+        }
+
+        if dot_git_metadata.is_file() {
+            let Ok(git_file_contents) = std::fs::read_to_string(&dot_git_path) else {
+                return false;
+            };
+            let Some(git_dir) = git_file_contents.trim().strip_prefix("gitdir:") else {
+                return false;
+            };
+
+            let git_dir = PathBuf::from(git_dir.trim());
+            let git_dir = if git_dir.is_absolute() {
+                git_dir
+            } else {
+                root_dir.join(git_dir)
+            };
+            return git_dir.join("HEAD").is_file();
+        }
+
+        false
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn remove_stale_local_roots_for_path(&mut self, path: &StandardizedPath) {
+        self.repository_roots.retain(|root| match root {
+            LocalOrRemotePath::Local(local_root) => StandardizedPath::try_from_local(local_root)
+                .map(|local_root| !path.starts_with(&local_root))
+                .unwrap_or(true),
+            LocalOrRemotePath::Remote(_) => true,
+        });
     }
 
     /// Given a local path, return its corresponding watched repository, if any.
