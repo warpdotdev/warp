@@ -165,13 +165,13 @@ fn advance_to_bootstrapped(block_list: &mut BlockList, data: BootstrappedValue) 
 }
 
 #[test]
-fn test_iterm_image_starts_script_execution_block() {
+fn test_iterm_image_renders_in_script_execution_block() {
     let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
     let mut block_list = TestBlockListBuilder::new().build();
     advance_to_script_execution(&mut block_list);
 
     assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
-    assert!(!block_list.active_block().started());
+    assert!(block_list.active_block().started());
 
     block_list.handle_completed_iterm_image(test_utils::test_iterm_image(1));
     block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
@@ -184,7 +184,7 @@ fn test_iterm_image_starts_script_execution_block() {
 }
 
 #[test]
-fn test_invalid_iterm_image_does_not_start_script_execution_block() {
+fn test_invalid_iterm_image_does_not_render_in_script_execution_block() {
     let _iterm_images = FeatureFlag::ITermImages.override_enabled(true);
     let mut block_list = TestBlockListBuilder::new().build();
     let mut image = test_utils::test_iterm_image(1);
@@ -195,24 +195,23 @@ fn test_invalid_iterm_image_does_not_start_script_execution_block() {
     advance_to_script_execution(&mut block_list);
 
     assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
-    assert!(!block_list.active_block().started());
+    assert!(block_list.active_block().started());
 
     block_list.handle_completed_iterm_image(image);
     block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
-
-    assert!(!block_list.active_block().started());
+    assert!(block_list.active_block().started());
     assert!(block_list.active_block().output_grid().is_empty());
 }
 
 #[test]
-fn test_kitty_image_starts_script_execution_block() {
+fn test_kitty_image_renders_in_script_execution_block() {
     let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
     let mut block_list = TestBlockListBuilder::new().build();
     let mut metadata = test_utils::test_kitty_image_metadata_map(1);
     advance_to_script_execution(&mut block_list);
 
     assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
-    assert!(!block_list.active_block().started());
+    assert!(block_list.active_block().started());
 
     block_list
         .handle_completed_kitty_action(
@@ -231,22 +230,21 @@ fn test_kitty_image_starts_script_execution_block() {
 }
 
 #[test]
-fn test_kitty_store_only_does_not_start_script_execution_block() {
+fn test_kitty_store_only_does_not_render_in_script_execution_block() {
     let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
     let mut block_list = TestBlockListBuilder::new().build();
     let mut metadata = test_utils::test_kitty_image_metadata_map(1);
     advance_to_script_execution(&mut block_list);
 
     assert_eq!(block_list.bootstrap_stage, BootstrapStage::ScriptExecution);
-    assert!(!block_list.active_block().started());
+    assert!(block_list.active_block().started());
 
     block_list
         .handle_completed_kitty_action(test_utils::test_kitty_store_only_action(1), &mut metadata)
         .expect("kitty action should be handled")
         .expect("kitty action should store");
     block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
-
-    assert!(!block_list.active_block().started());
+    assert!(block_list.active_block().started());
     assert!(block_list.active_block().output_grid().is_empty());
 }
 

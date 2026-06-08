@@ -2981,10 +2981,6 @@ macro_rules! delegate_image_completion {
                     if !$self.output_grid.started() {
                         $self.output_grid.start();
                     }
-                    if $self.bootstrap_stage == BootstrapStage::ScriptExecution && !$self.started()
-                    {
-                        $self.start();
-                    }
                 }
                 retval
             }
