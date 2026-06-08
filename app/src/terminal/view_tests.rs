@@ -358,11 +358,7 @@ fn updated_conversation_metadata_refreshes_selected_conversation_pane_title() {
             );
 
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                history.rename_conversation_after_server_success(
-                    conversation_id,
-                    "Renamed title".to_string(),
-                    ctx,
-                )
+                history.apply_conversation_title(conversation_id, "Renamed title".to_string(), ctx)
             });
             view.handle_ai_history_model_event(
                 BlocklistAIHistoryModel::handle(ctx),

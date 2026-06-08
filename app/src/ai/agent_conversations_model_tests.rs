@@ -240,7 +240,7 @@ fn test_title_update_refreshes_shadowing_task_title() {
 
         history_model.update(&mut app, |model, ctx| {
             model.restore_conversations(terminal_view_id, vec![conversation], ctx);
-            model.rename_conversation_after_server_success(
+            model.apply_conversation_title(
                 conversation_id,
                 "Renamed conversation".to_string(),
                 ctx,

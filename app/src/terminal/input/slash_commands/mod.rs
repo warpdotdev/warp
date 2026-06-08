@@ -35,8 +35,8 @@ use crate::ai::blocklist::agent_view::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, PendingAttachment, QueuedQuery,
-    QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
+    BeginConversationRenameError, BlocklistAIHistoryModel, InputTypeAutoDetectionSource,
+    PendingAttachment, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
 };
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -559,6 +559,25 @@ impl Input {
                     );
                     return true;
                 };
+                match history.update(ctx, |history, ctx| {
+                    history.begin_conversation_rename(conversation_id, title.clone(), ctx)
+                }) {
+                    Ok(()) => {}
+                    Err(BeginConversationRenameError::RenameInProgress) => {
+                        show_error_toast(
+                            "A rename is already in progress for this conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
+                    Err(BeginConversationRenameError::ConversationNotFound) => {
+                        show_error_toast(
+                            "/rename-conversation requires an active conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
+                }
 
                 let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
                 ctx.spawn(
@@ -571,7 +590,7 @@ impl Input {
                         Ok(response) => {
                             let title = response.title;
                             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                                history.rename_conversation_after_server_success(
+                                history.complete_conversation_rename(
                                     conversation_id,
                                     title.clone(),
                                     ctx,
@@ -589,6 +608,9 @@ impl Input {
                             });
                         }
                         Err(e) => {
+                            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                                history.fail_conversation_rename(conversation_id, ctx);
+                            });
                             show_error_toast(format!("Failed to rename conversation: {e}"), ctx);
                         }
                     },
