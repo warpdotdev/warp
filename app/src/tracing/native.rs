@@ -8,34 +8,41 @@
 //!
 //! # Why spans must be ended during shutdown
 //!
-//! An OpenTelemetry span is submitted to a span processor only after it ends. Shutting down an
-//! [`SdkTracerProvider`] flushes spans that have already reached its processors, but it does not end
-//! spans that are still active. Some `tracing::Span` references are intentionally propagated into
-//! asynchronous task machinery and can therefore remain alive when the application terminates.
-//! Shutting down the provider before those spans end would silently discard them.
+//! An OpenTelemetry span becomes exportable and passes owned span data to a processor's `on_end`
+//! callback only after it ends. Shutting down an [`SdkTracerProvider`] flushes spans that have
+//! reached `on_end`, but it does not end spans that are still active. Some `tracing::Span`
+//! references are intentionally propagated into asynchronous task machinery and can therefore
+//! remain alive when the application terminates. Shutting down the provider before those spans end
+//! would silently discard them.
 //!
 //! [`ShutdownAwareTracer`] and [`ShutdownAwareSpan`] wrap the SDK tracer and spans used by
 //! `tracing-opentelemetry`. This keeps existing `tracing` instrumentation unchanged while allowing
-//! [`ActiveSpanRegistry`] to explicitly end every started SDK span before shutting down the
-//! provider. The application retains [`Initialization`] in its termination callback so this
-//! ordering happens before platforms that terminate the process without running Rust destructors;
-//! [`Initialization`]'s `Drop` implementation remains a fallback for ordinary returns.
+//! [`ActiveSpanRegistry`] to explicitly end still-reachable, registered SDK spans before shutting
+//! down the provider. The standard application lifecycle retains [`Initialization`] in its
+//! termination callback so this ordering happens before platforms that terminate the process
+//! without running Rust destructors. [`Initialization`]'s `Drop` implementation remains a fallback
+//! for ordinary returns. Explicit process exits bypass both forms of cleanup.
 //!
 //! # Span ownership and synchronization
 //!
-//! `tracing-opentelemetry` creates SDK spans lazily, when a `tracing` span is first activated.
-//! Every SDK span that reaches [`ShutdownAwareTracer::build_with_context`] is wrapped in an
-//! `Arc<Mutex<_>>` and weakly registered. The wrapper remains the span's owner; the registry uses
-//! weak references so tracking does not extend normal span lifetimes. A `tracing` span that is
-//! never activated never creates an SDK span and therefore has nothing for this registry to end.
+//! `tracing-opentelemetry` creates SDK spans lazily during several `tracing` span lifecycle
+//! operations, including when it needs a span's context and when a span closes. Every SDK span that
+//! reaches [`ShutdownAwareTracer::build_with_context`] is wrapped in an `Arc<Mutex<_>>`. Before
+//! shutdown begins, it is weakly registered; after shutdown begins, it is immediately ended
+//! instead. The wrapper remains the span's owner; the registry uses weak references so tracking
+//! does not extend normal span lifetimes. An SDK span that has not yet been built when shutdown
+//! begins cannot reach `on_end` before provider shutdown. If it materializes later, it is ended too
+//! late for export.
 //!
-//! Span creation and shutdown are serialized by the registry-state mutex. Shutdown keeps that
-//! mutex locked while it ends active spans and shuts down the provider, preventing a span from
-//! being created in the otherwise-dangerous gap between those operations. The lock order is
-//! always registry state followed by an individual SDK span. Normal span operations lock only the
-//! individual SDK span and never attempt to lock the registry. Mutex acquisition recovers poisoned
-//! inner values because trace export and shutdown are best-effort cleanup that should continue
-//! after an unrelated panic.
+//! SDK-span creation and shutdown are serialized by the registry-state mutex. Shutdown keeps that
+//! mutex locked while it ends every still-upgradeable registered span and shuts down the provider,
+//! preventing an SDK span from being created in the otherwise-dangerous gap between those
+//! operations. A final span owner can begin dropping after its weak reference becomes impossible
+//! to upgrade, so shutdown cannot strictly guarantee that every previously registered span has
+//! finished ending. The lock order is always registry state followed by an individual SDK span.
+//! Normal span operations lock only the individual SDK span and never attempt to lock the registry.
+//! Mutex acquisition recovers poisoned inner values because trace export and shutdown are
+//! best-effort cleanup that should continue after an unrelated panic.
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, Weak};
@@ -124,10 +131,10 @@ pub fn init() -> anyhow::Result<Initialization> {
 /// Builds the SDK provider and its batch exporter.
 ///
 /// A batch exporter keeps network export off instrumentation call sites. The provider is retained
-/// by [`Initialization`] so application termination can explicitly shut it down after active spans
-/// have been ended. Exported resources include Warp's version and channel alongside standard
-/// environment-detected OpenTelemetry attributes, with `OTEL_SERVICE_NAME` taking precedence over
-/// the default service name.
+/// by [`Initialization`] so application termination can explicitly shut it down after attempting
+/// to end registered active spans. Exported resources include Warp's version and channel alongside
+/// standard environment-detected OpenTelemetry attributes, with [`OTEL_SERVICE_NAME`] taking
+/// precedence over the default service name.
 fn build_provider(base_endpoint: &str) -> anyhow::Result<SdkTracerProvider> {
     let endpoint = traces_endpoint(base_endpoint)?;
     let exporter = opentelemetry_otlp::SpanExporter::builder()
@@ -197,7 +204,7 @@ fn export_timeout() -> Duration {
     .unwrap_or(super::DEFAULT_EXPORT_TIMEOUT)
 }
 
-/// Tracks started SDK spans so they can be ended before provider shutdown.
+/// A registry of started SDK spans used for best-effort ending before provider shutdown.
 ///
 /// This registry belongs beside the provider in [`Initialization`]. It stores only weak references
 /// so a span that ends normally can be dropped without first unregistering itself.
@@ -215,11 +222,11 @@ struct ActiveSpanRegistryState {
 }
 
 impl ActiveSpanRegistry {
-    /// Builds and registers an SDK span while excluding concurrent shutdown.
+    /// Builds an SDK span, registering it before shutdown or ending it after shutdown begins.
     ///
-    /// `tracing-opentelemetry` calls this lazily when it activates a `tracing` span. If shutdown
-    /// has already begun, the newly built span is ended immediately rather than being allowed to
-    /// outlive the provider.
+    /// `tracing-opentelemetry` calls this whenever it materializes an SDK span. If shutdown has
+    /// already begun, the newly built span is ended immediately rather than being allowed to
+    /// remain active.
     fn build_span(
         &self,
         tracer: &SdkTracer,
@@ -244,11 +251,12 @@ impl ActiveSpanRegistry {
         }
     }
 
-    /// Ends every registered span and then shuts down the provider.
+    /// Ends every still-upgradeable registered span and then shuts down the provider.
     ///
     /// The registry lock intentionally remains held through provider shutdown. This guarantees
-    /// that every span built before shutdown is ended first and that no span can be built between
-    /// the final end call and the provider becoming unable to accept ended spans.
+    /// that no SDK span can be built between the final end attempt and the provider becoming unable
+    /// to accept ended spans. It does not synchronize with the final drop of a span whose weak
+    /// reference can no longer be upgraded, so ending previously built spans remains best-effort.
     pub(super) fn shutdown(
         &self,
         provider: &SdkTracerProvider,
@@ -269,7 +277,7 @@ impl ActiveSpanRegistry {
     }
 }
 
-/// Adapts [`SdkTracer`] so spans created by `tracing-opentelemetry` are registered for shutdown.
+/// An [`SdkTracer`] adapter that routes spans through shutdown-aware construction.
 ///
 /// Wrapping the tracer, rather than the span processor, is necessary because processors receive
 /// only a temporary mutable reference in `on_start` and receive owned exportable data only after
@@ -298,7 +306,7 @@ impl opentelemetry::trace::Tracer for ShutdownAwareTracer {
     }
 }
 
-/// Provides synchronized access to an SDK span shared with [`ActiveSpanRegistry`].
+/// A synchronized wrapper around an SDK span shared with [`ActiveSpanRegistry`].
 ///
 /// The immutable [`SpanContext`] is cached outside the mutex because the OpenTelemetry
 /// [`opentelemetry::trace::Span`] trait must return it by reference. All mutable SDK-span operations
@@ -375,7 +383,8 @@ impl opentelemetry::trace::Span for ShutdownAwareSpan {
     }
 }
 
-/// Restricts the shared tracing subscriber's output to explicitly marked cloud-agent spans.
+/// An exporter that restricts the shared tracing subscriber's output to explicitly marked
+/// cloud-agent spans.
 ///
 /// Filtering here preserves normal parent/context propagation inside the application while
 /// ensuring unrelated application tracing is never sent to the configured cloud-agent endpoint.
