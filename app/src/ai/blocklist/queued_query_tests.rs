@@ -331,6 +331,61 @@ fn peek_autofire_leaves_row_until_remove_fired_row_drops_it() {
 }
 
 #[test]
+fn restore_fired_row_reinserts_removed_row_for_retry() {
+    with_model(|mut app, model, events| {
+        let conv = AIConversationId::new();
+        let first_id = model.update(&mut app, |model, ctx| {
+            model.append(
+                conv,
+                QueuedQuery::new_with_attachments(
+                    "first".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                    vec![image_attachment("a.png")],
+                ),
+                ctx,
+            )
+        });
+        append_user(&model, &mut app, conv, "second");
+
+        let (retry_index, retry_query) = model.read(&app, |model, _| {
+            model
+                .queue(conv)
+                .iter()
+                .enumerate()
+                .find(|(_, query)| query.id() == first_id)
+                .map(|(index, query)| (index, query.clone()))
+                .expect("queued row should exist")
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.remove_fired_row(conv, first_id, ctx);
+        });
+        events.borrow_mut().clear();
+
+        model.update(&mut app, |model, ctx| {
+            model.restore_fired_row(conv, retry_index, retry_query, ctx);
+        });
+
+        model.read(&app, |model, _| {
+            let queue = model.queue(conv);
+            assert_eq!(queue.len(), 2);
+            assert_eq!(queue[0].id(), first_id);
+            assert_eq!(queue[0].text(), "first");
+            assert_eq!(queue[0].attachments()[0].file_name(), "a.png");
+            assert_eq!(queue[1].text(), "second");
+        });
+        let evts = events.borrow();
+        assert!(matches!(
+            evts.as_slice(),
+            [QueuedQueryEvent::Appended {
+                conversation_id,
+                query_id
+            }] if *conversation_id == conv && *query_id == first_id
+        ));
+    });
+}
+
+#[test]
 fn peek_autofire_returns_pop_from_edit_mode_with_committed_text_and_attachments() {
     // Per spec: when the first row is in edit mode, peek_autofire's PopFromEditMode action
     // carries the row's last-committed text and its stored attachments (NOT any uncommitted

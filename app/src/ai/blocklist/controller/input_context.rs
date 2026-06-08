@@ -246,9 +246,6 @@ pub(super) fn parse_context_attachments(
         }
     }
 
-    // Pending file attachments are resolved by the controller's send path (from either the live
-    // staging or a fired queued prompt's row), not sourced from the context model here.
-
     // Add pending AI document as attachment if present
     if let Some(document_id) = context_model.pending_document_id() {
         if let Some(content) = AIDocumentModel::as_ref(ctx).get_document_content(&document_id, ctx)

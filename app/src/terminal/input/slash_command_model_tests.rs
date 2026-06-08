@@ -3,7 +3,7 @@ use warpui::{App, SingletonEntity as _};
 
 use super::SlashCommandEntryState;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::QueuedQueryId;
+use crate::ai::blocklist::{QueuedQuery, QueuedQueryModel, QueuedQueryOrigin};
 use crate::report_if_error;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::AISettings;
@@ -462,12 +462,18 @@ fn test_submit_queued_prompt_routes_plain_text_to_conversation() {
         // It routes through detect_command (returning None) and falls through
         // to send_user_query_in_new_conversation.
         input.update(&mut app, |input, ctx| {
-            input.submit_queued_prompt(
-                "fix the tests".to_string(),
-                AIConversationId::new(),
-                QueuedQueryId::new_for_test(),
-                ctx,
-            );
+            let conversation_id = AIConversationId::new();
+            let query_id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(
+                    conversation_id,
+                    QueuedQuery::new(
+                        "fix the tests".to_owned(),
+                        QueuedQueryOrigin::QueueSlashCommand,
+                    ),
+                    ctx,
+                )
+            });
+            input.submit_queued_prompt("fix the tests".to_string(), conversation_id, query_id, ctx);
         });
     });
 }
@@ -499,12 +505,18 @@ fn test_submit_queued_prompt_detects_slash_command() {
             // submit_queued_prompt should detect the slash command and route through
             // execute_slash_command. This should not panic.
             input.update(&mut app, |input, ctx| {
-                input.submit_queued_prompt(
-                    command_text,
-                    AIConversationId::new(),
-                    QueuedQueryId::new_for_test(),
-                    ctx,
-                );
+                let conversation_id = AIConversationId::new();
+                let query_id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.append(
+                        conversation_id,
+                        QueuedQuery::new(
+                            command_text.clone(),
+                            QueuedQueryOrigin::QueueSlashCommand,
+                        ),
+                        ctx,
+                    )
+                });
+                input.submit_queued_prompt(command_text, conversation_id, query_id, ctx);
             });
         }
     });
