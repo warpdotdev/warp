@@ -289,9 +289,13 @@ impl ModelEventDispatcher {
                 image_protocol,
             },
             Event::BootstrapPrecmdDone => ModelEvent::BootstrapPrecmdDone,
-            Event::AgentTaggedInChanged { is_tagged_in } => {
-                ModelEvent::AgentTaggedInChanged { is_tagged_in }
-            }
+            Event::AgentTaggedInChanged {
+                block_id,
+                is_tagged_in,
+            } => ModelEvent::AgentTaggedInChanged {
+                block_id,
+                is_tagged_in,
+            },
             Event::PluggableNotification { title, body } => {
                 ModelEvent::PluggableNotification { title, body }
             }
@@ -474,6 +478,7 @@ pub enum ModelEvent {
     },
     BootstrapPrecmdDone,
     AgentTaggedInChanged {
+        block_id: BlockId,
         is_tagged_in: bool,
     },
     /// A pluggable notification triggered via OSC 9 or OSC 777 escape sequences.

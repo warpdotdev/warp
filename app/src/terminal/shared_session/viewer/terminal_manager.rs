@@ -6,9 +6,9 @@ use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use session_sharing_protocol::common::{
     ActivePrompt, AddGuestsResponse, CLIAgentSessionState, CommandExecutionFailureReason,
-    LinkAccessLevelUpdateResponse, RemoveGuestResponse, SelectedAgentModel, SessionId,
-    TeamAccessLevelUpdateResponse, UniversalDeveloperInputContextUpdate,
-    UpdatePendingUserRoleResponse,
+    LinkAccessLevelUpdateResponse, LongRunningCommandAgentInteraction, RemoveGuestResponse,
+    SelectedAgentModel, SessionId, TeamAccessLevelUpdateResponse,
+    UniversalDeveloperInputContextUpdate, UpdatePendingUserRoleResponse,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
 use session_sharing_protocol::viewer::SessionEndedReason;
@@ -466,6 +466,7 @@ impl TerminalManager {
                 self.model.clone(),
                 write_to_pty_events_rx,
                 initial_load_mode,
+                self.viewer_remote_update_guard.clone(),
                 ctx,
             )
         });
@@ -984,13 +985,24 @@ impl TerminalManager {
                     .active_block()
                     .is_active_and_long_running()
                 {
-                    if let Some(interaction_state) =
+                    if let Some(interaction) =
+                        context_update.long_running_command_agent_interaction.clone()
+                    {
+                        if let Some(view) = weak_view_handle.upgrade(ctx) {
+                            view.update(ctx, |view, ctx| {
+                                view.apply_long_running_command_agent_interaction(interaction, ctx);
+                            });
+                        }
+                    } else if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
+                        // TODO (roland): this is kept around for backward compatibility. Remove after 6 weeks once clients have
+                        // updated to use context_update.long_running_command_agent_interaction above.
                         if let Some(view) = weak_view_handle.upgrade(ctx) {
                             view.update(ctx, |view, ctx| {
                                 view.apply_long_running_command_agent_interaction_state(
                                     interaction_state,
+                                    None,
                                     ctx,
                                 );
                             });
@@ -1527,13 +1539,24 @@ impl TerminalManager {
                     network.send_report_terminal_size(*window_size);
                 });
             }
-            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged { state } => {
+            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged {
+                state,
+                block_id,
+            } => {
+                let interaction =
+                    block_id
+                        .clone()
+                        .map(|block_id| LongRunningCommandAgentInteraction {
+                            block_id: block_id.into(),
+                            state: *state,
+                        });
                 Self::send_input_context_update_to_current_network(
                     &viewer_remote_update_guard,
                     &model,
                     &current_network,
                     UniversalDeveloperInputContextUpdate {
                         long_running_command_agent_interaction_state: Some(*state),
+                        long_running_command_agent_interaction: interaction,
                         ..Default::default()
                     },
                     ctx,

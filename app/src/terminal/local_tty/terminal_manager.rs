@@ -14,8 +14,8 @@ use parking_lot::{FairMutex, Mutex};
 use pathfinder_geometry::vector::Vector2F;
 use session_sharing_protocol::common::{
     ActivePrompt, AgentPromptFailureReason, CLIAgentSessionState, CommandExecutionFailureReason,
-    ControlAction, ControlActionFailureReason, SelectedAgentModel,
-    UniversalDeveloperInputContextUpdate, WriteToPtyFailureReason,
+    ControlAction, ControlActionFailureReason, LongRunningCommandAgentInteraction,
+    SelectedAgentModel, UniversalDeveloperInputContextUpdate, WriteToPtyFailureReason,
 };
 #[cfg(not(any(test, feature = "integration_tests")))]
 use session_sharing_protocol::common::{
@@ -1445,21 +1445,30 @@ impl TerminalManager {
                     )
                     .and_then(|update| update.selected_conversation);
 
-                let long_running_command_agent_interaction_state = {
+                let (
+                    long_running_command_agent_interaction_state,
+                    long_running_command_agent_interaction,
+                ) = {
                     let model = model.lock();
                     let active_block = model.block_list().active_block();
-                    let state = if active_block.is_active_and_long_running() {
-                        if active_block.is_agent_in_control() {
-                            LongRunningCommandAgentInteractionState::InControl
-                        } else if active_block.is_agent_tagged_in() {
-                            LongRunningCommandAgentInteractionState::TaggedIn
-                        } else {
-                            LongRunningCommandAgentInteractionState::NotInteracting
-                        }
+                    if active_block.is_active_and_long_running() {
+                        let state = if active_block.is_agent_in_control() {
+                                LongRunningCommandAgentInteractionState::InControl
+                            } else if active_block.is_agent_tagged_in() {
+                                LongRunningCommandAgentInteractionState::TaggedIn
+                            } else {
+                                LongRunningCommandAgentInteractionState::NotInteracting
+                            };
+                        (
+                            Some(state),
+                            Some(LongRunningCommandAgentInteraction {
+                                block_id: active_block.id().clone().into(),
+                                state,
+                            }),
+                        )
                     } else {
-                        LongRunningCommandAgentInteractionState::NotInteracting
-                    };
-                    Some(state)
+                        (Some(LongRunningCommandAgentInteractionState::NotInteracting), None)
+                    }
                 };
 
                 // Include CLI agent session state in initial context so
@@ -1482,6 +1491,7 @@ impl TerminalManager {
                     auto_approve_agent_actions: Some(auto_approve_agent_actions),
                     selected_model: None,
                     long_running_command_agent_interaction_state,
+                    long_running_command_agent_interaction,
                     cli_agent_session,
                 };
 
@@ -2175,12 +2185,21 @@ impl TerminalManager {
                     .active_block()
                     .is_active_and_long_running()
                 {
-                    if let Some(interaction_state) =
+                    if let Some(interaction) =
+                        context_update.long_running_command_agent_interaction.clone()
+                    {
+                        terminal_view.update(ctx, |view, ctx| {
+                            view.apply_long_running_command_agent_interaction(interaction, ctx);
+                        });
+                    } else if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
+                        // TODO (roland): this is kept around for backward compatibility. Remove after 6 weeks once clients have
+                        // updated to use context_update.long_running_command_agent_interaction above.
                         terminal_view.update(ctx, |view, ctx| {
                             view.apply_long_running_command_agent_interaction_state(
                                 interaction_state,
+                                None,
                                 ctx,
                             );
                         });
@@ -2462,16 +2481,27 @@ impl TerminalManager {
                     });
                 }
             }
-            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged { state } => {
+            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged {
+                state,
+                block_id,
+            } => {
                 if !sharer_remote_update_guard.should_broadcast() {
                     return;
                 }
 
                 if let Some(network) = session_sharer.borrow().as_ref() {
+                    let interaction =
+                        block_id
+                            .clone()
+                            .map(|block_id| LongRunningCommandAgentInteraction {
+                                block_id: block_id.into(),
+                                state: *state,
+                            });
                     network.update(ctx, |network, _| {
                         network.send_universal_developer_input_context_update(
                             UniversalDeveloperInputContextUpdate {
                                 long_running_command_agent_interaction_state: Some(*state),
+                                long_running_command_agent_interaction: interaction,
                                 ..Default::default()
                             },
                         )

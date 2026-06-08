@@ -11,6 +11,7 @@ use warpui::{App, ViewHandle};
 use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::shared_session::tests::terminal_model_for_viewer;
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
@@ -98,6 +99,7 @@ fn test_terminal_model_is_correct() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -188,6 +190,7 @@ fn test_append_followup_scrollback_skips_duplicates() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -215,6 +218,7 @@ fn test_append_followup_scrollback_skips_duplicates() {
                 },
                 None,
                 SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -267,6 +271,7 @@ fn test_append_followup_scrollback_skips_duplicates() {
                 },
                 None,
                 SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -324,6 +329,7 @@ fn test_append_followup_scrollback_with_completed_last_block_creates_active_bloc
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -347,6 +353,7 @@ fn test_append_followup_scrollback_with_completed_last_block_creates_active_bloc
                 },
                 None,
                 SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -406,6 +413,7 @@ fn test_append_followup_replay_marks_existing_conversations_suppressible() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::AppendFollowupScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -461,6 +469,7 @@ fn test_fresh_session_replay_does_not_suppress_existing_conversations() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -507,6 +516,7 @@ fn test_out_of_order_buffering() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -574,6 +584,7 @@ fn test_pty_bytes_buffered_before_command_execution_started() {
                 },
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -646,6 +657,7 @@ fn test_cloud_mode_setup_phase_ended_clears_setup_state() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -733,6 +745,7 @@ fn test_cloud_mode_setup_phase_ended_when_flag_already_false() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -804,6 +817,7 @@ fn test_cloud_mode_setup_phase_ended_is_idempotent() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
