@@ -241,6 +241,45 @@ fn begin_conversation_rename_updates_title_and_cached_metadata() {
 }
 
 #[test]
+fn begin_conversation_rename_rejects_optimistic_root_task() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let (conversation_id, result) = history_model.update(&mut app, |model, ctx| {
+            let conversation_id =
+                model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "server-conversation-token".to_string(),
+            );
+            let result =
+                model.begin_conversation_rename(conversation_id, "Manual title".to_string(), ctx);
+            (conversation_id, result)
+        });
+
+        assert_eq!(
+            result,
+            Err(BeginConversationRenameError::ConversationNotReady)
+        );
+        history_model.read(&app, |model, _| {
+            let conversation = model
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            let root_task = conversation
+                .get_root_task()
+                .expect("conversation should have a root task");
+            assert!(root_task.source().is_none());
+            assert_eq!(root_task.description(), "");
+            assert!(!model
+                .in_flight_conversation_renames
+                .contains_key(&conversation_id));
+        });
+    });
+}
+
+#[test]
 fn complete_conversation_rename_applies_normalized_title_and_clears_in_flight_state() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

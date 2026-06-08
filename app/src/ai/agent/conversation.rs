@@ -1471,7 +1471,7 @@ impl AIConversation {
     }
 
     /// Updates the conversation title and persists the conversation.
-    pub fn update_conversation_title(
+    pub(crate) fn update_conversation_title(
         &mut self,
         title: String,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
@@ -1486,7 +1486,7 @@ impl AIConversation {
     }
 
     /// Restores a previous title snapshot and persists the conversation.
-    pub fn restore_conversation_title(
+    pub(crate) fn restore_conversation_title(
         &mut self,
         root_task_description: String,
         server_metadata_title: Option<String>,

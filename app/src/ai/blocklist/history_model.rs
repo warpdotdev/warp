@@ -187,6 +187,8 @@ pub enum UpdateHistoryError {
 pub(crate) enum BeginConversationRenameError {
     #[error("conversation not found")]
     ConversationNotFound,
+    #[error("conversation is not ready to rename")]
+    ConversationNotReady,
     #[error("conversation rename already in progress")]
     RenameInProgress,
 }
@@ -571,10 +573,13 @@ impl BlocklistAIHistoryModel {
             .conversations_by_id
             .get(&conversation_id)
             .ok_or(BeginConversationRenameError::ConversationNotFound)?;
-        let previous_root_task_description = conversation
+        let root_task = conversation
             .get_root_task()
-            .map(|root_task| root_task.description().to_owned())
-            .unwrap_or_default();
+            .ok_or(BeginConversationRenameError::ConversationNotReady)?;
+        if root_task.source().is_none() {
+            return Err(BeginConversationRenameError::ConversationNotReady);
+        }
+        let previous_root_task_description = root_task.description().to_owned();
         let previous_server_metadata_title = conversation
             .server_metadata()
             .map(|metadata| metadata.title.clone());

@@ -577,6 +577,14 @@ impl Input {
                         );
                         return true;
                     }
+                    Err(BeginConversationRenameError::ConversationNotReady) => {
+                        show_error_toast(
+                            "Your conversation is still syncing. Try renaming it again in a moment."
+                                .to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
                 }
 
                 let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
