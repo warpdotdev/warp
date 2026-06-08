@@ -1175,6 +1175,8 @@ pub(crate) fn initialize_app(
     let server_api = server_api_provider.as_ref(ctx).get();
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
     #[cfg(not(target_family = "wasm"))]
+    // Refresh starts only after the authenticated server client exists; tracing initialization
+    // remains responsible for deciding whether this process opted in to cloud-agent export.
     tracing::start_auth_refresh(
         server_api_provider.as_ref(ctx).get_managed_secrets_client(),
         ctx,

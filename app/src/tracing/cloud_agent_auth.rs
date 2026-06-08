@@ -1,3 +1,21 @@
+//! Provides authenticated OTLP trace transport and credential refresh for opted-in cloud agents.
+//!
+//! Dispatch bootstraps tracing with a bearer token and expiry in the process environment. The
+//! exporter is built once around [`AuthenticatedHttpClient`], which reads a shared token snapshot
+//! immediately before every request so refresh never requires rebuilding the exporter. Processes
+//! without the endpoint switch or a currently valid dispatch credential never initialize this
+//! module.
+//!
+//! Refresh begins only after the application has an authenticated managed-secrets client. A
+//! successful mint replaces the dispatch credential only after the returned JWT's unverified
+//! payload contains a string `run_id` exactly matching the immutable startup `OZ_RUN_ID`. This
+//! payload inspection is only a rejection gate; the collector remains responsible for verifying
+//! the token's signature, audience, expiry, and trusted trace resource attributes. Every refresh
+//! failure preserves the last valid credential and enters bounded jittered backoff.
+//!
+//! Tokens must never appear in diagnostics or formatted values. Cached authorization headers are
+//! marked sensitive, manual `Debug` implementations omit secrets, and token-store locks are always
+//! released before network I/O.
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -14,17 +32,27 @@ use warp_managed_secrets::client::{IdentityTokenOptions, ManagedSecretsClient, T
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
+/// The environment variables form the immutable dispatch-time authentication bootstrap.
 const CLOUD_AGENT_OTLP_TOKEN: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN";
 const CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT";
 const OZ_RUN_ID: &str = "OZ_RUN_ID";
+/// The collector audience and requested lifetime are fixed by the cloud-agent trace contract.
 const COLLECTOR_AUDIENCE: &str = "warp-cloud-agent-otel";
 const REFRESHED_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
+/// Proactive refresh starts roughly twenty minutes before expiry, with jitter to spread load.
 const PROACTIVE_REFRESH_BUFFER: Duration = Duration::from_secs(20 * 60);
 const PROACTIVE_REFRESH_JITTER: Duration = Duration::from_secs(2 * 60);
+/// Failed refreshes use bounded full-jitter exponential backoff and rate-limited diagnostics.
 const INITIAL_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_FAILURE_BACKOFF: Duration = Duration::from_secs(5 * 60);
 const FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
+/// A stalled identity-token request must release the single in-flight refresh slot.
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Shares dispatch authentication state between the exporter and the later refresh coordinator.
+///
+/// The optional expected run ID intentionally does not gate initial tracing: a valid dispatch
+/// credential remains usable when `OZ_RUN_ID` is missing or empty, but every refreshed credential
+/// is rejected until an immutable expected run ID is available to the replacement gate.
 
 #[derive(Clone)]
 pub(super) struct AuthContext {
@@ -35,6 +63,10 @@ pub(super) struct AuthContext {
 }
 
 impl AuthContext {
+    /// Seeds authentication from a currently valid dispatch credential in the environment.
+    ///
+    /// The caller treats failure as an opt-out so normal processes and partially rolled-out cloud
+    /// agents retain no-op tracing behavior.
     pub(super) fn from_environment() -> anyhow::Result<Self> {
         let token = std::env::var(CLOUD_AGENT_OTLP_TOKEN)
             .context("Cloud-agent OTLP token is missing")?
@@ -69,6 +101,7 @@ impl AuthContext {
         })
     }
 
+    /// Creates a transport sharing the latest credential while leaving the exporter itself stable.
     pub(super) fn http_client(&self) -> AuthenticatedHttpClient {
         AuthenticatedHttpClient {
             inner: reqwest::blocking::Client::new(),
@@ -77,6 +110,7 @@ impl AuthContext {
         }
     }
 
+    /// Transfers the bounded refresh-hint receiver to the one allowed coordinator.
     fn take_refresh_hint_receiver(&self) -> Option<Receiver<()>> {
         self.refresh_hint_receiver
             .lock()
@@ -94,23 +128,31 @@ impl fmt::Debug for AuthContext {
     }
 }
 
+/// Stores the latest credential snapshot behind a short-lived reader/writer lock.
+///
+/// Readers clone only the sensitive authorization header, and no caller holds this lock during
+/// network I/O. Replacement constructs and validates a complete snapshot before taking the write
+/// lock so failures preserve the last valid credential.
 #[derive(Clone)]
 struct TokenStore {
     inner: Arc<RwLock<TokenSnapshot>>,
 }
 
 impl TokenStore {
+    /// Creates the initial store from the validated dispatch credential.
     fn new(token: String, expires_at: DateTime<Utc>) -> anyhow::Result<Self> {
         Ok(Self {
             inner: Arc::new(RwLock::new(TokenSnapshot::new(token, expires_at)?)),
         })
     }
 
+    /// Returns a cloned sensitive header only while the current credential remains unexpired.
     fn valid_authorization_header(&self) -> Option<HeaderValue> {
         let snapshot = self.inner.read().unwrap_or_else(|err| err.into_inner());
         (snapshot.expires_at > Utc::now()).then(|| snapshot.authorization_header.clone())
     }
 
+    /// Atomically replaces the current snapshot only with a usable unexpired credential.
     fn replace(&self, token: String, expires_at: DateTime<Utc>) -> anyhow::Result<()> {
         anyhow::ensure!(
             expires_at > Utc::now(),
@@ -121,6 +163,8 @@ impl TokenStore {
         Ok(())
     }
 
+    /// Applies the exact-run rejection gate before allowing a refreshed credential to replace the
+    /// dispatch or previous refresh credential.
     fn replace_refreshed(
         &self,
         token: String,
@@ -142,12 +186,14 @@ impl fmt::Debug for TokenStore {
     }
 }
 
+/// Caches the already-parsed sensitive authorization header with its trusted server expiry.
 struct TokenSnapshot {
     authorization_header: HeaderValue,
     expires_at: DateTime<Utc>,
 }
 
 impl TokenSnapshot {
+    /// Constructs a snapshot whose header redacts its value from standard debug formatting.
     fn new(token: String, expires_at: DateTime<Utc>) -> anyhow::Result<Self> {
         let mut authorization_header = HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| anyhow!("Cloud-agent OTLP token cannot be used as an HTTP header"))?;
@@ -169,9 +215,11 @@ impl fmt::Debug for TokenSnapshot {
     }
 }
 
-/// Checks the unverified refreshed-token payload as a rejection-only sanity gate.
+/// Requires the unverified refreshed-token payload to name the immutable expected run exactly.
 ///
-/// The collector remains responsible for cryptographically verifying the token.
+/// This local decode never establishes token authenticity. The collector remains responsible for
+/// cryptographically verifying the token, while malformed or mismatched tokens fail closed here
+/// before replacement and leave the existing credential untouched.
 fn validate_refreshed_token_run_id(
     token: &str,
     expected_run_id: Option<&str>,
@@ -213,6 +261,7 @@ fn validate_refreshed_token_run_id(
     Ok(())
 }
 
+/// Reports only token-free transport failure categories to the exporter.
 #[derive(thiserror::Error, Debug)]
 enum AuthenticatedHttpError {
     #[error("No unexpired cloud-agent OTLP token is available")]
@@ -221,10 +270,12 @@ enum AuthenticatedHttpError {
     HttpStatus(u16),
 }
 
-/// Injects the latest valid token immediately before each OTLP request.
+/// Injects the latest valid token immediately before each request from the exporter built at
+/// startup.
 ///
 /// The token-store lock is released before network I/O begins. A manual `Debug` implementation
-/// prevents either the cached token or a request's authorization header from being formatted.
+/// prevents the client from formatting cached state, while sensitive [`HeaderValue`] instances
+/// redact request headers. Expired credentials are removed and refused rather than sent.
 pub(super) struct AuthenticatedHttpClient {
     inner: reqwest::blocking::Client,
     token_store: TokenStore,
@@ -241,6 +292,10 @@ impl fmt::Debug for AuthenticatedHttpClient {
 }
 
 impl AuthenticatedHttpClient {
+    /// Overwrites any supplied authorization header with the latest unexpired credential.
+    ///
+    /// Removing the supplied header first ensures an expired store fails closed rather than
+    /// accidentally sending a stale or caller-provided credential.
     fn authorize_request(
         &self,
         request: &mut Request<Bytes>,
@@ -264,6 +319,7 @@ impl HttpClient for AuthenticatedHttpClient {
         let mut response = self.inner.execute(request)?;
         let status = response.status();
         if status == http::StatusCode::UNAUTHORIZED {
+            // The bounded nonblocking hint cannot recurse into or delay this export request.
             let _ = self.refresh_hint_sender.try_send(());
         }
 
@@ -278,6 +334,10 @@ impl HttpClient for AuthenticatedHttpClient {
     }
 }
 
+/// Starts the one refresh coordinator after authenticated server connectivity is available.
+///
+/// Consuming the bounded hint receiver coalesces concurrent starts, and the coordinator immediately
+/// mints once so the short-lived dispatch credential is replaced as soon as possible.
 pub(super) fn start_refresh_coordinator(
     auth_context: AuthContext,
     client: Arc<dyn ManagedSecretsClient>,
@@ -297,6 +357,10 @@ pub(super) fn start_refresh_coordinator(
     });
 }
 
+/// Owns serialized credential minting, proactive scheduling, failure backoff, and diagnostics.
+///
+/// At most one mint is in flight and one scheduled wakeup is retained. A bounded nonblocking 401
+/// hint can accelerate refresh without recursing into or blocking the export request.
 struct AuthRefreshCoordinator {
     token_store: TokenStore,
     expected_run_id: Option<Arc<str>>,
@@ -308,6 +372,7 @@ struct AuthRefreshCoordinator {
 }
 
 impl AuthRefreshCoordinator {
+    /// Installs the hint stream and immediately starts the first bounded refresh request.
     fn new(
         token_store: TokenStore,
         expected_run_id: Option<Arc<str>>,
@@ -333,6 +398,10 @@ impl AuthRefreshCoordinator {
         coordinator
     }
 
+    /// Starts one mint and coalesces all triggers while it remains in flight.
+    ///
+    /// Each request asks for the fixed collector audience and principal-only subject, and the
+    /// timeout guarantees a stalled request eventually enters the ordinary failure path.
     fn start_refresh(&mut self, ctx: &mut ModelContext<Self>) {
         if self.refresh_in_flight {
             return;
@@ -356,6 +425,10 @@ impl AuthRefreshCoordinator {
         );
     }
 
+    /// Accepts a refreshed credential only after all replacement gates succeed.
+    ///
+    /// Any mint, timeout, expiry, header, or run-ID failure retains the last valid token and enters
+    /// the same bounded retry path without logging token contents.
     fn finish_refresh(
         &mut self,
         result: anyhow::Result<TaskIdentityToken>,
@@ -385,6 +458,7 @@ impl AuthRefreshCoordinator {
         }
     }
 
+    /// Schedules successful refreshes around twenty minutes before server-returned expiry.
     fn schedule_proactive_refresh(
         &mut self,
         expires_at: DateTime<Utc>,
@@ -396,6 +470,7 @@ impl AuthRefreshCoordinator {
         self.schedule_refresh(remaining.saturating_sub(refresh_buffer), ctx);
     }
 
+    /// Schedules a full-jitter exponential retry capped at five minutes.
     fn schedule_failure_retry(&mut self, ctx: &mut ModelContext<Self>) {
         let exponent = self.consecutive_failures.min(31);
         let upper_bound = INITIAL_FAILURE_BACKOFF
@@ -406,6 +481,7 @@ impl AuthRefreshCoordinator {
         self.schedule_refresh(delay, ctx);
     }
 
+    /// Replaces the one scheduled wakeup so proactive, retry, and hint triggers stay coalesced.
     fn schedule_refresh(&mut self, delay: Duration, ctx: &mut ModelContext<Self>) {
         self.cancel_scheduled_refresh();
         let task = ctx.spawn(
@@ -420,12 +496,14 @@ impl AuthRefreshCoordinator {
         self.scheduled_refresh = Some(task.abort_handle());
     }
 
+    /// Cancels the prior wakeup without affecting a refresh already in flight.
     fn cancel_scheduled_refresh(&mut self) {
         if let Some(handle) = self.scheduled_refresh.take() {
             handle.abort();
         }
     }
 
+    /// Emits a local token-free failure diagnostic at most once per configured interval.
     fn warn_refresh_failure(&mut self) {
         let now = std::time::Instant::now();
         if self
@@ -445,161 +523,5 @@ impl Entity for AuthRefreshCoordinator {
 impl SingletonEntity for AuthRefreshCoordinator {}
 
 #[cfg(test)]
-mod tests {
-    use base64::Engine as _;
-    use chrono::TimeDelta;
-
-    use super::*;
-    fn jwt_with_payload(payload: serde_json::Value) -> String {
-        let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        let header = encoder.encode(br#"{"alg":"none"}"#);
-        let payload = encoder.encode(serde_json::to_vec(&payload).unwrap());
-        format!("{header}.{payload}.test-signature")
-    }
-
-    fn client_with_expiry(token: &str, expires_at: DateTime<Utc>) -> AuthenticatedHttpClient {
-        let (refresh_hint_sender, _) = async_channel::bounded(1);
-        AuthenticatedHttpClient {
-            inner: reqwest::blocking::Client::new(),
-            token_store: TokenStore::new(token.to_owned(), expires_at).unwrap(),
-            refresh_hint_sender,
-        }
-    }
-
-    #[test]
-    fn authorization_overwrites_supplied_header() {
-        let client = client_with_expiry(
-            "current-test-token",
-            Utc::now() + TimeDelta::try_minutes(5).unwrap(),
-        );
-        let mut request = Request::builder()
-            .header(AUTHORIZATION, "Bearer stale-test-token")
-            .body(Bytes::new())
-            .unwrap();
-
-        client.authorize_request(&mut request).unwrap();
-
-        assert_eq!(
-            request.headers().get(AUTHORIZATION).unwrap(),
-            "Bearer current-test-token"
-        );
-    }
-
-    #[test]
-    fn expired_token_is_refused_and_supplied_header_is_removed() {
-        let client = client_with_expiry(
-            "expired-test-token",
-            Utc::now() - TimeDelta::try_minutes(5).unwrap(),
-        );
-        let mut request = Request::builder()
-            .header(AUTHORIZATION, "Bearer stale-test-token")
-            .body(Bytes::new())
-            .unwrap();
-
-        assert!(matches!(
-            client.authorize_request(&mut request),
-            Err(AuthenticatedHttpError::NoValidToken)
-        ));
-        assert!(!request.headers().contains_key(AUTHORIZATION));
-    }
-
-    #[test]
-    fn debug_output_redacts_token() {
-        let client = client_with_expiry(
-            "secret-test-token",
-            Utc::now() + TimeDelta::try_minutes(5).unwrap(),
-        );
-
-        let debug_output = format!("{client:?}");
-
-        assert!(!debug_output.contains("secret-test-token"));
-        assert!(debug_output.contains("expires_at"));
-    }
-
-    #[test]
-    fn authorized_request_debug_redacts_token() {
-        let client = client_with_expiry(
-            "secret-request-test-token",
-            Utc::now() + TimeDelta::try_minutes(5).unwrap(),
-        );
-        let mut request = Request::builder().body(Bytes::new()).unwrap();
-
-        client.authorize_request(&mut request).unwrap();
-        let request_debug = format!("{request:?}");
-        let headers_debug = format!("{:?}", request.headers());
-
-        assert!(!request_debug.contains("secret-request-test-token"));
-        assert!(!headers_debug.contains("secret-request-test-token"));
-        assert!(request_debug.contains("Sensitive"));
-        assert!(headers_debug.contains("Sensitive"));
-    }
-
-    #[test]
-    fn refreshed_token_run_id_exactly_matches() {
-        let token = jwt_with_payload(serde_json::json!({ "run_id": "expected-run-id" }));
-
-        validate_refreshed_token_run_id(&token, Some("expected-run-id")).unwrap();
-    }
-
-    #[test]
-    fn refreshed_token_run_id_is_required() {
-        let token = jwt_with_payload(serde_json::json!({}));
-        assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
-    }
-
-    #[test]
-    fn expected_run_id_is_required() {
-        let token = jwt_with_payload(serde_json::json!({ "run_id": "expected-run-id" }));
-
-        assert!(validate_refreshed_token_run_id(&token, None).is_err());
-        assert!(validate_refreshed_token_run_id(&token, Some("")).is_err());
-    }
-
-    #[test]
-    fn refreshed_token_run_id_must_match() {
-        let token = jwt_with_payload(serde_json::json!({ "run_id": "wrong-run-id" }));
-
-        assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
-    }
-
-    #[test]
-    fn refreshed_token_run_id_must_be_a_string() {
-        let token = jwt_with_payload(serde_json::json!({ "run_id": 123 }));
-        assert!(validate_refreshed_token_run_id(&token, Some("expected-run-id")).is_err());
-    }
-
-    #[test]
-    fn malformed_refreshed_tokens_are_rejected() {
-        let invalid_json = {
-            let encoder = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-            let payload = encoder.encode(b"not-json");
-            format!("header.{payload}.signature")
-        };
-
-        for token in ["not-a-jwt", "header.!!!.signature", &invalid_json] {
-            assert!(validate_refreshed_token_run_id(token, Some("expected-run-id")).is_err());
-        }
-    }
-
-    #[test]
-    fn rejected_refreshed_token_preserves_previous_token() {
-        let token_store = TokenStore::new(
-            "current-test-token".to_owned(),
-            Utc::now() + TimeDelta::try_minutes(5).unwrap(),
-        )
-        .unwrap();
-        let wrong_run_token = jwt_with_payload(serde_json::json!({ "run_id": "wrong-run-id" }));
-
-        assert!(token_store
-            .replace_refreshed(
-                wrong_run_token,
-                Utc::now() + TimeDelta::try_minutes(5).unwrap(),
-                Some("expected-run-id"),
-            )
-            .is_err());
-        assert_eq!(
-            token_store.valid_authorization_header().unwrap(),
-            "Bearer current-test-token"
-        );
-    }
-}
+#[path = "cloud_agent_auth_tests.rs"]
+mod tests;

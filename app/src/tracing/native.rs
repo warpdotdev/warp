@@ -65,7 +65,7 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-use super::auth::{self, AuthContext};
+use super::cloud_agent_auth::{self, AuthContext};
 use super::Initialization;
 use crate::channel::ChannelState;
 use crate::tracing::install_no_subscriber;
@@ -81,6 +81,11 @@ const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 /// The minimum interval between local export failure diagnostics.
 const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
+/// Retains bootstrap authentication only when the endpoint and dispatch credential enabled export.
+///
+/// The exporter is built once during [`init`], while the stored context later starts dynamic
+/// credential refresh after authenticated application services become available, and this static
+/// remains unset for processes that did not opt in.
 
 static AUTH_CONTEXT: OnceLock<AuthContext> = OnceLock::new();
 
@@ -147,7 +152,8 @@ pub fn init() -> anyhow::Result<Initialization> {
 /// by [`Initialization`] so application termination can explicitly shut it down after attempting
 /// to end registered active spans. Exported resources include Warp's version and channel alongside
 /// standard environment-detected OpenTelemetry attributes, with [`OTEL_SERVICE_NAME`] taking
-/// precedence over the default service name.
+/// precedence over the default service name. The exporter is built once with a dynamic HTTP client
+/// so credential refresh can update requests without reconstructing provider state.
 fn build_provider(
     base_endpoint: &str,
     auth_context: &AuthContext,
@@ -189,9 +195,12 @@ fn build_provider(
 }
 
 /// Starts the single refresh coordinator after the authenticated server client exists.
+///
+/// Processes that did not opt in with both an endpoint and valid dispatch credential have no
+/// retained [`AUTH_CONTEXT`] and remain no-ops here.
 pub(super) fn start_auth_refresh(client: Arc<dyn ManagedSecretsClient>, ctx: &mut AppContext) {
     if let Some(auth_context) = AUTH_CONTEXT.get() {
-        auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
+        cloud_agent_auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
     }
 }
 
@@ -473,12 +482,14 @@ impl SpanExporter for CloudAgentSpanExporter {
     }
 }
 
+/// Rate-limits local token-free export diagnostics independently of exporter retries.
 #[derive(Debug, Default)]
 struct RateLimitedDiagnostics {
     last_export_failure: Mutex<Option<Instant>>,
 }
 
 impl RateLimitedDiagnostics {
+    /// Emits at most one local export-failure warning per configured interval.
     fn warn_export_failure(&self) {
         let now = Instant::now();
         let mut last_failure = self
