@@ -8,18 +8,13 @@ pub use file_watchers::{
     extract_skill_parent_directory, read_skills_from_directories, SkillWatcher, SkillWatcherEvent,
 };
 use warp_core::features::FeatureFlag;
-use warp_core::ui::icons::Icon;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
+use super::bundled::BundledSkill;
 #[cfg(test)]
-use super::bundled::build_bundled_skill_context;
-use super::bundled::{
-    icon_for_bundled_skill, load_bundled_skills, read_bundled_skills, BundledSkill,
-    BundledSkillActivation,
-};
+use super::bundled::{build_bundled_skill_context, read_bundled_skills, BundledSkillActivation};
 use super::{SkillDescriptor, SkillPathQuery};
-use crate::ai::mcp::McpIntegration;
 use crate::ai::skills::skill_utils::unique_skills;
 
 pub struct SkillManager {
@@ -39,8 +34,8 @@ pub struct SkillManager {
     /// Reverse lookup: skill name → set of paths with that name.
     /// This allows efficient lookup by skill name without scanning all paths.
     skills_by_name: HashMap<String, HashSet<LocalOrRemotePath>>,
-    /// Skills bundled into Warp, each with activation condition and icon.
-    bundled_skills: HashMap<String, BundledSkill>,
+    /// Skills bundled into Warp for the local host.
+    bundled_skill: BundledSkill,
     /// When true, all skills in `directory_skills` are in scope regardless of
     /// the current working directory. Set by `AgentDriver` when a cloud
     /// environment with configured repos is active, so the agent sees every
@@ -66,11 +61,8 @@ impl SkillManager {
         let skill_watcher = ctx.add_model(|ctx| SkillWatcher::new(ctx, skill_watcher_tx));
 
         if FeatureFlag::BundledSkills.is_enabled() {
-            ctx.spawn(load_bundled_skills(), |me, result, _| {
-                me.bundled_skills = result;
-            });
-            ctx.spawn(Self::load_figma_skills(), |me, figma_skills, _| {
-                me.bundled_skills.extend(figma_skills);
+            ctx.spawn(BundledSkill::detect(), |me, result, _| {
+                me.bundled_skill = result;
             });
         }
 
@@ -78,7 +70,7 @@ impl SkillManager {
             directory_skills: HashMap::new(),
             skills_by_path: HashMap::new(),
             skills_by_name: HashMap::new(),
-            bundled_skills: HashMap::new(),
+            bundled_skill: BundledSkill::default(),
             is_cloud_environment: false,
             skill_watcher,
         }
@@ -170,18 +162,7 @@ impl SkillManager {
 
         // Append bundled skills whose activation condition is met.
         if FeatureFlag::BundledSkills.is_enabled() {
-            skills.extend(
-                self.bundled_skills
-                    .iter()
-                    .filter(|(_, bundled)| bundled.activation.is_enabled(ctx))
-                    .map(|(id, bundled)| {
-                        SkillDescriptor::new_bundled(
-                            id.clone(),
-                            bundled.skill.clone(),
-                            bundled.icon,
-                        )
-                    }),
-            );
+            skills.extend(self.bundled_skill.active_descriptors(ctx));
         }
 
         skills
@@ -318,10 +299,8 @@ impl SkillManager {
     ) -> SkillReference {
         let skill_path = skill_path.to_skill_location();
         // Check if this path belongs to a bundled skill.
-        for (id, bundled) in &self.bundled_skills {
-            if bundled.skill.path == skill_path {
-                return SkillReference::BundledSkillId(id.clone());
-            }
+        if let Some(reference) = self.bundled_skill.reference_for_path(&skill_path) {
+            return reference;
         }
         // Default to path-based reference.
         SkillReference::Path(skill_path)
@@ -331,9 +310,7 @@ impl SkillManager {
     pub fn skill_by_reference(&self, reference: &SkillReference) -> Option<&ParsedSkill> {
         match reference {
             SkillReference::Path(path) => self.skills_by_path.get(path),
-            SkillReference::BundledSkillId(id) => {
-                self.bundled_skills.get(id).map(|bundled| &bundled.skill)
-            }
+            SkillReference::BundledSkillId(id) => self.bundled_skill.skill(id),
         }
     }
 
@@ -355,8 +332,7 @@ impl SkillManager {
 
     /// Returns a bundled skill by ID only if its activation condition is met.
     pub fn active_bundled_skill(&self, id: &str, ctx: &AppContext) -> Option<&ParsedSkill> {
-        let bundled = self.bundled_skills.get(id)?;
-        bundled.activation.is_enabled(ctx).then_some(&bundled.skill)
+        self.bundled_skill.active_skill(id, ctx)
     }
 
     fn handle_skill_watcher_event(&mut self, event: SkillWatcherEvent) {
@@ -434,29 +410,6 @@ impl SkillManager {
         }
     }
 
-    /// Load Figma-specific bundled skills from the `figma/` subdirectory.
-    async fn load_figma_skills() -> HashMap<String, BundledSkill> {
-        let Some(resources_dir) = warp_core::paths::bundled_resources_dir() else {
-            return HashMap::new();
-        };
-        let figma_skills_dir = resources_dir
-            .join("bundled")
-            .join("mcp_skills")
-            .join("figma");
-        read_bundled_skills(&figma_skills_dir)
-            .await
-            .into_iter()
-            .map(|(id, skill)| {
-                let bundled = BundledSkill {
-                    skill,
-                    activation: BundledSkillActivation::RequiresMcp(McpIntegration::Figma),
-                    icon: Icon::Figma,
-                };
-                (id, bundled)
-            })
-            .collect()
-    }
-
     /// Adds a skill to the skill manager for testing purposes.
     #[cfg(test)]
     pub fn add_skill_for_testing(&mut self, skill: ParsedSkill) {
@@ -474,15 +427,7 @@ impl SkillManager {
         skill: ParsedSkill,
         activation: BundledSkillActivation,
     ) {
-        let id = id.into();
-        self.bundled_skills.insert(
-            id.clone(),
-            BundledSkill {
-                skill,
-                activation,
-                icon: icon_for_bundled_skill(&id),
-            },
-        );
+        self.bundled_skill.insert_for_testing(id, skill, activation);
     }
 }
 

@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ai::skills::{parse_bundled_skill, ParsedSkill};
-use anyhow::Context;
+use ai::skills::{parse_bundled_skill, ParsedSkill, SkillReference};
 use futures::TryStreamExt;
 use warp_core::channel::ChannelState;
 use warp_core::ui::icons::Icon;
 use warp_core::{report_error, safe_warn};
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, SingletonEntity};
 
+use super::SkillDescriptor;
 use crate::ai::mcp::{McpIntegration, TemplatableMCPServerManager};
 use crate::keyboard::keybinding_file_path;
 use crate::settings::user_preferences_toml_file_path;
@@ -36,16 +37,85 @@ impl BundledSkillActivation {
     }
 }
 
-/// A bundled skill with its activation condition and icon.
+/// A bundled skill definition with its activation condition and icon.
 #[derive(Debug, Clone)]
+struct BundledSkillDefinition {
+    skill: ParsedSkill,
+    activation: BundledSkillActivation,
+    icon: Icon,
+}
+
+/// Skills bundled with Warp for a single host.
+#[derive(Debug, Default)]
 pub struct BundledSkill {
-    pub skill: ParsedSkill,
-    pub activation: BundledSkillActivation,
-    pub icon: Icon,
+    definitions: HashMap<String, BundledSkillDefinition>,
+}
+
+impl BundledSkill {
+    /// Detect all skill definitions bundled with Warp for the local host.
+    pub async fn detect() -> Self {
+        let (mut definitions, figma_definitions) = futures::join!(
+            load_bundled_skill_definitions(),
+            load_figma_skill_definitions()
+        );
+        definitions.extend(figma_definitions);
+        Self { definitions }
+    }
+
+    /// Returns descriptors for bundled skills whose activation conditions are met.
+    pub fn active_descriptors(&self, ctx: &AppContext) -> Vec<SkillDescriptor> {
+        self.definitions
+            .iter()
+            .filter(|(_, definition)| definition.activation.is_enabled(ctx))
+            .map(|(id, definition)| {
+                SkillDescriptor::new_bundled(id.clone(), definition.skill.clone(), definition.icon)
+            })
+            .collect()
+    }
+
+    /// Returns a bundled skill reference when the path belongs to a bundled skill.
+    pub fn reference_for_path(&self, path: &LocalOrRemotePath) -> Option<SkillReference> {
+        self.definitions
+            .iter()
+            .find(|(_, definition)| definition.skill.path == *path)
+            .map(|(id, _)| SkillReference::BundledSkillId(id.clone()))
+    }
+
+    /// Returns a bundled skill definition by ID.
+    pub fn skill(&self, id: &str) -> Option<&ParsedSkill> {
+        self.definitions.get(id).map(|definition| &definition.skill)
+    }
+
+    /// Returns a bundled skill by ID only if its activation condition is met.
+    pub fn active_skill(&self, id: &str, ctx: &AppContext) -> Option<&ParsedSkill> {
+        let definition = self.definitions.get(id)?;
+        definition
+            .activation
+            .is_enabled(ctx)
+            .then_some(&definition.skill)
+    }
+
+    #[cfg(test)]
+    pub fn insert_for_testing(
+        &mut self,
+        id: impl Into<String>,
+        skill: ParsedSkill,
+        activation: BundledSkillActivation,
+    ) {
+        let id = id.into();
+        self.definitions.insert(
+            id.clone(),
+            BundledSkillDefinition {
+                skill,
+                activation,
+                icon: icon_for_bundled_skill(&id),
+            },
+        );
+    }
 }
 
 /// Load skill definitions bundled with Warp.
-pub(crate) async fn load_bundled_skills() -> HashMap<String, BundledSkill> {
+async fn load_bundled_skill_definitions() -> HashMap<String, BundledSkillDefinition> {
     let Some(resources_dir) = warp_core::paths::bundled_resources_dir() else {
         return HashMap::new();
     };
@@ -56,10 +126,33 @@ pub(crate) async fn load_bundled_skills() -> HashMap<String, BundledSkill> {
         .map(|(id, skill)| {
             let icon = icon_for_bundled_skill(&id);
             let activation = activation_for_bundled_skill(&id, &resources_dir);
-            let bundled = BundledSkill {
+            let bundled = BundledSkillDefinition {
                 skill,
                 activation,
                 icon,
+            };
+            (id, bundled)
+        })
+        .collect()
+}
+
+/// Load Figma-specific bundled skills from the `figma/` subdirectory.
+async fn load_figma_skill_definitions() -> HashMap<String, BundledSkillDefinition> {
+    let Some(resources_dir) = warp_core::paths::bundled_resources_dir() else {
+        return HashMap::new();
+    };
+    let figma_skills_dir = resources_dir
+        .join("bundled")
+        .join("mcp_skills")
+        .join("figma");
+    read_bundled_skills(&figma_skills_dir)
+        .await
+        .into_iter()
+        .map(|(id, skill)| {
+            let bundled = BundledSkillDefinition {
+                skill,
+                activation: BundledSkillActivation::RequiresMcp(McpIntegration::Figma),
+                icon: Icon::Figma,
             };
             (id, bundled)
         })
