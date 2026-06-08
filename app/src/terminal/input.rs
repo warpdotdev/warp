@@ -143,7 +143,7 @@ use super::view::{
 };
 use super::warpify::SubshellSource;
 use super::{prompt, History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig};
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentContext, AIAgentExchangeId, CancellationReason, EntrypointType};
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
@@ -452,22 +452,6 @@ const AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_CLASSIC: &str =
 const AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_UDI: &str = "Ask a follow up";
 const AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_CLASSIC: &str =
     "Ask a follow up, or backspace to exit";
-
-/// Returns the child-agent placeholder text, including the child agent's display name.
-fn child_agent_hint_text(conversation: &AIConversation) -> Option<Cow<'static, str>> {
-    if !conversation.is_child_agent_conversation() {
-        return None;
-    }
-
-    let agent_name = conversation.agent_name().unwrap_or("child");
-    if conversation.status().is_in_progress() {
-        Some(Cow::Owned(format!("Steer the {agent_name} agent")))
-    } else {
-        Some(Cow::Owned(format!(
-            "Ask the {agent_name} agent a follow up"
-        )))
-    }
-}
 
 /// Action name for setting input mode to agent mode
 pub const SET_INPUT_MODE_AGENT_ACTION_NAME: &str = "input:set_mode_agent";
@@ -5999,7 +5983,7 @@ impl Input {
     // Returns the appropriate hint/placeholder text to render in an empty input when Agent Mode is
     // enabled (the feature flag, not the specific AI input mode). This method ensures that hint text
     // is cached when needed for new conversations.
-    fn agent_mode_hint_text(&mut self, app: &AppContext) -> Cow<'static, str> {
+    fn agent_mode_hint_text(&mut self, app: &AppContext) -> String {
         let input_model = self.ai_input_model.as_ref(app);
         let is_udi_enabled = InputSettings::as_ref(app).is_universal_developer_input_enabled(app);
 
@@ -6008,23 +5992,25 @@ impl Input {
             input_model.should_run_input_autodetection(app),
         ) {
             (InputType::Shell, false) => {
-                Cow::Borrowed(AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_TEXT)
+                AGENT_MODE_AI_DISABLED_AUTODETECTION_DISABLED_HINT_TEXT.to_owned()
             }
             (InputType::Shell, true) => {
                 // Ensure hint text is cached for new conversations
-                Cow::Borrowed(get_stable_agent_mode_hint_text(
-                    &mut self.cached_agent_mode_hint_text,
-                ))
+                get_stable_agent_mode_hint_text(&mut self.cached_agent_mode_hint_text).to_owned()
             }
             (InputType::AI, _) => {
-                if let Some(hint) = self
-                    .ai_context_model
-                    .as_ref(app)
-                    .selected_conversation(app)
-                    .and_then(child_agent_hint_text)
+                if let Some(conversation) =
+                    self.ai_context_model.as_ref(app).selected_conversation(app)
                 {
-                    return hint;
+                    if conversation.is_child_agent_conversation() {
+                        let agent_name = conversation.agent_name().unwrap_or("child");
+                        if conversation.status().is_in_progress() {
+                            return format!("Steer the {agent_name} agent");
+                        }
+                        return format!("Ask the {agent_name} agent a follow up");
+                    }
                 }
+
                 // Follow the `agent_indicator` pattern (see `app/src/tab.rs`):
                 //  * `None` (no conversation, empty, passive, or untitled) => new conversation => "Warp anything"
                 //  * `InProgress`                                           => agent running    => "Steer"
@@ -6036,23 +6022,22 @@ impl Input {
                 {
                     Some(status) if status.is_in_progress() => {
                         if is_udi_enabled {
-                            Cow::Borrowed(AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_UDI)
+                            AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_UDI.to_owned()
                         } else {
-                            Cow::Borrowed(AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_CLASSIC)
+                            AGENT_MODE_AI_ENABLED_STEER_HINT_TEXT_CLASSIC.to_owned()
                         }
                     }
                     Some(_) => {
                         if is_udi_enabled {
-                            Cow::Borrowed(AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_UDI)
+                            AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_UDI.to_owned()
                         } else {
-                            Cow::Borrowed(AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_CLASSIC)
+                            AGENT_MODE_AI_ENABLED_FOLLOW_UP_HINT_TEXT_CLASSIC.to_owned()
                         }
                     }
                     None => {
                         // Ensure hint text is cached for new conversations
-                        Cow::Borrowed(get_stable_agent_mode_hint_text(
-                            &mut self.cached_agent_mode_hint_text,
-                        ))
+                        get_stable_agent_mode_hint_text(&mut self.cached_agent_mode_hint_text)
+                            .to_owned()
                     }
                 }
             }
@@ -6570,9 +6555,9 @@ impl Input {
         if toggled_on && AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
             if FeatureFlag::AgentMode.is_enabled() {
                 // agent_mode_hint_text now handles caching internally
-                let hint_text = self.agent_mode_hint_text(ctx).to_string();
+                let hint_text = self.agent_mode_hint_text(ctx);
                 self.editor.update(ctx, |editor, ctx| {
-                    editor.set_placeholder_text(&hint_text, ctx);
+                    editor.set_placeholder_text(hint_text, ctx);
                 });
             } else {
                 self.editor.update(ctx, |editor, ctx| {
