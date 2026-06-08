@@ -2247,8 +2247,8 @@ fn render_tab_group_internal(
             };
             let mut container = Container::new(build_rows()).with_background(background);
             if FeatureFlag::GroupedTabs.is_enabled() && stack_panes_flush {
-                container =
-                    container.with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
+                container = container
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)));
             }
             if is_drag_target {
                 container = container.with_border(
