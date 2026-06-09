@@ -8040,14 +8040,20 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(block_id) = block_id {
-            let should_apply = {
+            let (is_active_block_long_running, active_block_id) = {
                 let model = self.model.lock();
                 let active_block = model.block_list().active_block();
-                active_block.is_active_and_long_running() && active_block.id() == block_id
+                (
+                    active_block.is_active_and_long_running(),
+                    active_block.id().clone(),
+                )
             };
+            let should_apply = is_active_block_long_running && active_block_id == *block_id;
             if !should_apply {
                 log::info!(
-                    "Ignoring stale shared-session LRC interaction_state={state:?} for block_id={block_id:?}"
+                    "Ignoring stale shared-session LRC interaction_state={state:?} for block_id={block_id:?}. Currently active block id={} is_active_and_long_running={}",
+                    active_block_id,
+                    is_active_block_long_running,
                 );
                 return;
             }
