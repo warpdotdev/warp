@@ -26882,6 +26882,27 @@ impl Workspace {
         None
     }
 
+    fn pane_split_drag_source(
+        &self,
+        src_idx: usize,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(ViewHandle<PaneGroup>, PaneId)> {
+        let src_tab = self.tabs.get(src_idx)?;
+        let src_pg = src_tab.pane_group.clone();
+
+        // Smallest slice: only single-pane source tabs are supported.
+        let src_pane_ids = src_pg.as_ref(ctx).visible_pane_ids();
+        if src_pane_ids.len() != 1 {
+            return None;
+        }
+        let src_pane_id = src_pane_ids[0];
+        if !src_pane_id.is_terminal_pane() {
+            return None;
+        }
+
+        Some((src_pg, src_pane_id))
+    }
+
     /// Smallest-slice implementation of "drag a tab onto another tab's pane area
     /// to create a horizontal split". Returns `true` if the drop was consumed.
     /// Edge cases (source has a split, source pane isn't a terminal, drop hit
@@ -26896,20 +26917,9 @@ impl Workspace {
         if !FeatureFlag::DragTabToPaneSplit.is_enabled() {
             return false;
         }
-        let Some(src_tab) = self.tabs.get(src_idx) else {
+        let Some((src_pg, src_pane_id)) = self.pane_split_drag_source(src_idx, ctx) else {
             return false;
         };
-        let src_pg = src_tab.pane_group.clone();
-
-        // Smallest slice: only single-pane source tabs are supported.
-        let src_pane_ids = src_pg.as_ref(ctx).visible_pane_ids();
-        if src_pane_ids.len() != 1 {
-            return false;
-        }
-        let src_pane_id = src_pane_ids[0];
-        if !src_pane_id.is_terminal_pane() {
-            return false;
-        }
 
         let Some((dst_idx, dst_pg, anchor_pane_id, direction)) =
             self.find_drop_target_pane(src_idx, drop_pos, ctx)
@@ -27014,7 +27024,9 @@ impl Workspace {
         // drag is hovering over a pane in another tab and `DragTabToPaneSplit`
         // is on, suppress the cross-window detach so the drop becomes a split
         // instead of spawning a preview window.
-        let drop_target_pane = if FeatureFlag::DragTabToPaneSplit.is_enabled() {
+        let drop_target_pane = if FeatureFlag::DragTabToPaneSplit.is_enabled()
+            && self.pane_split_drag_source(current_index, ctx).is_some()
+        {
             self.find_drop_target_pane(current_index, position, ctx)
                 .map(|(_, _, pane_id, direction)| (pane_id, direction))
         } else {
