@@ -607,6 +607,7 @@ fn command_execution_finished_defers_queued_command_advance_until_block_completi
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
@@ -678,6 +679,7 @@ fn command_execution_started_preserves_draft_for_queued_command() {
                 empty_scrollback(),
                 None,
                 SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+                RemoteUpdateGuard::new(),
                 ctx,
             )
         });
