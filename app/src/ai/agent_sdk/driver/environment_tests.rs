@@ -39,8 +39,19 @@ fn parallel_clone_command_runs_repos_in_background_and_waits() {
     assert!(command.contains("warpdotdev/warp-server"));
     assert!(command.contains("https://github.com/warpdotdev/warp-server.git"));
     assert_eq!(command.matches("clone_repo").count(), 3);
-    assert_eq!(command.matches("&").count(), 2);
+    assert_eq!(command.matches("2>&1 &").count(), 2);
+    assert!(command.contains("mktemp -d"));
+    assert!(command.contains("warp-clone-logs"));
+    assert!(command.contains("trap cleanup_clone_logs EXIT"));
+    assert!(command.contains("repo-0.log"));
+    assert!(command.contains("repo-1.log"));
+    assert!(command.contains(">\"$log_file_0\" 2>&1 &"));
+    assert!(command.contains(">\"$log_file_1\" 2>&1 &"));
     assert!(command.contains("pids=\"$pids $!\""));
     assert!(command.contains("wait \"$pid\""));
+    assert!(command.contains("===== warpdotdev/warp ====="));
+    assert!(command.contains("cat \"$log_file_0\""));
+    assert!(command.contains("===== warpdotdev/warp-server ====="));
+    assert!(command.contains("cat \"$log_file_1\""));
     assert!(command.contains("exit \"$failed\""));
 }

@@ -269,6 +269,11 @@ fn build_parallel_clone_command(repos: &[GithubRepo], shell_type: ShellType) -> 
         r#"set +e
 failed=0
 pids=""
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/warp-clone-logs.XXXXXX")"
+cleanup_clone_logs() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup_clone_logs EXIT
 clone_repo() {
   repo_name="$1"
   repo_url="$2"
@@ -283,16 +288,27 @@ clone_repo() {
 "#,
     );
 
-    for repo in repos {
+    let mut log_outputs = String::new();
+    for (index, repo) in repos.iter().enumerate() {
         let repo_name = format!("{}/{}", repo.owner, repo.repo);
         let repo_url = format!("https://github.com/{repo_name}.git");
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
         let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&repo.repo, ShellType::Bash);
+        let log_var = format!("log_file_{index}");
         script.push_str(&format!(
-            "clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' &\n"
+            "{log_var}=\"$tmp_dir/repo-{index}.log\"\n\
+             clone_repo '{escaped_repo_name}' '{escaped_repo_url}' '{escaped_target}' >\"${log_var}\" 2>&1 &\n"
         ));
         script.push_str("pids=\"$pids $!\"\n");
+        log_outputs.push_str(&format!(
+            "printf '%s\\n' '===== {escaped_repo_name} ====='\n\
+             if [ -s \"${log_var}\" ]; then\n\
+             \tcat \"${log_var}\"\n\
+             else\n\
+             \tprintf '%s\\n' '(no output)'\n\
+             fi\n"
+        ));
     }
 
     script.push_str(
@@ -301,6 +317,11 @@ clone_repo() {
     failed=1
   fi
 done
+"#,
+    );
+    script.push_str(&log_outputs);
+    script.push_str(
+        r#"
 exit "$failed"
 "#,
     );
