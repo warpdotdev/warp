@@ -3729,10 +3729,7 @@ impl Input {
                 });
                 self.focus_input_box(ctx);
             }
-            QueuedPromptsPanelEvent::RowDeleted { text } => {
-                if self.buffer_text(ctx).is_empty() {
-                    self.replace_buffer_content(text, ctx);
-                }
+            QueuedPromptsPanelEvent::RowDeleted => {
                 self.focus_input_box(ctx);
             }
             QueuedPromptsPanelEvent::EditEnded => {

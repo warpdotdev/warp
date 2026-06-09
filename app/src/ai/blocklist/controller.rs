@@ -677,9 +677,9 @@ impl BlocklistAIController {
         }
 
         if let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str()) {
-            // For a fired queued prompt (e.g. a queued `/compact`), route into the conversation
-            // the prompt was queued on rather than letting the slash request re-derive the target
-            // from the current UI selection. Direct submissions keep the selection-based behavior.
+            // Only fired queued rows carry `queued_query_id`. For those rows, keep slash commands
+            // (e.g. queued `/compact`) on the conversation they were queued on; direct slash
+            // submissions still re-derive their target from the current UI selection.
             let conversation_id_override = input_query
                 .queued_query_id
                 .is_some()
@@ -776,8 +776,9 @@ impl BlocklistAIController {
                 running_command,
                 ..
             } => {
-                // Resolve the attachment set for this submission: a fired queued-prompt row's
-                // stored attachments (by id), or the live input staging for a direct submission.
+                // Resolve the attachment set for this submission. The direct-send branch
+                // preserves existing behavior: live input staging is still consumed by regular
+                // submissions, but fired queued rows read from their row-owned attachment set.
                 let prompt_attachments = match queued_query_id {
                     Some(query_id) => QueuedQueryModel::as_ref(ctx)
                         .attachments_for(conversation_id, query_id)
@@ -788,6 +789,7 @@ impl BlocklistAIController {
                         .pending_attachments()
                         .to_vec(),
                 };
+
                 input_for_query(
                     query,
                     &task_id,
@@ -1353,9 +1355,7 @@ impl BlocklistAIController {
 
     /// Same as [`Self::send_slash_command_request`] but marks the emitted `SentRequest`
     /// event as a queued prompt submission so UI subscribers (e.g. the input editor)
-    /// don't clear the input buffer on the auto-send. `conversation_id` is the conversation
-    /// the prompt was queued on, used to route the send and resolve the row's attachments
-    /// rather than re-deriving from the current UI selection.
+    /// don't clear the input buffer on the auto-send.
     pub fn send_queued_slash_command_request(
         &mut self,
         slash_command: SlashCommandRequest,

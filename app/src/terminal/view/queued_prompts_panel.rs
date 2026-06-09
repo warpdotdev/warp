@@ -192,9 +192,8 @@ pub enum QueuedPromptsPanelEvent {
         query_id: QueuedQueryId,
         text: String,
     },
-    /// A row was deleted via the trash button. The host should place `text` into the input editor
-    /// when the editor is empty, and focus the input.
-    RowDeleted { text: String },
+    /// A row was deleted via the trash button. The host should refocus the input.
+    RowDeleted,
     /// An inline edit was committed or cancelled. The host should refocus the input.
     EditEnded,
 }
@@ -634,9 +633,7 @@ impl TypedActionView for QueuedPromptsPanelView {
                         },
                         ctx
                     );
-                    ctx.emit(QueuedPromptsPanelEvent::RowDeleted {
-                        text: removed.text().to_owned(),
-                    });
+                    ctx.emit(QueuedPromptsPanelEvent::RowDeleted);
                 }
             }
             QueuedPromptsPanelAction::StartDrag(query_id) => {

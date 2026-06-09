@@ -373,8 +373,9 @@ impl QueuedQueryModel {
         })
     }
 
-    /// Removes the row `query_id` from `conversation_id`'s queue after it has been fired or
-    /// restored to the input. Clears edit state if it pointed at the removed row.
+    /// Removes the row `query_id` from `conversation_id`'s queue after it has been fired. In the
+    /// edit-mode auto-fire path, the caller first restores the row's committed text and
+    /// attachments to the input, then calls this to drop the row and clear edit state.
     pub fn remove_fired_row(
         &mut self,
         conversation_id: AIConversationId,
