@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ops::RangeInclusive;
 
 use regex::escape;
@@ -64,6 +65,21 @@ impl RegexDFAs {
         enable_unicode_word_boundary: bool,
         case_sensitive: bool,
     ) -> Result<RegexDFAs, Box<BuildError>> {
+        let patterns = patterns
+            .iter()
+            .map(|pattern| {
+                if enable_unicode_word_boundary {
+                    Cow::Borrowed(*pattern)
+                } else {
+                    Cow::Owned(replace_unicode_word_boundaries(pattern))
+                }
+            })
+            .collect::<Vec<_>>();
+        let pattern_refs = patterns
+            .iter()
+            .map(|pattern| pattern.as_ref())
+            .collect::<Vec<_>>();
+
         let mut builder = DFA::builder();
         builder.configure(
             DFA::config()
@@ -79,7 +95,7 @@ impl RegexDFAs {
         if !case_sensitive {
             builder.syntax(Config::new().case_insensitive(true));
         }
-        Self::new_internal(patterns, builder)
+        Self::new_internal(&pattern_refs, builder)
     }
 
     // Based on FindConfig, create DFAs for all directions
@@ -322,11 +338,58 @@ impl RegexDFAs {
 /// Including a \b in a regex causes compilation of the regex to fail with a haystack containing
 /// unicode. Therefore, we replace it with the ASCII-only version as the docs suggest.
 ///
+/// This rewrite is intentionally syntax-aware. Custom secret regexes can contain literal escaped
+/// backslashes (for example `\\b`) or byte escapes inside character classes (`[\b]`), neither of
+/// which should be treated as word-boundary assertions. We only rewrite unescaped `\b` and `\B`
+/// outside character classes so those patterns keep their original meaning while still avoiding
+/// Unicode word-boundary DFA failures.
+///
 /// Note: One alternative could be use enable this option:
 /// https://docs.rs/regex-automata/0.4.6/regex_automata/hybrid/dfa/struct.Config.html#method.unicode_word_boundary
 /// However, "this only works when the search input is ASCII only." This assumption is
 /// often false in the terminal context, which often contains emojis, box-drawing chars,
 /// international text, etc.
 fn replace_unicode_word_boundaries(pattern: &str) -> String {
-    pattern.replace("\\b", "(?-u:\\b)")
+    let mut result = String::with_capacity(pattern.len());
+    let mut chars = pattern.char_indices().peekable();
+    let mut in_character_class = false;
+
+    while let Some((index, c)) = chars.next() {
+        let is_escaped = count_preceding_backslashes(pattern, index) % 2 == 1;
+        if c == '[' && !is_escaped {
+            in_character_class = true;
+        } else if c == ']' && !is_escaped {
+            in_character_class = false;
+        }
+
+        if c == '\\' && !in_character_class && !is_escaped {
+            match chars.peek().map(|(_, next)| *next) {
+                Some('b') => {
+                    result.push_str("(?-u:\\b)");
+                    chars.next();
+                }
+                Some('B') => {
+                    result.push_str("(?-u:\\B)");
+                    chars.next();
+                }
+                _ => result.push(c),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }
+
+fn count_preceding_backslashes(pattern: &str, index: usize) -> usize {
+    pattern[..index]
+        .chars()
+        .rev()
+        .take_while(|c| *c == '\\')
+        .count()
+}
+
+#[cfg(test)]
+#[path = "find_tests.rs"]
+mod tests;

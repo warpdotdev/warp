@@ -6,6 +6,7 @@ use ai::agent::orchestration_config::{
 };
 use settings::Setting;
 use warp_core::execution_mode::ExecutionMode;
+use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::*;
@@ -77,6 +78,77 @@ fn persist_plan_config_with_harness(
     });
 }
 
+#[test]
+fn should_autoexecute_duplicate_launched_agent_denial() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        state.executor.update(&mut app, |executor, _ctx| {
+            executor.record_launched_agents(
+                state.conversation_id,
+                &[RunAgentsAgentOutcome {
+                    name: "child".to_string(),
+                    kind: RunAgentsAgentOutcomeKind::Launched {
+                        agent_id: "agent-123".to_string(),
+                    },
+                }],
+            );
+        });
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn execute_denies_duplicate_launched_agent() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        state.executor.update(&mut app, |executor, _ctx| {
+            executor.record_launched_agents(
+                state.conversation_id,
+                &[RunAgentsAgentOutcome {
+                    name: "child".to_string(),
+                    kind: RunAgentsAgentOutcomeKind::Launched {
+                        agent_id: "agent-123".to_string(),
+                    },
+                }],
+            );
+        });
+        let action = with_agent_name(remote_run_agents_action("oz"), "Child");
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert!(reason.contains("child (agent-123)"));
+        assert!(reason.contains("send_message_to_agent"));
+    });
+}
+
 fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTestState {
     initialize_settings_for_tests_with_mode(app, mode, false);
     let global_resource_handles = GlobalResourceHandles::mock(app);
@@ -137,6 +209,42 @@ fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
             harness_auth_secret_name: None,
         }),
     }
+}
+
+fn with_agent_name(mut action: AIAgentAction, name: &str) -> AIAgentAction {
+    let AIAgentActionType::RunAgents(request) = &mut action.action else {
+        panic!("expected run_agents action");
+    };
+    request.agent_run_configs[0].name = name.to_string();
+    action
+}
+
+#[test]
+fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
+    let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate the failure".to_string(),
+        title: String::new(),
+    };
+
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Local,
+        "codex",
+        "",
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("local Codex should be accepted when the feature flag is enabled");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: Some("codex".to_string()),
+            model_id: None,
+        }
+    );
 }
 
 fn persist_default_auth_secret(app: &mut App, harness_config_name: &str, secret_name: &str) {

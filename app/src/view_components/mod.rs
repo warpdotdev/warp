@@ -24,7 +24,7 @@ pub use clickable_text_input::*;
 pub use compact_dropdown::{CompactDropdown, CompactDropdownEvent, CompactDropdownItem};
 pub use copyable_text_field::*;
 pub use dismissible_toast::*;
-pub use dropdown::{Dropdown, DropdownEvent, DropdownItem};
+pub use dropdown::{Dropdown, DropdownAction, DropdownEvent, DropdownItem, DropdownItemAction};
 pub use feature_popup::*;
 pub use filterable_dropdown::{
     FilterableDropdown, FilterableDropdownEvent, FilterableDropdownOrientation,

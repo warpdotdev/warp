@@ -2,21 +2,22 @@ use prost::Message;
 
 use super::*;
 use crate::proto::{
-    client_message, server_message, ClientMessage, Initialize, InitializeResponse, ServerMessage,
+    client_message, server_message, session_scoped_request, ClientMessage, Initialize,
+    InitializeResponse, ServerMessage,
 };
 
 #[tokio::test]
 async fn round_trip_client_message() {
-    let msg = ClientMessage {
-        request_id: "test-123".to_string(),
-        message: Some(client_message::Message::Initialize(Initialize {
+    let msg = ClientMessage::session_scoped(
+        "test-123".to_string(),
+        session_scoped_request::Message::Initialize(Initialize {
             auth_token: String::new(),
             user_id: String::new(),
             user_email: String::new(),
             crash_reporting_enabled: true,
             codebase_index_limits: None,
-        })),
-    };
+        }),
+    );
 
     let mut buf = Vec::new();
     write_client_message(&mut buf, &msg).await.unwrap();
@@ -26,7 +27,7 @@ async fn round_trip_client_message() {
 
     assert_eq!(decoded.request_id, "test-123");
     match decoded.message {
-        Some(client_message::Message::Initialize(_)) => {}
+        Some(client_message::Message::SessionScoped(_)) => {}
         other => panic!("unexpected message variant: {other:?}"),
     }
 }
@@ -122,16 +123,16 @@ async fn write_message_too_large() {
 
 #[test]
 fn try_extract_request_id_from_valid_message() {
-    let msg = ClientMessage {
-        request_id: "abc-123".to_string(),
-        message: Some(client_message::Message::Initialize(Initialize {
+    let msg = ClientMessage::session_scoped(
+        "abc-123".to_string(),
+        session_scoped_request::Message::Initialize(Initialize {
             auth_token: String::new(),
             user_id: String::new(),
             user_email: String::new(),
             crash_reporting_enabled: true,
             codebase_index_limits: None,
-        })),
-    };
+        }),
+    );
     let buf = msg.encode_to_vec();
     assert_eq!(try_extract_request_id(&buf), Some("abc-123".to_string()));
 }

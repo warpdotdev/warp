@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -e
+
+workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+temp_dir="$(mktemp -d)"
+trap 'rm -rf "$temp_dir"' EXIT
+
+mkdir -p "$temp_dir/bin"
+cat > "$temp_dir/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CARGO_ARGS_FILE"
+EOF
+chmod +x "$temp_dir/bin/cargo"
+
+PATH="$temp_dir/bin:$PATH" \
+  CARGO_ARGS_FILE="$temp_dir/cargo-args" \
+  CARGO_TARGET_DIR="$temp_dir/target" \
+  "$workspace_root/script/linux/bundle" \
+  --check-only \
+  --artifact warpctrl \
+  --features smoke_feature
+
+grep -qx -- '--features' "$temp_dir/cargo-args"
+grep -qx -- 'release_bundle,crash_reporting,agent_mode_debug,jemalloc_pprof,standalone,warp_control_cli,smoke_feature' "$temp_dir/cargo-args"
+
+profile_dir="$temp_dir/target/release-cli-debug_assertions"
+mkdir -p "$profile_dir"
+cat > "$profile_dir/dev" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FORWARDED_ARGS_FILE"
+EOF
+chmod +x "$profile_dir/dev"
+
+CARGO_TARGET_DIR="$temp_dir/target" \
+  NO_LICENSES=1 \
+  SKIP_SETTINGS_SCHEMA=1 \
+  "$workspace_root/script/linux/bundle" \
+  --skip-build \
+  --artifact warpctrl
+
+FORWARDED_ARGS_FILE="$temp_dir/forwarded-args" \
+  "$profile_dir/bundle/linux/warpctrl" tab create --instance "inst 123"
+
+cat > "$temp_dir/expected-forwarded-args" <<'EOF'
+--warpctrl
+tab
+create
+--instance
+inst 123
+EOF
+cmp "$temp_dir/expected-forwarded-args" "$temp_dir/forwarded-args"

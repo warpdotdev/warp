@@ -22,9 +22,9 @@ use warp::integration_testing::view_getters::{
 use warp::terminal::session_settings::HonorPS1;
 use warp::terminal::shell::{self, ShellType};
 use warp::workspace::Workspace;
-use warpui::clipboard::ClipboardContent;
-use warpui::integration::TestStep;
-use warpui::{async_assert, async_assert_eq, ViewHandle};
+use warpui_core::clipboard::ClipboardContent;
+use warpui_core::integration::TestStep;
+use warpui_core::{async_assert, async_assert_eq, ViewHandle};
 
 use super::{new_builder, Builder};
 use crate::util::{write_all_rc_files_for_test, write_rc_files_for_test, ShellRcType};

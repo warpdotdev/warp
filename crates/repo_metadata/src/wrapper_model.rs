@@ -10,16 +10,17 @@ use std::path::Path;
 
 use warp_core::HostId;
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{AppContext, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::file_tree_store::FileTreeState;
-use crate::file_tree_update::RepoMetadataUpdate;
+use crate::file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
 use crate::local_model::{
-    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoContent, RepositoryMetadataEvent,
+    GetContentsArgs, IndexedRepoState, LocalRepoMetadataModel, RepoContents,
+    RepositoryMetadataEvent,
 };
 use crate::remote_model::{RemoteRepoMetadataModel, RemoteRepositoryMetadataEvent};
 use crate::repository_identifier::{RemoteRepositoryIdentifier, RepositoryIdentifier};
-use crate::RepoMetadataError;
+use crate::{RepoMetadataError, StandingQueryResults, StandingQueryResultsDelta};
 
 /// Unified events emitted by the [`RepoMetadataModel`] wrapper.
 ///
@@ -34,7 +35,17 @@ pub enum RepoMetadataEvent {
     /// File trees for repositories were updated.
     FileTreeUpdated { ids: Vec<RepositoryIdentifier> },
     /// A file tree entry was updated.
-    FileTreeEntryUpdated { id: RepositoryIdentifier },
+    FileTreeEntryUpdated {
+        id: RepositoryIdentifier,
+        /// Specifies whether this event contains a precise delta or requires a conservative
+        /// refresh because the entry was replaced without one.
+        update_type: MetadataUpdateType,
+    },
+    /// Stored standing-query paths changed for a repository.
+    StandingQueryResultsUpdated {
+        id: RepositoryIdentifier,
+        delta: StandingQueryResultsDelta,
+    },
     /// Updating a repository failed.
     UpdatingRepositoryFailed { id: RepositoryIdentifier },
     /// An incremental file tree update is ready to be sent to the remote
@@ -110,9 +121,16 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RepositoryMetadataEvent::FileTreeEntryUpdated { path } => {
+            RepositoryMetadataEvent::FileTreeEntryUpdated { path, update_type } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::local(path.clone()),
+                    update_type: update_type.clone(),
+                }
+            }
+            RepositoryMetadataEvent::StandingQueryResultsUpdated { path, delta } => {
+                RepoMetadataEvent::StandingQueryResultsUpdated {
+                    id: RepositoryIdentifier::local(path.clone()),
+                    delta: delta.clone(),
                 }
             }
             RepositoryMetadataEvent::UpdatingRepositoryFailed { path } => {
@@ -154,9 +172,16 @@ impl RepoMetadataModel {
                         .collect(),
                 }
             }
-            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id } => {
+            RemoteRepositoryMetadataEvent::FileTreeEntryUpdated { id, update_type } => {
                 RepoMetadataEvent::FileTreeEntryUpdated {
                     id: RepositoryIdentifier::Remote(id.clone()),
+                    update_type: update_type.clone(),
+                }
+            }
+            RemoteRepositoryMetadataEvent::StandingQueryResultsUpdated { id, delta } => {
+                RepoMetadataEvent::StandingQueryResultsUpdated {
+                    id: RepositoryIdentifier::Remote(id.clone()),
+                    delta: delta.clone(),
                 }
             }
         };
@@ -175,6 +200,21 @@ impl RepoMetadataModel {
             RepositoryIdentifier::Local(path) => self.local.as_ref(ctx).get_repository(path),
             RepositoryIdentifier::Remote(remote_id) => {
                 self.remote.as_ref(ctx).get_repository(remote_id)
+            }
+        }
+    }
+
+    pub fn standing_query_results<'a>(
+        &self,
+        id: &RepositoryIdentifier,
+        ctx: &'a AppContext,
+    ) -> Option<&'a StandingQueryResults> {
+        match id {
+            RepositoryIdentifier::Local(path) => {
+                self.local.as_ref(ctx).standing_query_results(path)
+            }
+            RepositoryIdentifier::Remote(remote_id) => {
+                self.remote.as_ref(ctx).standing_query_results(remote_id)
             }
         }
     }
@@ -227,12 +267,18 @@ impl RepoMetadataModel {
     }
 
     /// Returns repository contents for the specified repository.
+    ///
+    /// The number of returned entries is capped; when the repository contains
+    /// more matching entries, the result is truncated and
+    /// [`RepoContents::truncated`] is set to `true`.
+    ///
+    /// Returns an error if the repository is not indexed, indexing is pending, or indexing failed.
     pub fn get_repo_contents<'a>(
         &self,
         id: &RepositoryIdentifier,
         args: GetContentsArgs,
         ctx: &'a AppContext,
-    ) -> Option<Vec<RepoContent<'a>>> {
+    ) -> Result<RepoContents<'a>, RepoMetadataError> {
         match id {
             RepositoryIdentifier::Local(path) => {
                 self.local.as_ref(ctx).get_repo_contents(path, args)
@@ -256,6 +302,18 @@ impl RepoMetadataModel {
     // ── Local-specific operations ────────────────────────────────────
     // These delegate to the local sub-model. Remote equivalents will be
     // added once the remote client ↔ server sync layer is in place.
+
+    /// Fully indexes a local directory identified by a standardized path.
+    #[cfg(feature = "local_fs")]
+    pub fn index_local_directory_path(
+        &self,
+        path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), RepoMetadataError> {
+        let path = path.clone();
+        self.local
+            .update(ctx, |local, ctx| local.index_directory_path(&path, ctx))
+    }
 
     /// Indexes a local repository from the given repository handle.
     #[cfg(feature = "local_fs")]
@@ -293,6 +351,34 @@ impl RepoMetadataModel {
         self.local.update(ctx, |local, ctx| {
             local.load_directory(&repo_root, &dir_path, ctx)
         })
+    }
+
+    /// Registers paths that must be loaded even when gitignored or beyond the
+    /// tree's size limit.
+    ///
+    /// This delegates to the local model because force-included path matching
+    /// happens while building local file trees. Remote repositories receive the
+    /// resulting file-tree metadata over the existing remote sync protocol.
+    pub fn register_force_included_paths(
+        &self,
+        paths: impl IntoIterator<Item = std::path::PathBuf>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let paths: Vec<_> = paths.into_iter().collect();
+        self.local.update(ctx, |local, _| {
+            local.register_force_included_paths(paths);
+        });
+    }
+
+    pub fn set_project_skill_provider_paths(
+        &self,
+        paths: impl IntoIterator<Item = std::path::PathBuf>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let paths: Vec<_> = paths.into_iter().collect();
+        self.local.update(ctx, |local, _| {
+            local.set_project_skill_provider_paths(paths);
+        });
     }
 
     /// Removes a lazily-loaded local standalone path from tracking.
@@ -379,7 +465,7 @@ impl RepoMetadataModel {
     }
 }
 
-impl warpui::Entity for RepoMetadataModel {
+impl warpui_core::Entity for RepoMetadataModel {
     type Event = RepoMetadataEvent;
 }
 
@@ -396,6 +482,17 @@ impl RepoMetadataModel {
     ) {
         self.local.update(ctx, |local, _ctx| {
             local.insert_test_state(repo_path, state);
+        });
+    }
+
+    pub fn insert_test_standing_results(
+        &self,
+        repo_path: StandardizedPath,
+        standing_results: StandingQueryResults,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.local.update(ctx, |local, _ctx| {
+            local.insert_test_standing_results(repo_path, standing_results);
         });
     }
 }

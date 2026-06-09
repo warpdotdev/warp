@@ -51,6 +51,7 @@ use crate::server::retry_strategies::{
     is_transient_http_error, OUT_OF_BAND_REQUEST_RETRY_STRATEGY, PERIODIC_POLL_RETRY_STRATEGY,
 };
 use crate::server::server_api::ai::TaskListFilter;
+use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
@@ -72,6 +73,35 @@ const TRANSIENT_FETCH_FAILURE_COOLDOWN: Duration = Duration::from_secs(2);
 /// can't cause a flood.
 const PERMANENT_FETCH_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
 
+/// Error details for a failed ambient-agent task metadata fetch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TaskFetchError {
+    message: String,
+    status: Option<u16>,
+}
+
+impl TaskFetchError {
+    fn from_error(e: &anyhow::Error) -> Self {
+        let status = e.chain().find_map(|cause| {
+            cause
+                .downcast_ref::<HttpStatusError>()
+                .map(|http_err| http_err.status)
+        });
+        Self {
+            message: format!("{e}"),
+            status,
+        }
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub(crate) fn is_access_denied(&self) -> bool {
+        matches!(self.status, Some(401 | 403))
+    }
+}
+
 /// Per-task fetch state for `get_or_async_fetch_task_data`. The three variants are mutually
 /// exclusive: a task id is either being fetched right now, in a short cooldown after a
 /// transient failure, or in a longer cooldown after a permanent (non-transient) failure.
@@ -84,12 +114,12 @@ enum TaskFetchState {
     /// The fetch returned a permanent (non-transient) HTTP error such as 401/403/404; remember
     /// when it failed so we can back off for [`PERMANENT_FETCH_FAILURE_COOLDOWN`] before
     /// retrying. We don't refuse forever in case permissions change mid-session.
-    /// The `String` carries a human-readable description of the failure for display in the UI.
-    PermanentlyFailed { at: Instant, message: String },
+    /// The `TaskFetchError` carries structured failure details for display in the UI.
+    PermanentlyFailed { at: Instant, error: TaskFetchError },
     /// The retry chain just exhausted on a transient error; remember when it failed so we
     /// can back off for [`TRANSIENT_FETCH_FAILURE_COOLDOWN`] before retrying.
-    /// The `String` carries a human-readable description of the failure for display in the UI.
-    TransientlyFailed { at: Instant, message: String },
+    /// The `TaskFetchError` carries structured failure details for display in the UI.
+    TransientlyFailed { at: Instant, error: TaskFetchError },
 }
 
 /// Tracks the cooldown window for RTC-triggered task-list refreshes. Pending events keep
@@ -1534,15 +1564,15 @@ impl AgentConversationsModel {
         self.tasks.get(task_id).cloned()
     }
 
-    /// Returns the error message when the most recent fetch for `task_id` ended in a
+    /// Returns the error details when the most recent fetch for `task_id` ended in a
     /// permanent or transient failure and the cooldown has not yet elapsed. The caller
     /// can use this to display an error state in the details panel.
-    pub fn task_fetch_error(&self, task_id: &AmbientAgentTaskId) -> Option<&str> {
+    pub(crate) fn task_fetch_error(&self, task_id: &AmbientAgentTaskId) -> Option<&TaskFetchError> {
         match self.task_fetch_state.get(task_id) {
             Some(
-                TaskFetchState::PermanentlyFailed { message, .. }
-                | TaskFetchState::TransientlyFailed { message, .. },
-            ) => Some(message),
+                TaskFetchState::PermanentlyFailed { error, .. }
+                | TaskFetchState::TransientlyFailed { error, .. },
+            ) => Some(error),
             _ => None,
         }
     }
@@ -1631,11 +1661,11 @@ impl AgentConversationsModel {
                 }
                 RequestState::RequestFailed(e) => {
                     let now = Instant::now();
-                    let message = format!("{e}");
+                    let error = TaskFetchError::from_error(&e);
                     let new_state = if is_transient_http_error(&e) {
-                        TaskFetchState::TransientlyFailed { at: now, message }
+                        TaskFetchState::TransientlyFailed { at: now, error }
                     } else {
-                        TaskFetchState::PermanentlyFailed { at: now, message }
+                        TaskFetchState::PermanentlyFailed { at: now, error }
                     };
                     model.task_fetch_state.insert(task_id_clone, new_state);
                     report_error!(e);

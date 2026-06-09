@@ -14,9 +14,9 @@ use serde_yaml::{Mapping, Value};
 use string_offset::{ByteOffset, CharOffset};
 use vec1::{Vec1, vec1};
 use warp_util::content_version::ContentVersion;
-use warpui::elements::ListIndentLevel;
-use warpui::text::point::Point;
-use warpui::{App, AppContext, ModelContext, ModelHandle, ReadModel};
+use warpui_core::elements::ListIndentLevel;
+use warpui_core::text::point::Point;
+use warpui_core::{App, AppContext, ModelContext, ModelHandle, ReadModel};
 
 use super::{BufferEvent, EditResult, ToBufferCharOffset};
 use crate::content::buffer::{

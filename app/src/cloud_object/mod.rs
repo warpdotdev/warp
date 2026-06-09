@@ -22,32 +22,19 @@ use self::model::generic_string_model::{
     GenericStringModel, GenericStringObjectId, Serializer, StringModel,
 };
 use self::model::persistence::CloudModel;
-use crate::ai::ambient_agents::scheduled::CloudScheduledAmbientAgentModel;
-use crate::ai::cloud_agent_config::CloudAgentConfigModel;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironmentModel;
-use crate::ai::document::ai_document_model::AIDocumentId;
-use crate::ai::execution_profiles::CloudAIExecutionProfileModel;
-use crate::ai::facts::CloudAIFactModel;
-use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
-use crate::ai::mcp::CloudMCPServerModel;
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
 use crate::channel::ChannelState;
-use crate::drive::folders::{CloudFolderModel, FolderId};
 use crate::drive::items::WarpDriveItem;
 use crate::drive::{CloudObjectTypeAndId, OpenWarpDriveObjectArgs, OpenWarpDriveObjectSettings};
-use crate::env_vars::CloudEnvVarCollectionModel;
-use crate::notebooks::{CloudNotebookModel, NotebookId};
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::server::ids::{HashableId, HashedSqliteId, ObjectUid, ServerId, SyncId, ToServerId};
 use crate::server::server_api::object::ObjectClient;
 use crate::server::sync_queue::{QueueItem, SerializedModel};
-use crate::settings::cloud_preferences::CloudPreferenceModel;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
-use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId, WorkflowSource};
-use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workflows::{CloudWorkflow, WorkflowSource};
+use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub mod breadcrumbs;
@@ -55,7 +42,7 @@ pub mod grab_edit_access_modal;
 pub mod model;
 pub mod toast_message;
 
-pub use warp_server_client::cloud_object::*;
+pub use cloud_objects::cloud_object::*;
 
 /// A CloudObject represents
 /// therefore shareable and editable (i.e. Notebooks and Workflows). In order
@@ -807,35 +794,7 @@ where
         Box::new(self.clone())
     }
 }
-impl<T, S> ServerObjectModel for GenericStringModel<T, S>
-where
-    T: StringModel<
-        CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
-    >,
-    S: Serializer<T>,
-{
-    fn object_type(&self) -> ObjectType {
-        <Self as CloudModelType>::object_type(self)
-    }
-}
 
-impl ServerObjectModel for CloudFolderModel {
-    fn object_type(&self) -> ObjectType {
-        <Self as CloudModelType>::object_type(self)
-    }
-}
-
-impl ServerObjectModel for CloudNotebookModel {
-    fn object_type(&self) -> ObjectType {
-        <Self as CloudModelType>::object_type(self)
-    }
-}
-
-impl ServerObjectModel for CloudWorkflowModel {
-    fn object_type(&self) -> ObjectType {
-        <Self as CloudModelType>::object_type(self)
-    }
-}
 /// Extracts the server id and object type from a (caller validated) Drive link.
 /// Intended use is deriving metadata from links such that Warp objects
 /// can be opened natively in Warp with no web interaction.
@@ -1018,253 +977,15 @@ fn get_top_folder_trashed_ts(
     None
 }
 
-#[derive(Clone, Debug)]
-pub enum ObjectPermissionUpdateResult {
-    Success, // TODO: we should return the full permissions here
-    Failure,
-}
-
-#[derive(Clone, Debug)]
-pub struct ObjectPermissionsUpdateData {
-    /// Updated permissions for the modified object.
-    pub permissions: ServerPermissions,
-    /// Relevant user profiles for the permissions change. This is not *all* profiles that the user
-    /// should have access to.
-    pub profiles: Vec<UserProfileWithUID>,
-}
-
-#[derive(Clone, Debug)]
-pub enum ObjectMetadataUpdateResult {
-    Success { metadata: Box<ServerMetadata> },
-    Failure,
-}
-
-pub enum ObjectDeleteResult {
-    Success { deleted_ids: Vec<SyncId> },
-    Failure,
-}
-
-/// A cloud object from the server.
-#[derive(Clone, Debug)]
-pub enum ServerCloudObject {
-    Notebook(ServerNotebook),
-    Workflow(Box<ServerWorkflow>),
-    Folder(ServerFolder),
-    Preference(ServerPreference),
-    EnvVarCollection(ServerEnvVarCollection),
-    WorkflowEnum(ServerWorkflowEnum),
-    AIFact(ServerAIFact),
-    MCPServer(ServerMCPServer),
-    AIExecutionProfile(ServerAIExecutionProfile),
-    TemplatableMCPServer(ServerTemplatableMCPServer),
-    AmbientAgentEnvironment(ServerAmbientAgentEnvironment),
-    ScheduledAmbientAgent(ServerScheduledAmbientAgent),
-    CloudAgentConfig(ServerCloudAgentConfig),
-}
-
-impl ServerCloudObject {
-    pub fn metadata(&self) -> &ServerMetadata {
-        match self {
-            ServerCloudObject::Notebook(notebook) => &notebook.metadata,
-            ServerCloudObject::Workflow(workflow) => &workflow.metadata,
-            ServerCloudObject::Folder(folder) => &folder.metadata,
-            ServerCloudObject::Preference(preferences) => &preferences.metadata,
-            ServerCloudObject::EnvVarCollection(env_var_collection) => &env_var_collection.metadata,
-            ServerCloudObject::WorkflowEnum(workflow_enum) => &workflow_enum.metadata,
-            ServerCloudObject::AIFact(aifact) => &aifact.metadata,
-            ServerCloudObject::MCPServer(mcp_server) => &mcp_server.metadata,
-            ServerCloudObject::TemplatableMCPServer(templatable_mcp_server) => {
-                &templatable_mcp_server.metadata
-            }
-            ServerCloudObject::AIExecutionProfile(ai_execution_profile) => {
-                &ai_execution_profile.metadata
-            }
-            ServerCloudObject::AmbientAgentEnvironment(ambient_agent_environment) => {
-                &ambient_agent_environment.metadata
-            }
-            ServerCloudObject::ScheduledAmbientAgent(scheduled_ambient_agent) => {
-                &scheduled_ambient_agent.metadata
-            }
-            ServerCloudObject::CloudAgentConfig(cloud_agent_config) => &cloud_agent_config.metadata,
-        }
-    }
-
-    pub fn uid(&self) -> ObjectUid {
-        match self {
-            ServerCloudObject::Notebook(notebook) => notebook.id.uid(),
-            ServerCloudObject::Workflow(workflow) => workflow.id.uid(),
-            ServerCloudObject::Folder(folder) => folder.id.uid(),
-            ServerCloudObject::Preference(preferences) => preferences.id.uid(),
-            ServerCloudObject::EnvVarCollection(env_var_collection) => env_var_collection.id.uid(),
-            ServerCloudObject::WorkflowEnum(workflow_enum) => workflow_enum.id.uid(),
-            ServerCloudObject::AIFact(aifact) => aifact.id.uid(),
-            ServerCloudObject::MCPServer(mcp_server) => mcp_server.id.uid(),
-            ServerCloudObject::AIExecutionProfile(ai_execution_profile) => {
-                ai_execution_profile.id.uid()
-            }
-            ServerCloudObject::TemplatableMCPServer(templatable_mcp_server) => {
-                templatable_mcp_server.id.uid()
-            }
-            ServerCloudObject::AmbientAgentEnvironment(ambient_agent_environment) => {
-                ambient_agent_environment.id.uid()
-            }
-            ServerCloudObject::ScheduledAmbientAgent(scheduled_ambient_agent) => {
-                scheduled_ambient_agent.id.uid()
-            }
-            ServerCloudObject::CloudAgentConfig(cloud_agent_config) => cloud_agent_config.id.uid(),
-        }
-    }
-}
-
-impl<K, M> From<&GenericServerObject<K, M>> for ServerCloudObject
-where
-    K: HashableId + ToServerId + Debug + Into<String> + Clone + 'static,
-    M: CloudModelType<IdType = K> + 'static,
-{
-    fn from(value: &GenericServerObject<K, M>) -> Self {
-        let value = value as &dyn Any;
-        if let Some(server_notebook) = value.downcast_ref::<ServerNotebook>() {
-            ServerCloudObject::Notebook(server_notebook.clone())
-        } else if let Some(server_workflow) = value.downcast_ref::<ServerWorkflow>() {
-            ServerCloudObject::Workflow(Box::new(server_workflow.clone()))
-        } else if let Some(server_folder) = value.downcast_ref::<ServerFolder>() {
-            ServerCloudObject::Folder(server_folder.clone())
-        } else if let Some(server_preferences) = value.downcast_ref::<ServerPreference>() {
-            ServerCloudObject::Preference(server_preferences.clone())
-        } else if let Some(server_env_var_collection) =
-            value.downcast_ref::<ServerEnvVarCollection>()
-        {
-            ServerCloudObject::EnvVarCollection(server_env_var_collection.clone())
-        } else if let Some(server_workflow_enum) = value.downcast_ref::<ServerWorkflowEnum>() {
-            ServerCloudObject::WorkflowEnum(server_workflow_enum.clone())
-        } else if let Some(server_aifact) = value.downcast_ref::<ServerAIFact>() {
-            ServerCloudObject::AIFact(server_aifact.clone())
-        } else if let Some(server_mcp_server) = value.downcast_ref::<ServerMCPServer>() {
-            ServerCloudObject::MCPServer(server_mcp_server.clone())
-        } else if let Some(server_ai_execution_profile) =
-            value.downcast_ref::<ServerAIExecutionProfile>()
-        {
-            ServerCloudObject::AIExecutionProfile(server_ai_execution_profile.clone())
-        } else if let Some(server_templatable_mcp_server) =
-            value.downcast_ref::<ServerTemplatableMCPServer>()
-        {
-            ServerCloudObject::TemplatableMCPServer(server_templatable_mcp_server.clone())
-        } else if let Some(server_ambient_agent_environment) =
-            value.downcast_ref::<ServerAmbientAgentEnvironment>()
-        {
-            ServerCloudObject::AmbientAgentEnvironment(server_ambient_agent_environment.clone())
-        } else if let Some(server_scheduled_ambient_agent) =
-            value.downcast_ref::<ServerScheduledAmbientAgent>()
-        {
-            ServerCloudObject::ScheduledAmbientAgent(server_scheduled_ambient_agent.clone())
-        } else if let Some(server_cloud_agent_config) =
-            value.downcast_ref::<ServerCloudAgentConfig>()
-        {
-            ServerCloudObject::CloudAgentConfig(server_cloud_agent_config.clone())
-        } else {
-            panic!("Unknown server object type");
-        }
-    }
-}
-
-pub type ServerPreference = GenericServerObject<GenericStringObjectId, CloudPreferenceModel>;
-pub type ServerFolder = GenericServerObject<FolderId, CloudFolderModel>;
-pub type ServerWorkflow = GenericServerObject<WorkflowId, CloudWorkflowModel>;
-pub type ServerNotebook = GenericServerObject<NotebookId, CloudNotebookModel>;
-pub type ServerEnvVarCollection =
-    GenericServerObject<GenericStringObjectId, CloudEnvVarCollectionModel>;
-pub type ServerWorkflowEnum = GenericServerObject<GenericStringObjectId, CloudWorkflowEnumModel>;
-pub type ServerAIFact = GenericServerObject<GenericStringObjectId, CloudAIFactModel>;
-pub type ServerMCPServer = GenericServerObject<GenericStringObjectId, CloudMCPServerModel>;
-pub type ServerAIExecutionProfile =
-    GenericServerObject<GenericStringObjectId, CloudAIExecutionProfileModel>;
-pub type ServerTemplatableMCPServer =
-    GenericServerObject<GenericStringObjectId, CloudTemplatableMCPServerModel>;
-pub type ServerAmbientAgentEnvironment =
-    GenericServerObject<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>;
-pub type ServerScheduledAmbientAgent =
-    GenericServerObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
-pub type ServerCloudAgentConfig = GenericServerObject<GenericStringObjectId, CloudAgentConfigModel>;
-
-/// Tries to convert a GraphQL object payload into a local server object.
-pub trait TryFromGql: Sized {
-    type GqlType;
-
-    fn try_from_gql(value: Self::GqlType) -> Result<Self>;
-}
-
-impl<T, S> TryFromGql for GenericServerObject<GenericStringObjectId, GenericStringModel<T, S>>
-where
-    T: StringModel<
-        CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
-    >,
-    S: Serializer<T>,
-{
-    type GqlType = warp_graphql::generic_string_object::GenericStringObject;
-
-    fn try_from_gql(value: Self::GqlType) -> Result<Self> {
-        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
-        let model = GenericStringModel::<T, S>::deserialize_owned(&value.serialized_model)?;
-        Ok(Self::new(
-            SyncId::ServerId(uid),
-            model,
-            value.metadata.try_into()?,
-            value.permissions.try_into()?,
-        ))
-    }
-}
-
-impl TryFromGql for ServerFolder {
-    type GqlType = warp_graphql::folder::Folder;
-
-    fn try_from_gql(value: Self::GqlType) -> Result<Self> {
-        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
-        Ok(Self::new(
-            SyncId::ServerId(uid),
-            CloudFolderModel::new(&value.name, value.is_warp_pack),
-            value.metadata.try_into()?,
-            value.permissions.try_into()?,
-        ))
-    }
-}
-
-impl TryFromGql for ServerNotebook {
-    type GqlType = warp_graphql::notebook::Notebook;
-
-    fn try_from_gql(value: Self::GqlType) -> Result<Self> {
-        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
-        let ai_document_id: Option<AIDocumentId> = value
-            .ai_document_id
-            .map(|id| AIDocumentId::try_from(&id[..]))
-            .transpose()?;
-        Ok(Self::new(
-            SyncId::ServerId(uid),
-            CloudNotebookModel {
-                title: value.title,
-                data: value.data,
-                ai_document_id,
-                conversation_id: None,
-            },
-            value.metadata.try_into()?,
-            value.permissions.try_into()?,
-        ))
-    }
-}
-
-impl TryFromGql for ServerWorkflow {
-    type GqlType = warp_graphql::workflow::Workflow;
-
-    fn try_from_gql(value: Self::GqlType) -> Result<Self> {
-        let uid = ServerId::from_string_lossy(value.metadata.uid.inner());
-        let workflow = serde_json::from_str(value.data.as_str())?;
-        Ok(Self::new(
-            SyncId::ServerId(uid),
-            CloudWorkflowModel { data: workflow },
-            value.metadata.try_into()?,
-            value.permissions.try_into()?,
-        ))
-    }
-}
+pub use cloud_object_client::{
+    ObjectDeleteResult, ObjectMetadataUpdateResult, ObjectPermissionsUpdateData,
+};
+pub use cloud_object_models::{
+    ServerAIExecutionProfile, ServerAIFact, ServerAmbientAgentEnvironment, ServerCloudAgentConfig,
+    ServerCloudObject, ServerEnvVarCollection, ServerFolder, ServerMCPServer, ServerNotebook,
+    ServerPreference, ServerScheduledAmbientAgent, ServerTemplatableMCPServer, ServerWorkflow,
+    ServerWorkflowEnum, TryFromGql,
+};
 
 #[derive(Default, Clone, Copy, Debug, Eq, Derivative)]
 #[derivative(PartialEq, Hash)]

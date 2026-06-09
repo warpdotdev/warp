@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -e
+
+workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+discovery_dir="$(mktemp -d)"
+trap 'rm -rf "$discovery_dir"' EXIT
+
+python3 - "$workspace_root" "$discovery_dir" <<'PY'
+import os
+import pathlib
+import subprocess
+import sys
+
+workspace_root = pathlib.Path(sys.argv[1])
+discovery_dir = sys.argv[2]
+environment = os.environ.copy()
+environment["WARP_LOCAL_CONTROL_DISCOVERY_DIR"] = discovery_dir
+result = subprocess.run(
+    [
+        "cargo",
+        "run",
+        "-p",
+        "warp",
+        "--bin",
+        "warp",
+        "--features",
+        "warp_control_cli",
+        "--",
+        "--warpctrl",
+        "--output-format",
+        "json",
+        "instance",
+        "list",
+    ],
+    cwd=workspace_root,
+    env=environment,
+    capture_output=True,
+    text=True,
+    timeout=180,
+)
+if result.returncode != 0:
+    sys.stderr.write(result.stderr)
+    sys.stderr.write(result.stdout)
+    raise SystemExit(result.returncode)
+if result.stdout.strip() != "[]":
+    sys.stderr.write(result.stderr)
+    sys.stderr.write(f"unexpected warpctrl output: {result.stdout!r}\n")
+    raise SystemExit(1)
+PY

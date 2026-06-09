@@ -1,4 +1,4 @@
-use warpui::SingletonEntity;
+use warpui_core::SingletonEntity;
 
 use crate::manager::SettingsManager;
 use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
@@ -61,7 +61,7 @@ pub fn init_and_register_user_preferences(ctx: &mut AppContext) {
 
 #[test]
 fn test_is_setting_syncable_on_current_platform() {
-    warpui::App::test((), |mut app| async move {
+    warpui_core::App::test((), |mut app| async move {
         app.update(init_and_register_user_preferences);
         app.add_singleton_model(|_| SettingsManager::default());
 
@@ -153,7 +153,7 @@ fn test_is_setting_syncable_on_current_platform() {
 }
 
 mod reload_all_public_settings_tests {
-    use warpui::SingletonEntity;
+    use warpui_core::SingletonEntity;
 
     use crate::manager::SettingsManager;
     use crate::{Setting, SupportedPlatforms, SyncToCloud, *};
@@ -193,7 +193,7 @@ mod reload_all_public_settings_tests {
     /// in the preferences backend.
     #[test]
     fn test_loads_present_keys() {
-        warpui::App::test((), |mut app| async move {
+        warpui_core::App::test((), |mut app| async move {
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
             ReloadTestSettings::register(&mut app);
@@ -227,7 +227,7 @@ mod reload_all_public_settings_tests {
     /// reload (the key-deletion scenario).
     #[test]
     fn test_resets_absent_keys_to_defaults() {
-        warpui::App::test((), |mut app| async move {
+        warpui_core::App::test((), |mut app| async move {
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
             ReloadTestSettings::register(&mut app);
@@ -268,7 +268,7 @@ mod reload_all_public_settings_tests {
     /// This is the property that prevents the infinite watcher loop.
     #[test]
     fn test_absent_keys_are_not_written_back() {
-        warpui::App::test((), |mut app| async move {
+        warpui_core::App::test((), |mut app| async move {
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
             ReloadTestSettings::register(&mut app);
@@ -309,7 +309,7 @@ mod reload_all_public_settings_tests {
     /// of settings that fail to deserialize (invalid value in file).
     #[test]
     fn test_reload_returns_failed_keys_for_invalid_values() {
-        warpui::App::test((), |mut app| async move {
+        warpui_core::App::test((), |mut app| async move {
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
             ReloadTestSettings::register(&mut app);
@@ -350,7 +350,7 @@ mod reload_all_public_settings_tests {
     /// when all values are valid.
     #[test]
     fn test_reload_returns_empty_vec_on_success() {
-        warpui::App::test((), |mut app| async move {
+        warpui_core::App::test((), |mut app| async move {
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
             ReloadTestSettings::register(&mut app);
@@ -380,7 +380,7 @@ mod reload_all_public_settings_tests {
     /// values without modifying in-memory state.
     #[test]
     fn test_validate_detects_invalid_values() {
-        warpui::App::test((), |mut app| async move {
+        warpui_core::App::test((), |mut app| async move {
             let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());
@@ -419,7 +419,7 @@ mod reload_all_public_settings_tests {
     /// stored values are valid.
     #[test]
     fn test_validate_returns_empty_when_all_valid() {
-        warpui::App::test((), |mut app| async move {
+        warpui_core::App::test((), |mut app| async move {
             let _guard = warp_features::FeatureFlag::SettingsFile.override_enabled(true);
             app.update(init_prefs);
             app.add_singleton_model(|_| SettingsManager::default());

@@ -10,7 +10,7 @@ use super::{
     model::session::{BootstrapSessionType, SessionInfo},
     warpify::settings::{PIPENV_SUBSHELL_COMMAND_REGEX, POETRY_SUBSHELL_COMMAND_REGEX},
 };
-use crate::env_vars::EnvVar;
+use crate::env_vars::{EnvVar, EnvVarExt};
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::shell::ShellType;
 

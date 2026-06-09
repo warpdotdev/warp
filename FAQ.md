@@ -80,7 +80,7 @@ No. Contributing by hand or with your own agent is free. Oz runs on Warp's credi
 
 ### Are agent-generated PRs held to the same bar as human ones?
 
-Yes. The same Oz + SME review, the same tests, and the same `cargo fmt` / `cargo clippy` / presubmit checks apply regardless of who (or what) wrote the code. Whether a PR is hand-written or agent-written doesn't change the quality bar — it changes how quickly you can iterate to meet it.
+Yes. The same Oz + SME review, the same tests, and the same `./script/format` / `cargo clippy` / presubmit checks apply regardless of who (or what) wrote the code. Whether a PR is hand-written or agent-written doesn't change the quality bar — it changes how quickly you can iterate to meet it.
 
 ### Will my issues, comments, or code be used to train models?
 

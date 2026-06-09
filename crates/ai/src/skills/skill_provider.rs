@@ -12,6 +12,7 @@ use strum_macros::{Display, EnumString, VariantNames};
 use warp_core::ui::color::CLAUDE_ORANGE;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::Fill;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 /// Represents a skill provider/origin (Agents, Claude, Codex, or Warp).
 #[derive(
@@ -166,29 +167,65 @@ pub fn home_skills_path(provider: SkillProvider) -> Option<PathBuf> {
     home_dir().map(|home_dir| home_dir.join(&definition.skills_path))
 }
 
-/// Returns the skill provider for a given path, if it matches a known skill provider directory.
-/// For example:
-///   get_provider_for_path(Path::new("/repo/.claude/skills/my-skill/SKILL.md")) returns Some(SkillProvider::Claude).
-/// Handles both SKILL.md files and files nested within a skill directory.
-pub fn get_provider_for_path(path: &Path) -> Option<SkillProvider> {
-    let path_components: Vec<_> = path.components().collect();
+/// Returns the skill provider for a location, if it matches a known skill provider directory.
+///
+/// Local locations retain home-directory-aware matching. All other locations are
+/// classified by provider-directory structure using their standardized path representation.
+pub fn get_provider_for_path(path: &LocalOrRemotePath) -> Option<SkillProvider> {
+    path.to_local_path()
+        .and_then(get_home_provider_for_local_path)
+        .or_else(|| get_provider_for_structural_path(path))
+}
 
-    for def in SKILL_PROVIDER_DEFINITIONS.iter() {
-        if home_skills_path(def.provider)
-            .into_iter()
-            .any(|home_skills_path| path.starts_with(home_skills_path))
-        {
-            return Some(def.provider);
+fn get_home_provider_for_local_path(path: &Path) -> Option<SkillProvider> {
+    SKILL_PROVIDER_DEFINITIONS
+        .iter()
+        .find(|definition| {
+            home_skills_path(definition.provider)
+                .into_iter()
+                .any(|home_skills_path| path.starts_with(home_skills_path))
+        })
+        .map(|definition| definition.provider)
+}
+
+/// Returns the directory containing a provider's skills root when `skills_root` has a known
+/// provider directory suffix, preserving the original local or remote location encoding.
+///
+/// For example, `/repo/.agents/skills` resolves to `/repo`, regardless of whether the location
+/// is encoded with Unix or Windows path separators.
+pub fn provider_parent_directory_for_skills_root(
+    skills_root: &LocalOrRemotePath,
+) -> Option<LocalOrRemotePath> {
+    match_provider_skills_root(skills_root).map(|(_, parent_directory)| parent_directory)
+}
+
+fn get_provider_for_structural_path(path: &LocalOrRemotePath) -> Option<SkillProvider> {
+    let mut current = Some(path.clone());
+    while let Some(candidate) = current {
+        if let Some((provider, _)) = match_provider_skills_root(&candidate) {
+            return Some(provider);
         }
+        current = candidate.parent();
+    }
+    None
+}
 
-        // Retrieves path components for the skill provider directory (i.e., [".claude", "skills"])
-        let skill_components: Vec<_> = def.skills_path.components().collect();
-
-        // Checks if some consecutive components of the path match the skill provider directory
-        for window in path_components.windows(skill_components.len()) {
-            if window == skill_components.as_slice() {
-                return Some(def.provider);
+fn match_provider_skills_root(
+    skills_root: &LocalOrRemotePath,
+) -> Option<(SkillProvider, LocalOrRemotePath)> {
+    for definition in SKILL_PROVIDER_DEFINITIONS.iter() {
+        let mut parent_directory = skills_root.clone();
+        let mut matches_provider = true;
+        for component in definition.skills_path.components().rev() {
+            let expected_component = component.as_os_str().to_str()?;
+            if parent_directory.file_name() != Some(expected_component) {
+                matches_provider = false;
+                break;
             }
+            parent_directory = parent_directory.parent()?;
+        }
+        if matches_provider {
+            return Some((definition.provider, parent_directory));
         }
     }
     None
@@ -210,28 +247,5 @@ pub fn get_scope_for_path(path: &Path) -> SkillScope {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        get_provider_for_path, get_scope_for_path, home_skills_path, SkillProvider, SkillScope,
-    };
-
-    #[test]
-    fn warp_home_skills_path_uses_warp_home_path() {
-        assert_eq!(
-            home_skills_path(SkillProvider::Warp),
-            warp_core::paths::warp_home_skills_dir()
-        );
-    }
-
-    #[test]
-    fn warp_home_skill_path_is_home_warp_skill() {
-        let Some(warp_home_skills_dir) = warp_core::paths::warp_home_skills_dir() else {
-            eprintln!("Skipping test: home directory not available");
-            return;
-        };
-        let path = warp_home_skills_dir.join("my-skill").join("SKILL.md");
-
-        assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Warp));
-        assert_eq!(get_scope_for_path(&path), SkillScope::Home);
-    }
-}
+#[path = "skill_provider_tests.rs"]
+mod tests;

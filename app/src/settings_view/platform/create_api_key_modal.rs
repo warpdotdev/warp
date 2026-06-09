@@ -1,11 +1,13 @@
 use chrono::Utc;
+use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
+use warp_server_client::auth::AgentIdentity;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    Empty, Expanded, Fill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentElement, PositionedElementAnchor,
-    PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
+    Empty, Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
+    MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, Stack, Text,
 };
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -22,13 +24,14 @@ use crate::editor::{
     TextOptions,
 };
 use crate::modal::{Modal, ModalViewState};
-use crate::server::server_api::auth::{AgentIdentity, AuthClient};
 use crate::util::truncation::truncate_from_end;
 use crate::view_components::dropdown::{DROPDOWN_PADDING, TOP_MENU_BAR_HEIGHT};
 use crate::view_components::{Dropdown as DropdownView, DropdownItem};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const OZ_AGENTS_URL: &str = "https://oz.warp.dev/agents?new=true";
+const API_KEY_DOCS_URL: &str =
+    "https://docs.warp.dev/reference/cli/api-keys/#personal-vs-agent-keys";
 
 const LABEL_FONT_SIZE: f32 = 14.;
 const INPUT_WIDTH: f32 = 428.; // 460px - (2 * 16px) padding
@@ -277,9 +280,10 @@ impl CreateApiKeyModal {
         self.is_loading_agents = true;
         ctx.notify();
 
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         ctx.spawn(
-            async move { server_api.list_agent_identities().await },
+            async move { auth_client.list_agent_identities().await },
             |me, res, ctx| {
                 me.is_loading_agents = false;
                 match res {
@@ -377,9 +381,10 @@ impl CreateApiKeyModal {
             None
         };
 
-        let server_api = crate::server::server_api::ServerApiProvider::as_ref(ctx).get();
+        let auth_client =
+            crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
         ctx.spawn(
-            async move { server_api.create_api_key(final_name, team_id, agent_uid, expires_at).await },
+            async move { auth_client.create_api_key(final_name, team_id, agent_uid, expires_at).await },
             |me, res, ctx| {
                 match res {
                     Ok(warp_graphql::mutations::generate_api_key::GenerateApiKeyResult::GenerateApiKeyOutput(output)) => {
@@ -601,14 +606,33 @@ impl View for CreateApiKeyModal {
             RequestState::Succeeded => self.render_success_content(app),
             _ => {
                 let selected_key_type = self.api_key_type_control.as_ref(app).selected_option();
-
-                let description_text = Text::new(
-                    selected_key_type.description(),
-                    appearance.ui_font_family(),
-                    LABEL_FONT_SIZE,
-                )
-                .with_color(theme.nonactive_ui_text_color().into())
-                .finish();
+                let description_text = if selected_key_type == ApiKeyType::Agent {
+                    FormattedTextElement::new(
+                        FormattedText::new([FormattedTextLine::Line(vec![
+                            FormattedTextFragment::plain_text(selected_key_type.description()),
+                            FormattedTextFragment::plain_text(" "),
+                            FormattedTextFragment::hyperlink("Learn more", API_KEY_DOCS_URL),
+                        ])]),
+                        LABEL_FONT_SIZE,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_family(),
+                        theme.nonactive_ui_text_color().into(),
+                        HighlightedHyperlink::default(),
+                    )
+                    .with_hyperlink_font_color(theme.accent().into_solid())
+                    .register_default_click_handlers(|url, _, ctx| {
+                        ctx.open_url(&url.url);
+                    })
+                    .finish()
+                } else {
+                    Text::new(
+                        selected_key_type.description(),
+                        appearance.ui_font_family(),
+                        LABEL_FONT_SIZE,
+                    )
+                    .with_color(theme.nonactive_ui_text_color().into())
+                    .finish()
+                };
 
                 let name_label = Text::new("Name", appearance.ui_font_family(), LABEL_FONT_SIZE)
                     .with_color(theme.active_ui_text_color().into())

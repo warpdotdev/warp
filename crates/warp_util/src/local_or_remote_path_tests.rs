@@ -178,3 +178,26 @@ fn local_or_remote_path_strip_repo_prefix_requires_same_host() {
         "local-vs-remote strip should be rejected"
     );
 }
+
+#[test]
+fn local_or_remote_path_strip_repo_prefix_rejects_sibling_dirs() {
+    // A remote file under a *sibling* directory whose name merely shares a
+    // string prefix with the repo (`/repository` vs `/repo`) is not inside
+    // the repo and must not be stripped. This must match the `Local` arm,
+    // which already rejects it via component-aware `Path::strip_prefix`.
+    let host = HostId::new("host".to_string());
+    let repo = LocalOrRemotePath::Remote(RemotePath::new(
+        host.clone(),
+        StandardizedPath::try_new("/repo").unwrap(),
+    ));
+    let sibling = LocalOrRemotePath::Remote(RemotePath::new(
+        host,
+        StandardizedPath::try_new("/repository/src/foo.rs").unwrap(),
+    ));
+
+    assert_eq!(
+        repo.strip_repo_prefix(&sibling),
+        None,
+        "sibling dir sharing a string prefix is not inside the repo"
+    );
+}

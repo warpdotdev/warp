@@ -1,9 +1,10 @@
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+#[cfg(feature = "local_fs")]
+use ai::skills::SKILL_PROVIDER_DEFINITIONS;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, ViewHandle, WindowId};
@@ -15,11 +16,11 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_tips::AITipModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
-use crate::ai::blocklist::task_status_sync_model::TaskStatusSyncModel;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, BlocklistAIPermissions, SerializedBlockListItem,
+    BlocklistAIHistoryModel, BlocklistAIPermissions, QueuedQueryModel, SerializedBlockListItem,
 };
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -44,6 +45,7 @@ use crate::pricing::PricingInfoModel;
 use crate::search::files::model::FileSearchModel;
 use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::iap::IapManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
@@ -73,6 +75,10 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     initialize_history_persistence_for_tests(app);
 
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    // Register a disabled `IapManager` (no IAP state) so code paths that read
+    // the singleton (e.g. the shared-session viewer network) don't panic in
+    // tests. With `None` state it is an inert no-op.
+    app.add_singleton_model(|ctx| IapManager::new(None, ctx));
     app.add_singleton_model(|ctx| ChangelogModel::new(ServerApiProvider::as_ref(ctx).get()));
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| SystemStats::new());
@@ -92,15 +98,16 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(LocalWorkflows::new);
     app.add_singleton_model(|_| History::default());
     app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+    // QueuedQueryModel subscribes to history events; register after the
+    // history model is in place.
+    app.add_singleton_model(QueuedQueryModel::new);
     // Pill bar model subscribes to history events; register after the
     // history model is in place.
     app.add_singleton_model(|ctx| OrchestrationPillBarModel::new(Default::default(), ctx));
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
-    app.add_singleton_model(TaskStatusSyncModel::new);
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        app.add_singleton_model(OrchestrationEventStreamer::new);
-    }
+    app.add_singleton_model(LocalAgentTaskSyncModel::new);
+    app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(BlocklistAIPermissions::new);
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -123,7 +130,22 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
     #[cfg(feature = "local_fs")]
-    app.add_singleton_model(RepoMetadataModel::new);
+    app.add_singleton_model(|ctx| {
+        let model = RepoMetadataModel::new(ctx);
+        model.register_force_included_paths(
+            SKILL_PROVIDER_DEFINITIONS
+                .iter()
+                .map(|provider| provider.skills_path.clone()),
+            ctx,
+        );
+        model.set_project_skill_provider_paths(
+            SKILL_PROVIDER_DEFINITIONS
+                .iter()
+                .map(|provider| provider.skills_path.clone()),
+            ctx,
+        );
+        model
+    });
     app.add_singleton_model(FileSearchModel::new);
     app.add_singleton_model(|_| GitStatusUpdateModel::new());
     app.add_singleton_model(RepoOutlines::new_for_test);

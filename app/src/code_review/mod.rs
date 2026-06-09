@@ -6,6 +6,7 @@ pub mod diff_size_limits;
 pub mod diff_state;
 pub mod editor_state;
 pub(crate) mod find_model;
+pub(crate) mod git_actions;
 pub(crate) mod git_dialog;
 pub mod git_status_update;
 mod hidden_lines;

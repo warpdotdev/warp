@@ -248,11 +248,11 @@ impl SlashCommandModel {
 
         let skill_name = possible_command.strip_prefix('/')?;
 
-        let cwd = self.active_session.as_ref(ctx).current_working_directory();
-        let cwd_path = cwd.as_ref().map(std::path::Path::new);
+        let active_session = self.active_session.as_ref(ctx);
+        let cwd_path = active_session.current_working_directory_location(ctx);
         let skills = SkillManager::handle(ctx)
             .as_ref(ctx)
-            .get_skills_for_working_directory(cwd_path, ctx);
+            .get_skills_for_working_directory(cwd_path.as_ref(), ctx);
 
         let matched_skill = skills.into_iter().find(|skill| skill.name == skill_name)?;
 

@@ -17,6 +17,7 @@ use crate::terminal::model::ansi::{self};
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::shared_session::ai_agent::decode_agent_response_event;
 use crate::terminal::shared_session::{decode_scrollback, SharedSessionStatus};
+use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::{TerminalModel, TerminalView};
 
 /// If we end up buffering more than this many events,
@@ -191,6 +192,22 @@ impl EventLoop {
                     if ai_metadata.is_none() {
                         if let Some(view) = self.terminal_view.upgrade(ctx) {
                             view.update(ctx, |view, ctx| {
+                                // Skip during cloud setup: clearing on every setup command would
+                                // wipe a follow-up the viewer is composing. Mirrors the
+                                // `InputUpdated` guard.
+                                let skip_clear_during_setup =
+                                    FeatureFlag::CloudModeSetupV2.is_enabled() && {
+                                        let model = view.model.lock();
+                                        is_cloud_agent_pre_first_exchange(
+                                            view.ambient_agent_view_model(),
+                                            view.agent_view_controller(),
+                                            &model,
+                                            ctx,
+                                        )
+                                    };
+                                if skip_clear_during_setup {
+                                    return;
+                                }
                                 view.input().update(ctx, |input, ctx| {
                                     input.unfreeze_and_clear_agent_input(ctx);
                                 });
@@ -342,6 +359,20 @@ impl EventLoop {
                                 controller
                                     .set_should_suppress_existing_agent_conversation_replay(false);
                             });
+                        });
+                    }
+                }
+                OrderedTerminalEventType::CloudModeSetupPhaseEnded => {
+                    // Canonical setup-complete signal from the sharer. Legacy
+                    // AppendedExchange-driven teardowns remain idempotently as
+                    // a fallback for pre-feature sharers.
+                    if let Some(view) = self.terminal_view.upgrade(ctx) {
+                        view.update(ctx, |view, ctx| {
+                            view.tear_down_cloud_mode_setup_phase(ctx);
+                            // A promptless handoff run never fires a first turn,
+                            // so this is the only point a prompt queued during
+                            // setup can be auto-sent.
+                            view.maybe_drain_queue_after_promptless_setup(ctx);
                         });
                     }
                 }

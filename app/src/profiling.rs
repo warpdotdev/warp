@@ -63,9 +63,13 @@ pub fn dump_dhat_heap_profile() {
 
 /// Dumps a jemalloc heap profile and sends it to Sentry.
 ///
-/// This function spawns `go tool pprof` to fetch and symbolicate the heap
-/// profile from the local HTTP server, then attaches the resulting profile
-/// to a Sentry event.
+/// On Linux the profile is produced in-process via the `jemalloc_pprof` crate
+/// as a raw (unsymbolized) pprof -- sample addresses + mappings + GNU build-id
+/// -- and is symbolized offline against the debug-info file uploaded to Sentry
+/// by the release process (matched by build-id).  On other platforms it spawns
+/// the bundled `pprof` binary to fetch and symbolicate the heap profile from
+/// the local HTTP server.  Either way, the resulting profile is attached to a
+/// Sentry event.
 #[cfg(feature = "heap_usage_tracking")]
 pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
     use sentry::protocol::{Attachment, AttachmentType};
@@ -113,35 +117,69 @@ pub async fn dump_jemalloc_heap_profile(memory_breakdown: serde_json::Value) {
 
 #[cfg(feature = "heap_usage_tracking")]
 async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
-    use anyhow::Context as _;
+    cfg_if::cfg_if! {
+        if #[cfg(target_os = "linux")] {
+            // `jemalloc_pprof` only supports Linux. We build it WITHOUT the
+            // `symbolize` feature, so `dump_pprof()` returns a raw, gzipped
+            // pprof (sample addresses + mappings + GNU build-id) that is
+            // symbolized offline against the debug-info file by build-id.  Dump
+            // it directly in-process -- no external `pprof`/Go binary, HTTP
+            // round-trip, or port dependency required (the latter matter for
+            // the headless remote server daemon, which has no bundled helpers
+            // next to it).
+            dump_jemalloc_pprof_bytes().await
+        } else {
+            use anyhow::Context as _;
 
-    // Create a temporary file for the profile output.
-    let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
-    let profile_path = temp_dir.path().join("heap-profile.pb");
+            // Create a temporary file for the profile output.
+            let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
+            let profile_path = temp_dir.path().join("heap-profile.pb");
 
-    // Run pprof to fetch and symbolicate the heap profile.
-    let pprof_path = pprof_binary_path()?;
-    let output = command::r#async::Command::new(pprof_path)
-        .args(["--proto", "--symbolize=local", "-output"])
-        .arg(&profile_path)
-        .arg("http://127.0.0.1:9277/debug/pprof/heap")
-        .output()
-        .await
-        .context("Failed to execute pprof")?;
+            // Run pprof to fetch and symbolicate the heap profile.
+            let pprof_path = pprof_binary_path()?;
+            let output = command::r#async::Command::new(pprof_path)
+                .args(["--proto", "--symbolize=local", "-output"])
+                .arg(&profile_path)
+                .arg("http://127.0.0.1:9277/debug/pprof/heap")
+                .output()
+                .await
+                .context("Failed to execute pprof")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("pprof failed: {stderr}");
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("pprof failed: {stderr}");
+            }
+
+            // Read the profile data from the temporary file.
+            let profile_data =
+                std::fs::read(&profile_path).context("Failed to read heap profile from disk")?;
+
+            Ok(profile_data)
+        }
     }
-
-    // Read the profile data from the temporary file.
-    let profile_data =
-        std::fs::read(&profile_path).context("Failed to read heap profile from disk")?;
-
-    Ok(profile_data)
 }
 
-#[cfg(feature = "heap_usage_tracking")]
+/// Produces a raw (unsymbolized), gzipped pprof heap profile directly from the
+/// in-process jemalloc profiler. The profile carries sample addresses,
+/// mappings, and the GNU build-id, and is symbolized offline against the
+/// matching debug-info file (by build-id).
+///
+/// This is the same dump that [`handle_get_heap`] serves over HTTP, but
+/// invoked directly so callers don't need to reach the local HTTP server.
+/// Requires the `jemalloc_pprof` feature, which is Linux-only.
+#[cfg(all(feature = "jemalloc_pprof", target_os = "linux"))]
+async fn dump_jemalloc_pprof_bytes() -> anyhow::Result<Vec<u8>> {
+    let Some(prof_ctl) = jemalloc_pprof::PROF_CTL.as_ref() else {
+        anyhow::bail!("heap profiler not initialized");
+    };
+    let mut prof_ctl = prof_ctl.lock().await;
+    if !prof_ctl.activated() {
+        anyhow::bail!("heap profiling not activated");
+    }
+    prof_ctl.dump_pprof()
+}
+
+#[cfg(all(feature = "heap_usage_tracking", not(target_os = "linux")))]
 fn pprof_binary_path() -> anyhow::Result<std::path::PathBuf> {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {

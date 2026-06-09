@@ -13,7 +13,7 @@ pub use positioning::InlineMenuPositioner;
 use serde::{Deserialize, Serialize};
 pub use view::{
     DetailsRenderConfig, InlineMenuAction, InlineMenuClickBehavior, InlineMenuEvent,
-    InlineMenuHeaderConfig, InlineMenuRowAction, InlineMenuView,
+    InlineMenuHeaderConfig, InlineMenuRowAction, InlineMenuView, QueryResultRendererExt,
 };
 
 use super::{InputSuggestionsMode, UserQueryMenuAction};
