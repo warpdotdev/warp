@@ -11781,11 +11781,11 @@ impl Workspace {
                 group_member_indices(&self.tabs, group_id)
                     .last()
                     .map(|i| i + 1)
-                    .unwrap_or_else(|| tab_index.min(self.tabs.len()))
+                    .unwrap_or(self.tabs.len())
             } else {
                 // Group was pruned — drop membership.
                 tab_data.group_id = None;
-                tab_index.min(self.tabs.len())
+                tab_index
             }
         } else {
             tab_index
