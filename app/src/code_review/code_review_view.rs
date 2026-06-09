@@ -19,7 +19,7 @@ use vec1::Vec1;
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
-use warp_core::{safe_error, safe_info};
+use warp_core::{safe_error, safe_info, SessionId};
 use warp_editor::content::buffer::{AutoScrollBehavior, InitialBufferState, SelectionOffsets};
 use warp_editor::model::CoreEditorModel;
 use warp_editor::render::element::VerticalExpansionBehavior;
@@ -99,6 +99,10 @@ use crate::code_review::diff_state::{
 };
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
+#[cfg(feature = "local_fs")]
+use crate::code_review::git_status_update::{
+    GitRepoStatusEvent, GitRepoStatusModel, GitStatusUpdateModel,
+};
 use crate::code_review::hidden_lines::calculate_hidden_lines;
 #[cfg(feature = "local_fs")]
 use crate::code_review::telemetry_event::DiffSetContextScope;
@@ -135,7 +139,7 @@ use crate::util::bindings::{
 };
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
-use crate::util::git::BranchEntry;
+use crate::util::git::{BranchEntry, PrInfo};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::resolve_file_target_with_editor_choice;
 #[cfg(feature = "local_fs")]
@@ -644,6 +648,9 @@ pub struct CodeReviewView {
     code_review_footer: Option<ViewHandle<CodeFooterView>>,
     /// Active git-operation dialog overlay (commit / push / publish), if open.
     git_dialog: Option<ViewHandle<GitDialog>>,
+    /// Per-repo git status model for the current repository, if any.
+    #[cfg(feature = "local_fs")]
+    git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
 }
 
 impl CodeReviewView {
@@ -671,6 +678,17 @@ impl CodeReviewView {
         &self.diff_state_model
     }
 
+    /// The session this review is being shown in, when available. Supplied
+    /// per-call as the preferred dispatch session for remote `GetDiffState`
+    /// RPCs so the request rides the connection that's actually showing the
+    /// review; `None` falls back to any connected session for the host.
+    fn preferred_review_session(&self, ctx: &ViewContext<Self>) -> Option<SessionId> {
+        self.terminal_view
+            .as_ref()
+            .and_then(|tv| tv.upgrade(ctx))
+            .and_then(|tv| tv.as_ref(ctx).active_block_session_id())
+    }
+
     /// Called when the code review view is opened/attached to a pane group.
     /// Subscribes to the diff state model and enables metadata refresh.
     pub fn on_open(&mut self, ctx: &mut ViewContext<Self>) {
@@ -680,6 +698,17 @@ impl CodeReviewView {
         self.is_open = true;
 
         ctx.subscribe_to_model(&self.diff_state_model, Self::handle_diff_state_model_event);
+        #[cfg(feature = "local_fs")]
+        self.subscribe_to_git_repo_status(ctx);
+        // Remote repos kick off a separate `GetPrInfo` fetch via the remote server manager.
+        // TODO: source the info from the `GitRepoStatusModel` as done for local repos.
+        if FeatureFlag::GitOperationsInCodeReview.is_enabled()
+            && self.repo_path().is_some_and(LocalOrRemotePath::is_remote)
+        {
+            self.diff_state_model.update(ctx, |model, ctx| {
+                model.fetch_pr_info(ctx);
+            });
+        }
         if self.repo_path().is_some() {
             self.fetch_branches_and_setup_dropdown(ctx);
         }
@@ -724,9 +753,10 @@ impl CodeReviewView {
         // (and will make an RPC once that path is wired). We pass
         // should_fetch_base: false because re-opening the panel doesn't
         // need to fetch the base branch from origin.
+        let preferred_session = self.preferred_review_session(ctx);
         self.diff_state_model.update(ctx, |model, ctx| {
             model.set_code_review_metadata_refresh_enabled(true, ctx);
-            model.load_diffs_for_current_repo(false, true, ctx);
+            model.load_diffs_for_current_repo(false, true, preferred_session, ctx);
         });
     }
 
@@ -743,6 +773,8 @@ impl CodeReviewView {
         }
 
         ctx.unsubscribe_to_model(&self.diff_state_model);
+        #[cfg(feature = "local_fs")]
+        self.unsubscribe_from_git_repo_status(ctx);
 
         self.code_review_footer = None;
 
@@ -1318,6 +1350,8 @@ impl CodeReviewView {
             is_open: false,
             code_review_footer: None,
             git_dialog: None,
+            #[cfg(feature = "local_fs")]
+            git_repo_status: None,
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
@@ -1554,8 +1588,9 @@ impl CodeReviewView {
             ctx
         );
 
+        let preferred_session = self.preferred_review_session(ctx);
         self.diff_state_model.update(ctx, |model, ctx| {
-            model.set_diff_mode(mode, false, true, ctx);
+            model.set_diff_mode(mode, false, true, preferred_session, ctx);
         });
         self.update_diff_selector_selection(ctx);
         self.invalidate_all(None, None, ctx);
@@ -2273,6 +2308,17 @@ impl CodeReviewView {
             DiffStateModelEvent::CurrentBranchChanged => {
                 self.fetch_branches_and_setup_dropdown(ctx);
                 self.update_diff_selector_selection(ctx);
+                // PR info is branch-specific. Local repos re-fetch automatically
+                // via `GitRepoStatusModel` (it keys off branch changes); remote
+                // repos must re-issue `GetPrInfo` here, since the diff-state
+                // sync doesn't carry PR info.
+                if FeatureFlag::GitOperationsInCodeReview.is_enabled()
+                    && self.repo_path().is_some_and(LocalOrRemotePath::is_remote)
+                {
+                    self.diff_state_model.update(ctx, |model, ctx| {
+                        model.fetch_pr_info(ctx);
+                    });
+                }
             }
             DiffStateModelEvent::NewDiffsComputed {
                 diffs,
@@ -2330,6 +2376,11 @@ impl CodeReviewView {
                     repo.available_branches = branches.clone();
                 }
                 self.update_diff_selector_selection(ctx);
+            }
+            DiffStateModelEvent::GitOpCompleted(_)
+            | DiffStateModelEvent::CommitMessageGenerated(_)
+            | DiffStateModelEvent::BranchCommittedFilesReceived(_) => {
+                // Handled by GitDialog's own subscription.
             }
         }
     }
@@ -4066,14 +4117,13 @@ impl CodeReviewView {
                     .with_margin_top(16.)
                     .finish(),
             );
-        } else if let Some(repo_path) = self.repo_path().and_then(LocalOrRemotePath::to_local_path)
-        {
+        } else if let Some(repo_path) = self.repo_path() {
             // Check for initialized project-scoped rules.
             if let Some(rules) =
                 ProjectContextModel::as_ref(app).find_applicable_project_rules(repo_path)
             {
                 if let Some(first_rule) = rules.active_rules.first() {
-                    if let Some(file_name) = first_rule.path.file_name().and_then(|n| n.to_str()) {
+                    if let Some(file_name) = first_rule.path.file_name() {
                         zero_state_column.add_child(
                             Container::new(
                                 Text::new(
@@ -5129,10 +5179,10 @@ impl CodeReviewView {
         let theme = appearance.theme();
 
         let diff_size = file.file_diff.size;
-        if diff_size == DiffSize::Unrenderable {
+        if let DiffSize::Unrenderable(reason) = diff_size {
             return Self::styled_file_content_container(
                 Text::new(
-                    "Diff is too large to render",
+                    reason.to_string(),
                     appearance.monospace_font_family(),
                     appearance.monospace_font_size(),
                 )
@@ -5699,7 +5749,7 @@ impl CodeReviewView {
                 terminal_view.input().update(ctx, |input, ctx| {
                     input.append_to_buffer(&location, ctx);
                     // Ensure agent mode for AI features
-                    input.ensure_agent_mode_for_ai_features(true, ctx);
+                    input.ensure_agent_mode_for_ai_features(true, None, ctx);
                 });
             });
         }
@@ -5844,7 +5894,7 @@ impl CodeReviewView {
                 terminal_view.update(ctx, |terminal_view, ctx| {
                     terminal_view.input().update(ctx, |input, ctx| {
                         input.append_to_buffer(&format!("{attachment_reference} "), ctx);
-                        input.ensure_agent_mode_for_ai_features(true, ctx);
+                        input.ensure_agent_mode_for_ai_features(true, None, ctx);
                     });
                 });
 
@@ -5928,8 +5978,9 @@ impl CodeReviewView {
     }
 
     pub(crate) fn set_diff_base(&mut self, diff_mode: DiffMode, ctx: &mut ViewContext<Self>) {
+        let preferred_session = self.preferred_review_session(ctx);
         self.diff_state_model.update(ctx, |diff_state_model, ctx| {
-            diff_state_model.set_diff_mode_and_fetch_base(diff_mode, ctx);
+            diff_state_model.set_diff_mode_and_fetch_base(diff_mode, preferred_session, ctx);
         });
         self.update_diff_selector_selection(ctx);
         self.invalidate_all(None, None, ctx);
@@ -6024,7 +6075,7 @@ impl CodeReviewView {
                 terminal_view.update(ctx, |terminal_view, ctx| {
                     terminal_view.input().update(ctx, |input, ctx| {
                         input.append_to_buffer(&format!("{attachment_reference} "), ctx);
-                        input.ensure_agent_mode_for_ai_features(true, ctx);
+                        input.ensure_agent_mode_for_ai_features(true, None, ctx);
                     });
                 });
 
@@ -6247,16 +6298,6 @@ impl CodeReviewView {
         }
     }
 
-    /// Refreshes metadata and PR info after a git operation (commit, push, etc.).
-    /// Diff reloading is left to the file watcher (for commits) or skipped
-    /// entirely (for push/create-PR where the working directory is unchanged).
-    fn refresh_after_git_operation(&mut self, ctx: &mut ViewContext<Self>) {
-        self.diff_state_model.update(ctx, |model, ctx| {
-            model.refresh_metadata_and_pr_info(ctx);
-        });
-        ctx.notify();
-    }
-
     /// Returns whether the working tree has uncommitted changes.
     ///
     /// This reads the `against_head` metadata directly rather than the loaded
@@ -6269,6 +6310,110 @@ impl CodeReviewView {
             .as_ref(app)
             .get_uncommitted_stats(app)
             .is_some_and(|stats| !stats.has_no_changes())
+    }
+
+    /// Returns PR info for the current branch.
+    ///
+    /// Routed by repo location: local repos read from the always-on
+    /// `GitRepoStatusModel` (matching the prompt PR chip's lifecycle — same
+    /// model, same events, same staleness window), while remote repos read
+    /// from the diff model, populated by the remote `GetPrInfo` / `CreatePr`
+    /// commands.
+    fn pr_info(&self, ctx: &AppContext) -> Option<PrInfo> {
+        if self.repo_path().is_some_and(LocalOrRemotePath::is_remote) {
+            return self.diff_state_model.as_ref(ctx).pr_info(ctx);
+        }
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "local_fs")] {
+                let git_repo_status = self.git_repo_status.as_ref()?;
+                git_repo_status.as_ref(ctx).pr_info().cloned()
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Whether a `gh pr view` lookup is currently in flight on `GitRepoStatusModel`.
+    fn is_pr_info_refreshing(&self, ctx: &AppContext) -> bool {
+        #[cfg(feature = "local_fs")]
+        {
+            self.git_repo_status
+                .as_ref()
+                .map(|h| h.as_ref(ctx).is_refreshing_pr_info())
+                .unwrap_or(false)
+        }
+
+        #[cfg(not(feature = "local_fs"))]
+        {
+            let _ = ctx;
+            false
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn refresh_pr_info(&self, ctx: &mut ViewContext<Self>) {
+        let Some(handle) = self.git_repo_status.as_ref() else {
+            return;
+        };
+        handle.update(ctx, |model, ctx| {
+            // We registered as a consumer in `subscribe_to_git_repo_status`
+            // and remain registered until `on_close`, so the gate is already
+            // open for this explicit "user just ran a git/gh operation" path.
+            model.refresh_pr_info(ctx);
+        });
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    fn refresh_pr_info(&self, _ctx: &mut ViewContext<Self>) {}
+
+    /// Subscribes to the per-repo git status model for PR info events and
+    /// registers this view as a `pr_info` consumer so the `gh pr view`
+    /// lookup runs while the pane is open.
+    #[cfg(feature = "local_fs")]
+    fn subscribe_to_git_repo_status(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(repo_path) = self
+            .repo_path()
+            .and_then(LocalOrRemotePath::to_local_path)
+            .map(Path::to_path_buf)
+        else {
+            return;
+        };
+        let result = GitStatusUpdateModel::handle(ctx)
+            .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
+        let handle = match result {
+            Ok(handle) => handle,
+            Err(err) => {
+                log::warn!("CodeReviewView git status subscribe failed: {err}");
+                return;
+            }
+        };
+        let view_id = ctx.view_id();
+        handle.update(ctx, |model, ctx| {
+            model.set_pr_info_consumer(view_id, true, ctx);
+        });
+        ctx.subscribe_to_model(&handle, |me, _, event, ctx| match event {
+            // Both events affect what the header shows: branch metadata can
+            // change the diff stats / Create-PR availability, and PR info
+            // controls View-PR vs Create-PR. `update_git_operations_ui` mutates
+            // the primary action button's label/icon/on_click and ends with
+            // `ctx.notify()`, so this also triggers a re-render.
+            GitRepoStatusEvent::MetadataChanged | GitRepoStatusEvent::PrInfoChanged => {
+                me.update_git_operations_ui(ctx);
+            }
+        });
+        self.git_repo_status = Some(handle);
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn unsubscribe_from_git_repo_status(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(handle) = self.git_repo_status.take() else {
+            return;
+        };
+        let view_id = ctx.view_id();
+        handle.update(ctx, |model, ctx| {
+            model.set_pr_info_consumer(view_id, false, ctx);
+        });
+        ctx.unsubscribe_to_model(&handle);
     }
 
     /// Opens a `GitDialog` overlay for the given `kind`. Centralizes the
@@ -6288,13 +6433,10 @@ impl CodeReviewView {
         {
             return;
         }
-        let Some(repo_path) = self
-            .repo_path()
-            .and_then(LocalOrRemotePath::to_local_path)
-            .map(Path::to_path_buf)
-        else {
+        let Some(repo_path) = self.repo_path().cloned() else {
             return;
         };
+        let diff_state_model = self.diff_state_model.clone();
         let branch_name = self
             .diff_state_model
             .read(ctx, |model, ctx| model.get_current_branch_name(ctx))
@@ -6308,13 +6450,14 @@ impl CodeReviewView {
                 // `has_upstream` controls the label/icon on the push-chained
                 // intent (Commit and push vs Commit and publish).
                 let diff_state = self.diff_state_model.as_ref(ctx);
-                let allow_create_pr = diff_state.pr_info(ctx).is_none()
-                    && !diff_state.is_pr_info_refreshing(ctx)
+                let allow_create_pr = self.pr_info(ctx).is_none()
+                    && !self.is_pr_info_refreshing(ctx)
                     && !diff_state.is_on_main_branch(ctx);
                 let has_upstream = diff_state.upstream_ref(ctx).is_some();
                 ctx.add_typed_action_view(|ctx| {
                     GitDialog::new_for_commit(
                         repo_path,
+                        diff_state_model,
                         branch_name,
                         allow_create_pr,
                         has_upstream,
@@ -6327,7 +6470,14 @@ impl CodeReviewView {
                     .diff_state_model
                     .read(ctx, |model, ctx| model.unpushed_commits(ctx).to_vec());
                 ctx.add_typed_action_view(|ctx| {
-                    GitDialog::new_for_push(repo_path, branch_name, publish, commits, ctx)
+                    GitDialog::new_for_push(
+                        repo_path,
+                        diff_state_model,
+                        branch_name,
+                        publish,
+                        commits,
+                        ctx,
+                    )
                 })
             }
             GitDialogKind::CreatePr => {
@@ -6335,7 +6485,13 @@ impl CodeReviewView {
                     .diff_state_model
                     .read(ctx, |model, ctx| model.get_main_branch_name(ctx));
                 ctx.add_typed_action_view(|ctx| {
-                    GitDialog::new_for_pr(repo_path, branch_name, base_branch_name, ctx)
+                    GitDialog::new_for_pr(
+                        repo_path,
+                        diff_state_model,
+                        branch_name,
+                        base_branch_name,
+                        ctx,
+                    )
                 })
             }
         };
@@ -6344,7 +6500,7 @@ impl CodeReviewView {
             match event {
                 GitDialogEvent::Completed => {
                     me.git_dialog = None;
-                    me.refresh_after_git_operation(ctx);
+                    me.refresh_pr_info(ctx);
                 }
                 GitDialogEvent::Cancelled => {
                     me.git_dialog = None;
@@ -6363,7 +6519,7 @@ impl CodeReviewView {
         let has_uncommitted_changes = self.has_uncommitted_changes(app);
         let has_upstream = diff_state.upstream_ref(app).is_some();
         let has_local_commits = !diff_state.unpushed_commits(app).is_empty();
-        let is_pr_info_refreshing = diff_state.is_pr_info_refreshing(app);
+        let is_pr_info_refreshing = self.is_pr_info_refreshing(app);
         // False when upstream == main (e.g. after `git checkout -b feature origin/master`),
         // which means the branch hasn't been pushed to its own remote ref yet.
         let upstream_differs_from_main = diff_state.upstream_differs_from_main(app);
@@ -6374,7 +6530,7 @@ impl CodeReviewView {
             PrimaryGitActionMode::Publish
         } else if has_local_commits {
             PrimaryGitActionMode::Push
-        } else if diff_state.pr_info(app).is_some() {
+        } else if self.pr_info(app).is_some() {
             PrimaryGitActionMode::ViewPr
         } else if !is_pr_info_refreshing
             && has_upstream
@@ -6442,9 +6598,8 @@ impl CodeReviewView {
                 });
             }
             PrimaryGitActionMode::ViewPr => {
-                let diff_state = self.diff_state_model.as_ref(ctx);
-                let pr_info = diff_state.pr_info(ctx).cloned();
-                let is_pr_info_refreshing = diff_state.is_pr_info_refreshing(ctx);
+                let pr_info = self.pr_info(ctx);
+                let is_pr_info_refreshing = self.is_pr_info_refreshing(ctx);
                 if let Some(pr_info) = pr_info {
                     let url = pr_info.url.clone();
                     let number = pr_info.number;
@@ -6521,8 +6676,8 @@ impl CodeReviewView {
     /// (e.g. a worktree branch whose tracking was auto-set to origin/master).
     fn pr_menu_item(&self, app: &AppContext) -> MenuItem<CodeReviewAction> {
         let diff_state = self.diff_state_model.as_ref(app);
-        let is_pr_info_refreshing = diff_state.is_pr_info_refreshing(app);
-        if let Some(pr_info) = diff_state.pr_info(app).cloned() {
+        let is_pr_info_refreshing = self.is_pr_info_refreshing(app);
+        if let Some(pr_info) = self.pr_info(app) {
             MenuItemFields::new(format!("PR #{}", pr_info.number))
                 .with_icon(Icon::Github)
                 .with_on_select_action(CodeReviewAction::ViewPr(pr_info.url))
@@ -7129,10 +7284,12 @@ impl TypedActionView for CodeReviewView {
                 self.save_files(unsaved_files.as_slice(), ctx);
             }
             CodeReviewAction::RefreshGitState => {
+                let preferred_session = self.preferred_review_session(ctx);
                 self.diff_state_model.update(ctx, |model, ctx| {
-                    model.load_diffs_for_current_repo(false, true, ctx);
-                    model.refresh_metadata_and_pr_info(ctx);
+                    model.load_diffs_for_current_repo(false, true, preferred_session, ctx);
+                    model.refresh_metadata_after_git_operation(ctx);
                 });
+                self.refresh_pr_info(ctx);
             }
             CodeReviewAction::UndoRevert => {
                 self.maybe_undo_revert(ctx);

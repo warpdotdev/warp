@@ -6,6 +6,7 @@ use markdown_parser::weight::CustomWeight;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::ui::appearance::{Appearance, AppearanceEvent};
 use warp_core::ui::theme::color::internal_colors;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::elements::{
     Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Expanded, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable, MainAxisAlignment,
@@ -38,6 +39,7 @@ use crate::server::ids::{ClientId, SyncId};
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::icons::Icon;
+use crate::util::path::display_path_with_host;
 use crate::view_components::action_button::{ActionButton, NakedTheme};
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
@@ -68,7 +70,7 @@ pub enum RuleViewEvent {
     AddRule,
     Edit(SyncId),
     OpenSettings,
-    OpenFile(PathBuf),
+    OpenFile(LocalOrRemotePath),
     InitializeProject(PathBuf),
 }
 
@@ -79,7 +81,7 @@ pub enum RuleViewAction {
     Edit(SyncId),
     OpenSettings,
     SelectScope(RuleScope),
-    OpenFile(PathBuf),
+    OpenFile(LocalOrRemotePath),
 }
 
 #[derive(Default, Debug, Clone)]
@@ -101,7 +103,7 @@ struct CloudRuleRow {
 /// plus an "Open file" button.
 #[derive(Debug, Clone)]
 struct FileBackedRow {
-    file_path: PathBuf,
+    file_path: LocalOrRemotePath,
     mouse_state: MouseStateHandle,
 }
 
@@ -126,9 +128,9 @@ impl RuleRow {
             }
             RuleRow::FileBacked(row) => row
                 .file_path
-                .to_str()
-                .map(|s| s.to_lowercase().contains(search_term))
-                .unwrap_or(false),
+                .display_path()
+                .to_lowercase()
+                .contains(search_term),
         }
     }
 
@@ -137,7 +139,9 @@ impl RuleRow {
             (RuleRow::Global(a), RuleRow::Global(b)) => {
                 b.fact.metadata().revision.cmp(&a.fact.metadata().revision)
             }
-            (RuleRow::FileBacked(a), RuleRow::FileBacked(b)) => a.file_path.cmp(&b.file_path),
+            (RuleRow::FileBacked(a), RuleRow::FileBacked(b)) => {
+                a.file_path.display_path().cmp(&b.file_path.display_path())
+            }
             _ => std::cmp::Ordering::Equal,
         }
     }
@@ -704,8 +708,9 @@ impl RuleView {
         &self,
         project_row: FileBackedRow,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        let row_name = project_row.file_path.to_str().map(|s| s.to_string())?;
+        let row_name = display_path_with_host(&project_row.file_path, false, app);
         let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -868,7 +873,9 @@ impl RuleView {
                 RuleRow::Global(global_row) => {
                     Some(self.render_global_rule_row(*global_row, appearance, app))
                 }
-                RuleRow::FileBacked(file_row) => self.render_file_backed_row(file_row, appearance),
+                RuleRow::FileBacked(file_row) => {
+                    self.render_file_backed_row(file_row, appearance, app)
+                }
             };
 
             if let Some(row) = row {

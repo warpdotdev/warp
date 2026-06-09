@@ -16,11 +16,11 @@ pub mod workflows;
 use std::cmp::Ordering;
 use std::fmt;
 
+pub use cloud_objects::drive::CloudObjectTypeAndId;
 pub use index::DriveIndexVariant;
 pub use panel::{DrivePanel, DrivePanelEvent};
 use serde::{Deserialize, Serialize};
 use warp_core::user_preferences::GetUserPreferences as _;
-pub use warp_server_client::drive::CloudObjectTypeAndId;
 use warpui::AppContext;
 
 use crate::cloud_object::model::view::{CloudViewModel, UpdateTimestamp};
@@ -46,7 +46,7 @@ pub struct OpenWarpDriveObjectArgs {
     pub settings: OpenWarpDriveObjectSettings,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DriveObjectType {
     Workflow,
     AgentModeWorkflow,

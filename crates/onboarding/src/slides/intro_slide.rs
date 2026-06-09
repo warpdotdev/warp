@@ -5,18 +5,18 @@ use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
-use warpui::elements::shimmering_text::{
+use warpui_core::elements::shimmering_text::{
     ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle,
 };
-use warpui::elements::{
+use warpui_core::elements::{
     Align, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
     MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Stack,
 };
-use warpui::keymap::Keystroke;
-use warpui::text_layout::TextAlignment;
-use warpui::ui_components::components::{UiComponent as _, UiComponentStyles};
-use warpui::{
+use warpui_core::keymap::Keystroke;
+use warpui_core::text_layout::TextAlignment;
+use warpui_core::ui_components::components::{UiComponent as _, UiComponentStyles};
+use warpui_core::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
     ViewContext,
 };

@@ -152,7 +152,7 @@ impl AmbientAgentEntryBlock {
             .title
             .as_deref()
             .and_then(Self::meaningful_title)
-            .or_else(|| Self::meaningful_title(&request.prompt))
+            .or_else(|| request.prompt.as_deref().and_then(Self::meaningful_title))
     }
     fn get_title(&self, app: &AppContext) -> String {
         let terminal_view = self.terminal_view.as_ref(app);

@@ -261,6 +261,19 @@ fn test_warp_web_link_failure() {
         None
     );
 }
+#[test]
+fn test_app_web_link_rewrites_to_new_cloud_agent_conversation() {
+    let url = Url::parse(&format!("{}/app", ChannelState::server_root_url())).unwrap();
+    let intent = web_intent_parser::maybe_rewrite_web_url_to_intent(&url).unwrap();
+
+    assert_eq!(
+        intent.as_str(),
+        format!(
+            "{}://action/new_cloud_agent_conversation?source=web_home",
+            ChannelState::url_scheme()
+        )
+    );
+}
 
 #[test]
 fn test_action_create_environment_parse() {
@@ -306,6 +319,194 @@ fn test_action_create_environment_parse_no_repos() {
         }
         _ => panic!("unexpected action: {action:?}"),
     }
+}
+
+fn open_file_editor_test_path(file_name: &str) -> (String, PathBuf) {
+    #[cfg(windows)]
+    let path = format!("C:/tmp/{file_name}");
+    #[cfg(not(windows))]
+    let path = format!("/tmp/{file_name}");
+
+    (path.clone(), PathBuf::from(path))
+}
+
+#[test]
+fn test_action_open_file_editor_parse_with_path_only() {
+    let (path_param, expected_path) = open_file_editor_test_path("test.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(line_col, None);
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_with_line_only() {
+    let (path_param, expected_path) = open_file_editor_test_path("test.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&line=120",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 120,
+                    column_num: None,
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_with_line_and_column() {
+    let (path_param, expected_path) = open_file_editor_test_path("test.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&line=120&column=8",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 120,
+                    column_num: Some(8),
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_decodes_percent_encoded_path() {
+    let (path_param, _) = open_file_editor_test_path("hello%20world.rs");
+    let (_, expected_path) = open_file_editor_test_path("hello world.rs");
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path={path_param}&line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(path, expected_path);
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 1,
+                    column_num: None,
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_expands_home_dir() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path=~/tmp/test.rs&line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    let action = Action::parse(&url).unwrap();
+    match action {
+        Action::OpenFileEditor { path, line_col } => {
+            assert_eq!(
+                path,
+                PathBuf::from(shellexpand::tilde("~/tmp/test.rs").into_owned())
+            );
+            assert_eq!(
+                line_col,
+                Some(LineAndColumnArg {
+                    line_num: 1,
+                    column_num: None,
+                })
+            );
+        }
+        _ => panic!("unexpected action: {action:?}"),
+    }
+}
+
+#[test]
+fn test_action_open_file_editor_parse_requires_path() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    assert!(Action::parse(&url).is_err());
+}
+
+#[test]
+fn test_action_open_file_editor_parse_rejects_relative_path() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path=src/main.rs&line=1",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    assert!(Action::parse(&url).is_err());
+}
+
+#[test]
+fn test_action_open_file_editor_parse_rejects_column_without_line() {
+    let url = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&column=8",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+
+    assert!(Action::parse(&url).is_err());
+}
+
+#[test]
+fn test_action_open_file_editor_parse_rejects_invalid_line_or_column() {
+    let invalid_line = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&line=abc",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+    assert!(Action::parse(&invalid_line).is_err());
+
+    let zero_line = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&line=0",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+    assert!(Action::parse(&zero_line).is_err());
+
+    let invalid_column = Url::parse(&format!(
+        "{}://action/open_file_editor?path=/tmp/test.rs&line=1&column=0",
+        ChannelState::url_scheme()
+    ))
+    .unwrap();
+    assert!(Action::parse(&invalid_column).is_err());
 }
 
 #[test]
@@ -691,10 +892,8 @@ fn test_open_file_executable_sh_routes_to_execute() {
     let p = dir.path().join("run.sh");
     std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!(
-        classify_open_file_action(&p),
-        OpenFileAction::ExecuteInSession
-    );
+    let action = classify_open_file_action(&p);
+    assert_eq!(action, OpenFileAction::ExecuteInSession);
 }
 
 #[test]
@@ -740,6 +939,35 @@ fn test_open_file_rust_source_still_opens_in_editor() {
     let p = dir.path().join("main.rs");
     std::fs::write(&p, b"fn main() {}\n").unwrap();
     assert_eq!(classify_open_file_action(&p), OpenFileAction::Editor);
+}
+
+#[test]
+#[cfg(unix)]
+fn test_open_file_editor_executable_sh_opens_in_editor() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("run.sh");
+    std::fs::write(&p, b"#!/bin/sh\n:\n").unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(can_open_file_editor_path(&p));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_open_file_editor_rust_source_opens_in_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("main.rs");
+    std::fs::write(&p, b"fn main() {}\n").unwrap();
+    assert!(can_open_file_editor_path(&p));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_open_file_editor_binary_file_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("image.png");
+    std::fs::write(&p, b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR").unwrap();
+    assert!(!can_open_file_editor_path(&p));
 }
 
 #[test]

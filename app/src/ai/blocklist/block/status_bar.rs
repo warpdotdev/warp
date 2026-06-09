@@ -25,8 +25,8 @@ use super::cli_controller::{CLISubagentController, CLISubagentEvent, UserTakeOve
 use super::model::{AIBlockModel, AIBlockModelImpl, AIBlockOutputStatus};
 use super::view_impl::common::{
     render_switch_control_to_user_button, render_warping_indicator, render_warping_indicator_base,
-    ButtonProps, ForceRefreshButtonProps, MaybeShimmeringText, WarpingIndicatorProps, WarpingProps,
-    LOAD_OUTPUT_MESSAGE, WAITING_FOR_USER_INPUT_MESSAGE,
+    AutoExecuteButtonProps, ButtonProps, ForceRefreshButtonProps, MaybeShimmeringText,
+    WarpingIndicatorProps, WarpingProps, LOAD_OUTPUT_MESSAGE, WAITING_FOR_USER_INPUT_MESSAGE,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
@@ -34,10 +34,10 @@ use crate::ai::agent::{
     SummarizationType,
 };
 use crate::ai::agent_tips::AITipModel;
-use crate::ai::blocklist::agent_view::child_agent_status_card::ChildAgentStatusCard;
 use crate::ai::blocklist::agent_view::shortcuts::AgentShortcutViewModel;
 use crate::ai::blocklist::agent_view::{
-    agent_view_bg_fill, AgentMessageBar, AgentViewController, EphemeralMessageModel,
+    agent_view_bg_fill, is_in_cloud_context, AgentMessageBar, AgentViewController,
+    EphemeralMessageModel,
 };
 use crate::ai::blocklist::model::AIBlockModelHelper;
 use crate::ai::blocklist::summarization_cancel_dialog::{
@@ -46,7 +46,7 @@ use crate::ai::blocklist::summarization_cancel_dialog::{
 use crate::ai::blocklist::{
     ai_brand_color, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
     BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIInputEvent,
-    BlocklistAIInputModel, ResponseStreamId,
+    BlocklistAIInputModel, QueuedQueryEvent, QueuedQueryModel, ResponseStreamId,
 };
 use crate::ai::llms::LLMPreferences;
 use crate::ai::AgentTip;
@@ -124,7 +124,6 @@ pub struct BlocklistAIStatusBar {
 
     ephemeral_message_model: ModelHandle<EphemeralMessageModel>,
     agent_message_bar: ViewHandle<AgentMessageBar>,
-    child_agent_status_card: ViewHandle<ChildAgentStatusCard>,
 }
 
 impl BlocklistAIStatusBar {
@@ -211,10 +210,15 @@ impl BlocklistAIStatusBar {
             }
         });
         ctx.subscribe_to_model(&context_model, |_, _, event, ctx| {
+            if matches!(event, BlocklistAIContextEvent::PendingQueryStateUpdated) {
+                ctx.notify();
+            }
+        });
+        ctx.subscribe_to_model(&QueuedQueryModel::handle(ctx), |_, _, event, ctx| {
             if matches!(
                 event,
-                BlocklistAIContextEvent::PendingQueryStateUpdated
-                    | BlocklistAIContextEvent::QueueNextPromptToggled
+                QueuedQueryEvent::QueueNextPromptToggled { .. }
+                    | QueuedQueryEvent::DefaultModeChanged
             ) {
                 ctx.notify();
             }
@@ -345,9 +349,6 @@ impl BlocklistAIStatusBar {
             )
         });
 
-        let child_agent_status_card = ctx.add_typed_action_view(|ctx| {
-            ChildAgentStatusCard::new(agent_view_controller.clone(), ctx)
-        });
         if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {
             ctx.subscribe_to_model(ambient_agent_view_model, |me, _, event, ctx| match event {
                 AmbientAgentViewModelEvent::DispatchedAgent
@@ -391,7 +392,6 @@ impl BlocklistAIStatusBar {
             current_tip: None,
             ephemeral_message_model,
             agent_message_bar,
-            child_agent_status_card,
         }
     }
 
@@ -822,23 +822,25 @@ impl BlocklistAIStatusBar {
                 shimmering_text_handle: &self.shimmering_text_handle,
                 summarization_start_time: self.summarization_start_time,
                 auto_execute_button: (!model.request_type(app).is_passive_code_diff()).then_some(
-                    ButtonProps {
+                    AutoExecuteButtonProps {
                         button_handle: &self.state_handles.autoexecute_button,
                         keystroke: self.autoexecute_keystroke.as_ref(),
                         is_active: model
                             .conversation(app)
                             .map(|c| c.autoexecute_any_action())
                             .unwrap_or(false),
+                        is_locked: is_in_cloud_context(
+                            terminal_model.block_list().agent_view_state(),
+                            &terminal_model,
+                        ),
                     },
                 ),
                 queue_next_prompt_button: FeatureFlag::QueueSlashCommand.is_enabled().then_some(
                     ButtonProps {
                         button_handle: &self.state_handles.queue_next_prompt_button,
                         keystroke: self.queue_next_prompt_keystroke.as_ref(),
-                        is_active: self
-                            .context_model
-                            .as_ref(app)
-                            .is_queue_next_prompt_enabled(),
+                        is_active: QueuedQueryModel::as_ref(app)
+                            .is_queue_next_prompt_enabled(conversation.id()),
                     },
                 ),
                 stop_button: Some(ButtonProps {
@@ -1223,16 +1225,12 @@ impl View for BlocklistAIStatusBar {
                 // Don't render warping indicator - the loading screen is shown in the main view
                 return Empty::new().finish();
             } else if agent_view_controller.is_active() {
-                // The new orchestration pill bar in the agent view header
-                // replaces the legacy child-agent status card rows; when
-                // it's enabled, render only the message bar here.
-                let mut column = Flex::column();
-                if !FeatureFlag::OrchestrationPillBar.is_enabled() {
-                    column =
-                        column.with_child(ChildView::new(&self.child_agent_status_card).finish());
-                }
-                column = column.with_child(ChildView::new(&self.agent_message_bar).finish());
-                return column.finish();
+                // The orchestration pill bar in the agent view header
+                // replaces the legacy child-agent status card rows;
+                // render only the message bar here.
+                return Flex::column()
+                    .with_child(ChildView::new(&self.agent_message_bar).finish())
+                    .finish();
             } else {
                 return Empty::new().finish();
             };
@@ -1294,17 +1292,6 @@ impl View for BlocklistAIStatusBar {
             }
         } else {
             container = container.with_vertical_padding(8.);
-        }
-
-        // When the agent view is active, keep the child agent status card
-        // visible above the warping/status indicator so it doesn't disappear
-        // while the agent is working. The new orchestration pill bar
-        // replaces this card, so skip it when that flag is on.
-        if agent_view_controller.is_active() && !FeatureFlag::OrchestrationPillBar.is_enabled() {
-            return Flex::column()
-                .with_child(ChildView::new(&self.child_agent_status_card).finish())
-                .with_child(container.finish())
-                .finish();
         }
 
         container.finish()

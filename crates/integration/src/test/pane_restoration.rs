@@ -206,7 +206,7 @@ pub fn test_undo_close_grace_period_cleanup() -> Builder {
                         let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                         pane_group_view.read(ctx, |pane_group, _| pane_group.pane_count())
                     });
-                    warpui::async_assert_eq!(initial_pane_count, 1, "Should have exactly one pane after grace period expires - closed pane should be cleaned up")
+                    warpui_core::async_assert_eq!(initial_pane_count, 1, "Should have exactly one pane after grace period expires - closed pane should be cleaned up")
                 }),
         )
         .with_step(trigger_undo_close()
@@ -217,7 +217,7 @@ pub fn test_undo_close_grace_period_cleanup() -> Builder {
                 workspace_view.read(app, |workspace, ctx| {
                     let pane_group_view = workspace.get_pane_group_view(0).expect("should have tab 0");
                     let pane_count = pane_group_view.read(ctx, |pane_group, _| pane_group.pane_count());
-                    warpui::async_assert_eq!(pane_count, 1, "Should still have only one pane after attempted restore - no pane should be restored")
+                    warpui_core::async_assert_eq!(pane_count, 1, "Should still have only one pane after attempted restore - no pane should be restored")
                 })
             }),
         )
@@ -287,9 +287,9 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
                             (pane_group.visible_pane_count(), pane_group.pane_count())
                         });
                         if visible_pane_count != 2 {
-                            warpui::integration::AssertionOutcome::failure(format!("Should have 2 visible panes after closing one (got {visible_pane_count} visible, {total_pane_count} total)"))
+                            warpui_core::integration::AssertionOutcome::failure(format!("Should have 2 visible panes after closing one (got {visible_pane_count} visible, {total_pane_count} total)"))
                         } else {
-                            warpui::integration::AssertionOutcome::Success
+                            warpui_core::integration::AssertionOutcome::Success
                         }
                     })
                 }),
@@ -317,9 +317,9 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
                         // After rearrangement, we should still have the same visible panes (no restoration)
                         // The exact count might vary based on how the move operation affects the layout
                         if visible_pane_count < 1 {
-                            warpui::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after undo close attempt, got {visible_pane_count}"))
+                            warpui_core::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after undo close attempt, got {visible_pane_count}"))
                         } else {
-                            warpui::integration::AssertionOutcome::Success
+                            warpui_core::integration::AssertionOutcome::Success
                         }
                     })
                 }),
@@ -332,9 +332,9 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
                     let visible_pane_count = pane_group_view.read(ctx, |pane_group, _| pane_group.visible_pane_count());
                     // Should still have the same panes, no restoration should occur
                     if visible_pane_count < 1 {
-                        warpui::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after second undo close attempt, got {visible_pane_count}"))
+                        warpui_core::integration::AssertionOutcome::failure(format!("Should have at least 1 visible pane after second undo close attempt, got {visible_pane_count}"))
                     } else {
-                        warpui::integration::AssertionOutcome::Success
+                        warpui_core::integration::AssertionOutcome::Success
                     }
                 })
             })
@@ -367,13 +367,13 @@ pub fn test_closed_panes_cleared_on_rearrangement() -> Builder {
                             0, 0, window_id, app,
                         );
                         match (original_result, third_result) {
-                            (warpui::integration::AssertionOutcome::Success, warpui::integration::AssertionOutcome::Success) => {
-                                warpui::integration::AssertionOutcome::Success
+                            (warpui_core::integration::AssertionOutcome::Success, warpui_core::integration::AssertionOutcome::Success) => {
+                                warpui_core::integration::AssertionOutcome::Success
                             }
-                            _ => warpui::integration::AssertionOutcome::failure("Expected to find both original_pane and third_pane content".to_string())
+                            _ => warpui_core::integration::AssertionOutcome::failure("Expected to find both original_pane and third_pane content".to_string())
                         }
                     } else {
-                        warpui::integration::AssertionOutcome::failure(format!("Unexpected pane count: {visible_pane_count}"))
+                        warpui_core::integration::AssertionOutcome::failure(format!("Unexpected pane count: {visible_pane_count}"))
                     }
                 }),
         )

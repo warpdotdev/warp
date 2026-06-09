@@ -3,29 +3,19 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use warp_core::sync_queue::{IsTransientError, SyncQueueTaskTrait};
+use warp_core::sync_queue::SyncQueueTaskTrait;
 
-use super::diff_state::{DiffMode, FileDiffAndContent, LocalDiffStateModel};
+use super::diff_state::{DiffMode, DiffStateError, FileDiffAndContent, LocalDiffStateModel};
 
-#[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub struct FileInvalidationError(#[from] anyhow::Error);
-
-impl IsTransientError for FileInvalidationError {
-    fn is_transient(&self) -> bool {
-        true
-    }
-}
-
-pub struct FileInvalidationTask {
-    pub file: PathBuf,
-    pub repo_path: PathBuf,
-    pub mode: DiffMode,
-    pub merge_base: Option<String>,
+pub(crate) struct FileInvalidationTask {
+    pub(crate) file: PathBuf,
+    pub(crate) repo_path: PathBuf,
+    pub(crate) mode: DiffMode,
+    pub(crate) merge_base: Option<String>,
 }
 
 impl SyncQueueTaskTrait for FileInvalidationTask {
-    type Error = FileInvalidationError;
+    type Error = DiffStateError;
     /// The first element is the repo-relative path of the updated file.
     type Result = (String, Option<Arc<FileDiffAndContent>>);
     #[cfg(not(target_arch = "wasm32"))]
@@ -49,7 +39,7 @@ impl SyncQueueTaskTrait for FileInvalidationTask {
                 merge_base.as_deref(),
             )
             .await
-            .map_err(FileInvalidationError::from)
+            .map_err(DiffStateError::from)
         })
     }
 }

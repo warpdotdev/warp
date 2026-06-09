@@ -863,6 +863,14 @@ impl CodeView {
                 // If there's no file ID, this is a new file - trigger Save As
                 self.save_as(index, callback, ctx)
             }
+            Err(ImmediateSaveError::RemoteDisconnected) => {
+                log::warn!("Cannot save: remote session disconnected");
+                CodeView::display_remote_disconnected_save_failure(ctx.window_id(), ctx);
+                if let Some(callback) = callback {
+                    callback(SaveOutcome::Failed, self, ctx);
+                }
+                SaveStatus::Failed(ImmediateSaveError::RemoteDisconnected)
+            }
             Err(err) => {
                 log::warn!("Failed to save file. {err:?}");
                 CodeView::display_save_failure(ctx.window_id(), ctx);
@@ -923,6 +931,15 @@ impl CodeView {
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             let toast = DismissibleToast::error(String::from("Failed to save file."))
                 .with_object_id("failed_to_save_file".to_string());
+            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+        });
+    }
+
+    fn display_remote_disconnected_save_failure(window_id: WindowId, ctx: &mut ViewContext<Self>) {
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast =
+                DismissibleToast::error(String::from("Cannot save — remote session disconnected."))
+                    .with_object_id("failed_to_save_file_remote_disconnected".to_string());
             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
         });
     }

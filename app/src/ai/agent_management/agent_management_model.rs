@@ -422,9 +422,7 @@ impl AgentNotificationsModel {
         branch: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !*AISettings::as_ref(ctx).show_agent_notifications {
-            return;
-        }
+        let show_agent_notifications = *AISettings::as_ref(ctx).show_agent_notifications;
 
         let is_visible = is_terminal_view_visible(terminal_view_id, ctx);
         let item = NotificationItem::new(
@@ -438,12 +436,14 @@ impl AgentNotificationsModel {
             artifacts,
             branch,
         );
-        send_telemetry_from_ctx!(
-            TelemetryEvent::AgentNotificationShown {
-                agent_variant: agent.into(),
-            },
-            ctx
-        );
+        if show_agent_notifications {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::AgentNotificationShown {
+                    agent_variant: agent.into(),
+                },
+                ctx
+            );
+        }
 
         let id = item.id;
         self.notifications.push(item);

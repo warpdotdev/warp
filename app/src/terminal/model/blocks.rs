@@ -1510,6 +1510,44 @@ impl BlockList {
         self.event_proxy.send_wakeup_event();
     }
 
+    pub fn remove_command_blocks_for_conversation(&mut self, conversation_id: AIConversationId) {
+        let active_block_index = self.active_block_index();
+
+        let mut indices_to_remove = Vec::new();
+        for (i, block) in self.blocks.iter().enumerate() {
+            let index: BlockIndex = i.into();
+            if index == active_block_index {
+                continue;
+            }
+
+            if matches!(
+                block.agent_view_visibility(),
+                AgentViewVisibility::Agent {
+                    origin_conversation_id,
+                    ..
+                } if *origin_conversation_id == conversation_id
+            ) {
+                indices_to_remove.push(index);
+            }
+        }
+
+        if indices_to_remove.is_empty() {
+            return;
+        }
+
+        self.clear_selection();
+        self.clear_smart_select_override();
+        self.clear_scroll_position_before_filter();
+
+        // Remove in reverse order so indices remain valid.
+        for index in indices_to_remove.into_iter().rev() {
+            self.remove_block_at_index(index);
+        }
+
+        // Force a re-draw since the blocklist has changed.
+        self.event_proxy.send_wakeup_event();
+    }
+
     /// Gets the active background block, if one exists.
     pub(super) fn background_block_mut(&mut self) -> Option<&mut Block> {
         // The active background block will be the one immediately before

@@ -4,13 +4,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+// Re-exported from cloud_objects.
+pub use cloud_objects::cloud_object::SerializedModel;
 use derivative::Derivative;
 use http::StatusCode;
 use lazy_static::lazy_static;
 use uuid::Uuid;
 use warp_graphql::scalars::time::ServerTimestamp;
-// Re-exported from warp_server_client.
-pub use warp_server_client::cloud_object::SerializedModel;
 use warpui::r#async::FutureId;
 use warpui::{Entity, ModelContext, RequestState, RetryOption, SingletonEntity};
 
@@ -108,6 +108,15 @@ impl QueueItemId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum QueueDependency {
+    QueueItem(QueueItemId),
+    BulkCreateGenericStringObject {
+        queue_item_id: QueueItemId,
+        client_id: ClientId,
+    },
 }
 
 /// Item that sync queue supports.
@@ -332,6 +341,7 @@ pub enum SyncQueueEvent {
 pub struct SyncQueue {
     queue: Vec<(QueueItemId, QueueItem)>,
     waiting_response: HashMap<String, HashSet<QueueItemId>>,
+    in_flight_bulk_create_objects: HashMap<QueueItemId, HashSet<ClientId>>,
     object_client: Arc<dyn ObjectClient>,
     client_id_to_server: HashMap<ClientId, String>,
     server_id_to_client_hash: HashMap<String, String>,
@@ -340,8 +350,8 @@ pub struct SyncQueue {
     // calls to `ctx#spawn` have finished before asserting.
     spawned_futures: Vec<FutureId>,
 
-    // For each QueueItem, store the set of QueueItems it depends upon finishing first
-    queue_dependencies: HashMap<QueueItemId, HashSet<QueueItemId>>,
+    // For each QueueItem, store the set of queue dependencies it depends upon finishing first.
+    queue_dependencies: HashMap<QueueItemId, HashSet<QueueDependency>>,
 }
 
 impl SyncQueue {
@@ -367,6 +377,7 @@ impl SyncQueue {
                 .map(|queue_item| (QueueItemId::new(), queue_item))
                 .collect(),
             waiting_response: Default::default(),
+            in_flight_bulk_create_objects: Default::default(),
             object_client,
             client_id_to_server: Default::default(),
             server_id_to_client_hash: Default::default(),
@@ -396,6 +407,7 @@ impl SyncQueue {
     pub fn clear(&mut self) {
         self.queue.clear();
         self.waiting_response.clear();
+        self.in_flight_bulk_create_objects.clear();
         self.queue_dependencies.clear();
         self.client_id_to_server.clear();
         self.server_id_to_client_hash.clear();
@@ -426,14 +438,18 @@ impl SyncQueue {
     ) {
         let mut dependencies = match item {
             // Update requests will depend on any existing create/updates to the same object
-            QueueItem::UpdateNotebook { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateFolder { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateCloudPreferences { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateEnvVarCollection { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateWorkflowEnum { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateCloudEnvironment { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateScheduledAmbientAgent { id, .. } => self.get_update_dependencies(id),
-            QueueItem::UpdateCloudAgentConfig { id, .. } => self.get_update_dependencies(id),
+            QueueItem::UpdateNotebook { id, .. }
+            | QueueItem::UpdateFolder { id, .. }
+            | QueueItem::UpdateCloudPreferences { id, .. }
+            | QueueItem::UpdateEnvVarCollection { id, .. }
+            | QueueItem::UpdateWorkflowEnum { id, .. }
+            | QueueItem::UpdateAIFact { id, .. }
+            | QueueItem::UpdateMCPServer { id, .. }
+            | QueueItem::UpdateAIExecutionProfile { id, .. }
+            | QueueItem::UpdateTemplatableMCPServer { id, .. }
+            | QueueItem::UpdateCloudEnvironment { id, .. }
+            | QueueItem::UpdateScheduledAmbientAgent { id, .. }
+            | QueueItem::UpdateCloudAgentConfig { id, .. } => self.get_update_dependencies(id),
 
             // Update workflow requests should depend on existing requests to that object, as well as
             // any enums or env vars they reference.
@@ -485,12 +501,14 @@ impl SyncQueue {
                 dependencies
             }
 
-            // Other queue item types don't have dependencies supported right now
-            _ => HashSet::new(),
+            // These queue item types do not have inferred dependencies.
+            QueueItem::CreateObject { .. }
+            | QueueItem::BulkCreateGenericStringObjects { .. }
+            | QueueItem::RecordObjectAction { .. } => HashSet::new(),
         };
 
         // We never want an object to be dependent on itself, which is possible when we infer dependencies on startup from SQLite
-        dependencies.remove(item_id);
+        dependencies.remove(&QueueDependency::QueueItem(*item_id));
 
         self.queue_dependencies.insert(*item_id, dependencies);
     }
@@ -506,7 +524,7 @@ impl SyncQueue {
     }
 
     /// Given an object ID, return the set of queue IDs of all queue items that operate on that object
-    fn get_items_with_object_id(&self, item_id: String) -> HashSet<QueueItemId> {
+    fn get_items_with_object_id(&self, item_id: String) -> HashSet<QueueDependency> {
         // Get a list of in flight QueueItems that operate on objects with `item_id`
         // We still want to map these in our dependencies, so that when they succeed or fail, we can respond accordingly
         // even if a subsequent request was enqueued after the relevant request was dequeued and is already in flight
@@ -515,39 +533,75 @@ impl SyncQueue {
             .get(&item_id)
             .into_iter()
             .flat_map(|dependencies| dependencies.iter())
-            .copied();
+            .copied()
+            .map(|queue_item_id| self.dependency_for_queue_item_id(queue_item_id, &item_id));
 
         self.queue
             .iter()
-            .filter(|(_, queue_item)| match queue_item {
-                QueueItem::CreateObject { id, .. } => id.to_string() == item_id,
-                QueueItem::CreateWorkflow { id, .. } => id.to_string() == item_id,
-                QueueItem::BulkCreateGenericStringObjects { objects, .. } => {
-                    objects.iter().any(|data| data.id.to_string() == item_id)
+            .filter_map(|(queue_item_id, queue_item)| match queue_item {
+                QueueItem::CreateObject { id, .. } if id.to_string() == item_id => {
+                    Some(QueueDependency::QueueItem(*queue_item_id))
                 }
-                QueueItem::UpdateCloudPreferences { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateNotebook { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateWorkflow { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateFolder { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateEnvVarCollection { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateWorkflowEnum { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateAIFact { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateMCPServer { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateAIExecutionProfile { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateTemplatableMCPServer { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateCloudEnvironment { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateScheduledAmbientAgent { id, .. } => id.uid() == item_id,
-                QueueItem::UpdateCloudAgentConfig { id, .. } => id.uid() == item_id,
-                // We don't depend on object actions, since they don't affect an object's own content or metadata
-                QueueItem::RecordObjectAction { .. } => false,
+                QueueItem::CreateWorkflow { id, .. } if id.to_string() == item_id => {
+                    Some(QueueDependency::QueueItem(*queue_item_id))
+                }
+                QueueItem::BulkCreateGenericStringObjects { objects, .. } => {
+                    objects.iter().find_map(|data| {
+                        (data.id.to_string() == item_id).then_some(
+                            QueueDependency::BulkCreateGenericStringObject {
+                                queue_item_id: *queue_item_id,
+                                client_id: data.id,
+                            },
+                        )
+                    })
+                }
+                QueueItem::UpdateCloudPreferences { id, .. }
+                | QueueItem::UpdateNotebook { id, .. }
+                | QueueItem::UpdateWorkflow { id, .. }
+                | QueueItem::UpdateFolder { id, .. }
+                | QueueItem::UpdateEnvVarCollection { id, .. }
+                | QueueItem::UpdateWorkflowEnum { id, .. }
+                | QueueItem::UpdateAIFact { id, .. }
+                | QueueItem::UpdateMCPServer { id, .. }
+                | QueueItem::UpdateAIExecutionProfile { id, .. }
+                | QueueItem::UpdateTemplatableMCPServer { id, .. }
+                | QueueItem::UpdateCloudEnvironment { id, .. }
+                | QueueItem::UpdateScheduledAmbientAgent { id, .. }
+                | QueueItem::UpdateCloudAgentConfig { id, .. }
+                    if id.uid() == item_id =>
+                {
+                    Some(QueueDependency::QueueItem(*queue_item_id))
+                }
+                // We don't depend on object actions, since they don't affect an object's own content or metadata.
+                _ => None,
             })
-            .map(|(queue_item_id, _)| *queue_item_id)
             .chain(in_flight_dependencies)
             .collect()
     }
 
+    fn dependency_for_queue_item_id(
+        &self,
+        queue_item_id: QueueItemId,
+        item_id: &str,
+    ) -> QueueDependency {
+        if let Some(client_id) = ClientId::from_hash(item_id) {
+            if self
+                .in_flight_bulk_create_objects
+                .get(&queue_item_id)
+                .is_some_and(|client_ids| client_ids.contains(&client_id))
+            {
+                return QueueDependency::BulkCreateGenericStringObject {
+                    queue_item_id,
+                    client_id,
+                };
+            }
+        }
+
+        QueueDependency::QueueItem(queue_item_id)
+    }
+
     /// Get dependencies for an update request, which should be every create or update request to the same object that is already enqueued
-    fn get_update_dependencies(&self, id: &SyncId) -> HashSet<QueueItemId> {
+    fn get_update_dependencies(&self, id: &SyncId) -> HashSet<QueueDependency> {
         // Get all objects with the same ID as the update request
         let mut dependencies = self.get_items_with_object_id(id.uid());
 
@@ -574,7 +628,7 @@ impl SyncQueue {
         workflow_id: SyncId,
         item_id: &QueueItemId,
         ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<HashSet<QueueItemId>> {
+    ) -> anyhow::Result<HashSet<QueueDependency>> {
         let mut dependencies = HashSet::new();
 
         let mut object_ids = workflow_model.data.get_enum_ids();
@@ -611,7 +665,18 @@ impl SyncQueue {
     fn update_items_with_new_revision(&mut self, server_id: &str, new_revision: Revision) {
         for (_item_id, item) in &mut self.queue {
             match item {
-                QueueItem::UpdateNotebook { revision, id, .. } => {
+                QueueItem::UpdateNotebook { id, revision, .. }
+                | QueueItem::UpdateWorkflow { id, revision, .. }
+                | QueueItem::UpdateCloudPreferences { id, revision, .. }
+                | QueueItem::UpdateEnvVarCollection { id, revision, .. }
+                | QueueItem::UpdateWorkflowEnum { id, revision, .. }
+                | QueueItem::UpdateAIFact { id, revision, .. }
+                | QueueItem::UpdateMCPServer { id, revision, .. }
+                | QueueItem::UpdateAIExecutionProfile { id, revision, .. }
+                | QueueItem::UpdateTemplatableMCPServer { id, revision, .. }
+                | QueueItem::UpdateCloudEnvironment { id, revision, .. }
+                | QueueItem::UpdateScheduledAmbientAgent { id, revision, .. }
+                | QueueItem::UpdateCloudAgentConfig { id, revision, .. } => {
                     Self::maybe_update_queue_item_with_new_revision(
                         &self.client_id_to_server,
                         id,
@@ -620,17 +685,11 @@ impl SyncQueue {
                         &new_revision,
                     );
                 }
-                QueueItem::UpdateWorkflow { id, revision, .. } => {
-                    Self::maybe_update_queue_item_with_new_revision(
-                        &self.client_id_to_server,
-                        id,
-                        server_id,
-                        revision,
-                        &new_revision,
-                    );
-                }
-                // TODO: should we support this for generic string objects?
-                _ => {}
+                QueueItem::CreateObject { .. }
+                | QueueItem::CreateWorkflow { .. }
+                | QueueItem::BulkCreateGenericStringObjects { .. }
+                | QueueItem::UpdateFolder { .. }
+                | QueueItem::RecordObjectAction { .. } => {}
             };
         }
     }
@@ -902,6 +961,9 @@ impl SyncQueue {
                     );
                 }
                 QueueItem::BulkCreateGenericStringObjects { owner, objects } => {
+                    let in_flight_client_ids = objects.iter().map(|data| data.id).collect();
+                    self.in_flight_bulk_create_objects
+                        .insert(dequeued_item_id, in_flight_client_ids);
                     for data in &objects {
                         self.waiting_response
                             .entry(data.id.to_string())
@@ -1269,7 +1331,7 @@ impl SyncQueue {
 
                             // After an object is created, go through any objects dependent on them and update the associated queue items accordingly.
                             me.update_dependencies_on_creation(
-                                &queue_item_id,
+                                &QueueDependency::QueueItem(queue_item_id),
                                 id,
                                 created_cloud_object.server_id_and_type.id,
                                 object_type,
@@ -1472,7 +1534,7 @@ impl SyncQueue {
                     dependencies.remove(&queue_item_id);
                 }
 
-                self.handle_dependency_success(&queue_item_id);
+                self.handle_dependency_success(&QueueDependency::QueueItem(queue_item_id));
 
                 self.update_items_with_new_revision(uid, revision_and_editor.revision.clone());
 
@@ -1492,7 +1554,7 @@ impl SyncQueue {
                 if let Some(dependencies) = self.waiting_response.get_mut(&uid.clone()) {
                     dependencies.remove(&queue_item_id);
                 }
-                self.handle_dependency_success(&queue_item_id);
+                self.handle_dependency_success(&QueueDependency::QueueItem(queue_item_id));
             }
             ResponseType::Creation {
                 creation_result:
@@ -1512,7 +1574,8 @@ impl SyncQueue {
                 if let Some(dependencies) = self.waiting_response.get_mut(&client_id.to_string()) {
                     dependencies.remove(&queue_item_id);
                 }
-                self.handle_dependency_success(&queue_item_id);
+                let dependency = self.creation_dependency_for_client_id(queue_item_id, client_id);
+                self.handle_dependency_success(&dependency);
 
                 self.update_items_with_new_revision(
                     &server_creation_info.server_id_and_type.id.uid(),
@@ -1532,7 +1595,8 @@ impl SyncQueue {
                 if let Some(dependencies) = self.waiting_response.get_mut(uid) {
                     dependencies.remove(&queue_item_id);
                 }
-                self.handle_dependency_success(&queue_item_id);
+                let dependency = self.creation_dependency_for_id(queue_item_id, uid);
+                self.handle_dependency_success(&dependency);
                 ctx.emit(SyncQueueEvent::ObjectCreationFailure {
                     reason: CreationFailureReason::Denied {
                         message,
@@ -1548,7 +1612,7 @@ impl SyncQueue {
                 if let Some(dependencies) = self.waiting_response.get_mut(uid) {
                     dependencies.remove(&queue_item_id);
                 }
-                self.handle_dependency_success(&queue_item_id);
+                self.handle_dependency_success(&QueueDependency::QueueItem(queue_item_id));
                 ctx.emit(SyncQueueEvent::ReportObjectActionSucceeded {
                     uid: uid.to_string(),
                     action_timestamp,
@@ -1595,7 +1659,8 @@ impl SyncQueue {
         if let Some(dependencies) = self.waiting_response.get_mut(id) {
             dependencies.remove(&queue_item_id);
         }
-        self.handle_dependency_failure(&queue_item_id, ctx);
+        let dependency = self.creation_dependency_for_id(queue_item_id, id);
+        self.handle_dependency_failure(&dependency, ctx);
     }
 
     fn handle_update_failure_response(
@@ -1613,7 +1678,7 @@ impl SyncQueue {
         if let Some(dependencies) = self.waiting_response.get_mut(&updated_sync_id.uid()) {
             dependencies.remove(&queue_item_id);
         }
-        self.handle_dependency_failure(&queue_item_id, ctx);
+        self.handle_dependency_failure(&QueueDependency::QueueItem(queue_item_id), ctx);
         ctx.emit(SyncQueueEvent::ObjectUpdateFailure {
             id: updated_sync_id,
         })
@@ -1629,7 +1694,7 @@ impl SyncQueue {
         if let Some(dependencies) = self.waiting_response.get_mut(&uid) {
             dependencies.remove(&queue_item_id);
         }
-        self.handle_dependency_failure(&queue_item_id, ctx);
+        self.handle_dependency_failure(&QueueDependency::QueueItem(queue_item_id), ctx);
         ctx.emit(SyncQueueEvent::ReportObjectActionFailed {
             uid,
             action_timestamp: timestamp,
@@ -1678,10 +1743,45 @@ impl SyncQueue {
         }
     }
 
+    fn creation_dependency_for_id(
+        &mut self,
+        queue_item_id: QueueItemId,
+        id: &str,
+    ) -> QueueDependency {
+        if let Some(client_id) = ClientId::from_hash(id) {
+            return self.creation_dependency_for_client_id(queue_item_id, client_id);
+        }
+
+        QueueDependency::QueueItem(queue_item_id)
+    }
+
+    fn creation_dependency_for_client_id(
+        &mut self,
+        queue_item_id: QueueItemId,
+        client_id: ClientId,
+    ) -> QueueDependency {
+        let Some(client_ids) = self.in_flight_bulk_create_objects.get_mut(&queue_item_id) else {
+            return QueueDependency::QueueItem(queue_item_id);
+        };
+
+        if !client_ids.remove(&client_id) {
+            return QueueDependency::QueueItem(queue_item_id);
+        }
+
+        if client_ids.is_empty() {
+            self.in_flight_bulk_create_objects.remove(&queue_item_id);
+        }
+
+        QueueDependency::BulkCreateGenericStringObject {
+            queue_item_id,
+            client_id,
+        }
+    }
+
     /// Given a successful object creation, update any dependent objects to refer to the object's new server ID
     fn update_dependencies_on_creation(
         &mut self,
-        queue_item_id: &QueueItemId,
+        dependency: &QueueDependency,
         client_id: ClientId,
         server_id: ServerId,
         object_type: ObjectType,
@@ -1695,11 +1795,11 @@ impl SyncQueue {
             for (item_id, queue_item) in self.queue.iter_mut() {
                 match queue_item {
                     QueueItem::CreateWorkflow { model, .. } => {
-                        // Only update the workflow if it depends on `queue_item_id`
+                        // Only update the workflow if it depends on this dependency.
                         if self
                             .queue_dependencies
                             .get(item_id)
-                            .is_some_and(|deps| deps.contains(queue_item_id))
+                            .is_some_and(|deps| deps.contains(dependency))
                         {
                             let workflow_model = Arc::make_mut(model);
                             workflow_model.data.replace_object_id(
@@ -1709,11 +1809,11 @@ impl SyncQueue {
                         }
                     }
                     QueueItem::UpdateWorkflow { model, .. } => {
-                        // Only update the workflow if it depends on `queue_item_id`
+                        // Only update the workflow if it depends on this dependency.
                         if self
                             .queue_dependencies
                             .get(item_id)
-                            .is_some_and(|deps| deps.contains(queue_item_id))
+                            .is_some_and(|deps| deps.contains(dependency))
                         {
                             let workflow_model = Arc::make_mut(model);
                             workflow_model.data.replace_object_id(
@@ -1729,16 +1829,16 @@ impl SyncQueue {
     }
 
     /// If a request succeeds, update the dependency map by removing it from all dependency sets
-    fn handle_dependency_success(&mut self, item_id: &QueueItemId) {
+    fn handle_dependency_success(&mut self, dependency: &QueueDependency) {
         for (_, dependencies) in self.queue_dependencies.iter_mut() {
-            dependencies.remove(item_id);
+            dependencies.remove(dependency);
         }
     }
 
     /// If a request fails, emit a failure for every dependent QueueItem
     fn handle_dependency_failure(
         &mut self,
-        queue_item_id: &QueueItemId,
+        failed_dependency: &QueueDependency,
         ctx: &mut ModelContext<SyncQueue>,
     ) {
         // Filter the queue to get a list of all items dependent on this queue item
@@ -1748,7 +1848,7 @@ impl SyncQueue {
             .filter(|(item_id, _)| {
                 self.queue_dependencies
                     .get(item_id)
-                    .is_some_and(|dependency_set| dependency_set.contains(queue_item_id))
+                    .is_some_and(|dependency_set| dependency_set.contains(failed_dependency))
             })
             .cloned()
             .collect();
@@ -1866,7 +1966,7 @@ impl SyncQueue {
     }
 
     #[cfg(test)]
-    pub fn queue_dependencies(&self) -> &HashMap<QueueItemId, HashSet<QueueItemId>> {
+    fn queue_dependencies(&self) -> &HashMap<QueueItemId, HashSet<QueueDependency>> {
         &self.queue_dependencies
     }
 

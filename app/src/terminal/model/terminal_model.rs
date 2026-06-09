@@ -80,7 +80,7 @@ use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::session::SessionInfo;
 use crate::terminal::shared_session::ai_agent::encode_agent_response_event;
-use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::ssh::util::{InteractiveSshCommand, SshLoginState};
 use crate::terminal::{
@@ -563,9 +563,9 @@ pub struct TerminalModel {
 
     shared_session_status: SharedSessionStatus,
 
-    /// The source type of the shared session (if this is a shared session).
-    /// If it is not a shared session, this will be `None`.
-    shared_session_source_type: Option<SessionSourceType>,
+    /// `SessionSourceType` paired with `source_task_id`, or `None` when
+    /// this is not a shared session.
+    shared_session_source: Option<SharedSessionSource>,
 
     /// Whether this terminal model was created as a cloud mode dummy session
     /// (no local shell process, deferred shared-session viewer backing).
@@ -1153,7 +1153,7 @@ impl TerminalModel {
             shell_launch_state: shell_state,
             obfuscate_secrets,
             shared_session_status,
-            shared_session_source_type: None,
+            shared_session_source: None,
             is_dummy_cloud_mode_session,
             conversation_transcript_viewer_status: None,
             ordered_terminal_events_for_shared_session_tx: None,
@@ -1411,6 +1411,23 @@ impl TerminalModel {
         }
     }
 
+    /// Signal to viewers that the Cloud Mode Setup V2 phase is complete and no
+    /// follow-up `AppendedExchange` is coming (e.g. because the AgentDriver is
+    /// short-circuiting an empty-prompt handoff via `skip_initial_turn`).
+    /// Viewers use this to clear `BlockList::is_executing_oz_environment_startup_commands`
+    /// and tear down the "Running setup commands…" chip.
+    pub fn send_cloud_mode_setup_phase_ended_for_shared_session(&mut self) {
+        if self.shared_session_status().is_sharer() {
+            if let Some(tx) = &self.ordered_terminal_events_for_shared_session_tx {
+                if let Err(e) = tx.try_send(OrderedTerminalEventType::CloudModeSetupPhaseEnded) {
+                    log::warn!(
+                        "Failed to send OrderedTerminalEventType::CloudModeSetupPhaseEnded: {e}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Whether the session sharing server is currently replaying
     /// conversation events (for conversation reconstruction).
     pub fn is_receiving_agent_conversation_replay(&self) -> bool {
@@ -1421,15 +1438,24 @@ impl TerminalModel {
         self.is_receiving_agent_conversation_replay = value;
     }
 
-    pub fn set_shared_session_source_type(
-        &mut self,
-        set_shared_session_source_type: SessionSourceType,
-    ) {
-        self.shared_session_source_type = Some(set_shared_session_source_type);
+    pub fn set_shared_session_source(&mut self, source: SharedSessionSource) {
+        self.shared_session_source = Some(source);
+    }
+
+    pub fn shared_session_source(&self) -> Option<&SharedSessionSource> {
+        self.shared_session_source.as_ref()
     }
 
     pub fn shared_session_source_type(&self) -> Option<SessionSourceType> {
-        self.shared_session_source_type.clone()
+        self.shared_session_source
+            .as_ref()
+            .map(|s| s.source_type.clone())
+    }
+
+    pub fn set_shared_session_source_task_id(&mut self, task_id: Option<String>) {
+        if let Some(source) = self.shared_session_source.as_mut() {
+            source.source_task_id = task_id;
+        }
     }
 
     pub fn is_dummy_cloud_mode_session(&self) -> bool {
@@ -1443,26 +1469,21 @@ impl TerminalModel {
 
     pub fn is_shared_ambient_agent_session(&self) -> bool {
         matches!(
-            self.shared_session_source_type,
+            self.shared_session_source.as_ref().map(|s| &s.source_type),
             Some(SessionSourceType::AmbientAgent { .. })
         )
     }
 
     pub fn ambient_agent_task_id(&self) -> Option<AmbientAgentTaskId> {
-        // Check if we're viewing an ambient agent conversation transcript
         if let Some(ConversationTranscriptViewerStatus::ViewingAmbientConversation(task_id)) =
             &self.conversation_transcript_viewer_status
         {
             return Some(*task_id);
         }
-
-        // Otherwise, check if we're in a shared ambient agent session
-        if let Some(SessionSourceType::AmbientAgent { task_id }) = &self.shared_session_source_type
-        {
-            task_id.as_deref().and_then(|s| s.parse().ok())
-        } else {
-            None
-        }
+        self.shared_session_source
+            .as_ref()
+            .and_then(|s| s.orchestrator_task_id())
+            .and_then(|s| s.parse().ok())
     }
 
     /// Loads the provided scrollback into the model.

@@ -20,7 +20,6 @@ use crate::appearance::Appearance;
 use crate::drive::cloud_object_styling::warp_drive_icon_color;
 use crate::drive::DriveObjectType;
 use crate::notebooks::file::is_markdown_file;
-use crate::notebooks::post_process_notebook;
 use crate::server::ids::ClientId;
 use crate::themes::theme::Fill;
 use crate::ui_components::icons::Icon;
@@ -893,9 +892,7 @@ impl FileUploadState {
 
 pub(super) async fn parse_file(path: PathBuf, file_type: FileType) -> Result<FileContent> {
     match file_type {
-        FileType::Notebook => Ok(FileContent::Notebook(post_process_notebook(
-            &async_fs::read_to_string(path).await?,
-        ))),
+        FileType::Notebook => Ok(FileContent::Notebook(async_fs::read_to_string(path).await?)),
         FileType::Workflow => {
             let file = async_fs::read(path).await?;
             let mut workflow_enums: HashMap<ClientId, WorkflowEnum> = HashMap::new();

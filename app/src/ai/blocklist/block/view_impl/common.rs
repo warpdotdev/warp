@@ -86,7 +86,7 @@ use crate::notebooks::editor::{markdown_table_appearance, rich_text_styles};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::settings::{FontSettings, InputSettings};
 use crate::settings_view::SettingsSection;
-use crate::terminal::find::{BlockListMatch, TerminalFindModel};
+use crate::terminal::find::TerminalFindModel;
 use crate::terminal::grid_renderer::{FOCUSED_MATCH_COLOR, MATCH_COLOR};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
@@ -159,7 +159,7 @@ pub struct WarpingProps<'a, V> {
     pub summarization_start_time: Option<instant::Instant>,
     pub hide_responses_button: Option<(ButtonProps<'a>, bool)>,
     pub take_over_lrc_control_button: Option<ButtonProps<'a>>,
-    pub auto_execute_button: Option<ButtonProps<'a>>,
+    pub auto_execute_button: Option<AutoExecuteButtonProps<'a>>,
     pub queue_next_prompt_button: Option<ButtonProps<'a>>,
     pub stop_button: Option<ButtonProps<'a>>,
     /// Inline `Check now` affordance displayed alongside `Last seen by agent ...`
@@ -178,6 +178,18 @@ pub struct ButtonProps<'a> {
     pub button_handle: &'a MouseStateHandle,
     pub keystroke: Option<&'a Keystroke>,
     pub is_active: bool,
+}
+
+/// Props for the auto-approve / fast-forward button in the warping indicator.
+///
+/// When `is_locked` is set, the button is rendered in its always-on state and
+/// the click handler (plus the action dispatched by the keybinding) are no-ops.
+/// Used for ambient agent conversations where fast-forward is always conceptually on.
+pub struct AutoExecuteButtonProps<'a> {
+    pub button_handle: &'a MouseStateHandle,
+    pub keystroke: Option<&'a Keystroke>,
+    pub is_active: bool,
+    pub is_locked: bool,
 }
 
 pub struct ForceRefreshButtonProps<'a> {
@@ -764,6 +776,7 @@ fn render_hide_responses_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::ToggleHideResponses);
         },
@@ -795,6 +808,7 @@ pub fn render_switch_control_to_user_button(
         props.keystroke,
         tooltip.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::SetInputModeTerminal);
         },
@@ -818,6 +832,7 @@ fn render_stop_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn El
         props.keystroke,
         "Stop agent task".to_string(),
         props.is_active,
+        false,
         |ctx: &mut EventContext<'_>| {
             ctx.dispatch_typed_action(BlocklistAIStatusBarAction::Stop);
         },
@@ -855,14 +870,21 @@ fn render_queue_next_prompt_button(
         props.keystroke,
         tooltip_text.to_string(),
         props.is_active,
+        false,
         |ctx| {
             ctx.dispatch_typed_action(TerminalAction::ToggleQueueNextPrompt);
         },
     )
 }
 
-fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Box<dyn Element> {
-    let icon = if props.is_active {
+fn render_auto_approve_button(
+    props: AutoExecuteButtonProps,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    // In locked mode (ambient/cloud agent conversations), the button is always
+    // rendered in its "on" state regardless of the underlying conversation state.
+    let is_active = props.is_active || props.is_locked;
+    let icon = if is_active {
         Icon::FastForwardFilled
     } else {
         Icon::FastForward
@@ -879,7 +901,9 @@ fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Bo
     )
     .finish();
 
-    let tooltip_text = if props.is_active {
+    let tooltip_text = if props.is_locked {
+        "Fast forward is always enabled for cloud agent conversations"
+    } else if is_active {
         "Turn off auto-approve all agent actions"
     } else {
         "Auto-approve all agent actions for this task"
@@ -891,8 +915,12 @@ fn render_auto_approve_button(props: ButtonProps, appearance: &Appearance) -> Bo
         icon,
         props.keystroke,
         tooltip_text.to_string(),
-        props.is_active,
-        |ctx| {
+        is_active,
+        props.is_locked,
+        move |ctx| {
+            if props.is_locked {
+                return;
+            }
             ctx.dispatch_typed_action(TerminalAction::ToggleAutoexecuteMode);
         },
     )
@@ -970,6 +998,7 @@ fn render_force_refresh_inline(
     .finish()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_warping_indicator_button<F>(
     mouse_state: MouseStateHandle,
     appearance: &Appearance,
@@ -977,6 +1006,7 @@ fn render_warping_indicator_button<F>(
     keybinding: Option<&Keystroke>,
     tooltip: String,
     is_active: bool,
+    is_disabled: bool,
     mut on_click: F,
 ) -> Box<dyn Element>
 where
@@ -1023,6 +1053,12 @@ where
         UiComponentStyles::default().set_background(internal_colors::fg_overlay_3(theme).into()),
     );
 
+    let cursor = if is_disabled {
+        Cursor::Arrow
+    } else {
+        Cursor::PointingHand
+    };
+
     let mut button = Button::new(
         mouse_state,
         styles,
@@ -1032,7 +1068,7 @@ where
     )
     .with_custom_label(button_content)
     .with_tooltip(move || ui_builder.tool_tip(tooltip.clone()).build().finish())
-    .with_cursor(Some(Cursor::PointingHand));
+    .with_cursor(Some(cursor));
 
     if is_active {
         button = button.active();
@@ -1114,11 +1150,11 @@ pub fn render_text_sections<V: View, A: Action>(
                 // Carve off a subslice of the pre-allocated handles for just
                 // this group, and advance the counter so subsequent image
                 // sections pick up handles from later in the slice.
-                let handle_start = *props.starting_image_section_index;
-                let handle_end = (handle_start + image_group.images.len())
-                    .min(props.image_section_tooltip_handles.len());
-                let handles_for_group =
-                    &props.image_section_tooltip_handles[handle_start..handle_end];
+                let handles_for_group = image_tooltip_handles_for_group(
+                    props.image_section_tooltip_handles,
+                    *props.starting_image_section_index,
+                    image_group.images.len(),
+                );
                 *props.starting_image_section_index += image_group.images.len();
                 let render_context = ImageRenderContext {
                     detected_links: props.detected_links,
@@ -1292,6 +1328,17 @@ fn text_sections_with_indices(
         .iter()
         .enumerate()
         .map(move |(offset, section)| (starting_text_section_index + offset, section))
+}
+
+fn image_tooltip_handles_for_group(
+    tooltip_handles: &[MouseStateHandle],
+    starting_image_section_index: usize,
+    image_group_len: usize,
+) -> &[MouseStateHandle] {
+    let available_handles = tooltip_handles
+        .get(starting_image_section_index..)
+        .unwrap_or(&[]);
+    &available_handles[..available_handles.len().min(image_group_len)]
 }
 
 #[derive(Clone, Copy)]
@@ -2863,12 +2910,8 @@ pub fn get_highlight_ranges_for_find_matches(
 ) -> impl Iterator<Item = HighlightedRange> {
     let find_match_locations = find_state.matches_for_location(location);
     let focused_match_location = find_model
-        .block_list_find_run()
-        .and_then(|run| match run.focused_match() {
-            Some(BlockListMatch::RichContent { match_id, .. }) => Some(match_id),
-            _ => None,
-        })
-        .and_then(|match_id| find_state.location_for_match(*match_id));
+        .focused_rich_content_match_id()
+        .and_then(|match_id| find_state.location_for_match(match_id));
     let mut highlighted_ranges = vec![];
     for find_match_location in find_match_locations {
         let is_focused_match =

@@ -26,7 +26,7 @@ use crate::ai::cloud_environments::{
 };
 use crate::auth::UserUid;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
-use crate::cloud_object::CloudObject;
+use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::server::cloud_objects::update_manager::{
     ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };

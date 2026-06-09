@@ -1,4 +1,4 @@
-use cocoa::foundation::{NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSPoint, NSRect, NSSize};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 pub trait Vector2FExt {

@@ -780,7 +780,9 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fi
     fi
 
-    if [[ "${RPROMPT:-}" != "%{"*"%}" ]]; then
+    # Do not synthesize an empty right prompt. Even without visible content, zsh reserves
+    # right-prompt layout space and may corrupt wrapped command redraws in the command grid.
+    if [[ -n "${RPROMPT:-}" && "${RPROMPT:-}" != "%{"*"%}" ]]; then
       RPROMPT="%{${RPROMPT:-}%}"
     fi
 
@@ -1168,6 +1170,12 @@ esac
       fi
     fi
   fi
+
+  # Restore the built-in bracketed-paste widget. This works around a buggy interaction we observed
+  # with the bracketed-paste-magic plugin (included in oh-my-zsh by default), zsh's "allexport"
+  # option (set -a), and Warp's bootstrapping code.
+  # https://github.com/warpdotdev/warp/issues/11520
+  zle -A .bracketed-paste bracketed-paste
 
   precmd_functions+=(warp_precmd warp_update_prompt_vars)
   preexec_functions+=(warp_preexec)

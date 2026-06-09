@@ -1,3 +1,5 @@
+use std::marker::PhantomData;
+
 use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, CornerRadius, CrossAxisAlignment, Flex,
@@ -8,11 +10,11 @@ use warpui::presenter::ChildView;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    Action, AppContext, BlurContext, Element, Entity, SingletonEntity, TypedActionView, View,
-    ViewContext, ViewHandle,
+    AppContext, BlurContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
 };
 
-use super::dropdown::DropdownAction;
+use super::dropdown::{DropdownAction, DropdownItemAction};
 use crate::appearance::Appearance;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::themes::theme::Fill;
@@ -27,18 +29,19 @@ mod tests;
 ///
 /// This is useful instead of [`crate::dropdown::Dropdown`] when showing a
 /// dropdown alongside other controls, such as in a formatting UI.
-pub struct CompactDropdown<A: Action + Clone> {
+pub struct CompactDropdown<A: DropdownItemAction = ()> {
     /// Whether the dropdown is open.
     is_expanded: bool,
     /// Mouse state for the dropdown button.
     top_bar_mouse_state: MouseStateHandle,
     /// Dropdown menu.
-    dropdown: ViewHandle<Menu<DropdownAction<A>>>,
+    dropdown: ViewHandle<Menu<DropdownAction>>,
     /// The size that icons are scaled to. Defaults to the UI font size if not set.
     icon_size: Option<f32>,
+    _action_type: PhantomData<A>,
 }
 
-pub struct CompactDropdownItem<A: Action + Clone> {
+pub struct CompactDropdownItem<A: DropdownItemAction = ()> {
     /// Icon identifier for this item.
     icon: Icon,
     /// Optional override color for the icon.
@@ -49,7 +52,7 @@ pub struct CompactDropdownItem<A: Action + Clone> {
     action: A,
 }
 
-impl<A: Action + Clone> CompactDropdown<A> {
+impl<A: DropdownItemAction> CompactDropdown<A> {
     /// Create a new, empty compact dropdown. The [`MenuVariant`] determines whether or not the
     /// dropdown is scrollable when expanded.
     pub fn new(menu_variant: MenuVariant, ctx: &mut ViewContext<Self>) -> Self {
@@ -70,6 +73,7 @@ impl<A: Action + Clone> CompactDropdown<A> {
             dropdown,
             top_bar_mouse_state: Default::default(),
             icon_size: None,
+            _action_type: PhantomData,
         }
     }
 
@@ -159,7 +163,7 @@ impl<A: Action + Clone> CompactDropdown<A> {
         // if the dropdown is not expanded.
         if !self.is_expanded {
             top_bar = top_bar.on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(DropdownAction::<A>::ToggleExpanded);
+                ctx.dispatch_typed_action(DropdownAction::ToggleExpanded);
             });
         }
 
@@ -200,7 +204,11 @@ impl<A: Action + Clone> CompactDropdown<A> {
     /// Adapter between [`MenuItem`] click callbacks and the parent action type.
     /// When a dropdown menu item is selected, we dispatch its action and close
     /// the dropdown.
-    fn select_action_and_close(&mut self, action: &A, ctx: &mut ViewContext<Self>) {
+    fn select_action_and_close(
+        &mut self,
+        action: &dyn DropdownItemAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
         ctx.dispatch_typed_action(action);
         self.close(ctx);
     }
@@ -213,11 +221,11 @@ impl<A: Action + Clone> CompactDropdown<A> {
     }
 }
 
-impl<A: Action + Clone> Entity for CompactDropdown<A> {
+impl<A: DropdownItemAction> Entity for CompactDropdown<A> {
     type Event = CompactDropdownEvent;
 }
 
-impl<A: Action + Clone> View for CompactDropdown<A> {
+impl<A: DropdownItemAction> View for CompactDropdown<A> {
     fn ui_name() -> &'static str {
         "CompactDropdown"
     }
@@ -248,22 +256,22 @@ impl<A: Action + Clone> View for CompactDropdown<A> {
     }
 }
 
-impl<A: Action + Clone> TypedActionView for CompactDropdown<A> {
-    type Action = DropdownAction<A>;
+impl<A: DropdownItemAction> TypedActionView for CompactDropdown<A> {
+    type Action = DropdownAction;
 
-    fn handle_action(&mut self, action: &DropdownAction<A>, ctx: &mut ViewContext<Self>) {
+    fn handle_action(&mut self, action: &DropdownAction, ctx: &mut ViewContext<Self>) {
         match action {
             DropdownAction::Focus(_) => self.focus(ctx),
             DropdownAction::Close => self.close(ctx),
             DropdownAction::SelectActionAndClose(action) => {
-                self.select_action_and_close(action, ctx)
+                self.select_action_and_close(action.as_ref(), ctx)
             }
             DropdownAction::ToggleExpanded => self.toggle_expanded(ctx),
         }
     }
 }
 
-impl<A: Action + Clone> CompactDropdownItem<A> {
+impl<A: DropdownItemAction> CompactDropdownItem<A> {
     pub fn new(icon: Icon, display_text: impl Into<String>, action: A) -> Self {
         Self {
             display_text: display_text.into(),
@@ -280,10 +288,10 @@ impl<A: Action + Clone> CompactDropdownItem<A> {
         self
     }
 
-    fn menu_item(self) -> MenuItem<DropdownAction<A>> {
+    fn menu_item(self) -> MenuItem<DropdownAction> {
         let mut item = MenuItemFields::new(self.display_text)
             .with_icon(self.icon)
-            .with_on_select_action(DropdownAction::SelectActionAndClose(self.action));
+            .with_on_select_action(DropdownAction::SelectActionAndClose(Box::new(self.action)));
         if let Some(color) = self.icon_color {
             item = item.with_override_icon_color(color);
         }

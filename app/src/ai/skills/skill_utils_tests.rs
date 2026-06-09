@@ -1,61 +1,39 @@
 use std::path::PathBuf;
 
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+use warp_util::host_id::HostId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use super::*;
 
+fn remote_location(path: &str) -> LocalOrRemotePath {
+    LocalOrRemotePath::Remote(RemotePath::new(
+        HostId::new("remote-host".to_string()),
+        StandardizedPath::try_new(path).unwrap(),
+    ))
+}
+
 #[test]
-fn test_skill_path_from_file_path_skill_md() {
-    let skill = PathBuf::from("/home/user/.claude/skills/my-skill/SKILL.md");
-    let result = skill_path_from_file_path(&skill);
+fn skill_path_from_unix_encoded_remote_location() {
+    let location = remote_location("/repo/.agents/skills/deploy/scripts/run.sh");
+
     assert_eq!(
-        result,
-        Some(PathBuf::from("/home/user/.claude/skills/my-skill/SKILL.md"))
+        skill_path_from_location(&location),
+        Some(remote_location("/repo/.agents/skills/deploy/SKILL.md"))
     );
 }
 
 #[test]
-fn test_skill_path_from_file_path_warp_home_skill() {
-    let Some(warp_home_skills_dir) = warp_core::paths::warp_home_skills_dir() else {
-        eprintln!("Skipping test: Warp home skills directory not available");
-        return;
-    };
-    let warp_home_skill = warp_home_skills_dir
-        .join("my-skill")
-        .join("assets")
-        .join("image.png");
-    let result = skill_path_from_file_path(&warp_home_skill);
+fn skill_path_from_windows_encoded_remote_location() {
+    let location = remote_location(r"C:\repo\.agents\skills\deploy\scripts\run.ps1");
+
     assert_eq!(
-        result,
-        Some(warp_home_skills_dir.join("my-skill").join("SKILL.md"))
+        skill_path_from_location(&location),
+        Some(remote_location(r"C:\repo\.agents\skills\deploy\SKILL.md"))
     );
 }
-
-#[test]
-fn test_skill_path_from_file_path_nested_file() {
-    let skill_nested = PathBuf::from("/home/user/.agents/skills/my-skill/assets/image.png");
-    let result = skill_path_from_file_path(&skill_nested);
-    assert_eq!(
-        result,
-        Some(PathBuf::from("/home/user/.agents/skills/my-skill/SKILL.md"))
-    );
-}
-
-#[test]
-fn test_skill_path_from_file_path_non_skill() {
-    let non_skill = PathBuf::from("/home/user/Documents/file.txt");
-    let result = skill_path_from_file_path(&non_skill);
-    assert_eq!(result, None);
-
-    let similar_path = PathBuf::from("/home/user/.claude/other/file.txt");
-    let result = skill_path_from_file_path(&similar_path);
-    assert_eq!(result, None);
-
-    let empty_path = PathBuf::from("");
-    let result = skill_path_from_file_path(&empty_path);
-    assert_eq!(result, None);
-}
-
 #[test]
 fn test_unique_skills_dedupes_identical_skills_same_dir() {
     let shared_skill_dir = PathBuf::from("/home/user");
@@ -64,7 +42,7 @@ fn test_unique_skills_dedupes_identical_skills_same_dir() {
 
     let content = "---\nname: test-skill\ndescription: A test skill\n---\nContent here";
     let skill = ParsedSkill {
-        path: skill_path1.clone(),
+        path: LocalOrRemotePath::Local(skill_path1.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
         content: content.to_string(),
@@ -74,7 +52,7 @@ fn test_unique_skills_dedupes_identical_skills_same_dir() {
     };
 
     let skill2 = ParsedSkill {
-        path: skill_path2.clone(),
+        path: LocalOrRemotePath::Local(skill_path2.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
         content: content.to_string(),
@@ -84,12 +62,18 @@ fn test_unique_skills_dedupes_identical_skills_same_dir() {
     };
 
     let mut skills_by_path = HashMap::new();
-    skills_by_path.insert(skill_path1.clone(), skill);
-    skills_by_path.insert(skill_path2.clone(), skill2);
+    skills_by_path.insert(LocalOrRemotePath::Local(skill_path1.clone()), skill);
+    skills_by_path.insert(LocalOrRemotePath::Local(skill_path2.clone()), skill2);
 
     let skill_paths = vec![
-        (shared_skill_dir.clone(), skill_path1),
-        (shared_skill_dir, skill_path2),
+        (
+            LocalOrRemotePath::Local(shared_skill_dir.clone()),
+            LocalOrRemotePath::Local(skill_path1),
+        ),
+        (
+            LocalOrRemotePath::Local(shared_skill_dir),
+            LocalOrRemotePath::Local(skill_path2),
+        ),
     ];
 
     let result = unique_skills(&skill_paths, &skills_by_path);
@@ -107,7 +91,7 @@ fn test_unique_skills_does_not_dedupe_different_dirs() {
 
     let content = "---\nname: test-skill\ndescription: A test skill\n---\nContent here";
     let home_skill = ParsedSkill {
-        path: home_path.clone(),
+        path: LocalOrRemotePath::Local(home_path.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
         content: content.to_string(),
@@ -117,7 +101,7 @@ fn test_unique_skills_does_not_dedupe_different_dirs() {
     };
 
     let project_skill = ParsedSkill {
-        path: project_path.clone(),
+        path: LocalOrRemotePath::Local(project_path.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
         content: content.to_string(),
@@ -127,10 +111,22 @@ fn test_unique_skills_does_not_dedupe_different_dirs() {
     };
 
     let mut skills_by_path = HashMap::new();
-    skills_by_path.insert(home_path.clone(), home_skill);
-    skills_by_path.insert(project_path.clone(), project_skill);
+    skills_by_path.insert(LocalOrRemotePath::Local(home_path.clone()), home_skill);
+    skills_by_path.insert(
+        LocalOrRemotePath::Local(project_path.clone()),
+        project_skill,
+    );
 
-    let skill_paths = vec![(home_dir, home_path), (project_dir, project_path)];
+    let skill_paths = vec![
+        (
+            LocalOrRemotePath::Local(home_dir),
+            LocalOrRemotePath::Local(home_path),
+        ),
+        (
+            LocalOrRemotePath::Local(project_dir),
+            LocalOrRemotePath::Local(project_path),
+        ),
+    ];
 
     let result = unique_skills(&skill_paths, &skills_by_path);
     assert_eq!(
@@ -150,7 +146,7 @@ fn test_unique_skills_does_not_dedupe_different_content() {
     let content2 = "---\nname: test-skill\ndescription: A test skill\n---\nDifferent content";
 
     let skill1 = ParsedSkill {
-        path: skill_path1.clone(),
+        path: LocalOrRemotePath::Local(skill_path1.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
         content: content1.to_string(),
@@ -160,7 +156,7 @@ fn test_unique_skills_does_not_dedupe_different_content() {
     };
 
     let skill2 = ParsedSkill {
-        path: skill_path2.clone(),
+        path: LocalOrRemotePath::Local(skill_path2.clone()),
         name: "test-skill".to_string(),
         description: "A test skill".to_string(),
         content: content2.to_string(),
@@ -170,12 +166,18 @@ fn test_unique_skills_does_not_dedupe_different_content() {
     };
 
     let mut skills_by_path = HashMap::new();
-    skills_by_path.insert(skill_path1.clone(), skill1);
-    skills_by_path.insert(skill_path2.clone(), skill2);
+    skills_by_path.insert(LocalOrRemotePath::Local(skill_path1.clone()), skill1);
+    skills_by_path.insert(LocalOrRemotePath::Local(skill_path2.clone()), skill2);
 
     let skill_paths = vec![
-        (shared_skill_dir.clone(), skill_path1),
-        (shared_skill_dir, skill_path2),
+        (
+            LocalOrRemotePath::Local(shared_skill_dir.clone()),
+            LocalOrRemotePath::Local(skill_path1),
+        ),
+        (
+            LocalOrRemotePath::Local(shared_skill_dir),
+            LocalOrRemotePath::Local(skill_path2),
+        ),
     ];
 
     let result = unique_skills(&skill_paths, &skills_by_path);

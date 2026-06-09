@@ -142,7 +142,9 @@ pub enum AIAgentActionType {
     FetchConversation {
         conversation_id: String,
     },
-
+    // TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 action support once
+    // old preview orchestration history no longer needs parse/display/result compatibility.
+    // Linear issue: QUALITY-788.
     StartAgent {
         version: StartAgentVersion,
         name: String,

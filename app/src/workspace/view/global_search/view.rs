@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_channel::Sender;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::{ByteOffset, CharCounter};
+use warp_core::r#async::debounce;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
@@ -36,7 +37,6 @@ use warpui::{
 
 use crate::code::icon_from_file_path;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-use crate::debounce::debounce;
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, InteractionState,
     PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, TextOptions,

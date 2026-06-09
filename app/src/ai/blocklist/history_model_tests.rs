@@ -6,7 +6,6 @@ use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use super::{
@@ -188,13 +187,16 @@ fn start_new_child_conversation_persists_harness_metadata() {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
+        // Pick a non-nil UUID for the parent run_id so the orchestration
+        // capability gate (which now reads run_id() exclusively) sees a valid
+        // agent identifier when seeding the child's parent_agent_id.
+        const PARENT_RUN_ID: &str = "00000000-0000-0000-0000-000000000001";
         let (child_a, child_b, child_ids) = history_model.update(&mut app, |history_model, ctx| {
             let parent_conversation_id =
                 history_model.start_new_conversation(terminal_view_id, false, false, false, ctx);
-            history_model.set_server_conversation_token_for_conversation(
-                parent_conversation_id,
-                "parent-agent-id".to_string(),
-            );
+            if let Some(parent) = history_model.conversation_mut(&parent_conversation_id) {
+                parent.set_run_id(PARENT_RUN_ID.to_string());
+            }
             let child_a = history_model.start_new_child_conversation(
                 terminal_view_id,
                 "Agent 1".to_string(),
@@ -242,21 +244,14 @@ fn start_new_child_conversation_persists_harness_metadata() {
                 child_b_conversation.orchestration_harness(),
                 Some(Harness::Codex)
             );
-            assert_eq!(
-                child_a_conversation.parent_agent_id(),
-                Some("parent-agent-id")
-            );
-            assert_eq!(
-                child_b_conversation.parent_agent_id(),
-                Some("parent-agent-id")
-            );
+            assert_eq!(child_a_conversation.parent_agent_id(), Some(PARENT_RUN_ID));
+            assert_eq!(child_b_conversation.parent_agent_id(), Some(PARENT_RUN_ID));
         });
     });
 }
 
 #[test]
 fn test_initialize_historical_conversations_resolves_parent_agent_id_children_via_seeded_run_ids() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();
         let child_id = AIConversationId::new();
@@ -323,6 +318,117 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                 model.child_conversation_ids_of(&parent_id),
                 &[child_id],
                 "parent_agent_id-only children should be indexed under their resolved parent",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_children() {
+    // Fix C: orchestration children should be inserted into `conversations_by_id`
+    // eagerly during `initialize_historical_conversations` so the pill bar and
+    // orchestration transcript name resolution can find them before the parent's
+    // hidden child pane materializes lazily. Non-orchestration historical rows
+    // must stay on the lazy path.
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+
+        let conversations = vec![
+            persisted_agent_conversation(
+                child_id,
+                AgentConversationData {
+                    server_conversation_token: Some("child-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: Some(parent_run_id.clone()),
+                    agent_name: Some("Agent 1".to_string()),
+                    orchestration_harness_type: None,
+                    parent_conversation_id: Some(parent_id.to_string()),
+                    is_remote_child: false,
+                    root_task_is_optimistic: None,
+                    run_id: Some(child_run_id.clone()),
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                    pinned: false,
+                },
+                now,
+                // Child needs at least one root task so `AIConversation::new_restored` succeeds.
+                Some("Child query"),
+            ),
+            persisted_agent_conversation(
+                parent_id,
+                AgentConversationData {
+                    server_conversation_token: Some("parent-token".to_string()),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: None,
+                    agent_name: None,
+                    orchestration_harness_type: None,
+                    parent_conversation_id: None,
+                    is_remote_child: false,
+                    root_task_is_optimistic: None,
+                    run_id: Some(parent_run_id.clone()),
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                    pinned: false,
+                },
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
+            // Child is hydrated into conversations_by_id eagerly so the pill
+            // bar / transcript name resolution can find it.
+            assert!(
+                model.conversation(&child_id).is_some(),
+                "Fix C: orchestration child should be eagerly hydrated into conversations_by_id",
+            );
+            // children_by_parent still gets populated as before.
+            assert_eq!(
+                model.child_conversation_ids_of(&parent_id),
+                &[child_id],
+                "orchestration children should still be indexed in children_by_parent",
+            );
+            // run_id index seeded for the child so name resolution succeeds.
+            assert_eq!(
+                model.conversation_id_for_agent_id(&child_run_id),
+                Some(child_id),
+                "child run_id should be indexed in agent_id_to_conversation_id",
+            );
+            // Parent run_id index is also seeded (matches existing behavior).
+            assert_eq!(
+                model.conversation_id_for_agent_id(&parent_run_id),
+                Some(parent_id),
+                "parent run_id should still be indexed in agent_id_to_conversation_id",
+            );
+            // Parent must NOT be in conversations_by_id yet; it remains on the
+            // existing lazy path via `restore_conversations`.
+            assert!(
+                model.conversation(&parent_id).is_none(),
+                "Fix C: parent conversation should NOT be eagerly loaded into conversations_by_id",
+            );
+            // Parent metadata is still recorded in all_conversations_metadata.
+            assert!(
+                model.get_conversation_metadata(&parent_id).is_some(),
+                "parent metadata should be recorded in all_conversations_metadata",
+            );
+            // Child metadata must NOT be recorded in all_conversations_metadata
+            // (orchestration children are managed by their parent and excluded from navigation).
+            assert!(
+                model.get_conversation_metadata(&child_id).is_none(),
+                "child metadata should NOT be recorded in all_conversations_metadata",
             );
         });
     });
@@ -564,6 +670,7 @@ fn create_server_metadata(
         was_summarized: false,
         context_window_usage: 0.0,
         credits_spent,
+        platform_credits_spent: 0.0,
         credits_spent_for_last_block: None,
         token_usage: vec![],
         tool_usage_metadata: Default::default(),
@@ -573,6 +680,7 @@ fn create_server_metadata(
         title: title.to_string(),
         usage,
         metadata: create_mock_server_metadata(),
+        creator: None,
         permissions: create_mock_server_permissions(),
         ambient_agent_task_id,
         server_conversation_token: ServerConversationToken::new(server_token.to_string()),
@@ -1197,8 +1305,6 @@ fn test_restore_conversations_maintains_children_by_parent() {
 fn test_restore_conversations_indexes_child_by_parent_agent_id() {
     use crate::ai::agent::conversation::AIConversation;
 
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
@@ -1502,6 +1608,524 @@ fn test_mark_conversation_as_remote_child_persists_updated_conversation_state() 
 
         assert_eq!(restored.id(), conversation_id);
         assert!(restored.is_remote_child());
+    });
+}
+
+/// Persisting a conversation whose root is still `Optimistic(Root)` (i.e.
+/// the server has not yet upgraded it via a `CreateTask` action) must NOT
+/// emit a stub `api::Task` in `updated_tasks`.
+///
+/// Previously, `Task::source_for_persistence` returned a synthetic empty
+/// `api::Task` keyed by the client-generated optimistic UUID, which
+/// accumulated as an orphan row in `agent_tasks` and broke later restores
+/// via `HashMap` iteration non-determinism in `AIConversation::new_restored`
+/// (when two parentless tasks — the stub and the real server root —
+/// co-existed and the stub randomly won).
+#[test]
+fn test_persist_with_optimistic_root_emits_event_with_no_task_rows() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+
+        // Create a fresh conversation. Its root is `Optimistic(Root)` with a
+        // client-generated UUID; no server response has been received.
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        // Force a persist while the root is still optimistic.
+        // `mark_conversation_as_remote_child` is one of several early-persist
+        // sites; any of them would exhibit the same writer behavior.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+        });
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("optimistic-root persist should emit an UpdateMultiAgentConversation event");
+
+        let ModelEvent::UpdateMultiAgentConversation {
+            updated_tasks,
+            conversation_data,
+            ..
+        } = event
+        else {
+            panic!("expected UpdateMultiAgentConversation event");
+        };
+
+        // The fix: optimistic-root tasks must not produce any persisted task rows.
+        assert!(
+            updated_tasks.is_empty(),
+            "Persisting a conversation whose root is still Optimistic(Root) must emit zero \
+             task rows; got {} task(s) with ids: {:?}",
+            updated_tasks.len(),
+            updated_tasks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+        );
+
+        // The legacy `root_task_is_optimistic` flag must no longer be written.
+        assert!(
+            conversation_data.root_task_is_optimistic.is_none(),
+            "conversation_data.root_task_is_optimistic must not be written (legacy field); \
+             got {:?}",
+            conversation_data.root_task_is_optimistic,
+        );
+    });
+}
+
+/// Once the in-memory root has been upgraded from `Optimistic(Root)` to a
+/// server-backed `Task`, the next `persist_conversation_state` must emit
+/// exactly one task row with the server-assigned id and no dependencies.
+/// Previously, the persist also retained the original optimistic stub row,
+/// producing two parentless rows that broke restore.
+#[test]
+fn test_optimistic_root_upgrade_then_persist_emits_event_with_single_server_task_row() {
+    use crate::test_util::ai_agent_tasks::create_api_task;
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(2);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        // First persist: while the root is still Optimistic(Root).
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+        });
+        let first_event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first persist event must arrive");
+        let ModelEvent::UpdateMultiAgentConversation {
+            updated_tasks: first_updated_tasks,
+            ..
+        } = first_event
+        else {
+            panic!("expected UpdateMultiAgentConversation event");
+        };
+        assert!(
+            first_updated_tasks.is_empty(),
+            "precondition: optimistic-root persist must emit zero task rows",
+        );
+
+        // Drive the optimistic→server upgrade in-place and trigger another
+        // persist via mark_conversation_as_remote_child (idempotent setter +
+        // unconditional persist) to keep this test isolated from the full
+        // response-stream/CreateTask plumbing.
+        let server_root_id = "server-root-task-id".to_string();
+        history_model.update(&mut app, |history_model, ctx| {
+            let conversation = history_model
+                .conversation_mut(&conversation_id)
+                .expect("conversation should still exist");
+            conversation.upgrade_optimistic_root_to_server_task_for_test(create_api_task(
+                &server_root_id,
+                vec![],
+            ));
+            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+        });
+
+        let second_event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("post-upgrade persist event must arrive");
+        let ModelEvent::UpdateMultiAgentConversation {
+            updated_tasks: second_updated_tasks,
+            ..
+        } = second_event
+        else {
+            panic!("expected UpdateMultiAgentConversation event");
+        };
+
+        assert_eq!(
+            second_updated_tasks.len(),
+            1,
+            "post-upgrade persist must emit exactly one task row (the server root); got {} task(s) with ids {:?}",
+            second_updated_tasks.len(),
+            second_updated_tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        );
+        let only_task = &second_updated_tasks[0];
+        assert_eq!(
+            only_task.id, server_root_id,
+            "post-upgrade persist row id must match the server-assigned id",
+        );
+        assert!(
+            only_task.dependencies.is_none(),
+            "the server root must be parentless (no dependencies); got {:?}",
+            only_task.dependencies,
+        );
+    });
+}
+
+/// Round-trip: take the persist event emitted while the root is still
+/// optimistic, build an `AgentConversation` from it (with the expected empty
+/// `tasks` list), feed it through the local-DB restore path, and confirm we
+/// get back an `InProgress` conversation with a fresh optimistic root and all
+/// linkage metadata preserved.
+#[test]
+fn test_optimistic_root_restore_round_trip_yields_in_progress_optimistic_root() {
+    use crate::ai::agent::conversation::ConversationStatus;
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(2);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+
+        // Set up a parent conversation so the child has a real parent_agent_id.
+        let (child_conversation_id, expected_parent_agent_id) =
+            history_model.update(&mut app, |history_model, ctx| {
+                let parent_id = history_model.start_new_conversation(
+                    terminal_view_id,
+                    false,
+                    false,
+                    false,
+                    ctx,
+                );
+                let parent_run_id = Uuid::new_v4().to_string();
+                history_model
+                    .conversation_mut(&parent_id)
+                    .expect("parent conversation should exist")
+                    .set_run_id(parent_run_id.clone());
+                // Drain any persist event from parent setup. start_new_conversation
+                // itself does not persist; nothing should be enqueued yet.
+                let child_id = history_model.start_new_child_conversation(
+                    terminal_view_id,
+                    "Round-trip child".to_string(),
+                    parent_id,
+                    Some(Harness::Claude),
+                    ctx,
+                );
+                let expected_parent_agent_id = history_model
+                    .conversation(&child_id)
+                    .and_then(|c| c.parent_agent_id().map(|s| s.to_string()))
+                    .expect("child conversation should have its parent_agent_id stamped");
+                (child_id, expected_parent_agent_id)
+            });
+
+        // The child-creation call site is itself one of the early-persist
+        // sites; consume that first event for the assertion below.
+        let first_event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("child creation should persist conversation state");
+        let ModelEvent::UpdateMultiAgentConversation {
+            conversation_id: child_id_str,
+            updated_tasks,
+            conversation_data,
+        } = first_event
+        else {
+            panic!("expected UpdateMultiAgentConversation event");
+        };
+        assert_eq!(child_id_str, child_conversation_id.to_string());
+        assert!(
+            updated_tasks.is_empty(),
+            "child conversation persisted while root is optimistic must emit zero task rows",
+        );
+
+        // Round-trip via the local-DB loader.
+        let persisted = AgentConversation {
+            conversation: AgentConversationRecord {
+                id: 0,
+                conversation_id: child_id_str.clone(),
+                conversation_data: serde_json::to_string(&conversation_data)
+                    .expect("conversation data should serialize"),
+                last_modified_at: Utc::now().naive_utc(),
+            },
+            tasks: updated_tasks,
+        };
+        let restored = convert_persisted_conversation_to_ai_conversation_with_metadata(persisted)
+            .expect("empty-tasks restore must succeed");
+
+        assert_eq!(restored.id(), child_conversation_id);
+        let root_task = restored.get_root_task().expect("root task should exist");
+        assert!(root_task.is_root_task());
+        assert!(
+            root_task.source().is_none(),
+            "the synthesized restored root must be optimistic (no api::Task source)",
+        );
+        assert_eq!(restored.status(), &ConversationStatus::InProgress);
+        assert!(restored.status_error_message().is_none());
+
+        // All persisted linkage metadata must round-trip.
+        assert_eq!(
+            restored.parent_agent_id(),
+            Some(expected_parent_agent_id.as_str()),
+        );
+        assert_eq!(restored.agent_name(), Some("Round-trip child"));
+        assert_eq!(restored.orchestration_harness(), Some(Harness::Claude));
+    });
+}
+
+/// `AIConversation::truncate_from_exchange` resets the root to
+/// `Optimistic(Root)` when all exchanges are removed and then calls
+/// `write_updated_conversation_state`. That persist must emit zero task rows
+/// (the synthesized optimistic root no longer produces a stub).
+#[test]
+fn test_truncate_from_exchange_to_empty_persist_event_has_empty_updated_tasks() {
+    use crate::test_util::ai_agent_tasks::create_api_task;
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let now = Local::now();
+
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        // Upgrade the root to a server-backed task so the truncate path
+        // ("all exchanges removed → reset to optimistic") actually involves a
+        // real server root being torn down.
+        let server_root_id = "truncate-server-root".to_string();
+        history_model.update(&mut app, |history_model, _ctx| {
+            let conversation = history_model
+                .conversation_mut(&conversation_id)
+                .expect("conversation should exist");
+            conversation.upgrade_optimistic_root_to_server_task_for_test(create_api_task(
+                &server_root_id,
+                vec![],
+            ));
+        });
+
+        // Append an exchange tied to the now server-backed root, then
+        // truncate from it. The exchange add path does not persist; the
+        // truncate call does. `update_for_new_request_input` allocates a
+        // fresh exchange id internally, so we look the freshly-assigned id
+        // up on the conversation rather than reusing the dummy exchange's
+        // id from `create_exchange_with_query`.
+        let stream_id = ResponseStreamId::new_for_test();
+        history_model.update(&mut app, |history_model, ctx| {
+            let exchange = create_exchange_with_query("truncate me", now, None);
+            let request_input = RequestInput {
+                conversation_id,
+                input_messages: std::collections::HashMap::from([(
+                    crate::ai::agent::task::TaskId::new(server_root_id.clone()),
+                    exchange.input,
+                )]),
+                working_directory: exchange.working_directory,
+                model_id: exchange.model_id,
+                coding_model_id: exchange.coding_model_id,
+                cli_agent_model_id: exchange.cli_agent_model_id,
+                computer_use_model_id: exchange.computer_use_model_id,
+                shared_session_response_initiator: exchange.response_initiator,
+                request_start_ts: exchange.start_time,
+                supported_tools_override: None,
+            };
+            history_model
+                .update_conversation_for_new_request_input(
+                    request_input,
+                    stream_id,
+                    terminal_view_id,
+                    ctx,
+                )
+                .expect("update_for_new_request_input must succeed on server-backed root");
+        });
+        let exchange_id = history_model.read(&app, |model, _| {
+            model
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .exchanges()
+                .last()
+                .map(|e| e.id)
+                .expect("a freshly-appended exchange must exist on the root task")
+        });
+
+        history_model.update(&mut app, |history_model, ctx| {
+            let conversation = history_model
+                .conversation_mut(&conversation_id)
+                .expect("conversation should exist");
+            conversation
+                .truncate_from_exchange(exchange_id, ctx)
+                .expect("truncating from an existing exchange must succeed");
+        });
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("truncate-to-empty must emit an UpdateMultiAgentConversation event");
+        let ModelEvent::UpdateMultiAgentConversation { updated_tasks, .. } = event else {
+            panic!("expected UpdateMultiAgentConversation event");
+        };
+        assert!(
+            updated_tasks.is_empty(),
+            "truncate-to-empty resets the root to optimistic; the persist must emit zero task rows, got {} row(s) with ids {:?}",
+            updated_tasks.len(),
+            updated_tasks.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        );
+    });
+}
+
+/// End-to-end happy path: start → early persist → upgrade → persist → restart
+/// → post-restore persist → restart. After two restart cycles, the final
+/// restored conversation must contain exactly one server-backed root task
+/// with the server id and no orphan optimistic tasks.
+#[test]
+fn test_two_restart_cycles_keep_exactly_one_server_root_task_row() {
+    use crate::test_util::ai_agent_tasks::create_api_task;
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        // Early persist while the root is still optimistic.
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+        });
+        let early_event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("early persist event must arrive");
+        let ModelEvent::UpdateMultiAgentConversation {
+            updated_tasks: early_updated_tasks,
+            ..
+        } = early_event
+        else {
+            panic!("expected UpdateMultiAgentConversation event");
+        };
+        assert!(
+            early_updated_tasks.is_empty(),
+            "early persist must not write any optimistic-stub task rows",
+        );
+
+        // Drive the optimistic→server upgrade and trigger another persist.
+        let server_root_id = "server-root".to_string();
+        history_model.update(&mut app, |history_model, ctx| {
+            let conversation = history_model
+                .conversation_mut(&conversation_id)
+                .expect("conversation should exist");
+            conversation.upgrade_optimistic_root_to_server_task_for_test(create_api_task(
+                &server_root_id,
+                vec![],
+            ));
+            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+        });
+        let post_upgrade_event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("post-upgrade persist event must arrive");
+        let post_upgrade_persisted =
+            persisted_agent_conversation_from_update_event(post_upgrade_event);
+        assert_eq!(
+            post_upgrade_persisted.tasks.len(),
+            1,
+            "post-upgrade persist must emit exactly one task row (the real server root)",
+        );
+        assert_eq!(post_upgrade_persisted.tasks[0].id, server_root_id);
+
+        // Simulate quit/restart #1: feed the persisted event through the
+        // local-DB restore helper.
+        let restored_after_restart_1 =
+            convert_persisted_conversation_to_ai_conversation_with_metadata(post_upgrade_persisted)
+                .expect("first simulated restart must restore cleanly");
+        let restart_1_root = restored_after_restart_1
+            .get_root_task()
+            .expect("root task must exist after restart 1");
+        assert!(
+            restart_1_root.source().is_some(),
+            "restart 1 root must be server-backed"
+        );
+        assert_eq!(
+            restart_1_root.id().to_string(),
+            server_root_id,
+            "restart 1 root must use the server-assigned id",
+        );
+        assert_eq!(
+            restored_after_restart_1.all_tasks().count(),
+            1,
+            "restart 1 must produce exactly one task (no orphan optimistic stub)",
+        );
+
+        // "Reload" the restored conversation into the in-memory model and
+        // trigger another post-restore persist site. `restore_conversations`
+        // uses `conversations_by_id.insert(...)` which overwrites the existing
+        // in-memory entry under the same id, so we do NOT delete first
+        // (`delete_conversation` would enqueue two model events that would
+        // race the persist event we want to recv below).
+        let restart_1_terminal_view_id = EntityId::new();
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.restore_conversations(
+                restart_1_terminal_view_id,
+                vec![restored_after_restart_1],
+                ctx,
+            );
+            history_model.mark_conversation_as_remote_child(conversation_id, ctx);
+        });
+
+        let post_restart_event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("post-restore persist event must arrive");
+        let post_restart_persisted =
+            persisted_agent_conversation_from_update_event(post_restart_event);
+        assert_eq!(
+            post_restart_persisted.tasks.len(),
+            1,
+            "post-restore persist must still emit exactly one task row (no accumulated stubs)",
+        );
+        assert_eq!(post_restart_persisted.tasks[0].id, server_root_id);
+
+        // Simulate quit/restart #2.
+        let restored_after_restart_2 =
+            convert_persisted_conversation_to_ai_conversation_with_metadata(post_restart_persisted)
+                .expect("second simulated restart must restore cleanly");
+
+        // Still exactly one server-backed root with the server id, no orphan
+        // optimistic tasks anywhere in the task store.
+        let restart_2_tasks: Vec<_> = restored_after_restart_2.all_tasks().collect();
+        assert_eq!(
+            restart_2_tasks.len(),
+            1,
+            "final restored conversation must have exactly one task; got {}",
+            restart_2_tasks.len(),
+        );
+        let restart_2_root = restored_after_restart_2
+            .get_root_task()
+            .expect("root task must exist after restart 2");
+        assert!(
+            restart_2_root.source().is_some(),
+            "restart 2 root must be server-backed",
+        );
+        assert_eq!(
+            restart_2_root.id().to_string(),
+            server_root_id,
+            "restart 2 root id must still match the server-assigned id",
+        );
     });
 }
 
@@ -2537,5 +3161,213 @@ fn test_fork_conversation_title_override_replaces_prefix() {
                 "title_override must replace the prefix+description",
             );
         });
+    });
+}
+
+/// LoadTranscript -> merge integration coverage for the orchestration
+/// remote-child restore path.
+///
+/// Simulates the smaller seam that
+/// `pane_group::hydrate_remote_child_transcript_in_place` reaches after a
+/// successful `load_conversation_by_server_token` fetch: it hands the
+/// fetched cloud transcript to
+/// `hydrate_remote_child_placeholder_with_cloud_transcript` on the local
+/// placeholder. Asserts the merged record:
+///   1. retains the placeholder's local `AIConversationId` (so it remains the
+///      canonical `child_agent_panes` key on the pane-group side),
+///   2. carries the placeholder's orchestration linkage forward
+///      (parent_conversation_id, agent_name, run_id, is_remote_child),
+///   3. surfaces the cloud transcript content (non-empty title + at least
+///      one exchange).
+///
+/// Also asserts the precondition guard: calling the merge against an
+/// unknown placeholder returns `Err` so the caller's tombstone fallback
+/// runs instead of silently constructing a detached conversation.
+#[test]
+fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_identity() {
+    use crate::ai::agent::conversation::AIConversation;
+    use crate::ai::ambient_agents::AmbientAgentTaskId;
+    use crate::persistence::model::AgentConversationData;
+    use crate::test_util::ai_agent_tasks::create_api_task;
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let terminal_view_id = EntityId::new();
+
+        // Build a placeholder "remote child" conversation with the
+        // orchestration linkage we want preserved across merge.
+        let parent_id = AIConversationId::new();
+        let placeholder_id = AIConversationId::new();
+        let placeholder_task_id_str = Uuid::new_v4().to_string();
+        let placeholder_task_id: AmbientAgentTaskId =
+            placeholder_task_id_str.parse().expect("task id must parse");
+
+        // The placeholder has no transcript yet — just a synthetic root
+        // task so `new_restored` succeeds. Real placeholders go through the
+        // optimistic-root construction path; for this test we just need a
+        // record with the right local-only fields.
+        let placeholder_root = create_api_task("placeholder-root", vec![]);
+        let placeholder = AIConversation::new_restored(
+            placeholder_id,
+            vec![placeholder_root],
+            Some(AgentConversationData {
+                server_conversation_token: None,
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: Some("parent-agent-id".to_string()),
+                agent_name: Some("worker".to_string()),
+                orchestration_harness_type: None,
+                parent_conversation_id: Some(parent_id.to_string()),
+                is_remote_child: true,
+                root_task_is_optimistic: Some(true),
+                run_id: Some(placeholder_task_id_str.clone()),
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            }),
+        )
+        .expect("placeholder conversation should build");
+        // Sanity-check the placeholder before restore so a later regression
+        // in `new_restored` doesn't pass this test silently.
+        assert!(placeholder.is_remote_child());
+        assert_eq!(placeholder.task_id(), Some(placeholder_task_id));
+
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![placeholder], ctx);
+        });
+
+        // Build a cloud-side AIConversation with a non-empty root task
+        // description (so `title()` returns it) and a real user-query
+        // message (so the merged conversation has ≥1 exchange).
+        let cloud_id = AIConversationId::new();
+        let mut cloud_root = create_api_task(
+            "cloud-root-task",
+            vec![create_user_query_message(
+                "cloud-user-msg",
+                "cloud-root-task",
+                "cloud-request",
+                "What's the status?",
+            )],
+        );
+        cloud_root.description = "Cloud-side title".to_string();
+        let cloud_tasks = vec![cloud_root];
+        let cloud_conversation = AIConversation::new_restored(
+            cloud_id,
+            cloud_tasks.clone(),
+            Some(AgentConversationData {
+                server_conversation_token: Some("cloud-token".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            }),
+        )
+        .expect("cloud conversation should build");
+
+        let merged = history_model.update(&mut app, |model, _| {
+            model
+                .hydrate_remote_child_placeholder_with_cloud_transcript(
+                    placeholder_id,
+                    cloud_tasks,
+                    cloud_conversation,
+                )
+                .expect("hydration must succeed when placeholder is loaded")
+        });
+
+        assert_eq!(
+            merged.id(),
+            placeholder_id,
+            "merge must reuse the placeholder's local AIConversationId so child_agent_panes stays canonical",
+        );
+        assert_eq!(
+            merged.title().as_deref(),
+            Some("Cloud-side title"),
+            "merged conversation must surface the cloud-side root task title",
+        );
+        assert!(
+            merged.exchange_count() >= 1,
+            "merged conversation must have at least one exchange from the cloud transcript; got {}",
+            merged.exchange_count(),
+        );
+        assert!(
+            merged.is_remote_child(),
+            "merged conversation must retain the placeholder's is_remote_child flag",
+        );
+        assert_eq!(
+            merged.parent_conversation_id(),
+            Some(parent_id),
+            "merged conversation must retain the placeholder's parent_conversation_id",
+        );
+        assert_eq!(
+            merged.agent_name(),
+            Some("worker"),
+            "merged conversation must retain the placeholder's agent_name",
+        );
+        assert_eq!(
+            merged.task_id(),
+            Some(placeholder_task_id),
+            "merged conversation must retain the placeholder's task_id (orchestration run id)",
+        );
+
+        // And the history model's view of placeholder_id now reflects the
+        // merge — callers that look up the placeholder will see the cloud
+        // transcript content.
+        history_model.read(&app, |model, _| {
+            let live = model
+                .conversation(&placeholder_id)
+                .expect("placeholder must still be in conversations_by_id after merge");
+            assert_eq!(live.id(), placeholder_id);
+            assert_eq!(live.title().as_deref(), Some("Cloud-side title"));
+            assert!(live.exchange_count() >= 1);
+            assert!(live.is_remote_child());
+        });
+
+        // Precondition guard: merging against an unknown placeholder must
+        // return Err so the caller falls back instead of silently building a
+        // detached conversation.
+        let unknown_placeholder = AIConversationId::new();
+        let mut cloud_root_again = create_api_task(
+            "cloud-root-task-2",
+            vec![create_user_query_message(
+                "cloud-user-msg-2",
+                "cloud-root-task-2",
+                "cloud-request-2",
+                "another",
+            )],
+        );
+        cloud_root_again.description = "Cloud title 2".to_string();
+        let cloud_again = AIConversation::new_restored(
+            AIConversationId::new(),
+            vec![cloud_root_again.clone()],
+            None,
+        )
+        .expect("second cloud conversation should build");
+        let err = history_model.update(&mut app, |model, _| {
+            model
+                .hydrate_remote_child_placeholder_with_cloud_transcript(
+                    unknown_placeholder,
+                    vec![cloud_root_again],
+                    cloud_again,
+                )
+                .expect_err("hydration must error when placeholder is not loaded")
+        });
+        assert!(
+            format!("{err:#}").contains("not found in conversations_by_id"),
+            "error must surface the missing-placeholder reason; got: {err:#}",
+        );
     });
 }

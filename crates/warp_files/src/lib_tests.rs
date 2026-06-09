@@ -1,6 +1,6 @@
 use async_channel::{unbounded, Receiver};
-use warpui::r#async::block_on;
-use warpui::{App, ModelHandle};
+use warpui_core::r#async::block_on;
+use warpui_core::{App, ModelHandle};
 
 // lib_tests.rs
 use super::*;

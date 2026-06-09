@@ -4,7 +4,7 @@ We take security seriously at Warp and appreciate the efforts of security resear
 
 ## Reporting a Vulnerability
 
-If you believe you've found a security vulnerability, please follow responsible disclosure practices and **do not** open a public GitHub issue, as this could expose the vulnerability before a fix is available.
+If you believe you've found a security vulnerability, please follow responsible disclosure practices and **do not** open a public GitHub issue or pull request, as this could expose the vulnerability before a fix is available.
 
 Instead, please report it through one of the following channels:
 

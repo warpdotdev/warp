@@ -4,9 +4,16 @@ use anyhow::{anyhow, Context, Result};
 use async_channel::Sender;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+// #[cfg(any(test, feature = "test-util"))]
+// pub use cloud_object_client::MockObjectClient;
+use cloud_object_client::{
+    GetCloudObjectResponse, InitialLoadResponse, ObjectActionHistory, ObjectActionType,
+    ObjectDeleteResult, ObjectMetadataUpdateResult, ObjectPermissionUpdateResult,
+    ObjectPermissionsUpdateData, ObjectUpdateMessage,
+};
+pub use cloud_object_client::{GuestIdentifier, ObjectClient};
+use cloud_object_models::JsonSerializer;
 use cynic::{MutationBuilder, QueryBuilder, SubscriptionBuilder};
-#[cfg(test)]
-use mockall::{automock, predicate::*};
 use warp_core::report_error;
 use warp_graphql::error::UserFacingErrorInterface;
 use warp_graphql::generic_string_object::GenericStringObjectInput;
@@ -122,214 +129,34 @@ use crate::ai::execution_profiles::AIExecutionProfile;
 use crate::ai::facts::AIFact;
 use crate::ai::mcp::{MCPServer, TemplatableMCPServer};
 use crate::channel::ChannelState;
-use crate::cloud_object::model::actions::{ObjectActionHistory, ObjectActionType};
 use crate::cloud_object::model::generic_string_model::{
     GenericStringModel, GenericStringObjectId, Serializer, StringModel,
 };
-use crate::cloud_object::model::json_model::JsonSerializer;
 use crate::cloud_object::{
     BulkCreateCloudObjectResult, BulkCreateGenericStringObjectsRequest, CreateCloudObjectResult,
     CreateObjectRequest, CreatedCloudObject, GenericCloudObject, GenericServerObject,
-    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, ObjectDeleteResult,
-    ObjectIdType, ObjectMetadataUpdateResult, ObjectPermissionUpdateResult,
-    ObjectPermissionsUpdateData, ObjectType, ObjectsToUpdate, Owner, Revision,
-    RevisionAndLastEditor, ServerCloudObject, ServerFolder, ServerMetadata, ServerNotebook,
-    ServerObject, ServerPermissions, ServerWorkflow, UpdateCloudObjectResult,
+    GenericStringObjectFormat, GenericStringObjectUniqueKey, JsonObjectType, ObjectIdType,
+    ObjectType, ObjectsToUpdate, Owner, Revision, RevisionAndLastEditor, ServerCloudObject,
+    ServerFolder, ServerMetadata, ServerNotebook, ServerObject, ServerPermissions, ServerWorkflow,
+    TryFromGql as _, UpdateCloudObjectResult,
 };
 use crate::drive::folders::FolderId;
 use crate::drive::sharing::SharingAccessLevel;
 use crate::env_vars::EnvVarCollection;
 use crate::notebooks::{NotebookId, SerializedNotebook};
-use crate::server::cloud_objects::listener::ObjectUpdateMessage;
-use crate::server::cloud_objects::update_manager::{GetCloudObjectResponse, InitialLoadResponse};
 use crate::server::graphql::schema::{
+    action_type_to_gql_action_type, object_action_history_from_gql,
     object_update_success_to_update_result, update_generic_string_object_result_to_update_result,
 };
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId, ToServerId};
-use crate::server::server_api::auth::AuthClient;
 use crate::server::server_api::ServerApi;
 use crate::server::sync_queue::SerializedModel;
 use crate::settings::Preference;
 use crate::workflows::workflow_enum::WorkflowEnum;
 use crate::workflows::WorkflowId;
+use crate::workspaces::gql_convert::object_update_message_from_gql;
 use crate::workspaces::user_profiles::UserProfileWithUID;
-
-/// Identifies a guest to remove from an object.
-#[derive(Clone, Debug)]
-pub enum GuestIdentifier {
-    /// Remove a user guest by their email address.
-    Email(String),
-    /// Remove a team guest by their team UID.
-    TeamUid(ServerId),
-}
-
-#[cfg_attr(test, automock)]
-#[cfg_attr(not(target_family = "wasm"), async_trait)]
-#[cfg_attr(target_family = "wasm", async_trait(?Send))]
-pub trait ObjectClient: 'static + Send + Sync {
-    /// This method saves a workflow for a given owner and returns it on success.
-    async fn create_workflow(
-        &self,
-        request: CreateObjectRequest,
-    ) -> Result<CreateCloudObjectResult>;
-
-    /// Updates a workflow with the new data. The update may be rejected if a revision
-    /// is specified _and_ that revision is not the current revision of the object in storage.
-    async fn update_workflow(
-        &self,
-        workflow_id: WorkflowId,
-        data: SerializedModel,
-        revision: Option<Revision>,
-    ) -> Result<UpdateCloudObjectResult<ServerWorkflow>>;
-
-    /// Creates n generic string objects in a single graphql request. Use
-    /// this rather than calling create_generic_string_object multiple times
-    /// in a loop.
-    async fn bulk_create_generic_string_objects(
-        &self,
-        owner: Owner,
-        objects: &[BulkCreateGenericStringObjectsRequest],
-    ) -> Result<BulkCreateCloudObjectResult>;
-
-    async fn create_generic_string_object(
-        &self,
-        format: GenericStringObjectFormat,
-        uniqueness_key: Option<GenericStringObjectUniqueKey>,
-        request: CreateObjectRequest,
-    ) -> Result<CreateCloudObjectResult>;
-
-    /// Creates a notebook on the server, returning the ID and revision of the object after
-    /// creation.
-    async fn create_notebook(
-        &self,
-        request: CreateObjectRequest,
-    ) -> Result<CreateCloudObjectResult>;
-
-    /// Updates a notebook with the new title and data. The update may be rejected if a revision
-    /// is specified _and_ that revision is not the current revision of the object in storage.
-    async fn update_notebook(
-        &self,
-        notebook_id: NotebookId,
-        title: Option<String>,
-        data: Option<SerializedModel>,
-        revision: Option<Revision>,
-    ) -> Result<UpdateCloudObjectResult<ServerNotebook>>;
-
-    async fn create_folder(&self, request: CreateObjectRequest) -> Result<CreateCloudObjectResult>;
-
-    async fn update_folder(
-        &self,
-        folder_id: FolderId,
-        name: SerializedModel,
-    ) -> Result<UpdateCloudObjectResult<ServerFolder>>;
-
-    async fn update_generic_string_object(
-        &self,
-        object_id: GenericStringObjectId,
-        model: SerializedModel,
-        revision: Option<Revision>,
-    ) -> Result<UpdateCloudObjectResult<Box<dyn ServerObject>>>;
-
-    /// Sets the current editor of the notebook to be the logged in user
-    async fn grab_notebook_edit_access(&self, notebook_id: NotebookId) -> Result<ServerMetadata>;
-    /// Sets the current editor of the notebook to be null
-    async fn give_up_notebook_edit_access(&self, notebook_id: NotebookId)
-        -> Result<ServerMetadata>;
-
-    /// Gets updates for all Warp Drive actions.
-    async fn get_warp_drive_updates(
-        &self,
-        message_sender: Sender<ObjectUpdateMessage>,
-        stream_ready_sender: Sender<()>,
-    ) -> Result<()>;
-
-    async fn fetch_changed_objects(
-        &self,
-        objects_to_update: ObjectsToUpdate,
-        force_refresh: bool,
-    ) -> Result<InitialLoadResponse>;
-
-    async fn fetch_single_cloud_object(&self, id: ServerId) -> Result<GetCloudObjectResponse>;
-
-    // Transfers a notebook to the given owner
-    async fn transfer_notebook_owner(&self, notebook_id: NotebookId, owner: Owner) -> Result<bool>;
-
-    async fn transfer_workflow_owner(&self, workflow_id: WorkflowId, owner: Owner) -> Result<bool>;
-
-    async fn transfer_generic_string_object_owner(
-        &self,
-        workflow_id: GenericStringObjectId,
-        owner: Owner,
-    ) -> Result<bool>;
-
-    async fn trash_object(&self, id: ServerId) -> Result<bool>;
-
-    async fn untrash_object(&self, id: ServerId) -> Result<ObjectMetadataUpdateResult>;
-
-    async fn delete_object(&self, id: ServerId) -> Result<ObjectDeleteResult>;
-
-    async fn empty_trash(&self, owner: Owner) -> Result<ObjectDeleteResult>;
-
-    async fn move_object(
-        &self,
-        id: ServerId,
-        folder_id: Option<FolderId>,
-        owner: Owner,
-        object_type: ObjectType,
-    ) -> Result<bool>;
-
-    async fn record_object_action(
-        &self,
-        id: ServerId,
-        action_type: ObjectActionType,
-        timestamp: DateTime<Utc>,
-        data: Option<String>,
-    ) -> Result<ObjectActionHistory>;
-
-    async fn leave_object(&self, id: ServerId) -> Result<ObjectDeleteResult>;
-
-    async fn set_object_link_permissions(
-        &self,
-        object_id: ServerId,
-        access_level: SharingAccessLevel,
-    ) -> Result<ObjectPermissionUpdateResult>;
-
-    async fn remove_object_link_permissions(
-        &self,
-        object_id: ServerId,
-    ) -> Result<ObjectPermissionUpdateResult>;
-
-    async fn add_object_guests(
-        &self,
-        object_id: ServerId,
-        guest_emails: Vec<String>,
-        access_level: AccessLevel,
-    ) -> Result<ObjectPermissionsUpdateData>;
-
-    async fn update_object_guests(
-        &self,
-        object_id: ServerId,
-        guest_emails: Vec<String>,
-        access_level: AccessLevel,
-    ) -> Result<ServerPermissions>;
-
-    async fn remove_object_guest(
-        &self,
-        object_id: ServerId,
-        guest: GuestIdentifier,
-    ) -> Result<ServerPermissions>;
-
-    /// Fetches the last-used timestamps for all cloud environments.
-    ///
-    /// This is derived from `CloudEnvironment.lastTaskCreated.createdAt` (not `lastTaskRunTimestamp`)
-    /// so that "Last used" reflects the most recently created task.
-    ///
-    /// Returns a map from environment UID to timestamp.
-    async fn fetch_environment_last_task_run_timestamps(
-        &self,
-    ) -> Result<HashMap<String, DateTime<Utc>>>;
-}
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -414,7 +241,7 @@ impl ObjectClient for ServerApi {
                 }
                 WorkflowUpdate::WorkflowUpdateRejected(rejected) => {
                     Ok(UpdateCloudObjectResult::Rejected {
-                        object: rejected.conflicting_workflow.try_into()?,
+                        object: ServerWorkflow::try_from_gql(rejected.conflicting_workflow)?,
                     })
                 }
                 WorkflowUpdate::Unknown => Err(anyhow!("WorkflowUpdate has unknown variant")),
@@ -662,7 +489,7 @@ impl ObjectClient for ServerApi {
                 }
                 NotebookUpdate::NotebookUpdateRejected(rejected) => {
                     Ok(UpdateCloudObjectResult::Rejected {
-                        object: rejected.conflicting_notebook.try_into()?,
+                        object: ServerNotebook::try_from_gql(rejected.conflicting_notebook)?,
                     })
                 }
                 NotebookUpdate::Unknown => Err(anyhow!("NotebookUpdate has unknown variant")),
@@ -860,7 +687,7 @@ impl ObjectClient for ServerApi {
 
         let subscription = GetWarpDriveUpdates::build(());
 
-        start_graphql_streaming_operation(
+        let result = start_graphql_streaming_operation(
             &ChannelState::ws_server_url(),
             init_payload,
             subscription,
@@ -868,12 +695,22 @@ impl ObjectClient for ServerApi {
                 res.ok_or_else(|| {
                     anyhow!("missing response data for message in get_warp_drive_updates")
                 })
-                .and_then(|data| data.warp_drive_updates.try_into())
+                .and_then(|data| object_update_message_from_gql(data.warp_drive_updates))
             },
             message_sender,
             stream_ready_sender,
+            self.iap_state
+                .as_ref()
+                .and_then(|state| state.proxy_auth_header())
+                .into_iter()
+                .collect(),
         )
-        .await
+        .await;
+
+        if let Err(err) = &result {
+            self.report_ws_iap_challenge(err);
+        }
+        result
     }
 
     async fn fetch_changed_objects(
@@ -907,17 +744,7 @@ impl ObjectClient for ServerApi {
                     .map(|notebooks| {
                         notebooks
                             .into_iter()
-                            .filter_map(|notebook| {
-                                ServerNotebook::try_from_graphql_fields(
-                                    ServerId::from_string_lossy(notebook.metadata.uid.inner()),
-                                    Some(notebook.title),
-                                    Some(notebook.data),
-                                    notebook.ai_document_id,
-                                    notebook.metadata.try_into().ok()?,
-                                    notebook.permissions.try_into().ok()?,
-                                )
-                                .ok()
-                            })
+                            .filter_map(|notebook| ServerNotebook::try_from_gql(notebook).ok())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -927,15 +754,7 @@ impl ObjectClient for ServerApi {
                     .map(|workflows| {
                         workflows
                             .into_iter()
-                            .filter_map(|workflow| {
-                                ServerWorkflow::try_from_graphql_fields(
-                                    ServerId::from_string_lossy(workflow.metadata.uid.inner()),
-                                    workflow.data,
-                                    workflow.metadata.try_into().ok()?,
-                                    workflow.permissions.try_into().ok()?,
-                                )
-                                .ok()
-                            })
+                            .filter_map(|workflow| ServerWorkflow::try_from_gql(workflow).ok())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -945,16 +764,7 @@ impl ObjectClient for ServerApi {
                     .map(|folders| {
                         folders
                             .into_iter()
-                            .filter_map(|folder| {
-                                ServerFolder::try_from_graphql_fields(
-                                    ServerId::from_string_lossy(folder.metadata.uid.inner()),
-                                    Some(folder.name),
-                                    folder.metadata.try_into().ok()?,
-                                    folder.permissions.try_into().ok()?,
-                                    folder.is_warp_pack,
-                                )
-                                .ok()
-                            })
+                            .filter_map(|folder| ServerFolder::try_from_gql(folder).ok())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -962,120 +772,68 @@ impl ObjectClient for ServerApi {
                 let mut updated_generic_string_objects = HashMap::new();
                 if let Some(objects) = output.generic_string_objects {
                     for gso in objects {
-                        let uid = gso.metadata.uid.inner().to_string();
-                        let server_id = ServerId::from_string_lossy(&uid);
-
-                        let metadata = match ServerMetadata::try_from(gso.metadata) {
-                            Ok(metadata) => metadata,
-                            Err(err) => {
-                                report_error!(err.context(format!(
-                                    "Failed to convert metadata for GSO {:?} {uid}",
-                                    gso.format
-                                )));
-                                continue;
-                            }
-                        };
-
-                        let permissions = match ServerPermissions::try_from(gso.permissions) {
-                            Ok(permissions) => permissions,
-                            Err(err) => {
-                                report_error!(err.context(format!(
-                                    "Failed to convert permissions for GSO {:?} {uid}",
-                                    gso.format
-                                )));
-                                continue;
-                            }
-                        };
-
                         match gso.format {
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
                                 parse_server_gso::<EnvVarCollection, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
                                 parse_server_gso::<Preference, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::Preference),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
                                 parse_server_gso::<WorkflowEnum, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::WorkflowEnum),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
                                 parse_server_gso::<AIFact, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::AIFact),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
                                 parse_server_gso::<MCPServer, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::MCPServer),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
                                 parse_server_gso::<AIExecutionProfile, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::AIExecutionProfile),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
                                 parse_server_gso::<TemplatableMCPServer, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::TemplatableMCPServer),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
                                 parse_server_gso::<AmbientAgentEnvironment, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::CloudEnvironment),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                             warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
                                 parse_server_gso::<ScheduledAmbientAgent, JsonSerializer>(
                                     &mut updated_generic_string_objects,
                                     GenericStringObjectFormat::Json(JsonObjectType::ScheduledAmbientAgent),
-                                    server_id,
-                                    metadata,
-                                    permissions,
-                                    gso.serialized_model,
+                                    gso,
                                 );
                             }
                         }
@@ -1137,7 +895,7 @@ impl ObjectClient for ServerApi {
                     .map(|histories| {
                         histories
                             .into_iter()
-                            .filter_map(|history| history.try_into().ok())
+                            .filter_map(|history| object_action_history_from_gql(history).ok())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -1186,7 +944,7 @@ impl ObjectClient for ServerApi {
                     .map(|histories| {
                         histories
                             .into_iter()
-                            .filter_map(|history| history.try_into().ok())
+                            .filter_map(|history| object_action_history_from_gql(history).ok())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -1399,7 +1157,7 @@ impl ObjectClient for ServerApi {
     ) -> Result<ObjectActionHistory> {
         let variables = RecordObjectActionVariables {
             input: RecordObjectActionInput {
-                action: action_type.into(),
+                action: action_type_to_gql_action_type(action_type),
                 json_data: data,
                 timestamp: timestamp.into(),
                 uid: id.into(),
@@ -1410,7 +1168,9 @@ impl ObjectClient for ServerApi {
         let operation = RecordObjectAction::build(variables);
         let response = self.send_graphql_request(operation, None).await?;
         match response.record_object_action {
-            RecordObjectActionResult::RecordObjectActionOutput(output) => output.history.try_into(),
+            RecordObjectActionResult::RecordObjectActionOutput(output) => {
+                object_action_history_from_gql(output.history)
+            }
             RecordObjectActionResult::UserFacingError(e) => {
                 Err(anyhow!(get_user_facing_error_message(e)))
             }
@@ -1637,17 +1397,15 @@ impl ObjectClient for ServerApi {
 fn parse_server_gso<T, S>(
     map: &mut HashMap<GenericStringObjectFormat, Vec<Box<dyn ServerObject>>>,
     format: GenericStringObjectFormat,
-    uid: ServerId,
-    metadata: ServerMetadata,
-    permissions: ServerPermissions,
-    serialized_model: String,
+    gso: warp_graphql::generic_string_object::GenericStringObject,
 ) where
     T: StringModel<
         CloudObjectType = GenericCloudObject<GenericStringObjectId, GenericStringModel<T, S>>,
     >,
     S: Serializer<T>,
 {
-    match GenericServerObject::<GenericStringObjectId, GenericStringModel<T, S>>::try_from_graphql_fields(uid, Some(serialized_model), metadata, permissions)
+    let uid = ServerId::from_string_lossy(gso.metadata.uid.inner());
+    match GenericServerObject::<GenericStringObjectId, GenericStringModel<T, S>>::try_from_gql(gso)
     {
         Ok(object) => {
             map.entry(format).or_default().push(Box::new(object));

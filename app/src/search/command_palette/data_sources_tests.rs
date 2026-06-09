@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use cloud_object_client::MockObjectClient;
 use settings::manager::SettingsManager;
 use warpui::{App, SingletonEntity};
 
@@ -18,11 +19,7 @@ use crate::search::data_source::Query;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ServerId;
 use crate::server::ids::SyncId::{self};
-#[cfg(test)]
-use crate::server::server_api::object::MockObjectClient;
-#[cfg(test)]
 use crate::server::server_api::team::MockTeamClient;
-#[cfg(test)]
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
@@ -58,26 +55,26 @@ fn mock_server_permissions(owner: Owner) -> ServerPermissions {
 }
 
 fn mock_server_workflow(id: WorkflowId, owner: Owner) -> ServerWorkflow {
-    ServerWorkflow {
-        id: SyncId::ServerId(id.into()),
-        metadata: mock_server_metadata(),
-        permissions: mock_server_permissions(owner),
-        model: CloudWorkflowModel::new(Workflow::new(format!("foo{id}"), format!("bar{id}"))),
-    }
+    ServerWorkflow::new(
+        SyncId::ServerId(id.into()),
+        CloudWorkflowModel::new(Workflow::new(format!("foo{id}"), format!("bar{id}"))),
+        mock_server_metadata(),
+        mock_server_permissions(owner),
+    )
 }
 
 fn mock_server_notebook(id: NotebookId, owner: Owner) -> ServerNotebook {
-    ServerNotebook {
-        id: SyncId::ServerId(id.into()),
-        metadata: mock_server_metadata(),
-        permissions: mock_server_permissions(owner),
-        model: CloudNotebookModel {
+    ServerNotebook::new(
+        SyncId::ServerId(id.into()),
+        CloudNotebookModel {
             title: format!("foo{id}"),
             data: format!("bar{id}"),
             ai_document_id: None,
             conversation_id: None,
         },
-    }
+        mock_server_metadata(),
+        mock_server_permissions(owner),
+    )
 }
 
 fn initialize_app(app: &mut App) {

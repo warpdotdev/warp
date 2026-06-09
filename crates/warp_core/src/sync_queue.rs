@@ -11,9 +11,9 @@ use futures::channel::oneshot::{self, Receiver, Sender};
 use futures::future::{AbortHandle, Abortable};
 use futures::StreamExt;
 use instant::Instant;
-use warpui::r#async::executor::Background;
-use warpui::r#async::Timer;
-use warpui::{Entity, RetryOption, SingletonEntity};
+use warpui_core::r#async::executor::Background;
+use warpui_core::r#async::Timer;
+use warpui_core::{Entity, RetryOption, SingletonEntity};
 
 const DEFAULT_BUFFER_SIZE: usize = 1024;
 const DEFAULT_SYNC_RETRY_STRATEGY: RetryOption = RetryOption::exponential(

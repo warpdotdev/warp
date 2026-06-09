@@ -47,7 +47,7 @@ impl ReadSkillExecutor {
                     ctx
                 );
                 let content = FileContext::new(
-                    skill.path.to_string_lossy().into_owned(),
+                    skill.path.display_path(),
                     AnyFileContent::StringContent(skill.content.clone()),
                     skill.line_range.clone(),
                     None,
