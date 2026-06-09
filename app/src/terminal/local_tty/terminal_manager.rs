@@ -1092,9 +1092,10 @@ impl TerminalManager {
         // detection. The chip value is fed by the same precmd payload regardless of
         // where it is displayed, so we must check all three locations.
         let node_version_chip_enabled = {
-            let in_prompt = Prompt::as_ref(ctx)
-                .chip_kinds()
-                .contains(&ContextChipKind::NodeVersion);
+            let in_prompt = !is_honor_ps1_enabled
+                && Prompt::as_ref(ctx)
+                    .chip_kinds()
+                    .contains(&ContextChipKind::NodeVersion);
             let settings = SessionSettings::as_ref(ctx);
             in_prompt
                 || settings
