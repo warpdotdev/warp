@@ -177,8 +177,9 @@ impl PromptDisplay {
                             .map(|v| v.to_string())
                             .unwrap_or_default()
                         || chip.chip_kind() != &chip_result.kind
-                        // I'm only comparing the first on-click values for efficiency, but we may need to change this in the future.
-                        || chip.first_on_click_value() != chip_result.on_click_values.first()
+                        // Compare the full on-click list so repo-sensitive menu data (e.g. the git
+                        // branch selector) is rebuilt even when the displayed value is unchanged.
+                        || chip.on_click_values() != chip_result.on_click_values.as_slice()
                 })
             })
     }

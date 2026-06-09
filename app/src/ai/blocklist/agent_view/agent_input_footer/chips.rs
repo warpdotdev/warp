@@ -25,8 +25,9 @@ impl AgentInputFooter {
                             .map(|v| v.to_string())
                             .unwrap_or_default()
                         || chip.chip_kind() != chip_result.kind()
-                        // For parity with PromptDisplay: compare the first on-click value only.
-                        || chip.first_on_click_value() != chip_result.on_click_values().first()
+                        // For parity with PromptDisplay: compare the full on-click list so
+                        // repo-sensitive menu data is rebuilt even when the displayed value matches.
+                        || chip.on_click_values() != chip_result.on_click_values()
                 })
             })
     }

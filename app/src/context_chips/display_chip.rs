@@ -289,7 +289,7 @@ pub struct DisplayChip {
     chip_kind: ContextChipKind,
     display_chip_kind: DisplayChipKind,
     next_chip_kind: Option<ContextChipKind>,
-    first_on_click_value: Option<String>,
+    on_click_values: Vec<String>,
     quota_reset_popup: ViewHandle<FeaturePopup>,
     session_context: Option<SessionContext>,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
@@ -865,7 +865,7 @@ impl DisplayChip {
             chip_kind: chip_result.kind,
             display_chip_kind,
             next_chip_kind,
-            first_on_click_value: chip_result.on_click_values.first().cloned(),
+            on_click_values: chip_result.on_click_values,
             quota_reset_popup,
             session_context: config.session_context,
             menu_positioning_provider: config.menu_positioning_provider,
@@ -905,8 +905,8 @@ impl DisplayChip {
         &self.display_chip_kind
     }
 
-    pub fn first_on_click_value(&self) -> Option<&String> {
-        self.first_on_click_value.as_ref()
+    pub(crate) fn on_click_values(&self) -> &[String] {
+        &self.on_click_values
     }
 
     pub fn close_git_branch_menu(&mut self, ctx: &mut ViewContext<Self>) {
