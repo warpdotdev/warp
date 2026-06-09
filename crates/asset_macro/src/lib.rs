@@ -5,11 +5,11 @@
 //!   Access with `bundled_asset!([path of asset relative to app/assets/bundled])`.
 //! - Remote: These are always fetched remotely based on the asset name and a hash of the contents.
 //!   These files are located in `app/assets/remote`. Access with
-//!   `remote_asset!(path of asset relative to app/assets/remote])`.
+//!   `remote_asset!(path of asset relative to app/assets/remote)`.
 //! - Bundled for native builds and remote for web builds: Keeping the size of the web build small
 //!   is critical for having fast load times, so many of the larger assets are split out. These
 //!   files live in `app/assets/async`. Access with
-//!   `bundled_or_fetched!(path of asset relative to app/assets/async])`.
+//!   `bundled_or_fetched!(path of asset relative to app/assets/async)`.
 //!
 //! These macros check for the existence of the asset at the appropriate location before returning
 //! an `AssetSource` with the appropriate bundle reference or URL.
