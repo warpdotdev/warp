@@ -37,6 +37,8 @@ use crate::settings_view::{SettingsAction as SettingsTabAction, SettingsSection}
 use crate::tab::{NewSessionMenuItem, SelectedTabColor};
 use crate::tab_configs::TabConfig;
 use crate::terminal::available_shells::AvailableShell;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::dev_container::DevContainerConfig;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
@@ -238,6 +240,12 @@ pub enum WorkspaceAction {
     AddAgentTab,
     /// Add a new tab running a local Docker sandbox via `sbx`.
     AddDockerSandboxTab,
+    /// Add a new tab running inside the selected Dev Container.
+    #[cfg(feature = "local_tty")]
+    OpenDevContainer {
+        config: DevContainerConfig,
+        toast_object_id: String,
+    },
     OpenNewSessionMenu {
         anchor: NewSessionMenuAnchor,
     },
@@ -826,6 +834,8 @@ impl WorkspaceAction {
         match self {
             #[cfg(not(target_family = "wasm"))]
             ContinueConversationLocally { .. } => true,
+            #[cfg(feature = "local_tty")]
+            OpenDevContainer { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
             | ActivatePrevTab

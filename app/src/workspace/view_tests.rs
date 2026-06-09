@@ -49,6 +49,7 @@ use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;
 use crate::pane_group::{Direction, PaneGroupAction, PaneId};
 use crate::pricing::PricingInfoModel;
+use crate::projects::ProjectManagementModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::codebase_index_model::RemoteCodebaseIndexModel;
 use crate::resource_center::Tip;
@@ -104,6 +105,7 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
     app.add_singleton_model(UserWorkspaces::default_mock);
+    app.add_singleton_model(|ctx| ProjectManagementModel::new(Vec::new(), None, ctx));
     app.add_singleton_model(|_ctx| UserProfiles::new(Vec::new()));
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(TeamUpdateManager::mock);
@@ -353,7 +355,7 @@ fn test_worktree_sidecar_hover_takes_precedence_over_selection() {
         initialize_app(&mut app);
 
         let workspace = mock_workspace(&mut app);
-        let temp_root = TempDir::new().expect("failed to create temp dir");
+        let temp_root = tempfile::TempDir::new().expect("failed to create temp dir");
         let alpha_repo = temp_root.path().join("alpha-repo");
         let beta_repo = temp_root.path().join("beta-repo");
         std::fs::create_dir_all(&alpha_repo).expect("failed to create alpha repo dir");
@@ -2869,6 +2871,69 @@ fn test_unified_new_session_menu_uses_new_worktree_config_label_and_order() {
                 labels.get(separator_index + 2),
                 Some(&"New tab config".to_string())
             );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn test_dev_container_sidecar_labels_disambiguate_duplicate_names() {
+    let workspace_folder = std::path::PathBuf::from("/workspace/project");
+    let default_config = DevContainerConfig {
+        workspace_folder: workspace_folder.clone(),
+        config_path: workspace_folder.join(".devcontainer/devcontainer.json"),
+        name: Some("Project".to_owned()),
+    };
+    let named_config = DevContainerConfig {
+        workspace_folder: workspace_folder.clone(),
+        config_path: workspace_folder.join(".devcontainer/tools/devcontainer.json"),
+        name: Some("Project".to_owned()),
+    };
+
+    assert_eq!(
+        Workspace::dev_container_config_menu_label(&default_config, false),
+        "Project"
+    );
+    assert_eq!(
+        Workspace::dev_container_config_menu_label(&default_config, true),
+        "Project (.devcontainer/devcontainer.json)"
+    );
+    assert_eq!(
+        Workspace::dev_container_config_menu_label(&named_config, true),
+        "Project (.devcontainer/tools/devcontainer.json)"
+    );
+    assert_eq!(
+        Workspace::dev_container_open_prompt_message(&default_config),
+        "This repository has a Dev Container config."
+    );
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn test_open_repository_with_devcontainer_shows_open_prompt_toast() {
+    let _dev_container_guard = FeatureFlag::DevContainers.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let temp_root = TempDir::new().expect("failed to create temp dir");
+        let devcontainer_dir = temp_root.path().join(".devcontainer");
+        std::fs::create_dir_all(&devcontainer_dir).expect("failed to create devcontainer dir");
+        std::fs::write(
+            devcontainer_dir.join("devcontainer.json"),
+            r#"{"name":"Project Dev Container"}"#,
+        )
+        .expect("failed to write devcontainer config");
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_open_repository(temp_root.path().to_str().unwrap(), ctx);
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace
+                .toast_stack
+                .read(ctx, |toast_stack, _| toast_stack.has_toasts()));
         });
     });
 }

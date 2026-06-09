@@ -3022,6 +3022,37 @@ fn test_create_docker_sandbox_slash_command_executes_and_clears_buffer() {
 }
 
 #[test]
+fn test_create_dev_container_slash_command_executes_and_clears_buffer() {
+    App::test((), |mut app| async move {
+        let _dev_container_flag = FeatureFlag::DevContainers.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("draft text", ctx);
+            let handled = input.execute_slash_command(
+                &commands::CREATE_DEV_CONTAINER,
+                None,
+                SlashCommandTrigger::input(),
+                /*is_queued_prompt*/ false,
+                ctx,
+            );
+            assert!(handled);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+        });
+    });
+}
+
+#[test]
 fn test_agent_mode_set_when_block_attached() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

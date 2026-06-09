@@ -1176,7 +1176,10 @@ impl AgentInputFooter {
                 let model = self.terminal_model.lock();
                 model.active_shell_launch_data().cloned()
             };
-            if matches!(shell_data, Some(ShellLaunchData::DockerSandbox { .. })) {
+            if matches!(
+                shell_data,
+                Some(ShellLaunchData::DockerSandbox { .. } | ShellLaunchData::DevContainer { .. })
+            ) {
                 return true;
             }
         }
@@ -1246,12 +1249,12 @@ impl AgentInputFooter {
             None => (None, None),
             // WSL is not supported for auto-install.
             Some(ShellLaunchData::WSL { .. }) => return false,
-            // Auto-install isn't supported for Docker sandbox sessions — the
+            // Auto-install isn't supported for container sessions — the
             // install would run against the *host's* shell config, not the
-            // container's. `should_use_manual_mode` already routes sandbox
+            // container's. `should_use_manual_mode` already routes container
             // sessions to the manual-instructions modal, so this arm is a
             // defensive fallthrough; users can still install the plugin by
-            // pasting the command into the sandbox PTY themselves.
+            // pasting the command into the container PTY themselves.
             //
             // TODO(advait): Add native auto-install support for sandboxes,
             // e.g. by routing the install through the session's in-band
@@ -1259,7 +1262,9 @@ impl AgentInputFooter {
             // container's shell / package layout. A common use case will be
             // running a 3p harness (e.g. Claude Code) inside a sandbox and
             // needing the Warp plugin to integrate with it.
-            Some(ShellLaunchData::DockerSandbox { .. }) => return false,
+            Some(ShellLaunchData::DockerSandbox { .. } | ShellLaunchData::DevContainer { .. }) => {
+                return false;
+            }
         };
 
         // Await the interactive PATH so nvm-installed tools like `claude`

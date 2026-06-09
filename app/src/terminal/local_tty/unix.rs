@@ -30,6 +30,9 @@ use super::spawner::{PtyHandle, PtySpawnInfo, PtySpawner};
 use super::{ChildEvent, EventedPty, EventedReadWrite, PtyOptions, SizeInfo};
 use crate::terminal::bootstrap::raw_init_shell_script_for_shell;
 use crate::terminal::cli_agent_sessions::event::current_protocol_version;
+use crate::terminal::local_tty::dev_container::{
+    devcontainer_host_command_script, DevContainerShellStarter,
+};
 use crate::terminal::local_tty::docker_sandbox::{
     DockerSandboxShellStarter, DOCKER_SANDBOX_HOME_DIR,
 };
@@ -176,6 +179,10 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
     if let ShellStarter::DockerSandbox(docker_starter) = &options.shell_starter {
         let docker_starter = docker_starter.clone();
         return spawn_docker_sandbox(options, docker_starter);
+    }
+    if let ShellStarter::DevContainer(dev_container_starter) = &options.shell_starter {
+        let dev_container_starter = dev_container_starter.clone();
+        return spawn_dev_container(options, dev_container_starter);
     }
 
     let PtyOptions {
@@ -815,6 +822,128 @@ fn build_docker_sandbox_command(
     }
 
     builder.current_dir(home_dir);
+
+    builder
+}
+
+/// Spawn the PTY for a Dev Container session.
+///
+/// The host process runs `devcontainer up` first and then replaces itself with
+/// `devcontainer exec ... /bin/sh -lc <bootstrap bash>`. PTY setup is still
+/// delegated to [`spawn_command_in_pty`], matching local and Docker Sandbox
+/// sessions.
+fn spawn_dev_container(
+    options: PtyOptions,
+    dev_container_starter: DevContainerShellStarter,
+) -> Result<PtySpawnInfo> {
+    let PtyOptions {
+        size,
+        window_id,
+        shell_starter: _,
+        start_dir: _,
+        env_vars,
+        enable_ssh_wrapper,
+        shell_debug_mode,
+        honor_ps1,
+        close_fds,
+    } = options;
+
+    let command = build_dev_container_command(
+        &dev_container_starter,
+        window_id,
+        env_vars,
+        enable_ssh_wrapper,
+        shell_debug_mode,
+        honor_ps1,
+    );
+
+    spawn_command_in_pty(command, &size, close_fds)
+}
+
+/// Builds the `Command` for a Dev Container PTY session.
+///
+/// The returned command is a host-side `/bin/sh -lc ...` wrapper because the
+/// Dev Container CLI needs two process steps (`up`, then `exec`) before Warp's
+/// in-container bash can start.
+fn build_dev_container_command(
+    dev_container_starter: &DevContainerShellStarter,
+    window_id: Option<usize>,
+    env_vars: HashMap<OsString, OsString>,
+    enable_ssh_wrapper: bool,
+    shell_debug_mode: bool,
+    honor_ps1: bool,
+) -> Command {
+    let mut buf = [0; 1024];
+    let pw = get_pw_entry(&mut buf);
+
+    log::info!(
+        "Starting Dev Container via {}",
+        dev_container_starter.logical_shell_path().display()
+    );
+
+    let init_script = raw_init_shell_script_for_shell(ShellType::Bash, &ASSETS);
+    let host_script = devcontainer_host_command_script(
+        dev_container_starter.logical_shell_path(),
+        dev_container_starter.workspace_folder(),
+        dev_container_starter.config_path(),
+        init_script.as_ref(),
+    );
+
+    let mut builder = Command::new("/bin/sh");
+    builder.arg("-lc");
+    builder.arg(host_script);
+
+    let home_dir = std::env::var("HOME").unwrap_or_else(|_| pw.dir.to_owned());
+
+    // Environment variables set on the host-side `devcontainer` process. Some
+    // are consumed by the CLI itself, and some may be propagated into the
+    // container by the Dev Container CLI implementation.
+    builder.env("LOGNAME", pw.name);
+    builder.env("USER", pw.name);
+    builder.env("HOME", &home_dir);
+    builder.env("TERM", "xterm-256color");
+    builder.env("TERM_PROGRAM", "WarpTerminal");
+    builder.env("COLORTERM", "truecolor");
+    builder.env_remove("DESKTOP_STARTUP_ID");
+    if let Some(version) = ChannelState::app_version() {
+        builder.env("TERM_PROGRAM_VERSION", version);
+        builder.env("WARP_CLIENT_VERSION", version);
+    } else {
+        builder.env("WARP_CLIENT_VERSION", "local");
+    }
+    builder.env("SHELL", "/bin/bash");
+    if let Some(window_id) = window_id {
+        builder.env("WINDOWID", format!("{window_id}"));
+    }
+    builder.env(
+        "WARP_USE_SSH_WRAPPER",
+        if enable_ssh_wrapper { "1" } else { "0" },
+    );
+    builder.env("SSH_SOCKET_DIR", ssh_socket_dir());
+    builder.env("WARP_IS_LOCAL_SHELL_SESSION", "1");
+    if FeatureFlag::HOANotifications.is_enabled() {
+        builder.env(
+            "WARP_CLI_AGENT_PROTOCOL_VERSION",
+            current_protocol_version().to_string(),
+        );
+    }
+    if shell_debug_mode {
+        builder.env("WARP_SHELL_DEBUG_MODE", "1");
+    }
+    builder.env("WARP_HONOR_PS1", if honor_ps1 { "1" } else { "0" });
+    let path_append = extra_path_entries()
+        .map(|p| p.to_string_lossy().into_owned())
+        .join(":");
+    builder.env("WARP_PATH_APPEND", path_append);
+    let sentinel_value = "57265949261";
+    builder.env("HISTFILESIZE", sentinel_value);
+    builder.env("WARP_INITIAL_HISTFILESIZE", sentinel_value);
+
+    for (key, value) in env_vars {
+        builder.env(key, value);
+    }
+
+    builder.current_dir(dev_container_starter.workspace_folder());
 
     builder
 }

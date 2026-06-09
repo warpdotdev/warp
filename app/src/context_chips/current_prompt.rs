@@ -1029,11 +1029,21 @@ impl CurrentPrompt {
     /// are missing their definition.
     fn configured_chips(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
         let prompt = Prompt::as_ref(ctx);
-        prompt
-            .chip_kinds()
+        let mut chip_kinds = prompt.chip_kinds();
+        if FeatureFlag::DevContainers.is_enabled()
+            && !chip_kinds.contains(&ContextChipKind::DevContainer)
+        {
+            chip_kinds.insert(0, ContextChipKind::DevContainer);
+        }
+
+        chip_kinds
             .into_iter()
             .filter(|chip_kind| chip_kind.to_chip().is_some())
             .collect()
+    }
+
+    pub(crate) fn display_chip_kinds(&self, ctx: &AppContext) -> Vec<ContextChipKind> {
+        self.configured_chips(ctx)
     }
 
     /// Chips whose values we should actively maintain in state.
@@ -1289,8 +1299,7 @@ impl CurrentPrompt {
         position: PromptPosition,
         ctx: &AppContext,
     ) -> Vec<MenuItem<TerminalAction>> {
-        Prompt::as_ref(ctx)
-            .chip_kinds()
+        self.display_chip_kinds(ctx)
             .into_iter()
             .filter_map(|chip_kind| {
                 let has_value = self
@@ -1344,8 +1353,7 @@ impl CurrentPrompt {
     /// Serializes the current prompt as an unstyled string.
     pub fn prompt_as_string(&self, ctx: &AppContext) -> String {
         chips_to_string(
-            Prompt::as_ref(ctx)
-                .chip_kinds()
+            self.display_chip_kinds(ctx)
                 .into_iter()
                 .filter_map(|chip_kind| {
                     let value = &self.states.get(&chip_kind)?.last_computed_value;

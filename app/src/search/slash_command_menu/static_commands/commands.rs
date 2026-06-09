@@ -68,6 +68,15 @@ pub const CREATE_DOCKER_SANDBOX: StaticCommand = StaticCommand {
     argument: None,
 };
 
+pub const CREATE_DEV_CONTAINER: StaticCommand = StaticCommand {
+    name: "/dev-container",
+    description: "Create a new Dev Container terminal session",
+    icon_path: "bundled/svg/docker.svg",
+    availability: Availability::LOCAL.union(Availability::AI_ENABLED),
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static CREATE_NEW_PROJECT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/create-new-project",
     description: "Have Oz walk you through creating a new coding project",
@@ -636,6 +645,10 @@ fn all_commands() -> Vec<StaticCommand> {
 
     if FeatureFlag::LocalDockerSandbox.is_enabled() {
         commands.push(CREATE_DOCKER_SANDBOX);
+    }
+
+    if FeatureFlag::DevContainers.is_enabled() {
+        commands.push(CREATE_DEV_CONTAINER);
     }
 
     if FeatureFlag::CreatingSharedSessions.is_enabled()

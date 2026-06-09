@@ -237,7 +237,7 @@ fn new_command_executor_for_local_tty_session(
     // container — the same semantics host shells get today.
     let launch_data_needs_in_band_executor = matches!(
         session_info.launch_data,
-        Some(ShellLaunchData::DockerSandbox { .. })
+        Some(ShellLaunchData::DockerSandbox { .. } | ShellLaunchData::DevContainer { .. })
     );
     let force_use_in_band_generators = shell_needs_in_band_executor
         || launch_data_needs_in_band_executor
@@ -255,20 +255,22 @@ fn new_command_executor_for_local_tty_session(
                     Some(executable_path.to_owned()),
                     shell_type,
                 )),
-                // Docker sandbox sessions should already be routed to the
+                // Docker sandbox and Dev Container sessions should already be routed to the
                 // in-band executor via `launch_data_needs_in_band_executor`
                 // above, so this arm is only reached if that routing drifts
                 // (e.g. a feature flag/debug setting disables it). Rather
                 // than panic in user-facing code, log loudly and fall back
-                // to a no-op executor so the sandbox session still runs;
+                // to a no-op executor so the container session still runs;
                 // generators won't work but the PTY stays healthy.
-                Some(ShellLaunchData::DockerSandbox { .. }) => {
+                Some(
+                    ShellLaunchData::DockerSandbox { .. } | ShellLaunchData::DevContainer { .. },
+                ) => {
                     debug_assert!(
                         false,
-                        "Docker sandbox sessions should be routed through the in-band executor"
+                        "Container sessions should be routed through the in-band executor"
                     );
                     log::error!(
-                        "Docker sandbox session reached the local-executor branch; \
+                        "Container session reached the local-executor branch; \
                          falling back to a no-op command executor. \
                          `launch_data_needs_in_band_executor` routing may have drifted."
                     );

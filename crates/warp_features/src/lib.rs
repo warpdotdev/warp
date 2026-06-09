@@ -474,6 +474,9 @@ pub enum FeatureFlag {
     /// Enables the local docker sandbox entrypoints in the client.
     LocalDockerSandbox,
 
+    /// Enables Dev Container terminal entrypoints in the client.
+    DevContainers,
+
     /// Enables the /compact slash command.
     SummarizationConversationCommand,
 
@@ -939,6 +942,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CodexPlugin,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
+    FeatureFlag::DevContainers,
+    FeatureFlag::CloudModeSetupV2,
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,

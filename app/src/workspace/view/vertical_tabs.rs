@@ -1402,11 +1402,14 @@ fn render_detail_kind_badge_icon(
                 .is_some()
             {
                 WarpIcon::Oz
+            } else if terminal_view.is_dev_container_session(app) {
+                WarpIcon::Docker
             } else {
                 WarpIcon::Terminal
             };
             let color = match icon {
                 WarpIcon::Oz | WarpIcon::OzCloud => oz_icon_fill(theme),
+                WarpIcon::Docker => WarpThemeFill::Solid(theme.ansi_fg_green()),
                 WarpIcon::Terminal => disabled_text,
                 _ => sub_text,
             };
@@ -3034,6 +3037,11 @@ fn resolve_icon_with_status_variant(
             let terminal_view = terminal_view.as_ref(app);
             if let Some(variant) = terminal_view_agent_icon_variant(terminal_view, app) {
                 variant
+            } else if terminal_view.is_dev_container_session(app) {
+                IconWithStatusVariant::Neutral {
+                    icon: WarpIcon::Docker,
+                    icon_color: WarpThemeFill::Solid(theme.ansi_fg_green()),
+                }
             } else {
                 // Plain terminal: use foreground color per design spec
                 IconWithStatusVariant::Neutral {

@@ -1053,6 +1053,7 @@ pub enum Event {
         initial_prompt: Option<String>,
     },
     CreateDockerSandbox,
+    CreateDevContainer,
     /// Exit cloud mode (ambient agent) and start a new *local* agent conversation in the root terminal.
     ///
     /// If `initial_prompt` is `Some`, it should prefill the local agent prompt but not auto-send.

@@ -471,6 +471,9 @@ impl Input {
             create_docker_sandbox if command.name == commands::CREATE_DOCKER_SANDBOX.name => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
+            create_dev_container if command.name == commands::CREATE_DEV_CONTAINER.name => {
+                ctx.emit(Event::CreateDevContainer);
+            }
             conversations if command.name == commands::CONVERSATIONS.name => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.suggestions_mode_model.update(ctx, |model, ctx| {

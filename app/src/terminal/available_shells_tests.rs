@@ -158,6 +158,30 @@ fn test_find_by_command_name_matches_known_shell() {
 }
 
 #[test]
+fn test_dev_container_shell_launch_data_round_trips_from_available_shell() {
+    let devcontainer_cli_path = PathBuf::from("/usr/local/bin/devcontainer");
+    let workspace_folder = PathBuf::from("/workspace/project");
+    let config_path = workspace_folder.join(".devcontainer/devcontainer.json");
+
+    let shell = AvailableShell::new_dev_container_shell(
+        devcontainer_cli_path.clone(),
+        workspace_folder.clone(),
+        config_path.clone(),
+    );
+
+    assert_eq!(shell.short_name(), "Dev Container");
+    assert!(shell.is_dev_container());
+    assert_eq!(
+        shell.get_valid_shell_path_and_type(),
+        Some(ShellLaunchData::DevContainer {
+            devcontainer_cli_path,
+            workspace_folder,
+            config_path,
+        })
+    );
+}
+
+#[test]
 fn test_find_by_command_name_returns_none_for_unknown_name() {
     let shells = make_available_shells(vec![AvailableShell::new_local_executable(
         "zsh".to_string(),

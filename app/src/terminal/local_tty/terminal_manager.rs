@@ -935,6 +935,11 @@ impl TerminalManager {
                 executable_path: docker_starter.logical_shell_path().to_owned(),
                 shell_type: docker_starter.shell_type(),
             },
+            ShellStarter::DevContainer(dev_container_starter) => ShellLaunchData::DevContainer {
+                devcontainer_cli_path: dev_container_starter.logical_shell_path().to_owned(),
+                workspace_folder: dev_container_starter.workspace_folder().to_owned(),
+                config_path: dev_container_starter.config_path().to_owned(),
+            },
             ShellStarter::Wsl(shell_starter) => ShellLaunchData::WSL {
                 distro: shell_starter.distribution().to_owned(),
             },

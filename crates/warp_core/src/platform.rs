@@ -7,15 +7,18 @@ pub enum SessionPlatform {
     Native,
     /// A shell running inside a Linux Docker sandbox container.
     DockerSandbox,
+    /// A shell running inside a Dev Container.
+    DevContainer,
 }
 
 impl SessionPlatform {
     #[allow(clippy::disallowed_methods)]
     pub fn default_line_ending(&self) -> LineEnding {
         match self {
-            SessionPlatform::MSYS2 | SessionPlatform::WSL | SessionPlatform::DockerSandbox => {
-                LineEnding::LF
-            }
+            SessionPlatform::MSYS2
+            | SessionPlatform::WSL
+            | SessionPlatform::DockerSandbox
+            | SessionPlatform::DevContainer => LineEnding::LF,
             SessionPlatform::Native => LineEnding::from_current_platform(),
         }
     }

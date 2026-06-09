@@ -1,9 +1,8 @@
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use warpui::{AppContext, SingletonEntity};
+use warpui::AppContext;
 
 use super::current_prompt::CurrentPrompt;
-use super::prompt::Prompt;
 use super::{chips_to_string, ChipResult, ChipValue};
 use crate::context_chips::ContextChipKind;
 use crate::settings::WarpPromptSeparator;
@@ -20,12 +19,11 @@ pub struct PromptSnapshot {
 
 impl PromptSnapshot {
     pub fn from_current_prompt(current_prompt: &CurrentPrompt, ctx: &AppContext) -> Self {
-        let prompt = Prompt::as_ref(ctx);
         let current_prompt_snapshot = current_prompt.snapshot();
         let current_prompt_on_click_snapshot = current_prompt.on_click_snapshot();
 
-        // Get base chip kinds from prompt configuration
-        let all_chip_kinds = prompt.chip_kinds();
+        // Get base chip kinds from prompt configuration, plus any session-scoped chips.
+        let all_chip_kinds = current_prompt.display_chip_kinds(ctx);
 
         // Re-sort current prompt snapshot so that it matches the order of elements in prompt
         let chips = all_chip_kinds

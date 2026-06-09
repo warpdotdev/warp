@@ -4,7 +4,7 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::ShellLaunchData;
 use crate::ui_components::icons::Icon;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShellIndicatorType {
     Powershell,
     GitBash,
@@ -13,6 +13,7 @@ pub enum ShellIndicatorType {
     Kali,
     Arch,
     Linux,
+    DevContainer,
 }
 
 impl ShellIndicatorType {
@@ -25,6 +26,7 @@ impl ShellIndicatorType {
             Self::Kali => Icon::Kali,
             Self::Arch => Icon::Arch,
             Self::Linux => Icon::Linux,
+            Self::DevContainer => Icon::Docker,
         }
     }
 }
@@ -46,8 +48,29 @@ impl TryFrom<&ShellLaunchData> for ShellIndicatorType {
                 s if s.contains("arch") => Ok(Self::Arch),
                 _ => Ok(Self::Linux),
             },
-            // Docker sandbox containers are Linux regardless of host.
+            // Docker sandbox sessions are Linux regardless of host.
             ShellLaunchData::DockerSandbox { .. } => Ok(Self::Linux),
+            ShellLaunchData::DevContainer { .. } => Ok(Self::DevContainer),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn dev_container_uses_docker_indicator() {
+        let launch_data = ShellLaunchData::DevContainer {
+            devcontainer_cli_path: PathBuf::from("/usr/local/bin/devcontainer"),
+            workspace_folder: PathBuf::from("/workspace/project"),
+            config_path: PathBuf::from("/workspace/project/.devcontainer/devcontainer.json"),
+        };
+
+        let indicator = ShellIndicatorType::try_from(&launch_data).unwrap();
+        assert_eq!(indicator, ShellIndicatorType::DevContainer);
+        assert_eq!(indicator.to_icon(), Icon::Docker);
     }
 }

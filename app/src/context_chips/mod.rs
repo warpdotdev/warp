@@ -186,6 +186,7 @@ pub enum ContextChipKind {
     // We originally had two different chips for different input types, this has since been consolidated.
     #[serde(alias = "RemoteLogin")]
     Ssh,
+    DevContainer,
     Subshell,
     /// A chip that shows the plan and todo list for the current conversation.
     AgentPlanAndTodoList,
@@ -335,6 +336,17 @@ impl ContextChipKind {
                 builtins::ssh_session,
                 RefreshConfig::OnDemandOnly,
             )),
+            Self::DevContainer => Some(ContextChip::builtin_with_runtime_policy(
+                "Dev Container",
+                builtins::dev_container,
+                RefreshConfig::OnDemandOnly,
+                ChipRuntimePolicy::new(
+                    std::iter::empty::<&str>(),
+                    false,
+                    None,
+                    [ChipFingerprintInput::SessionId],
+                ),
+            )),
             Self::Subshell => Some(ContextChip::builtin(
                 "subshell",
                 builtins::subshell,
@@ -391,6 +403,7 @@ impl ContextChipKind {
             Self::SvnBranch => ChipValue::Text("svn-feature-branch".to_string()),
             Self::SvnDirtyItems => ChipValue::Text("3".to_string()),
             Self::Ssh => ChipValue::Text("alice@127.0.0.1".to_string()),
+            Self::DevContainer => ChipValue::Text("Dev Container".to_string()),
             Self::Subshell => ChipValue::Text("bash".to_string()),
             Self::AgentPlanAndTodoList => ChipValue::Text("Plan and Todo List".to_string()),
         }
@@ -423,6 +436,7 @@ impl ContextChipKind {
             Self::SvnBranch => prompt_colors.input_prompt_branch,
             Self::SvnDirtyItems => prompt_colors.input_prompt_svn,
             Self::Ssh => prompt_colors.input_prompt_ssh,
+            Self::DevContainer => appearance.theme().ansi_fg_green(),
             Self::Subshell => prompt_colors.input_prompt_subshell,
             Self::AgentPlanAndTodoList => prompt_colors.input_prompt_agent_mode_hint,
             Self::Custom { .. } => ColorU::new(255, 255, 255, 255),
@@ -506,6 +520,7 @@ impl ContextChipKind {
         match self {
             Self::WorkingDirectory => Some(Icon::Folder),
             Self::Username | Self::Ssh => Some(Icon::User),
+            Self::DevContainer => Some(Icon::Docker),
             Self::Hostname => Some(Icon::Laptop),
             Self::Date => Some(Icon::CalendarDate),
             Self::Time12 | Self::Time24 => Some(Icon::Clock),

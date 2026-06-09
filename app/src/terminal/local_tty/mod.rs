@@ -3,6 +3,7 @@
 
 //! TTY related functionality.
 
+pub mod dev_container;
 pub mod docker_sandbox;
 pub mod event_loop;
 mod mio_channel;

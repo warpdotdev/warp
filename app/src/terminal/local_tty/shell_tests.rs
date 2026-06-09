@@ -1,10 +1,38 @@
 use super::*;
+use crate::terminal::available_shells::AvailableShell;
+use std::path::PathBuf;
 
 #[test]
 fn test_program_invalid_bash() {
     // This test assumes there is no bash binary at /some/weird/path/bash.
     let shell_path = "/some/weird/path/bash".to_owned();
     assert!(supported_shell_path_and_type(&shell_path).is_none());
+}
+
+#[test]
+fn test_dev_container_shell_starter_uses_bash_and_devcontainer_cli() {
+    let devcontainer_cli_path = PathBuf::from("/usr/local/bin/devcontainer");
+    let workspace_folder = PathBuf::from("/workspace/project");
+    let config_path = workspace_folder.join(".devcontainer/devcontainer.json");
+    let shell = AvailableShell::new_dev_container_shell(
+        devcontainer_cli_path.clone(),
+        workspace_folder.clone(),
+        config_path.clone(),
+    );
+
+    let starter = ShellStarter::init(shell).expect("should create dev container shell starter");
+
+    match starter {
+        ShellStarterSourceOrWslName::Source(ShellStarterSource::Override(
+            ShellStarter::DevContainer(starter),
+        )) => {
+            assert_eq!(starter.logical_shell_path(), devcontainer_cli_path);
+            assert_eq!(starter.workspace_folder(), workspace_folder);
+            assert_eq!(starter.config_path(), config_path);
+            assert_eq!(starter.shell_type(), ShellType::Bash);
+        }
+        _ => panic!("expected Dev Container shell starter"),
+    }
 }
 
 #[test]

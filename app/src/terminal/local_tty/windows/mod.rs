@@ -171,6 +171,12 @@ pub(super) fn spawn(
                 "Docker sandbox shells are not supported on Windows".to_owned(),
             ));
         }
+        ShellStarter::DevContainer(_) => {
+            log::error!("Dev Container shell starter reached the Windows PTY spawn path");
+            return Err(PtySpawnError::UnsupportedShellStarter(
+                "Dev Container shells are not supported on Windows yet".to_owned(),
+            ));
+        }
     };
     let mut process_information = PROCESS_INFORMATION::default();
 

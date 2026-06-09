@@ -750,7 +750,9 @@ impl ShellType {
 /// Provides the necessary info to be able to launch and bootstrap the selected AvailableShell. For
 /// executables, this is the path to the executable and the shell type. For WSL, this is the distro
 /// name. For Docker sandboxes, this is the `sbx` CLI path plus the base Docker
-/// image; the shell inside the container is whatever the image provides.
+/// image; the shell inside the container is whatever the image provides. For
+/// Dev Containers, this is the `devcontainer` CLI path plus the workspace and
+/// config paths used to enter the container.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ShellLaunchData {
     Executable {
@@ -776,6 +778,12 @@ pub enum ShellLaunchData {
         /// image".
         base_image: Option<String>,
     },
+    /// A shell running inside a Dev Container via the `devcontainer` CLI.
+    DevContainer {
+        devcontainer_cli_path: PathBuf,
+        workspace_folder: PathBuf,
+        config_path: PathBuf,
+    },
 }
 
 impl ShellLaunchData {
@@ -800,7 +808,9 @@ impl ShellLaunchData {
                 .ok()
             }
             // Paths inside the sandbox container are plain Unix paths.
-            ShellLaunchData::DockerSandbox { .. } => Some(PathBuf::from(path_str)),
+            ShellLaunchData::DockerSandbox { .. } | ShellLaunchData::DevContainer { .. } => {
+                Some(PathBuf::from(path_str))
+            }
         }
     }
 
@@ -810,9 +820,9 @@ impl ShellLaunchData {
         shell_encoded_path: TypedPathBuf,
     ) -> Option<PathBuf> {
         match self {
-            ShellLaunchData::Executable { .. } | ShellLaunchData::DockerSandbox { .. } => {
-                PathBuf::try_from(shell_encoded_path).ok()
-            }
+            ShellLaunchData::Executable { .. }
+            | ShellLaunchData::DockerSandbox { .. }
+            | ShellLaunchData::DevContainer { .. } => PathBuf::try_from(shell_encoded_path).ok(),
             ShellLaunchData::WSL { distro } => {
                 convert_wsl_to_windows_host_path(&shell_encoded_path.to_path(), distro).ok()
             }
@@ -838,7 +848,9 @@ impl ShellLaunchData {
             }
             // The container is Unix; Warp runs on the host, so paths are
             // already in the host's native encoding. Pass through unchanged.
-            ShellLaunchData::DockerSandbox { .. } => Some(PathBuf::from(path_str)),
+            ShellLaunchData::DockerSandbox { .. } | ShellLaunchData::DevContainer { .. } => {
+                Some(PathBuf::from(path_str))
+            }
         }
     }
 
@@ -854,7 +866,8 @@ impl ShellLaunchData {
             }
             ShellLaunchData::WSL { .. }
             | ShellLaunchData::MSYS2 { .. }
-            | ShellLaunchData::DockerSandbox { .. } => TypedPath::unix(path_str),
+            | ShellLaunchData::DockerSandbox { .. }
+            | ShellLaunchData::DevContainer { .. } => TypedPath::unix(path_str),
         }
     }
 
@@ -891,6 +904,9 @@ impl ShellLaunchData {
                 Some(image) => format!("Docker sandbox ({image})"),
                 None => "Docker sandbox".to_owned(),
             },
+            Self::DevContainer { config_path, .. } => {
+                format!("Dev Container ({})", config_path.display())
+            }
         }
     }
 }
@@ -902,6 +918,7 @@ impl From<ShellLaunchData> for SessionPlatform {
             ShellLaunchData::WSL { .. } => SessionPlatform::WSL,
             ShellLaunchData::MSYS2 { .. } => SessionPlatform::MSYS2,
             ShellLaunchData::DockerSandbox { .. } => SessionPlatform::DockerSandbox,
+            ShellLaunchData::DevContainer { .. } => SessionPlatform::DevContainer,
         }
     }
 }

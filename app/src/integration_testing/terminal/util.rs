@@ -36,6 +36,9 @@ pub fn current_shell_starter_and_version() -> (DirectShellStarter, String) {
             ShellStarter::DockerSandbox(_) => {
                 todo!("We don't yet support integration tests for Docker sandbox shells")
             }
+            ShellStarter::DevContainer(_) => {
+                todo!("We don't yet support integration tests for Dev Container shells")
+            }
         },
         ShellStarterSource::Environment(starter)
         | ShellStarterSource::UserDefault(starter)
