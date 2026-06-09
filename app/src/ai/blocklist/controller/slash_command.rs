@@ -9,8 +9,7 @@ use super::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
-    AIAgentContext, AIAgentInput, CancellationReason, CloneRepositoryURL, EntrypointType,
-    RequestMetadata,
+    AIAgentContext, AIAgentInput, CloneRepositoryURL, EntrypointType, RequestMetadata,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::search::slash_command_menu::static_commands::commands;
@@ -112,17 +111,11 @@ impl SlashCommandRequest {
             return;
         };
 
-        let cancellation_reason = CancellationReason::FollowUpSubmitted {
-            is_for_same_conversation: active_conversation_id
-                .is_some_and(|id| id == conversation_id),
-        };
-        if let Some(active_conversation_id) = active_conversation_id {
-            controller.cancel_conversation_progress(
-                active_conversation_id,
-                cancellation_reason,
-                ctx,
-            );
-        }
+        controller.cancel_conversation_progress_for_new_request(
+            conversation_id,
+            active_conversation_id,
+            ctx,
+        );
 
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)

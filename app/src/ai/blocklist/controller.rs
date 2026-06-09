@@ -23,7 +23,6 @@ use parking_lot::FairMutex;
 use pending_response_streams::PendingResponseStreams;
 use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
-use warp_core::assertions::safe_assert;
 use warp_multi_agent_api::{message, Task, ToolType};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
@@ -664,13 +663,11 @@ impl BlocklistAIController {
 
         let ai_history_model = BlocklistAIHistoryModel::as_ref(ctx);
         let active_conversation_id = ai_history_model.active_conversation_id(self.terminal_view_id);
-        let cancellation_reason = CancellationReason::FollowUpSubmitted {
-            is_for_same_conversation: active_conversation_id
-                .is_some_and(|id| id == conversation_id),
-        };
-        if let Some(active_conversation_id) = active_conversation_id {
-            self.cancel_conversation_progress(active_conversation_id, cancellation_reason, ctx);
-        }
+        self.cancel_conversation_progress_for_new_request(
+            conversation_id,
+            active_conversation_id,
+            ctx,
+        );
 
         if let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str()) {
             slash_command_request.send_request(self, is_queued_prompt, ctx);
@@ -698,6 +695,9 @@ impl BlocklistAIController {
             input_query.input_query,
             InputQueryType::UserSubmittedQueryFromInput { .. }
         );
+        let cancellation_reason = CancellationReason::FollowUpSubmitted {
+            is_for_same_conversation: true,
+        };
 
         let completed_action_results = self.action_model.update(ctx, |action_model, ctx| {
             action_model.cancel_all_pending_actions(
@@ -2268,7 +2268,9 @@ impl BlocklistAIController {
             );
             const AI_INPUT_NOT_SENT_ERROR_STR: &str =
                 "Not sending AI input because there is an in-flight request";
-            safe_assert!(false, "{}", AI_INPUT_NOT_SENT_ERROR_STR);
+            log::warn!(
+                "{AI_INPUT_NOT_SENT_ERROR_STR}: conversation_id={conversation_id:?}, stream will not be replaced"
+            );
             return Err(anyhow::anyhow!(AI_INPUT_NOT_SENT_ERROR_STR));
         }
 
@@ -2468,6 +2470,46 @@ impl BlocklistAIController {
     ) -> bool {
         self.in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, app)
+    }
+    fn cancel_conversation_progress_for_new_request(
+        &mut self,
+        target_conversation_id: AIConversationId,
+        active_conversation_id: Option<AIConversationId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if active_conversation_id != Some(target_conversation_id) {
+            let target_status_has_progress = {
+                let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                history_model
+                    .conversation(&target_conversation_id)
+                    .is_some_and(|conversation| {
+                        conversation.status().is_in_progress() || conversation.status().is_blocked()
+                    })
+            };
+            let target_has_active_stream = self
+                .in_flight_response_streams
+                .has_active_stream_for_conversation(target_conversation_id, ctx);
+
+            if target_status_has_progress || target_has_active_stream {
+                self.cancel_conversation_progress(
+                    target_conversation_id,
+                    CancellationReason::FollowUpSubmitted {
+                        is_for_same_conversation: true,
+                    },
+                    ctx,
+                );
+            }
+        }
+
+        if let Some(active_conversation_id) = active_conversation_id {
+            self.cancel_conversation_progress(
+                active_conversation_id,
+                CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: active_conversation_id == target_conversation_id,
+                },
+                ctx,
+            );
+        }
     }
 
     /// Cancels 'progress' for the active conversation if there is one:
