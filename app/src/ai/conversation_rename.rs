@@ -19,6 +19,9 @@ pub(crate) fn rename_conversation<T: View>(
     let Some(title) = validate_conversation_title(title, ctx) else {
         return true;
     };
+    if conversation_title_matches(conversation_id, &title, ctx) {
+        return true;
+    }
 
     if BlocklistAIHistoryModel::as_ref(ctx)
         .conversation(&conversation_id)
@@ -42,6 +45,9 @@ pub(crate) fn rename_conversation<T: View>(
             history.update(ctx, |history, _| {
                 history.cache_loaded_conversation(*conversation);
             });
+            if conversation_title_matches(conversation_id, &title, ctx) {
+                return;
+            }
             begin_loaded_conversation_rename(
                 conversation_id,
                 title,
@@ -61,6 +67,24 @@ pub(crate) fn rename_conversation<T: View>(
     });
 
     true
+}
+
+/// Returns whether the requested title already matches local conversation state.
+fn conversation_title_matches<T: View>(
+    conversation_id: AIConversationId,
+    title: &str,
+    ctx: &ViewContext<T>,
+) -> bool {
+    let history = BlocklistAIHistoryModel::as_ref(ctx);
+    history
+        .conversation(&conversation_id)
+        .and_then(|conversation| conversation.title())
+        .or_else(|| {
+            history
+                .get_conversation_metadata(&conversation_id)
+                .map(|metadata| metadata.title.clone())
+        })
+        .is_some_and(|current_title| current_title == title)
 }
 
 fn validate_conversation_title<T: View>(title: String, ctx: &mut ViewContext<T>) -> Option<String> {
