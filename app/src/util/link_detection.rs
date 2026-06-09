@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::ops::Range;
+
 use string_offset::ByteOffset;
 use urlocator::{UrlLocation, UrlLocator};
-use warpui::elements::PartialClickableElement;
-
+use warpui::elements::{MouseStateHandle, PartialClickableElement};
 use warpui::platform::Cursor;
+use warpui::text::char_slice;
+use warpui::Action;
 
 use crate::ai::agent::{AIAgentActionType, AIAgentOutput, AIAgentTextSection, ReadFilesRequest};
 use crate::ai::blocklist::block::view_impl::output::LinkActionConstructors;
@@ -12,9 +14,6 @@ use crate::ai::blocklist::block::TextLocation;
 use crate::terminal::links::should_directly_open_link;
 use crate::terminal::model::grid::grid_handler::is_file_link_separator;
 use crate::terminal::ShellLaunchData;
-use warpui::elements::MouseStateHandle;
-use warpui::text::char_slice;
-use warpui::Action;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {

@@ -6,24 +6,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use instant::Instant;
-
-use crate::server::ids::SyncId;
-use crate::server::telemetry::ImageProtocol;
-use crate::terminal::model::block::BlockMetadata;
-use crate::terminal::model::block::SerializedBlock;
-use crate::terminal::model::completions::ShellCompletion;
-use crate::terminal::model::terminal_model::HandlerEvent;
-use crate::terminal::shell::ShellType;
-use crate::terminal::ClipboardType;
-use crate::util::AsciiDebug;
+pub use remote_server::setup::RemoteServerSetupState;
 
 use super::history::HistoryEntry;
 use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
 use super::model::block::BlockId;
 use super::model::session::{SessionId, SessionInfo};
 use super::model::terminal_model::{BlockIndex, ExitReason, TmuxInstallationState};
-
-pub use remote_server::setup::RemoteServerSetupState;
+use crate::server::ids::SyncId;
+use crate::server::telemetry::ImageProtocol;
+use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
+use crate::terminal::model::completions::ShellCompletion;
+use crate::terminal::model::terminal_model::HandlerEvent;
+use crate::terminal::shell::ShellType;
+use crate::terminal::ClipboardType;
+use crate::util::AsciiDebug;
 
 #[derive(Clone)]
 /// Events sent to the main thread by the terminal model & event loop.
@@ -46,6 +43,13 @@ pub enum Event {
     },
     /// Sent when a new block is created.
     BlockMetadataReceived(BlockMetadataReceivedEvent),
+    /// Sent when a block's working directory has been updated outside of the
+    /// normal precmd path (e.g. via an OSC 7 escape sequence). Subscribers
+    /// that only care about CWD changes should listen for this in addition to
+    /// `BlockMetadataReceived`; subscribers tied to precmd semantics (such as
+    /// the requested-command finish detector) should keep listening only to
+    /// `BlockMetadataReceived` so they preserve their once-per-block contract.
+    BlockWorkingDirectoryUpdated(BlockWorkingDirectoryUpdatedEvent),
     /// Sent after a background block is started and added to the block list.
     BackgroundBlockStarted,
     ClipboardStore(ClipboardType, String),
@@ -109,6 +113,7 @@ pub enum Event {
     /// Users "Tag an agent in" when they ask the agent to take over a long running command
     /// that was started outside of a conversation (and they tag the agent out when they take control back).
     AgentTaggedInChanged {
+        block_id: BlockId,
         is_tagged_in: bool,
     },
     Handler(HandlerEvent),
@@ -283,6 +288,27 @@ pub struct BlockMetadataReceivedEvent {
 }
 
 #[derive(Clone, Debug)]
+/// A notification that an existing block's working directory has been updated
+/// out-of-band (e.g. by an OSC 7 escape sequence) without a fresh precmd. The
+/// payload mirrors `BlockMetadataReceivedEvent` so CWD-dependent listeners can
+/// reuse the same handling, but listeners that rely on precmd semantics should
+/// keep using `BlockMetadataReceivedEvent`.
+///
+/// Note: `is_for_in_band_command` here describes the block carrying the update,
+/// while the similarly-spelled `is_after_in_band_command` on
+/// `BlockMetadataReceivedEvent` describes the *previous* block. The semantics
+/// differ because precmd fires after a block runs, while OSC 7 fires while the
+/// block is alive.
+pub struct BlockWorkingDirectoryUpdatedEvent {
+    pub block_metadata: BlockMetadata,
+    pub block_index: BlockIndex,
+    /// Whether the block carrying this update is for an in-band command.
+    pub is_for_in_band_command: bool,
+    /// Whether the session has fully completed the bootstrapping process.
+    pub is_done_bootstrapping: bool,
+}
+
+#[derive(Clone, Debug)]
 /// Contents of a normal block that a user executed.
 pub struct UserBlockCompleted {
     pub index: BlockIndex,
@@ -411,6 +437,11 @@ impl Debug for Event {
                 "BlockStarted({:?}, Done bootstrapping: {:?})",
                 event.block_metadata, event.is_done_bootstrapping
             ),
+            Event::BlockWorkingDirectoryUpdated(event) => write!(
+                f,
+                "BlockWorkingDirectoryUpdated({:?}, Done bootstrapping: {:?})",
+                event.block_metadata, event.is_done_bootstrapping
+            ),
             Event::AfterBlockStarted { .. } => write!(f, "BlockExecutionStarted"),
             Event::BackgroundBlockStarted => write!(f, "BackgroundBlockStarted"),
             Event::VisibleBootstrapBlock => write!(f, "VisibleBootstrapBlock"),
@@ -457,8 +488,14 @@ impl Debug for Event {
             Event::PromptUpdated => write!(f, "PromptUpdated"),
             Event::HonorPS1OutOfSync => write!(f, "HonorPS1OutOfSync"),
             Event::Typeahead => write!(f, "Typeahead"),
-            Event::AgentTaggedInChanged { is_tagged_in } => {
-                write!(f, "AgentTaggedInChanged(is_tagged_in: {is_tagged_in})")
+            Event::AgentTaggedInChanged {
+                block_id,
+                is_tagged_in,
+            } => {
+                write!(
+                    f,
+                    "AgentTaggedInChanged(block_id: {block_id:?}, is_tagged_in: {is_tagged_in})"
+                )
             }
             Event::Handler(handler_event) => write!(f, "Handler({handler_event:?}))"),
             Event::RemoteServerReady { session_id } => {

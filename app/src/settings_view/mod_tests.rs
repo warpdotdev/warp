@@ -1,5 +1,6 @@
-use super::*;
 use settings_page::MatchData;
+
+use super::*;
 
 // ── SettingsSection classification ──────────────────────────────────────────
 

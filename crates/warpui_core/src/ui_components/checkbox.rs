@@ -1,16 +1,15 @@
+use lazy_static::lazy_static;
+
 use crate::color::ColorU;
-use crate::elements::{ChildAnchor, ParentAnchor, ParentOffsetBounds};
+use crate::elements::{
+    Align, Border, ChildAnchor, ConstrainedBox, Container, Element, Flex, Hoverable, Icon,
+    MouseState, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Rect, Stack,
+};
 use crate::geometry::vector::Vector2F;
 use crate::prelude::{Coords, Fill};
-use crate::{
-    elements::{
-        Align, Border, ConstrainedBox, Container, Element, Flex, Hoverable, Icon, MouseState,
-        MouseStateHandle, OffsetPositioning, ParentElement, Rect, Stack,
-    },
-    ui_components::components::{UiComponent, UiComponentStyles},
-    ui_components::text::Span,
-};
-use lazy_static::lazy_static;
+use crate::ui_components::components::{UiComponent, UiComponentStyles};
+use crate::ui_components::text::Span;
 
 const CHECK_SVG_PATH: &str = "bundled/svg/check-thick.svg";
 

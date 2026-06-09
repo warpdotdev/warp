@@ -2,9 +2,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use warpui::duration_with_jitter;
 use warpui::r#async::Timer;
-use warpui::RetryOption;
+use warpui::{duration_with_jitter, RetryOption};
 
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::presigned_upload::HttpStatusError;
@@ -74,7 +73,9 @@ pub(crate) fn is_transient_graphql_or_http_error(e: &anyhow::Error) -> bool {
             return match graphql_err {
                 GraphQLError::RequestError(_) => true,
                 GraphQLError::HttpError { status, .. } => is_transient_status(status.as_u16()),
-                GraphQLError::StagingAccessBlocked | GraphQLError::ResponseError(_) => false,
+                GraphQLError::StagingAccessBlocked
+                | GraphQLError::IapChallengeBlocked
+                | GraphQLError::ResponseError(_) => false,
             };
         }
 

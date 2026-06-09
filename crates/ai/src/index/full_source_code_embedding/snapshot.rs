@@ -1,20 +1,19 @@
+use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
 use chrono::Utc;
 #[cfg(feature = "local_fs")]
 use repo_metadata::Repository;
-use std::{
-    collections::HashSet,
-    hash::{DefaultHasher, Hash, Hasher},
-    path::{Path, PathBuf},
-    time::Duration,
-};
 #[cfg(feature = "local_fs")]
-use warpui::ModelHandle;
+use warpui_core::ModelHandle;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use super::Error as CodebaseIndexError;
         use std::sync::Arc;
-        use warpui::ModelContext;
+        use warpui_core::ModelContext;
         use anyhow::Context;
         use warp_core::safe_info;
         use super::{store_client::StoreClient, CodebaseIndex, EmbeddingConfig};

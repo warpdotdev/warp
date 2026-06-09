@@ -1,11 +1,13 @@
 pub mod get_warp_drive_updates;
 
+use std::collections::HashMap;
+
 use anyhow::{anyhow, Context, Result};
 use async_channel::Sender;
 use cynic::{QueryFragment, QueryVariables, StreamingOperation as CynicStreamingOperation};
 use futures::StreamExt as _;
-use serde::{de::DeserializeOwned, Serialize};
-use std::collections::HashMap;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 const PROTOCOL: &str = "graphql-transport-ws";
 
@@ -18,6 +20,12 @@ const PROTOCOL: &str = "graphql-transport-ws";
 /// The `init_payload`` is a payload that is sent as part of the websocket handshake
 /// See: https://github.com/enisdenjo/graphql-ws/blob/master/PROTOCOL.md#connectioninit
 ///
+/// `handshake_headers` are extra HTTP request headers attached to the websocket
+/// upgrade itself (as opposed to the `init_payload`, which is only sent after
+/// the upgrade completes). This is where auth that must be validated by an
+/// intermediary on the handshake — e.g. the IAP `Proxy-Authorization` token on
+/// staging — belongs. Ignored on wasm, where handshake headers are unsupported.
+///
 /// Note that the future returned by this method only resolves once the stream is done.
 /// However, a message is sent over stream_ready_sender when the stream is ready to receive messages.
 /// Any errant message sent over the stream will also terminate it.
@@ -28,6 +36,7 @@ pub async fn start_graphql_streaming_operation<Q, V, F, T>(
     transform_stream_message: F,
     message_sender: Sender<T>,
     stream_ready_sender: Sender<()>,
+    handshake_headers: Vec<(&str, String)>,
 ) -> Result<()>
 where
     Q: QueryFragment + DeserializeOwned + Unpin + Send + 'static,
@@ -38,9 +47,10 @@ where
     // we only have one subscription so let's just create a new one (we have to
     // anyways for retry logic).
 
-    let socket = websocket::WebSocket::connect(server_url, Some(PROTOCOL))
-        .await
-        .context("failed to create websocket connection")?;
+    let socket =
+        websocket::WebSocket::connect_with_headers(server_url, Some(PROTOCOL), handshake_headers)
+            .await
+            .context("failed to create websocket connection")?;
     let mut stream = socket
         .into_graphql_client_builder()
         .await

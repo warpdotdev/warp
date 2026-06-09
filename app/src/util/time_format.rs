@@ -1,5 +1,6 @@
-use chrono::{DateTime, Duration, Local, Utc};
 use std::ops::Sub;
+
+use chrono::{DateTime, Duration, Local, Utc};
 
 // Some conversion ratios for time units.
 const SEC_TO_MS: f64 = 1000.;

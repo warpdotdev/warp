@@ -1,3 +1,17 @@
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::Icon;
+use warpui::elements::{
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+};
+use warpui::fonts::{Properties, Weight};
+use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
+use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar::{
     render_agent_avatar_disc, render_orchestrator_avatar_disc,
@@ -15,21 +29,6 @@ use crate::persistence::model::{
     PRIMARY_AGENT_CATEGORY,
 };
 use crate::ui_components::blended_colors;
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::Icon;
-use warpui::elements::ConstrainedBox;
-use warpui::fonts::{Properties, Weight};
-use warpui::platform::Cursor;
-use warpui::text_layout::ClipConfig;
-use warpui::{
-    elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize,
-        MouseStateHandle, ParentElement, Radius, Text,
-    },
-    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -39,6 +38,7 @@ pub enum DisplayMode {
 
 pub struct ConversationUsageInfo {
     pub credits_spent: f32,
+    pub platform_credits_spent: f32,
     // Credits spent over the last block, where the block comprises
     // all agent outputs since the most recent user input.
     pub credits_spent_for_last_block: Option<f32>,
@@ -216,8 +216,8 @@ impl ConversationUsageView {
     }
 
     /// Helper to collect models grouped by category.
-    /// Returns a HashMap mapping category name to list of (model_id, is_byok) tuples.
-    /// Handles both category-based fields and legacy warp_tokens/byok_tokens fields.
+    /// Returns a HashMap mapping category name to list of (model_id, shows_key_icon) tuples.
+    /// Handles category-based fields plus legacy token-total fallbacks.
     fn collect_models_by_category(&self) -> HashMap<String, Vec<(String, bool)>> {
         let mut entries_by_category: HashMap<String, Vec<(String, bool)>> = HashMap::new();
 
@@ -239,6 +239,14 @@ impl ConversationUsageView {
                         .push((model.model_id.clone(), true));
                 }
             }
+            for (category, &tokens) in &model.custom_endpoint_token_usage_by_category {
+                if tokens > 0 {
+                    entries_by_category
+                        .entry(category.clone())
+                        .or_default()
+                        .push((model.model_id.clone(), true));
+                }
+            }
         }
 
         // Fallback to legacy fields for backwards compatibility
@@ -251,6 +259,12 @@ impl ConversationUsageView {
                         .push((model.model_id.clone(), false));
                 }
                 if model.byok_tokens > 0 {
+                    entries_by_category
+                        .entry(PRIMARY_AGENT_CATEGORY.to_string())
+                        .or_default()
+                        .push((model.model_id.clone(), true));
+                }
+                if model.custom_endpoint_tokens > 0 {
                     entries_by_category
                         .entry(PRIMARY_AGENT_CATEGORY.to_string())
                         .or_default()
@@ -286,7 +300,7 @@ impl ConversationUsageView {
         let total_credits_value = rollup
             .as_ref()
             .map(|r| r.total_credits)
-            .unwrap_or(self.usage_info.credits_spent);
+            .unwrap_or(self.usage_info.credits_spent + self.usage_info.platform_credits_spent);
 
         if self.display_mode == DisplayMode::Footer
             && self.usage_info.credits_spent_for_last_block.is_some()
@@ -375,7 +389,7 @@ impl ConversationUsageView {
                 labels.push(render_label_text(&label_text, appearance));
             }
 
-            // Build comma-separated list of models, with BYOK indicator using Icon::Key
+            // Build comma-separated list of models, with external-key indicator using Icon::Key
             let mut model_elements: Vec<Box<dyn Element>> = vec![];
             let mut sorted_models: Vec<_> = models.iter().collect();
             sorted_models.sort_by(|a, b| a.0.cmp(&b.0));

@@ -1,8 +1,10 @@
 use std::sync::LazyLock;
 
-use warpui::{keymap::Keystroke, AppContext};
+use warpui::keymap::Keystroke;
+use warpui::AppContext;
 
-use crate::{terminal::TerminalModel, util::bindings::keybinding_name_to_keystroke};
+use crate::terminal::TerminalModel;
+use crate::util::bindings::keybinding_name_to_keystroke;
 
 pub const ACCEPT_PROMPT_SUGGESTION_KEYBINDING: &str = "terminal:accept_prompt_suggestions";
 

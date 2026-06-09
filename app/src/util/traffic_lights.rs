@@ -9,14 +9,16 @@ pub mod windows;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux_only {
-    pub(super) use crate::workspace::TOTAL_TAB_BAR_HEIGHT;
+    pub(super) use std::sync::Arc;
+
     pub(super) use pathfinder_color::ColorU;
     pub(super) use pathfinder_geometry::vector::vec2f;
-    pub(super) use std::sync::Arc;
     pub(super) use warpui::elements::{
         Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Flex, Hoverable, Icon,
         OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, Stack,
     };
+
+    pub(super) use crate::workspace::TOTAL_TAB_BAR_HEIGHT;
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -24,7 +26,6 @@ use linux_only::*;
 
 #[cfg(target_os = "windows")]
 mod windows_only {
-    pub(super) use crate::ui_components::icons::Icon as IconComponent;
     pub(super) use pathfinder_color::ColorU;
     pub(super) use pathfinder_geometry::vector::vec2f;
     pub(super) use warp_core::ui::theme;
@@ -32,6 +33,8 @@ mod windows_only {
         Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, Hoverable,
         OffsetPositioning, ParentAnchor, ParentOffsetBounds, Radius, Rect, Stack,
     };
+
+    pub(super) use crate::ui_components::icons::Icon as IconComponent;
     pub(super) const WINDOWS_BRIGHT_RED: ColorU = ColorU {
         r: 232,
         g: 17,
@@ -43,16 +46,15 @@ mod windows_only {
     pub(super) const WINDOWS_BUTTON_PADDING_HORIZONTAL: f32 = 12.;
 }
 
-#[cfg(target_os = "windows")]
-use windows_only::*;
-
 #[cfg(not(target_os = "windows"))]
 use warpui::elements::Empty;
-
-use crate::themes::theme::WarpTheme;
 use warpui::elements::MouseStateHandle;
 use warpui::platform::FullscreenState;
 use warpui::{AppContext, Element, WindowId};
+#[cfg(target_os = "windows")]
+use windows_only::*;
+
+use crate::themes::theme::WarpTheme;
 
 #[cfg(any(target_os = "windows", any(target_os = "linux", target_os = "freebsd")))]
 const BUTTON_ICON_SIZE: f32 = 22.;

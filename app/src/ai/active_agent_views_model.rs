@@ -1,6 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
+    WindowId,
+};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{AgentConversationEntry, AgentConversationEntryId};
@@ -11,10 +15,6 @@ use crate::ai::blocklist::orchestration_event_streamer::{
 };
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::terminal::model::session::active_session::ActiveSession;
-use warpui::{
-    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
-    WindowId,
-};
 
 /// Contains the handles needed to track an active agent view.
 struct ActiveAgentViewHandles {

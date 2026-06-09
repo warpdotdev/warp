@@ -1,10 +1,10 @@
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
-use std::{env, fmt, path::Path};
+use std::path::Path;
+use std::{env, fmt};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use url::Url;
-
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 
@@ -16,6 +16,8 @@ mod process_handle;
 pub mod artifact;
 pub mod scope;
 pub mod skill;
+mod sort_order;
+pub use sort_order::SortOrderArg;
 
 pub mod agent;
 pub mod api_key;
@@ -27,6 +29,7 @@ pub mod federate;
 pub mod harness_support;
 pub mod integration;
 pub mod json_filter;
+pub mod local_control;
 pub mod mcp;
 pub mod model;
 pub mod provider;
@@ -346,12 +349,6 @@ impl Args {
                     .mut_subcommand("get", |get_cmd| {
                         get_cmd.mut_arg("conversation", |arg| arg.hide(true))
                     })
-            });
-        }
-        // Hide the message subcommand from help text.
-        if !FeatureFlag::OrchestrationV2.is_enabled() {
-            command = command.mut_subcommand("run", |run_cmd| {
-                run_cmd.mut_subcommand("message", |c| c.hide(true))
             });
         }
 

@@ -6,20 +6,17 @@ use enum_iterator::Sequence;
 use lsp::supported_servers::LSPServerType;
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
-#[cfg(not(target_family = "wasm"))]
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{Entity, ModelContext, SingletonEntity as _};
 
-use crate::{
-    ai::persisted_workspace::PersistedWorkspace,
-    settings::CodeSettings,
-    terminal::view::init_project::{
-        lsp_server_selector::LSPServerInfo, CodebaseIndexingResult, CreateEnvironmentResult,
-        InitActionResult, LanguageServersResult, ProjectScopedRulesResult, FILES_TO_CHECK,
-        LINKABLE_FILES,
-    },
-    workspaces::user_workspaces::UserWorkspaces,
+use crate::ai::persisted_workspace::PersistedWorkspace;
+use crate::settings::CodeSettings;
+use crate::terminal::view::init_project::lsp_server_selector::LSPServerInfo;
+use crate::terminal::view::init_project::{
+    CodebaseIndexingResult, CreateEnvironmentResult, InitActionResult, LanguageServersResult,
+    ProjectScopedRulesResult, FILES_TO_CHECK, LINKABLE_FILES,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const INIT_STEP_COUNT: usize = enum_iterator::cardinality::<InitStepKind>();
 
@@ -189,7 +186,7 @@ impl InitProjectModel {
             && !*CodeSettings::as_ref(ctx).auto_indexing_enabled;
 
         let has_pending_project_scoped_rules = ProjectContextModel::as_ref(ctx)
-            .find_applicable_project_rules(path)
+            .find_applicable_project_rules(&LocalOrRemotePath::Local(path.to_path_buf()))
             .is_none();
 
         has_pending_codebase_context || has_pending_project_scoped_rules

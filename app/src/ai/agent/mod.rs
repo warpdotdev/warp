@@ -12,49 +12,48 @@ mod task_store;
 pub(super) mod telemetry;
 pub(super) mod util;
 
-// Re-export types that were moved to the ai crate.
-pub use ai::agent::{action::*, action_result::*, AIAgentCitation, FileLocations};
-use warp_core::features::FeatureFlag;
-
-use crate::ai::block_context::BlockContext;
-use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
-use crate::ai::skills::SkillDescriptor;
-use crate::code::editor_management::CodeSource;
-use crate::code_review::comments::{
-    AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
-};
-use crate::search::slash_command_menu::static_commands::commands;
-use crate::server::server_api::AIApiError;
-use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
-use ai::skills::ParsedSkill;
-use chrono::{DateTime, Local, TimeDelta};
-use comment::ReviewComment;
-use task::TaskId;
-pub use telemetry::AIIdentifiers;
-
-use warp_editor::render::model::LineCount;
-
-use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::{AddAssign, Deref, DerefMut, Range};
 use std::sync::Arc;
 use std::time::Duration;
+
+// Re-export types that were moved to the ai crate.
+pub use ai::agent::action::*;
+pub use ai::agent::action_result::*;
+use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+pub use ai::agent::{AIAgentCitation, FileLocations};
+use ai::skills::ParsedSkill;
+use chrono::{DateTime, Local, TimeDelta};
+use comment::ReviewComment;
+use derivative::Derivative;
+use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use session_sharing_protocol::common::ParticipantId;
+use task::TaskId;
+pub use telemetry::AIIdentifiers;
 use uuid::Uuid;
+use warp_core::features::FeatureFlag;
+use warp_editor::render::model::LineCount;
 use warp_multi_agent_api::{diff_hunk as diff_hunk_api, AgentEvent, AgentType};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+use super::llms::LLMId;
+use crate::ai::block_context::BlockContext;
+use crate::ai::blocklist::block::view_impl::output::are_all_text_sections_empty;
+use crate::ai::skills::SkillDescriptor;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
+use crate::code::editor_management::CodeSource;
+use crate::code_review::comments::{
+    AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
+};
+use crate::search::slash_command_menu::static_commands::commands;
+use crate::server::server_api::{AIApiError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::TelemetryEvent;
-use derivative::Derivative;
-use markdown_parser::{parse_markdown, FormattedTable, FormattedText, FormattedTextInline};
-use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::ParticipantId;
-
-use super::llms::LLMId;
 
 /// A server supplied ID for a specific AI generated output.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
@@ -103,6 +102,12 @@ pub enum CancellationReason {
     /// The long-running command completed while the agent was still streaming.
     /// This should be treated as a successful completion, not a cancellation.
     OptimisticCLISubagentCompletion,
+
+    /// The user manually took control of a long-running command away from the agent.
+    /// The agent conversation is still in progress — it will resume after the command
+    /// finishes or once the user hands control back. The stream is cancelled only to
+    /// stop the CLI subagent monitoring loop, not to end the conversation.
+    CLISubagentUserTakeover,
 }
 
 impl Display for CancellationReason {
@@ -116,6 +121,9 @@ impl Display for CancellationReason {
             CancellationReason::Deleted => write!(f, "deleted"),
             CancellationReason::OptimisticCLISubagentCompletion => {
                 write!(f, "LRC command completed")
+            }
+            CancellationReason::CLISubagentUserTakeover => {
+                write!(f, "CLI subagent user takeover")
             }
         }
     }
@@ -143,6 +151,19 @@ impl CancellationReason {
 
     pub fn is_lrc_command_completed(&self) -> bool {
         matches!(self, CancellationReason::OptimisticCLISubagentCompletion)
+    }
+
+    /// Returns true when the stream was cancelled because the user took manual
+    /// control of the long-running command. The conversation remains in progress
+    /// and the ambient agent task should not be reported as cancelled.
+    pub fn is_cli_subagent_user_takeover(&self) -> bool {
+        matches!(self, CancellationReason::CLISubagentUserTakeover)
+    }
+
+    /// Returns true when the stream cancellation should NOT transition the
+    /// conversation status away from InProgress.
+    pub fn should_preserve_in_progress_status(&self) -> bool {
+        self.is_follow_up_for_same_conversation() || self.is_cli_subagent_user_takeover()
     }
 }
 
@@ -643,6 +664,22 @@ pub enum RenderableAIError {
 }
 
 impl RenderableAIError {
+    const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
+        "Warp lost connection while receiving the agent response. This is usually temporary.";
+    pub fn transient_network_error(will_attempt_resume: bool, waiting_for_network: bool) -> Self {
+        Self::Other {
+            error_message: Self::TRANSIENT_NETWORK_ERROR_MESSAGE.to_string(),
+            will_attempt_resume,
+            waiting_for_network,
+        }
+    }
+
+    fn is_transient_network_transport_error(error: &reqwest::Error) -> bool {
+        // If reqwest has an HTTP status, the server responded. Preserve the existing generic
+        // rendering for those failures rather than calling them lost connections.
+        error.status().is_none()
+    }
+
     pub fn is_invalid_api_key(&self) -> bool {
         matches!(self, Self::InvalidApiKey { .. })
     }
@@ -672,6 +709,12 @@ impl From<&AIApiError> for RenderableAIError {
                 user_display_message: user_display_message.clone(),
             },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
+            AIApiError::Transport(error)
+            | AIApiError::Deserialization(DeserializationError::Transport(error))
+                if Self::is_transient_network_transport_error(error) =>
+            {
+                Self::transient_network_error(false, false)
+            }
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
@@ -2038,6 +2081,30 @@ pub enum AIAgentContext {
         branch: Option<String>,
     },
 
+    /// Information about the git repository in the current working directory.
+    Repository {
+        /// The repository name (e.g. "warp-internal").
+        name: String,
+        /// The repository owner/organization (e.g. "warpdotdev"), if determinable from the remote URL.
+        owner: Option<String>,
+    },
+
+    /// Information about the GitHub pull request associated with the current branch.
+    PullRequest {
+        /// The pull request number.
+        #[serde(default, deserialize_with = "deserialize_pull_request_number")]
+        number: i32,
+        /// The pull request state (for example, `OPEN`, `MERGED`, or `CLOSED`).
+        #[serde(default)]
+        state: String,
+        /// Whether the pull request is marked as draft.
+        #[serde(default)]
+        draft: bool,
+        /// The pull request's base branch.
+        #[serde(default)]
+        base_branch: String,
+    },
+
     /// List of available skills is provided to the agent during initialization
     /// or when updated.
     Skills {
@@ -2046,6 +2113,37 @@ pub enum AIAgentContext {
 
     #[serde(untagged)]
     Block(Box<BlockContext>),
+}
+
+fn deserialize_pull_request_number<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Null => Ok(0),
+        serde_json::Value::String(s) => {
+            if !s.chars().all(|c| c.is_ascii_digit()) {
+                return Ok(0);
+            }
+            Ok(s.parse()
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        serde_json::Value::Number(n) => {
+            let Some(number) = n.as_i64() else {
+                return Ok(0);
+            };
+            Ok(i32::try_from(number)
+                .ok()
+                .filter(|number| *number > 0)
+                .unwrap_or_default())
+        }
+        value => Err(serde::de::Error::custom(format!(
+            "expected string or number for pull request number, got {value}"
+        ))),
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -3031,25 +3129,7 @@ pub struct RequestMetadata {
     pub is_auto_resume_after_error: bool,
 }
 
-/// A globally unique ID for a suggested objects.
-///
-/// This is used for telemetry purposes to track and connect both:
-/// - Suggested objects generated by the AI agent
-/// - The corresponding objects stored in the cloud (if the suggestion was accepted)
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SuggestedLoggingId(String);
-
-impl Display for SuggestedLoggingId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for SuggestedLoggingId {
-    fn from(value: String) -> Self {
-        Self(value)
-    }
-}
+pub use cloud_object_models::SuggestedLoggingId;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SuggestedRule {

@@ -1,23 +1,19 @@
 use std::collections::HashMap;
 
-use warp_core::ui::{appearance::Appearance, Icon};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::Icon;
+use warpui::elements::ParentElement;
+use warpui::prelude::{
+    ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle, Text,
+};
 use warpui::{
-    elements::ParentElement,
-    prelude::{
-        ConstrainedBox, Container, CrossAxisAlignment, Cursor, Flex, Hoverable, MouseStateHandle,
-        Text,
-    },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::{
-    ai::blocklist::{
-        agent_view::{agent_view_bg_color, AgentViewController},
-        inline_action::inline_action_icons,
-        BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    },
-    terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent},
-};
+use crate::ai::blocklist::agent_view::{agent_view_bg_color, AgentViewController};
+use crate::ai::blocklist::inline_action::inline_action_icons;
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SetupCommandGroupId(u64);

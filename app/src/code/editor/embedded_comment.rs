@@ -10,10 +10,10 @@ use warp_editor::content::markdown::MarkdownStyle;
 use warp_editor::editor::EmbeddedItemModel;
 use warp_editor::render::element::{RenderContext, RenderableBlock};
 use warp_editor::render::layout::TextLayout;
-
+use warp_editor::render::model::viewport::ViewportItem;
 use warp_editor::render::model::{
-    viewport::ViewportItem, BlockSpacing, EmbeddedItem, EmbeddedItemHTMLRepresentation,
-    EmbeddedItemRichFormat, LaidOutEmbeddedItem, RenderState,
+    BlockSpacing, EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat,
+    LaidOutEmbeddedItem, RenderState,
 };
 use warpui::event::DispatchedEvent;
 use warpui::units::Pixels;

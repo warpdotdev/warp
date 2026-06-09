@@ -1,14 +1,10 @@
+use warpui::keymap::{EditableBinding, Keystroke, Trigger};
 use warpui::platform::OperatingSystem;
-use warpui::{
-    keymap::{EditableBinding, Keystroke, Trigger},
-    App,
-};
+use warpui::App;
 
-use crate::{
-    terminal,
-    util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke},
-    workspace::WorkspaceAction,
-};
+use crate::terminal;
+use crate::util::bindings::{keybinding_name_to_display_string, trigger_to_keystroke};
+use crate::workspace::WorkspaceAction;
 
 #[test]
 fn test_keybinding_name_to_display_string() {
@@ -73,6 +69,27 @@ fn test_keybinding_name_to_display_string() {
                 keybinding_name_to_display_string("workspace:toggle_resource_center", ctx)
                     .as_deref()
             );
+        });
+    });
+}
+
+#[test]
+fn test_orchestration_cycle_bindings_are_editable() {
+    App::test((), |mut app| async move {
+        app.update(terminal::init);
+
+        app.update(|ctx| {
+            let next = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == "terminal:cycle_next_orchestration_child_agent")
+                .and_then(|binding| trigger_to_keystroke(binding.trigger));
+            let previous = ctx
+                .editable_bindings()
+                .find(|binding| binding.name == "terminal:cycle_previous_orchestration_child_agent")
+                .and_then(|binding| trigger_to_keystroke(binding.trigger));
+
+            assert_eq!(next, Keystroke::parse("ctrl-alt-]").ok());
+            assert_eq!(previous, Keystroke::parse("ctrl-alt-[").ok());
         });
     });
 }

@@ -5,16 +5,17 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::channel::mpsc;
+use futures::{FutureExt as _, StreamExt as _};
+use virtual_fs::{Stub, VirtualFS};
+use warp_util::standardized_path::StandardizedPath;
+use warpui_core::r#async::Timer;
+use warpui_core::{App, ModelContext, ModelHandle};
+
 use crate::repositories::stub_git_repository;
 use crate::repository::{RepositorySubscriber, TrackedRemoteRef};
 use crate::watcher::{DirectoryWatcher, TaskQueue};
 use crate::{CanonicalizedPath, RepoMetadataError, Repository, RepositoryUpdate};
-use futures::channel::mpsc;
-use futures::StreamExt as _;
-use virtual_fs::{Stub, VirtualFS};
-use warp_util::standardized_path::StandardizedPath;
-use warpui::r#async::Timer;
-use warpui::{App, ModelContext, ModelHandle};
 
 #[test]
 fn test_add_repository_success() {
@@ -44,6 +45,63 @@ fn test_add_repository_success() {
             });
         });
     });
+}
+
+#[test]
+fn test_existing_directory_registration_is_enriched_with_external_git_directory() {
+    VirtualFS::test(
+        "enrich_existing_directory_with_external_git_directory",
+        |dirs, mut vfs| {
+            vfs.mkdir("repo/.git/worktrees/worktree").mkdir("worktree");
+
+            let worktree_path = dirs.tests().join("worktree");
+            let external_git_dir = dirs.tests().join("repo/.git/worktrees/worktree");
+            let common_git_dir = dirs.tests().join("repo/.git");
+
+            App::test((), |mut app| async move {
+                let watcher_handle = app.add_model(DirectoryWatcher::new_for_testing);
+                let worktree_path =
+                    StandardizedPath::from_local_canonicalized(&worktree_path).unwrap();
+                let external_git_dir =
+                    StandardizedPath::from_local_canonicalized(&external_git_dir).unwrap();
+
+                let raw_directory_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(worktree_path.clone(), ctx)
+                    })
+                    .unwrap();
+                raw_directory_handle.read(&app, |repository, _ctx| {
+                    assert!(repository.external_git_directory().is_none());
+                });
+
+                let enriched_directory_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory_with_git_dir(
+                            worktree_path.clone(),
+                            Some(external_git_dir.clone()),
+                            ctx,
+                        )
+                    })
+                    .unwrap();
+
+                assert_eq!(raw_directory_handle, enriched_directory_handle);
+                enriched_directory_handle.read(&app, |repository, _ctx| {
+                    assert_eq!(repository.external_git_directory(), Some(&external_git_dir));
+                    assert_eq!(repository.common_git_dir(), common_git_dir);
+                });
+
+                let reused_directory_handle = watcher_handle
+                    .update(&mut app, |watcher, ctx| {
+                        watcher.add_directory(worktree_path, ctx)
+                    })
+                    .unwrap();
+                assert_eq!(enriched_directory_handle, reused_directory_handle);
+                reused_directory_handle.read(&app, |repository, _ctx| {
+                    assert_eq!(repository.external_git_directory(), Some(&external_git_dir));
+                });
+            });
+        },
+    );
 }
 
 #[test]
@@ -375,8 +433,9 @@ async fn wait_for_queue_complete(queue: ModelHandle<TaskQueue>, app: &mut App) {
 
 #[test]
 fn test_is_git_internal_path() {
-    use crate::entry::is_git_internal_path;
     use std::path::Path;
+
+    use crate::entry::is_git_internal_path;
 
     // .git/ internal paths should be detected
     assert!(is_git_internal_path(Path::new("/repo/.git/HEAD")));
@@ -515,7 +574,6 @@ fn test_common_config_routes_to_repos_sharing_common_git_dir() {
 }
 
 #[test]
-#[ignore = "flaky test: CODE-1492"]
 fn test_commit_related_files_excluded_from_update_lists() {
     VirtualFS::test("commit_files_excluded", |dirs, mut vfs| {
         log::info!("Start setting up test vfs");
@@ -560,7 +618,14 @@ fn test_commit_related_files_excluded_from_update_lists() {
             log::info!("Finished setting up watcher");
 
             // Wait for initial scan to complete
-            scan_rx.next().await.expect("Scan should complete");
+            futures::select! {
+                scan = scan_rx.next().fuse() => {
+                    scan.expect("Scan channel closed while waiting for initial repository scan");
+                }
+                _ = futures::FutureExt::fuse(Timer::after(Duration::from_secs(5))) => {
+                    panic!("Timed out waiting for initial repository scan");
+                }
+            }
             log::info!("Initial scan completed");
 
             // Update both a regular file and a commit-related file
@@ -575,52 +640,79 @@ fn test_commit_related_files_excluded_from_update_lists() {
             std::fs::write(&branch_file_path, "def456abc123").expect("Updating branch ref failed");
             log::info!("Wrote files: regular_file.txt, .git/HEAD, .git/refs/heads/main");
 
-            // Receive the update with timeout and retry
-            let update = loop {
+            let update_timeout = Duration::from_secs(5);
+            let timeout = futures::FutureExt::fuse(Timer::after(update_timeout));
+            futures::pin_mut!(timeout);
+            let mut updates = Vec::new();
+
+            loop {
+                if updates
+                    .iter()
+                    .any(|update: &RepositoryUpdate| update.commit_updated)
+                    && updates.iter().any(|update| {
+                        update
+                            .added_or_modified()
+                            .any(|file| file.path == regular_file_path)
+                    })
+                {
+                    break;
+                }
                 futures::select! {
-                    update = futures::FutureExt::fuse(update_rx.next()) => {
+                    update = update_rx.next().fuse() => {
                         match update {
                             Some(update) => {
-                                log::info!("Received update");
-                                break update;
+                                log::info!("Received update: {update:?}");
+                                updates.push(update);
                             }
                             None => {
-                                panic!("Update channel closed unexpectedly");
+                                panic!(
+                                    "Update channel closed while waiting for watcher updates after modifying regular_file.txt, .git/HEAD, and .git/refs/heads/main. Received {} update(s): {updates:#?}",
+                                    updates.len()
+                                );
                             }
                         }
                     }
-                    _ = futures::FutureExt::fuse(Timer::after(Duration::from_secs(5))) => {
-                        log::warn!("Waiting for update timed out after 5s, retrying...");
+                    _ = timeout => {
+                        panic!(
+                            "Timed out after {update_timeout:?} waiting for watcher updates after modifying regular_file.txt, .git/HEAD, and .git/refs/heads/main. Expected at least one update with commit_updated=true and one update containing {}. Received {} update(s): {updates:#?}",
+                            regular_file_path.display(),
+                            updates.len()
+                        );
                     }
                 }
-            };
+            }
 
             // Verify that commit_updated is true
             assert!(
-                update.commit_updated,
+                updates.iter().any(|update| update.commit_updated),
                 "commit_updated should be true when git commit files change"
             );
 
             // Verify that git files are NOT in the added list, but regular files are
-            use crate::TargetFile;
             assert!(
-                update
-                    .contains_added_or_modified(&TargetFile::new(regular_file_path.clone(), false)),
+                updates.iter().any(|update| update
+                    .added_or_modified()
+                    .any(|file| file.path == regular_file_path)),
                 "Regular file should be in added/modified list"
             );
             assert!(
-                !update.contains_added_or_modified(&TargetFile::new(head_file_path.clone(), false)),
+                updates.iter().all(|update| update
+                    .added_or_modified()
+                    .all(|file| file.path != head_file_path)),
                 "Git HEAD file should NOT be in added/modified list"
             );
             assert!(
-                !update
-                    .contains_added_or_modified(&TargetFile::new(branch_file_path.clone(), false)),
+                updates.iter().all(|update| update
+                    .added_or_modified()
+                    .all(|file| file.path != branch_file_path)),
                 "Git branch ref file should NOT be in added/modified list"
             );
 
             // The update should not be considered empty due to commit_updated being true
             assert!(
-                !update.is_empty(),
+                updates
+                    .iter()
+                    .any(|update| update.commit_updated && !update.is_empty()),
                 "Update should not be empty when commit_updated is true"
             );
 

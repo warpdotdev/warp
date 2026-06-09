@@ -1,52 +1,47 @@
 pub mod active_session;
 pub mod command_executor;
 
-use async_channel::Sender;
-pub use command_executor::*;
-
-use anyhow::Result;
-use futures::future::{BoxFuture, Shared};
-use futures::FutureExt;
-use instant::Instant;
-use once_cell::sync::OnceCell;
-use smol_str::SmolStr;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
-use warp_util::path::{
-    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
-    ShellFamily,
-};
 
+use anyhow::Result;
+use async_channel::Sender;
+#[cfg(feature = "local_tty")]
+use command_executor::remote_server_executor::RemoteServerCommandExecutor;
+pub use command_executor::*;
+use futures::future::{BoxFuture, Shared};
+use futures::FutureExt;
+use instant::Instant;
+use once_cell::sync::OnceCell;
+use parking_lot::{Mutex, RwLock};
+use smol_str::SmolStr;
+use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
 use version_compare::Version;
 use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
-use warpui::{platform::OperatingSystem, Entity, ModelContext, SingletonEntity};
+use warp_util::path::{
+    convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
+    ShellFamily,
+};
+use warpui::platform::OperatingSystem;
+use warpui::{Entity, ModelContext, SingletonEntity};
 
+use super::ansi::{BootstrappedValue, InitShellValue, SSHValue};
+use super::terminal_model::{HistoryEntry, SubshellInitializationInfo};
 #[cfg(feature = "local_tty")]
 use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::server::telemetry::{BootstrappingInfo, TelemetryEvent};
-use crate::terminal::event::ExecutedExecutorCommandEvent;
-use crate::terminal::ShellHost;
-use crate::terminal::ShellLaunchData;
-#[cfg(feature = "local_tty")]
-use command_executor::remote_server_executor::RemoteServerCommandExecutor;
-use parking_lot::{Mutex, RwLock};
-
+use crate::terminal::event::{ExecutedExecutorCommandEvent, RemoteServerSetupState};
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::History;
-
-use super::ansi::{BootstrappedValue, InitShellValue, SSHValue};
-use super::terminal_model::{HistoryEntry, SubshellInitializationInfo};
-use crate::terminal::event::RemoteServerSetupState;
+use crate::terminal::{History, ShellHost, ShellLaunchData};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ReadHistoryContentsError {
@@ -188,7 +183,13 @@ impl Sessions {
                 | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
                 | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
                 | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
-                | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
+                | RemoteServerManagerEvent::GetBranchesResponse { .. }
+                | RemoteServerManagerEvent::CommitChainResponse { .. }
+                | RemoteServerManagerEvent::GitPushResponse { .. }
+                | RemoteServerManagerEvent::CreatePrResponse { .. }
+                | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+                | RemoteServerManagerEvent::GetPrInfoResponse { .. }
+                | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,
@@ -1401,9 +1402,11 @@ impl Session {
             .as_deref()
             .map(|path| HashMap::from_iter([("PATH".to_string(), path.to_string())]));
 
+        let escaped_history_file =
+            shell_escape_single_quotes(history_file, self.info.shell.shell_type());
         let output_in_bytes = self
             .execute_command(
-                format!("cat {history_file}").as_str(),
+                format!("cat '{escaped_history_file}'").as_str(),
                 None,
                 env_vars,
                 ExecuteCommandOptions::default(),
@@ -1585,7 +1588,8 @@ pub fn get_local_hostname() -> Result<String> {
 
 #[cfg(test)]
 pub mod testing {
-    use super::{command_executor::testing::TestCommandExecutor, *};
+    use super::command_executor::testing::TestCommandExecutor;
+    use super::*;
 
     /// Builder methods for constructing `SessionInfo` in tests.
     impl SessionInfo {

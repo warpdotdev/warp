@@ -7,10 +7,10 @@
 use std::ops::Deref;
 
 use settings::PrivatePreferences;
-use warpui::SingletonEntity;
+use warpui_core::SingletonEntity;
 use warpui_extras::user_preferences::UserPreferences;
 
-/// An extension trait on [`warpui::AppContext`] for accessing private user
+/// An extension trait on [`warpui_core::AppContext`] for accessing private user
 /// preferences.
 ///
 /// Private settings are always stored in the platform-native store (e.g.
@@ -24,7 +24,7 @@ pub trait GetUserPreferences {
     fn private_user_preferences(&self) -> &dyn UserPreferences;
 }
 
-impl GetUserPreferences for warpui::AppContext {
+impl GetUserPreferences for warpui_core::AppContext {
     fn private_user_preferences(&self) -> &dyn UserPreferences {
         <PrivatePreferences as SingletonEntity>::as_ref(self).deref()
     }

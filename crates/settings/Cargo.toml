@@ -15,7 +15,7 @@ serde.workspace = true
 serde_json.workspace = true
 settings_value = { workspace = true, features = ["derive"] }
 warp_features.workspace = true
-warpui = { workspace = true, features = ["settings_value"] }
+warpui_core = { workspace = true, features = ["settings_value"] }
 warpui_extras = { workspace = true, features = ["default"] }
 
 [dev-dependencies]

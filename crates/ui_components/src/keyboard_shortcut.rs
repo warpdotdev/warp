@@ -1,7 +1,10 @@
 use std::borrow::Cow;
 
-use warp_core::ui::{appearance::Appearance, icons::Icon};
-use warpui::{keymap::Keystroke, platform::OperatingSystem, prelude::*};
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::icons::Icon;
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::OperatingSystem;
+use warpui_core::prelude::*;
 
 use crate::Component;
 

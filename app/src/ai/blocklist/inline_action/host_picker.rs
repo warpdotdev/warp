@@ -7,6 +7,7 @@
 //! then connected worker hosts, then the user's most recent custom slug,
 //! then a "Custom host…" entry.
 
+use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Expanded, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
@@ -16,8 +17,6 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
-
-use warp_core::ui::theme::Fill;
 
 use crate::ai::blocklist::inline_action::orchestration_controls::{
     self as oc, ORCHESTRATION_PICKER_BORDER_WIDTH, ORCHESTRATION_PICKER_FONT_SIZE,
@@ -423,8 +422,8 @@ pub(crate) fn build_menu_items(
     default_host: Option<&str>,
     recent_host: Option<&str>,
     connected_hosts: &[String],
-) -> Vec<MenuItem<DropdownAction<InternalAction>>> {
-    let mut items: Vec<MenuItem<DropdownAction<InternalAction>>> = Vec::new();
+) -> Vec<MenuItem<DropdownAction>> {
+    let mut items: Vec<MenuItem<DropdownAction>> = Vec::new();
     let mut known_slugs: Vec<String> = Vec::new();
 
     if let Some(slug) = default_host {
@@ -473,7 +472,7 @@ pub(crate) fn build_menu_items(
     }
     items.push(MenuItem::Item(
         MenuItemFields::new(CUSTOM_HOST_LABEL).with_on_select_action(
-            DropdownAction::SelectActionAndClose(InternalAction::EnterCustomMode),
+            DropdownAction::select_action_and_close(InternalAction::EnterCustomMode),
         ),
     ));
 
@@ -501,10 +500,10 @@ fn menu_item_for_known(
     slug: &str,
     badge: Option<&str>,
     action: InternalAction,
-) -> MenuItem<DropdownAction<InternalAction>> {
+) -> MenuItem<DropdownAction> {
     MenuItem::Item(
         MenuItemFields::new(format_known_label(slug, badge))
-            .with_on_select_action(DropdownAction::SelectActionAndClose(action)),
+            .with_on_select_action(DropdownAction::select_action_and_close(action)),
     )
 }
 

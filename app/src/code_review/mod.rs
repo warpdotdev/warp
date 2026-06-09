@@ -6,6 +6,7 @@ pub mod diff_size_limits;
 pub mod diff_state;
 pub mod editor_state;
 pub(crate) mod find_model;
+pub(crate) mod git_actions;
 pub(crate) mod git_dialog;
 pub mod git_status_update;
 mod hidden_lines;
@@ -22,15 +23,15 @@ pub(crate) mod diff_selector;
 pub(crate) mod file_invalidation_queue;
 
 use code_review_view::CodeReviewAction;
+use warpui::keymap::{EditableBinding, FixedBinding};
 use warpui::{
-    id,
-    keymap::{EditableBinding, FixedBinding},
-    AppContext, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId,
+    id, AppContext, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId,
 };
 
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::terminal::{view::TerminalView, CLIAgent};
+use crate::terminal::view::TerminalView;
+use crate::terminal::CLIAgent;
 use crate::util::bindings::CustomAction;
 
 /// Arguments needed to open or toggle the code review panel.

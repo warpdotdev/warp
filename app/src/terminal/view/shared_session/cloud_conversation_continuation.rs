@@ -1,3 +1,6 @@
+use warp_cli::agent::Harness;
+use warpui::{AppContext, EntityId, SingletonEntity};
+
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
@@ -12,8 +15,6 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, ServerGuestSubject};
 use crate::drive::sharing::SharingAccessLevel;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use warp_cli::agent::Harness;
-use warpui::{AppContext, EntityId, SingletonEntity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TombstoneCta {
@@ -58,6 +59,9 @@ pub(in crate::terminal::view) fn resolve_cloud_conversation_continuation_ui_stat
     let Some(task) = AgentConversationsModel::as_ref(app).get_task_data(&task_id) else {
         return Err(CloudConversationContinuationError::MissingTask);
     };
+    if task.blocks_cloud_followups() {
+        return Ok(CloudConversationContinuationUiState::Tombstone { cta: None });
+    }
     if task.has_active_execution() {
         return Err(CloudConversationContinuationError::ActiveTaskExecution);
     }

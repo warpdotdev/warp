@@ -5,26 +5,22 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use warp_core::ui::appearance::Appearance;
-use warpui::{
-    elements::{
-        Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow,
-        Empty, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-        Shrinkable, Text,
-    },
-    fonts::{Properties, Weight},
-    Element,
+use warpui::elements::{
+    Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Empty,
+    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
+    Text,
 };
+use warpui::fonts::{Properties, Weight};
+use warpui::Element;
 
-use crate::{
-    settings_view::billing_and_usage_page_v2::{
-        AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
-        BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
-    },
-    ui_components::blended_colors,
-    workspaces::workspace::{
-        AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-        BillingCycleUsageEntry,
-    },
+use crate::settings_view::billing_and_usage_page_v2::{
+    AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
+    BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
+};
+use crate::ui_components::blended_colors;
+use crate::workspaces::workspace::{
+    AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
+    BillingCycleUsageEntry,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -204,7 +200,7 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
 /// "Is there any data in `entries` that's not my own?"
 pub fn has_non_viewer_data(entries: &[BillingCycleUsageEntry], viewer_uid: Option<&str>) -> bool {
     entries.iter().any(|e| match &e.subject_type {
-        AiCreditsUsageAndCostSubjectType::Team => true,
+        AiCreditsUsageAndCostSubjectType::Team => e.credits_used > 0,
         _ => match (e.subject_uid.as_deref(), viewer_uid) {
             (Some(uid), Some(viewer)) => uid != viewer,
             // Unknown subject — conservatively treat as non-viewer.

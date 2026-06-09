@@ -1,5 +1,6 @@
-use super::*;
 use std::ops::Add;
+
+use super::*;
 
 #[test]
 fn test_extend_and_push_tree() {
@@ -16,7 +17,8 @@ fn test_extend_and_push_tree() {
 #[test]
 fn test_random() {
     for seed in 0..100 {
-        use rand::{distributions, prelude::*};
+        use rand::distributions;
+        use rand::prelude::*;
 
         let rng = &mut StdRng::seed_from_u64(seed);
 

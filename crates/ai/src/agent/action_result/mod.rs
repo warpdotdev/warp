@@ -1,6 +1,8 @@
 mod convert;
 
-use std::{fmt::Display, ops::Range, time::SystemTime};
+use std::fmt::Display;
+use std::ops::Range;
+use std::time::SystemTime;
 
 use chrono::{DateTime, Local};
 use itertools::Itertools as _;
@@ -9,10 +11,8 @@ use warp_core::command::ExitCode;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_terminal::model::BlockId;
 
-use crate::{
-    agent::FileLocations,
-    document::{AIDocumentId, AIDocumentVersion},
-};
+use crate::agent::FileLocations;
+use crate::document::{AIDocumentId, AIDocumentVersion};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AIAgentActionResultType {
@@ -1208,6 +1208,9 @@ impl Display for FetchConversationResult {
     }
 }
 
+// TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 result support once
+// old preview orchestration history no longer needs parse/display/result compatibility.
+// Linear issue: QUALITY-788.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum StartAgentResult {
     Success {

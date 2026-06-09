@@ -3,14 +3,9 @@ pub mod uniforms;
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
-use crate::rendering::OnGPUDeviceSelected;
-use crate::windowing;
-use crate::{r#async::block_on, rendering::GPUPowerPreference};
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -22,6 +17,10 @@ use wgpu::{
     Adapter, Backend, CompositeAlphaMode, CurrentSurfaceTexture, Device, DeviceType, PresentMode,
     Queue, Surface, SurfaceConfiguration,
 };
+
+use crate::r#async::block_on;
+use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
+use crate::windowing;
 
 /// A mostly-arbitrary value to use as the height/width of a surface when
 /// creating a default surface configuration.
@@ -521,6 +520,7 @@ pub fn adapter_has_rendering_offset_bug(adapter_info: &wgpu::AdapterInfo) -> boo
     // Known affected Intel integrated GPU models. This list is based on user reports from
     // https://github.com/warpdotdev/Warp/issues/6120.
     let affected_models = [
+        "Intel(R) HD Graphics 2500",
         "Intel(R) HD Graphics 4000",
         "Intel(R) HD Graphics 4400",
         "Intel(R) HD Graphics 4600",

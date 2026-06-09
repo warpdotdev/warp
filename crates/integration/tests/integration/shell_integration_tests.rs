@@ -48,6 +48,8 @@ integration_tests! {
     test_warp_honors_user_title_bash,
     // Tests zsh-specific behavior.
     test_warp_honors_user_title_zsh,
+    // Tests OSC 7 updates the block's working directory on bash and zsh.
+    test_osc7_updates_current_working_directory,
     // Tests shell-specific "autocd" behavior.
     test_completions_with_autocd,
     // Tests bootstrap reports completable executables.
@@ -98,6 +100,8 @@ integration_tests! {
     // Tests of custom prompt behavior.
     test_copy_prompt_from_block_honor_ps1_enabled,
     test_copy_prompt_from_input_honor_ps1_enabled,
+    // Tests zsh-specific right-prompt behavior in Warp prompt mode.
+    test_warp_prompt_unsets_zsh_rprompt,
 
     // Disabled due to flakiness on CI.
     #[ignore]

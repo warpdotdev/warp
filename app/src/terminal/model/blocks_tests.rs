@@ -1,25 +1,22 @@
 use float_cmp::{approx_eq, assert_approx_eq};
 use warp_core::features::FeatureFlag;
+use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use warpui::units::IntoLines;
-use warpui::{elements::DEFAULT_UI_LINE_HEIGHT_RATIO, App};
+use warpui::App;
 
 use super::*;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryOrigin, AgentViewState,
 };
+use crate::settings::TerminalSpacing;
+use crate::terminal::event::Event;
+use crate::terminal::model::ansi::Handler;
 use crate::terminal::model::block::AgentInteractionMetadata;
 use crate::terminal::model::test_utils;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
 use crate::terminal::view::{InlineBannerItem, InlineBannerType};
-use crate::terminal::BlockListSettings;
-use crate::{
-    settings::TerminalSpacing,
-    terminal::{
-        event::Event,
-        model::{ansi::Handler, test_utils::TestBlockListBuilder},
-        SizeUpdateReason,
-    },
-};
+use crate::terminal::{BlockListSettings, SizeUpdateReason};
 
 pub fn input_string(block_list: &mut BlockList, input: &str) {
     for c in input.chars() {
@@ -1940,12 +1937,14 @@ pub fn test_emits_after_block_completed_event() {
     block_list.start_active_block_for_in_band_command();
     block_list.preexec(PreexecValue {
         command: "warp_run_generator_command 1234 foo".to_owned(),
+        session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
 
     block_list.start_active_block();
     block_list.preexec(PreexecValue {
         command: "some user command".to_owned(),
+        session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
 
@@ -2011,6 +2010,7 @@ fn test_background_blocks_finished() {
     block_list.start_active_block_for_in_band_command();
     block_list.preexec(PreexecValue {
         command: "warp_run_generator_command abc".to_owned(),
+        session_id: None,
     });
     command_finished_and_precmd(&mut block_list);
 

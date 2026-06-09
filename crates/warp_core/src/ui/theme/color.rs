@@ -3,21 +3,18 @@
 //! These colors can be further understood here:
 //! https://docs.google.com/document/d/1YMovEoXsPRziPk99a4i9LZNEKGm_rjEyzhcHsFkT3ac/edit.
 
+use getset::Getters;
+use serde::{Deserialize, Serialize};
+use warpui_core::color::ColorU;
+
 use self::internal_colors::{
     accent_overlay_2, fg_overlay_1, fg_overlay_2, fg_overlay_3, neutral_1, neutral_2, neutral_3,
     neutral_4,
 };
-
 use super::{AnsiColor, AnsiColorIdentifier, Fill, TerminalColors, WarpTheme};
-
-use crate::ui::color::{
-    blend::Blend,
-    contrast::{pick_best_foreground_color, MinimumAllowedContrast},
-    Opacity,
-};
-use getset::Getters;
-use serde::{Deserialize, Serialize};
-use warpui::color::ColorU;
+use crate::ui::color::blend::Blend;
+use crate::ui::color::contrast::{pick_best_foreground_color, MinimumAllowedContrast};
+use crate::ui::color::Opacity;
 
 const BLOCK_SELECTION_OPACITY: Opacity = 10;
 
@@ -429,7 +426,7 @@ impl WarpTheme {
 /// Internal color system tokens, defined in "Colors" [Figma project](https://www.figma.com/design/dnvTdLbfFaosFSP00F30S0/Colors).
 /// Should not be used directly outside of reusable components. Use color methods on `WarpTheme` instead.
 pub mod internal_colors {
-    use warpui::color::ColorU;
+    use warpui_core::color::ColorU;
 
     use super::{Fill, WarpTheme};
     use crate::ui::color::blend::Blend;

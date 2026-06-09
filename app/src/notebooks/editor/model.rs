@@ -1,68 +1,56 @@
-use crate::notebooks::file::MarkdownDisplayMode;
-use base64::{prelude::BASE64_STANDARD, Engine as _};
-use std::{
-    any::Any,
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    ops::Range,
-    time::Duration,
-};
+use std::any::Any;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::time::Duration;
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine as _;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedText;
 use mermaid_to_svg::MermaidTheme;
 use num_traits::SaturatingSub;
 use regex::Regex;
+use string_offset::CharOffset;
 use url::Url;
 use vec1::{vec1, Vec1};
+use warp_core::features::FeatureFlag;
+use warp_core::r#async::debounce;
+use warp_core::semantic_selection::SemanticSelection;
+use warp_editor::content::buffer::{
+    AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
+    SelectionOffsets, ShouldAutoscroll,
+};
+use warp_editor::content::selection_model::BufferSelectionModel;
+use warp_editor::content::text::{
+    BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, BufferTextStyle, CodeBlockType,
+    IndentBehavior, IndentUnit, TextStyles, TextStylesWithMetadata,
+};
+use warp_editor::model::{BufferUpdateWrapper, CoreEditorModel, RichTextEditorModel};
+use warp_editor::render::model::{
+    AutoScrollMode, BlockItem, RenderEvent, RenderState, RichTextStyles, StyleUpdateAction,
+};
+use warp_editor::search::Searcher;
+use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
+use warpui::clipboard::ClipboardContent;
+use warpui::elements::ListIndentLevel;
 use warpui::{
-    accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole},
-    clipboard::ClipboardContent,
     AppContext, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, WindowId,
 };
 
-use crate::{
-    cloud_object::model::persistence::{CloudModel, CloudModelEvent},
-    debounce::debounce,
-    editor::InteractionState,
-    notebooks::telemetry::BlockInfo,
-};
-use crate::{
-    notebooks::editor::interaction_state_model::InteractionStateModelEvent,
-    terminal::ShellLaunchData,
-};
-use string_offset::CharOffset;
-use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
-use warp_editor::{
-    content::{buffer::ShouldAutoscroll, selection_model::BufferSelectionModel},
-    model::BufferUpdateWrapper,
-    render::model::{BlockItem, StyleUpdateAction},
-};
-use warp_editor::{
-    content::{
-        buffer::{
-            AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction,
-            EditOrigin, SelectionOffsets,
-        },
-        text::{
-            BlockHeaderSize, BlockType, BufferBlockItem, BufferBlockStyle, BufferTextStyle,
-            CodeBlockType, IndentBehavior, IndentUnit, TextStyles, TextStylesWithMetadata,
-        },
-    },
-    model::{CoreEditorModel, RichTextEditorModel},
-    render::model::{AutoScrollMode, RenderEvent, RenderState, RichTextStyles},
-    search::Searcher,
-    selection::{SelectionMode, SelectionModel, TextDirection, TextUnit},
-};
-use warpui::elements::ListIndentLevel;
-
-use super::{
-    super::telemetry::SelectionMode as TelemetrySelectionMode, embedding_model::NotebookEmbed,
-    interaction_state_model::InteractionStateModel, notebook_command::NotebookCommand,
-    NotebookWorkflow,
-};
+use super::super::telemetry::SelectionMode as TelemetrySelectionMode;
+use super::embedding_model::NotebookEmbed;
+use super::interaction_state_model::InteractionStateModel;
+use super::notebook_command::NotebookCommand;
+use super::NotebookWorkflow;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::editor::InteractionState;
+use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
+use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::telemetry::BlockInfo;
+use crate::terminal::ShellLaunchData;
 
 const DEBOUNCED_RESIZE_PERIOD: Duration = Duration::from_millis(5);
 

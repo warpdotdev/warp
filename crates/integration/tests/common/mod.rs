@@ -1,7 +1,8 @@
-use command::blocking::Command;
 use std::env;
 use std::process::Stdio;
-use warpui::integration::RERUN_EXIT_CODE;
+
+use command::blocking::Command;
+use warpui_core::integration::RERUN_EXIT_CODE;
 
 const MAX_TEST_RUNS: usize = 10;
 

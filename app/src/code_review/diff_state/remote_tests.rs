@@ -1,17 +1,18 @@
 use std::sync::{Arc, Mutex};
 
-use warp_core::SessionId;
+use remote_server::manager::RemoteServerManagerEvent;
 use warp_util::remote_path::RemotePath;
 
+use super::InternalRemoteDiffState;
+use crate::auth::AuthStateProvider;
 use crate::code_review::diff_size_limits::DiffSize;
 use crate::code_review::diff_state::{
     DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
     DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent, GitDiffData,
     GitDiffWithBaseContent, GitFileStatus, RemoteDiffStateModel,
 };
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::util::git::{Commit, PrInfo};
-
-use super::InternalRemoteDiffState;
 
 impl RemoteDiffStateModel {
     fn new_for_test(
@@ -26,9 +27,9 @@ impl RemoteDiffStateModel {
                     .expect("test repo path should be valid and absolute"),
             ),
             mode,
-            session_id: SessionId::default(),
             state,
             metadata,
+            tracked_diff_load_start_time: None,
         }
     }
 }
@@ -39,6 +40,7 @@ fn empty_metadata(branch: &str) -> DiffMetadata {
         current_branch_name: branch.to_string(),
         against_head: DiffMetadataAgainstBase {
             aggregate_stats: DiffStats::default(),
+            files: vec![],
         },
         against_base_branch: None,
         has_head_commit: true,
@@ -114,6 +116,7 @@ fn test_metadata(branch: &str) -> DiffMetadata {
                 total_additions: 5,
                 total_deletions: 2,
             },
+            files: vec![],
         },
         against_base_branch: None,
         has_head_commit: true,
@@ -123,15 +126,23 @@ fn test_metadata(branch: &str) -> DiffMetadata {
             files_changed: 1,
             additions: 5,
             deletions: 2,
+            files: vec![],
         }],
         upstream_ref: Some("origin/feature".to_string()),
         pr_info: Some(PrInfo {
             number: 42,
             url: "https://github.com/test/repo/pull/42".to_string(),
+            state: String::new(),
+            draft: false,
+            base_branch: String::new(),
         }),
     }
 }
 
+fn initialize_test_app(app: &mut warpui::App) {
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
+}
 #[test]
 fn apply_snapshot_loaded_with_diffs() {
     warpui::App::test((), |mut app| async move {
@@ -158,6 +169,59 @@ fn apply_snapshot_loaded_with_diffs() {
 }
 
 #[test]
+fn get_committed_branch_files_response_emits_domain_files() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        {
+            let emitted = emitted.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                    if let DiffStateModelEvent::BranchCommittedFilesReceived(files) = event {
+                        emitted
+                            .lock()
+                            .expect("emitted mutex should not be poisoned")
+                            .push(files.clone());
+                    }
+                });
+            });
+        }
+
+        // Success: proto entries are converted to domain entries and emitted.
+        let proto_files = vec![remote_server::proto::FileChangeEntry {
+            path: "src/main.rs".to_string(),
+            additions: 3,
+            deletions: 1,
+        }];
+        handle.update(&mut app, |m, ctx| {
+            m.handle_get_committed_branch_files_response(&Ok(proto_files), ctx);
+        });
+
+        // Error: an empty list is emitted so the dialog shows an empty box
+        // rather than stale data.
+        handle.update(&mut app, |m, ctx| {
+            m.handle_get_committed_branch_files_response(&Err("boom".to_string()), ctx);
+        });
+
+        let emitted = emitted
+            .lock()
+            .expect("emitted mutex should not be poisoned");
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(emitted[0].len(), 1);
+        assert_eq!(emitted[0][0].path, "src/main.rs");
+        assert_eq!(emitted[0][0].additions, 3);
+        assert_eq!(emitted[0][0].deletions, 1);
+        assert!(emitted[1].is_empty());
+    });
+}
+
+#[test]
 fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
     warpui::App::test((), |mut app| async move {
         let handle = app.add_model(|_ctx| {
@@ -172,7 +236,10 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
             let emitted_content = emitted_content.clone();
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
-                    if let DiffStateModelEvent::NewDiffsComputed(Some(diffs)) = event {
+                    if let DiffStateModelEvent::NewDiffsComputed {
+                        diffs: Some(diffs), ..
+                    } = event
+                    {
                         emitted_content
                             .lock()
                             .expect("emitted content mutex should not be poisoned")
@@ -212,6 +279,7 @@ fn apply_snapshot_loaded_preserves_content_at_base_in_event() {
 #[test]
 fn apply_snapshot_loaded_without_diffs_becomes_error() {
     warpui::App::test((), |mut app| async move {
+        initialize_test_app(&mut app);
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -252,6 +320,7 @@ fn apply_snapshot_not_in_repository() {
 #[test]
 fn apply_snapshot_error_stores_message() {
     warpui::App::test((), |mut app| async move {
+        initialize_test_app(&mut app);
         let handle = app.add_model(|_ctx| {
             RemoteDiffStateModel::new_for_test(
                 DiffMode::Head,
@@ -451,7 +520,10 @@ fn apply_snapshot_emits_event_with_repo_relative_paths() {
             let emitted_paths = emitted_paths.clone();
             app.update(|ctx| {
                 ctx.subscribe_to_model(&handle, move |_, event, _| {
-                    if let DiffStateModelEvent::NewDiffsComputed(Some(diffs)) = event {
+                    if let DiffStateModelEvent::NewDiffsComputed {
+                        diffs: Some(diffs), ..
+                    } = event
+                    {
                         emitted_paths
                             .lock()
                             .expect("emitted paths mutex should not be poisoned")
@@ -666,7 +738,6 @@ fn read_api_with_metadata() {
     assert_eq!(m.unpushed_commits().len(), 1);
     assert_eq!(m.upstream_ref(), Some("origin/feature"));
     assert!(m.upstream_differs_from_main());
-    assert_eq!(m.pr_info().expect("pr info should be present").number, 42);
     assert!(m.has_head());
     assert_eq!(
         m.get_uncommitted_stats()
@@ -686,7 +757,6 @@ fn read_api_defaults_without_metadata() {
     assert!(m.unpushed_commits().is_empty());
     assert!(m.upstream_ref().is_none());
     assert!(!m.upstream_differs_from_main());
-    assert!(m.pr_info().is_none());
     assert!(!m.has_head());
     assert!(m.get_uncommitted_stats().is_none());
 }
@@ -761,4 +831,93 @@ fn empty_branch_names_become_none() {
     );
     assert_eq!(m.get_main_branch_name(), None);
     assert_eq!(m.get_current_branch_name(), None);
+}
+
+#[test]
+fn host_disconnected_for_matching_host_transitions_to_disconnected() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let connection_lost_count = Arc::new(Mutex::new(0));
+        {
+            let connection_lost_count = connection_lost_count.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                    if matches!(event, DiffStateModelEvent::ConnectionLost) {
+                        *connection_lost_count
+                            .lock()
+                            .expect("connection lost count mutex should not be poisoned") += 1;
+                    }
+                });
+            });
+        }
+
+        let event = RemoteServerManagerEvent::HostDisconnected {
+            host_id: remote_server::HostId::new("test-host".to_string()),
+        };
+        handle.update(&mut app, |m, ctx| m.handle_manager_event(&event, ctx));
+
+        handle.read(&app, |m, _| {
+            assert!(matches!(m.get(), DiffState::Disconnected));
+        });
+        assert_eq!(
+            *connection_lost_count
+                .lock()
+                .expect("connection lost count mutex should not be poisoned"),
+            1
+        );
+    });
+}
+
+#[test]
+fn host_disconnected_for_other_host_is_ignored() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let event = RemoteServerManagerEvent::HostDisconnected {
+            host_id: remote_server::HostId::new("other-host".to_string()),
+        };
+        handle.update(&mut app, |m, ctx| m.handle_manager_event(&event, ctx));
+
+        handle.read(&app, |m, _| {
+            assert!(matches!(m.get(), DiffState::Loading));
+        });
+    });
+}
+
+#[test]
+fn session_disconnected_is_ignored_by_session_agnostic_model() {
+    // Per-session lifecycle events are no longer the model's concern; the
+    // manager picks a connected client at RPC dispatch time and only
+    // host-level connect/disconnect drive state transitions.
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let event = RemoteServerManagerEvent::SessionDisconnected {
+            session_id: warp_core::SessionId::default(),
+            host_id: remote_server::HostId::new("test-host".to_string()),
+            exit_status: None,
+            was_reconnect_attempt: false,
+        };
+        handle.update(&mut app, |m, ctx| m.handle_manager_event(&event, ctx));
+
+        handle.read(&app, |m, _| {
+            assert!(matches!(m.get(), DiffState::Loading));
+        });
+    });
 }

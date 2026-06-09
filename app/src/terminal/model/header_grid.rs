@@ -1,31 +1,27 @@
 //! This module defines HeaderGrid, a struct which manages the prompt and command grid's within
 //! Warp. This struct is abstracted away from Block, for the purposes of enabling same-line prompt,
 //! utilizing a combined prompt/command grid, with helper methods to expose the prompt and command.
-use std::{cmp::max, io};
+use std::cmp::max;
+use std::io;
 
-use super::{
-    grid::{grid_handler::PerformResetGridChecks, Dimensions as _},
-    selection::ScrollDelta,
-};
 use instant::Instant;
 use pathfinder_color::ColorU;
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::units::{IntoLines as _, Lines};
 
+use super::ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor};
+use super::block::{BlockGridPoint, BlockSize};
+use super::blockgrid::BlockGrid;
+use super::bootstrap::BootstrapStage;
+use super::find::RegexDFAs;
+use super::grid::grid_handler::{PerformResetGridChecks, RegexIter};
+use super::grid::{Cursor, Dimensions as _, RespectDisplayedOutput};
+use super::index::{Point, VisibleRow};
+use super::selection::ScrollDelta;
+use super::{ObfuscateSecrets, RespectObfuscatedSecrets};
 use crate::terminal::event::Event;
-
-use super::{
-    ansi::{self, Attr, Handler, PrecmdValue, PreexecValue, Processor},
-    block::{BlockGridPoint, BlockSize},
-    blockgrid::BlockGrid,
-    bootstrap::BootstrapStage,
-    find::RegexDFAs,
-    grid::grid_handler::RegexIter,
-    grid::{Cursor, RespectDisplayedOutput},
-    index::{Point, VisibleRow},
-    ObfuscateSecrets, RespectObfuscatedSecrets,
-};
-use crate::terminal::{event_listener::ChannelEventListener, SizeInfo};
-use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use crate::terminal::event_listener::ChannelEventListener;
+use crate::terminal::SizeInfo;
 
 macro_rules! delegate {
     ($self:ident.$method:ident( $( $arg:expr ),* )) => {

@@ -5,7 +5,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use clap::Args;
-
 use jaq_all::data::{self, DataKind};
 use jaq_all::load::FileReportsDisp;
 

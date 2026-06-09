@@ -1,4 +1,5 @@
-use std::{fmt, path::PathBuf};
+use std::fmt;
+use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 

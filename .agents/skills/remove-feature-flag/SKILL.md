@@ -116,7 +116,7 @@ After removing the flag:
 
 ```bash
 # Format and lint
-cargo fmt
+./script/format
 cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 
 # Run tests

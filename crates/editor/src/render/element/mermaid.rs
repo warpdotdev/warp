@@ -1,22 +1,16 @@
 use std::time::Duration;
 
-use warpui::{
-    AppContext, Element, SizeConstraint,
-    elements::{Align, CacheOption, CornerRadius, Empty, Image, Radius, Text},
-    geometry::vector::vec2f,
-};
-
-use crate::{
-    editor::RunnableCommandModel,
-    extract_block,
-    render::{
-        BLOCK_FOOTER_HEIGHT,
-        element::paint::{CursorData, CursorDisplayType},
-        model::{BlockItem, RenderState, bounds, viewport::ViewportItem},
-    },
-};
+use warpui_core::elements::{Align, CacheOption, CornerRadius, Empty, Image, Radius, Text};
+use warpui_core::geometry::vector::vec2f;
+use warpui_core::{AppContext, Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
+use crate::editor::RunnableCommandModel;
+use crate::extract_block;
+use crate::render::BLOCK_FOOTER_HEIGHT;
+use crate::render::element::paint::{CursorData, CursorDisplayType};
+use crate::render::model::viewport::ViewportItem;
+use crate::render::model::{BlockItem, RenderState, bounds};
 const MERMAID_RENDER_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct RenderableMermaidDiagram {
@@ -49,7 +43,12 @@ impl RenderableBlock for RenderableMermaidDiagram {
         &self.viewport_item
     }
 
-    fn layout(&mut self, model: &RenderState, ctx: &mut warpui::LayoutContext, app: &AppContext) {
+    fn layout(
+        &mut self,
+        model: &RenderState,
+        ctx: &mut warpui_core::LayoutContext,
+        app: &AppContext,
+    ) {
         let content = model.content();
         let (asset_source, config) = extract_block!(
             self.viewport_item,
@@ -166,7 +165,9 @@ impl RenderableBlock for RenderableMermaidDiagram {
                 model.styles(),
             );
         }
-        ctx.paint.scene.start_layer(warpui::ClipBounds::ActiveLayer);
+        ctx.paint
+            .scene
+            .start_layer(warpui_core::ClipBounds::ActiveLayer);
         let button_origin = content_rect.lower_right()
             - vec2f(
                 self.footer.size().expect("Footer should be laid out").x(),
@@ -176,7 +177,11 @@ impl RenderableBlock for RenderableMermaidDiagram {
         ctx.paint.scene.stop_layer();
     }
 
-    fn after_layout(&mut self, ctx: &mut warpui::AfterLayoutContext, app: &warpui::AppContext) {
+    fn after_layout(
+        &mut self,
+        ctx: &mut warpui_core::AfterLayoutContext,
+        app: &warpui_core::AppContext,
+    ) {
         if let Some(ref mut image_element) = self.image_element {
             image_element.after_layout(ctx, app);
         }
@@ -186,8 +191,8 @@ impl RenderableBlock for RenderableMermaidDiagram {
     fn dispatch_event(
         &mut self,
         _model: &RenderState,
-        event: &warpui::event::DispatchedEvent,
-        ctx: &mut warpui::EventContext,
+        event: &warpui_core::event::DispatchedEvent,
+        ctx: &mut warpui_core::EventContext,
         app: &AppContext,
     ) -> bool {
         self.footer.dispatch_event(event, ctx, app)

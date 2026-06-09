@@ -3,14 +3,15 @@ mod data_source;
 mod search_item;
 pub(super) mod view;
 
-pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
-pub use data_source::*;
-pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
-
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 
 use ai::skills::SkillReference;
+pub use cloud_mode_v2_view::{CloudModeV2SlashCommandView, Section as CloudModeV2Section};
+pub use data_source::*;
+pub use view::{CloseReason, InlineSlashCommandView, SlashCommandsEvent};
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
@@ -33,7 +34,10 @@ use crate::ai::blocklist::agent_view::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, SlashCommandRequest};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryModel,
+    QueuedQueryOrigin, SlashCommandRequest,
+};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
@@ -46,6 +50,7 @@ use crate::tab::SelectedTabColor;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::{InlineMenuAction, InlineMenuType};
 use crate::terminal::input::message_bar::Message;
+use crate::terminal::input::models::InlineModelSelectorTab;
 use crate::terminal::input::slash_command_model::{
     SlashCommandEntryState, UpdatedSlashCommandModel,
 };
@@ -60,8 +65,6 @@ use crate::view_components::DismissibleToast;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::TelemetryEvent;
-#[cfg(not(target_family = "wasm"))]
-use warp_cli::agent::Harness;
 
 #[derive(Debug, Clone)]
 pub enum AcceptSlashCommandOrSavedPrompt {
@@ -255,7 +258,7 @@ impl Input {
                 if detected_command.command.auto_enter_ai_mode
                     || !FeatureFlag::AgentView.is_enabled()
                 {
-                    self.enter_ai_mode(ctx);
+                    self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
                 }
 
                 if detected_command.command.name == commands::EDIT.name
@@ -282,7 +285,7 @@ impl Input {
                 }
 
                 // Skill commands always require AI mode
-                self.enter_ai_mode(ctx);
+                self.enter_ai_mode(Some(InputTypeAutoDetectionSource::SlashCommand), ctx);
             }
         }
     }
@@ -806,8 +809,22 @@ impl Input {
                         footer.open_v2_model_selector(ctx);
                     });
                     return true;
+                } else if trigger.is_keybinding() {
+                    // A keybinding may carry a pre-existing prompt in the buffer; open
+                    // like the model chip so the prompt is parked for search and
+                    // restored when a model is selected (or the selector is dismissed).
+                    self.open_model_selector_and_snapshot_prompt(
+                        InlineModelSelectorTab::BaseAgent,
+                        ctx,
+                    );
                 } else {
-                    self.open_model_selector(ctx);
+                    // Typed `/model`: the buffer holds the consumable command text.
+                    // Just switch into the model selector; `set_mode` snapshots the
+                    // buffer so it's restored on dismiss but cleared on selection.
+                    self.suggestions_mode_model.update(ctx, |model, ctx| {
+                        model.set_mode(InputSuggestionsMode::ModelSelector, ctx);
+                    });
+                    ctx.notify();
                 }
             }
             profiles if command.name == commands::PROFILE.name => {
@@ -898,9 +915,7 @@ impl Input {
             }
             #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
             move_to_cloud if command.name == commands::MOVE_TO_CLOUD.name => {
-                if !AISettings::as_ref(ctx)
-                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, ctx)
-                {
+                if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
                     return false;
                 }
                 let prompt = argument
@@ -921,10 +936,27 @@ impl Input {
                             entry_point: HandoffEntryPoint::SlashCommand,
                         },
                     );
+                } else if self.source_conversation_has_content(ctx) {
+                    // Empty `/handoff` with a non-empty source conversation:
+                    // dispatch the immediate empty-prompt handoff (continue /
+                    // snapshot rehydration); the workspace synthesizes the
+                    // launch and collects attachments.
+                    ctx.dispatch_typed_action_deferred(
+                        WorkspaceAction::OpenLocalToCloudHandoffPane {
+                            launch: None,
+                            environment_id: None,
+                            entry_point: HandoffEntryPoint::SlashCommand,
+                        },
+                    );
                 } else {
-                    // `/handoff` with no query enters `&` compose mode,
-                    // same as the footer chip.
-                    self.activate_cloud_handoff_compose(HandoffEntryPoint::SlashCommand, ctx);
+                    // Empty `/handoff` with no source content — surface a toast
+                    // so the user knows why nothing happened. The chip falls
+                    // back to `&` compose mode here; the slash-command flow
+                    // does not because it has no compose-draft state to seed.
+                    show_error_toast(
+                        "Nothing to hand off — start a conversation first.".to_owned(),
+                        ctx,
+                    );
                 }
             }
             fork if command.name == commands::FORK.name => {
@@ -1061,17 +1093,34 @@ impl Input {
                 };
 
                 let history = BlocklistAIHistoryModel::handle(ctx);
-                let is_in_progress = history
+                // An empty conversation defaults to `InProgress` even though nothing is
+                // running, so exclude it here to auto-send rather than queue.
+                let should_queue = history
                     .as_ref(ctx)
                     .conversation(&conversation_id)
-                    .is_some_and(|c| c.status().is_in_progress() || c.status().is_blocked());
+                    .is_some_and(|c| {
+                        !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
+                    });
 
-                if is_in_progress {
-                    ctx.dispatch_typed_action(&WorkspaceAction::QueuePromptForConversation {
-                        prompt,
+                if should_queue {
+                    let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.take_pending_attachments(ctx)
+                    });
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.append(
+                            conversation_id,
+                            QueuedQuery::new_with_attachments(
+                                prompt,
+                                QueuedQueryOrigin::QueueSlashCommand,
+                                attachments,
+                            ),
+                            ctx,
+                        );
                     });
                 } else {
-                    self.submit_queued_prompt(prompt, ctx);
+                    // Not in progress: submit immediately as a regular (non-queued) user query so
+                    // the live staging is sent and reset, rather than treated as a queued-row fire.
+                    self.submit_user_query_now(prompt, ctx);
                 }
             }
             open_repo if command.name == commands::OPEN_REPO.name => {
@@ -1189,9 +1238,7 @@ impl Input {
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
-                self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
-                )
+                self.execute_skill_command(reference, user_query, None, None, ctx)
             }
             SlashCommandEntryState::None
             | SlashCommandEntryState::Composing { .. }
@@ -1290,9 +1337,7 @@ impl Input {
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
-                self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
-                )
+                self.execute_skill_command(reference, user_query, None, None, ctx)
             }
             SlashCommandEntryState::None
             | SlashCommandEntryState::Composing { .. }

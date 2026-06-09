@@ -1,21 +1,16 @@
-use cocoa::foundation::NSUInteger;
-use std::{ffi::CStr, os::raw::c_char};
+use std::ffi::CStr;
 
-use warpui_core::event::{KeyEventDetails, ModifiersState};
-use warpui_core::platform::keyboard::{KeyCode, PhysicalKey};
-use warpui_core::{keymap::Keystroke, Event};
-
-use cocoa::{
-    appkit::{NSEvent, NSEventModifierFlags, NSEventType},
-    base::{id, YES},
-    foundation::NSString,
-};
+use cocoa::base::id;
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+use objc2_foundation::NSUInteger;
 use pathfinder_geometry::vector::vec2f;
+use warpui_core::event::{KeyEventDetails, ModifiersState};
+use warpui_core::keymap::Keystroke;
+use warpui_core::platform::keyboard::{KeyCode, PhysicalKey};
+use warpui_core::Event;
 
-use super::{
-    keycode::{scancode_to_physicalkey, Keycode},
-    utils::unicode_char_to_key,
-};
+use super::keycode::{scancode_to_physicalkey, Keycode};
+use super::utils::unicode_char_to_key;
 
 // Unpublished but widely known and stable flags for distinguishing left/right alt.
 // Google "NX_DEVICELALTKEYMASK" for more.
@@ -24,11 +19,11 @@ const RIGHT_ALT_MASK: NSUInteger = 0x00000040;
 
 fn modifier_flags_to_state(flags: NSEventModifierFlags) -> ModifiersState {
     ModifiersState {
-        alt: flags.contains(NSEventModifierFlags::NSAlternateKeyMask),
-        cmd: flags.contains(NSEventModifierFlags::NSCommandKeyMask),
-        shift: flags.contains(NSEventModifierFlags::NSShiftKeyMask),
-        ctrl: flags.contains(NSEventModifierFlags::NSControlKeyMask),
-        func: flags.contains(NSEventModifierFlags::NSFunctionKeyMask),
+        alt: flags.contains(NSEventModifierFlags::Option),
+        cmd: flags.contains(NSEventModifierFlags::Command),
+        shift: flags.contains(NSEventModifierFlags::Shift),
+        ctrl: flags.contains(NSEventModifierFlags::Control),
+        func: flags.contains(NSEventModifierFlags::Function),
     }
 }
 
@@ -49,11 +44,12 @@ pub unsafe fn from_native(
     window_height: Option<f32>,
     is_first_mouse: bool,
 ) -> Option<Event> {
-    let event_type = native_event.eventType();
+    let native_event = &*native_event.cast::<NSEvent>();
+    let event_type = native_event.r#type();
 
     // Filter out event types that aren't in the NSEventType enum.
     // See https://github.com/servo/cocoa-rs/issues/155#issuecomment-323482792 for details.
-    match event_type as u64 {
+    match event_type.0 as u64 {
         0 | 21 | 32 | 33 | 35 | 36 | 37 => {
             return None;
         }
@@ -62,7 +58,7 @@ pub unsafe fn from_native(
     let modifiers = modifier_flags_to_state(native_event.modifierFlags());
 
     match event_type {
-        NSEventType::NSKeyDown => {
+        NSEventType::KeyDown => {
             let native_modifiers = native_event.modifierFlags();
 
             // Get the base character for this key without any modifiers (including Shift)
@@ -76,8 +72,8 @@ pub unsafe fn from_native(
                 right_alt: (native_modifiers.bits() & RIGHT_ALT_MASK) != 0,
                 key_without_modifiers,
             };
-            let unmodified_chars = native_event.charactersIgnoringModifiers();
-            let unmodified_chars = CStr::from_ptr(unmodified_chars.UTF8String() as *mut c_char)
+            let unmodified_chars = native_event.charactersIgnoringModifiers()?;
+            let unmodified_chars = CStr::from_ptr(unmodified_chars.UTF8String())
                 .to_str()
                 .ok()?;
 
@@ -88,24 +84,30 @@ pub unsafe fn from_native(
             };
 
             let keystroke = Keystroke {
-                ctrl: native_modifiers.contains(NSEventModifierFlags::NSControlKeyMask),
-                alt: native_modifiers.contains(NSEventModifierFlags::NSAlternateKeyMask),
-                shift: native_modifiers.contains(NSEventModifierFlags::NSShiftKeyMask),
-                cmd: native_modifiers.contains(NSEventModifierFlags::NSCommandKeyMask),
+                ctrl: native_modifiers.contains(NSEventModifierFlags::Control),
+                alt: native_modifiers.contains(NSEventModifierFlags::Option),
+                shift: native_modifiers.contains(NSEventModifierFlags::Shift),
+                cmd: native_modifiers.contains(NSEventModifierFlags::Command),
                 meta: false, /* handled separately */
                 key: unmodified_chars.into(),
             };
 
-            let chars = native_event.characters().UTF8String() as *mut c_char;
-            let chars = if chars.is_null() {
-                // `UTF8String` can return null in some rare cases where the
-                // string isn't valid UTF-8.  For example, if the user
-                // enters a UTF-8 surrogate character, e.g. U+DDDD, via the
-                // Unicode Hex Input keyboard, the conversion will produce
-                // null.
-                String::new()
-            } else {
-                CStr::from_ptr(chars).to_str().ok()?.to_owned()
+            let characters = native_event.characters();
+            let chars = match characters.as_deref() {
+                None => String::new(),
+                Some(characters) => {
+                    let chars = characters.UTF8String();
+                    if chars.is_null() {
+                        // `UTF8String` can return null in some rare cases where the
+                        // string isn't valid UTF-8.  For example, if the user
+                        // enters a UTF-8 surrogate character, e.g. U+DDDD, via the
+                        // Unicode Hex Input keyboard, the conversion will produce
+                        // null.
+                        String::new()
+                    } else {
+                        CStr::from_ptr(chars).to_str().ok()?.to_owned()
+                    }
+                }
             };
 
             Some(Event::KeyDown {
@@ -115,20 +117,20 @@ pub unsafe fn from_native(
                 is_composing: false,
             })
         }
-        NSEventType::NSMouseMoved => window_height.map(|window_height| Event::MouseMoved {
+        NSEventType::MouseMoved => window_height.map(|window_height| Event::MouseMoved {
             position: vec2f(
                 native_event.locationInWindow().x as f32,
                 window_height - native_event.locationInWindow().y as f32,
             ),
             cmd: native_event
                 .modifierFlags()
-                .contains(NSEventModifierFlags::NSCommandKeyMask),
+                .contains(NSEventModifierFlags::Command),
             shift: native_event
                 .modifierFlags()
-                .contains(NSEventModifierFlags::NSShiftKeyMask),
+                .contains(NSEventModifierFlags::Shift),
             is_synthetic: false,
         }),
-        NSEventType::NSFlagsChanged => {
+        NSEventType::FlagsChanged => {
             let key_code = native_key_code_to_key_code(native_event.keyCode());
 
             window_height.map(|window_height| Event::ModifierStateChanged {
@@ -140,7 +142,7 @@ pub unsafe fn from_native(
                 key_code,
             })
         }
-        NSEventType::NSLeftMouseDown => window_height.map(|window_height| {
+        NSEventType::LeftMouseDown => window_height.map(|window_height| {
             let position = vec2f(
                 native_event.locationInWindow().x as f32,
                 window_height - native_event.locationInWindow().y as f32,
@@ -165,14 +167,14 @@ pub unsafe fn from_native(
                 }
             }
         }),
-        NSEventType::NSLeftMouseUp => window_height.map(|window_height| Event::LeftMouseUp {
+        NSEventType::LeftMouseUp => window_height.map(|window_height| Event::LeftMouseUp {
             position: vec2f(
                 native_event.locationInWindow().x as f32,
                 window_height - native_event.locationInWindow().y as f32,
             ),
             modifiers,
         }),
-        NSEventType::NSLeftMouseDragged => {
+        NSEventType::LeftMouseDragged => {
             window_height.map(|window_height| Event::LeftMouseDragged {
                 position: vec2f(
                     native_event.locationInWindow().x as f32,
@@ -184,7 +186,7 @@ pub unsafe fn from_native(
         // TODO: This option is deprecated by Apple in favour of NSEventTypeOtherMouseDown
         // but we'll likely need to update cocoa.
         // See https://developer.apple.com/documentation/appkit/nsothermousedown.
-        NSEventType::NSOtherMouseDown => {
+        NSEventType::OtherMouseDown => {
             let window_height = window_height?;
             let window_location = native_event.locationInWindow();
             let position = vec2f(
@@ -192,8 +194,8 @@ pub unsafe fn from_native(
                 window_height - (window_location.y as f32),
             );
             let modifier_flags = native_event.modifierFlags();
-            let cmd = modifier_flags.contains(NSEventModifierFlags::NSCommandKeyMask);
-            let shift = modifier_flags.contains(NSEventModifierFlags::NSShiftKeyMask);
+            let cmd = modifier_flags.contains(NSEventModifierFlags::Command);
+            let shift = modifier_flags.contains(NSEventModifierFlags::Shift);
             let click_count = native_event.clickCount() as u32;
 
             match native_event.buttonNumber() {
@@ -219,20 +221,20 @@ pub unsafe fn from_native(
             }
         }
         // For trackpads, this event will get triggered by the user's secondary click setting.
-        NSEventType::NSRightMouseDown => window_height.map(|window_height| Event::RightMouseDown {
+        NSEventType::RightMouseDown => window_height.map(|window_height| Event::RightMouseDown {
             position: vec2f(
                 native_event.locationInWindow().x as f32,
                 window_height - native_event.locationInWindow().y as f32,
             ),
             cmd: native_event
                 .modifierFlags()
-                .contains(NSEventModifierFlags::NSCommandKeyMask),
+                .contains(NSEventModifierFlags::Command),
             shift: native_event
                 .modifierFlags()
-                .contains(NSEventModifierFlags::NSShiftKeyMask),
+                .contains(NSEventModifierFlags::Shift),
             click_count: native_event.clickCount() as u32,
         }),
-        NSEventType::NSScrollWheel => window_height.map(|window_height| Event::ScrollWheel {
+        NSEventType::ScrollWheel => window_height.map(|window_height| Event::ScrollWheel {
             position: vec2f(
                 native_event.locationInWindow().x as f32,
                 window_height - native_event.locationInWindow().y as f32,
@@ -241,7 +243,7 @@ pub unsafe fn from_native(
                 native_event.scrollingDeltaX() as f32,
                 native_event.scrollingDeltaY() as f32,
             ),
-            precise: native_event.hasPreciseScrollingDeltas() == YES,
+            precise: native_event.hasPreciseScrollingDeltas(),
             modifiers,
         }),
         _ => None,

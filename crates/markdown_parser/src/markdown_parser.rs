@@ -1,32 +1,28 @@
-use anyhow::Result;
-use itertools::Itertools;
-use nom::{
-    FindToken, IResult, InputIter, InputLength, Parser, Slice,
-    branch::alt,
-    bytes::complete::{
-        is_a, tag, tag_no_case, take, take_till1, take_until, take_while, take_while_m_n,
-        take_while1,
-    },
-    character::{
-        complete::{char, one_of, satisfy, space0, space1},
-        is_digit,
-    },
-    combinator::{
-        all_consuming, consumed, eof, fail, flat_map, map, map_parser, recognize, value, verify,
-    },
-    error::{ContextError, ErrorKind, ParseError, context, make_error},
-    multi::{fold_many_m_n, fold_many1, many_m_n, many0},
-    sequence::{delimited, pair, preceded, terminated, tuple},
-};
-use serde_yaml::Value;
 use std::cell::RefCell;
 
-use crate::{
-    CodeBlockText, FormattedImage, FormattedIndentTextInline, FormattedTable, FormattedTaskList,
-    FormattedText, FormattedTextFragment, FormattedTextHeader, FormattedTextInline,
-    FormattedTextLine, Hyperlink, OrderedFormattedIndentTextInline, TableAlignment,
+use anyhow::Result;
+use itertools::Itertools;
+use nom::branch::alt;
+use nom::bytes::complete::{
+    is_a, tag, tag_no_case, take, take_till1, take_until, take_while, take_while_m_n, take_while1,
 };
-use crate::{CustomWeight, FormattedTextStyles};
+use nom::character::complete::{char, one_of, satisfy, space0, space1};
+use nom::character::is_digit;
+use nom::combinator::{
+    all_consuming, consumed, eof, fail, flat_map, map, map_parser, recognize, value, verify,
+};
+use nom::error::{ContextError, ErrorKind, ParseError, context, make_error};
+use nom::multi::{fold_many_m_n, fold_many1, many_m_n, many0};
+use nom::sequence::{delimited, pair, preceded, terminated, tuple};
+use nom::{FindToken, IResult, InputIter, InputLength, Parser, Slice};
+use serde_yaml::Value;
+
+use crate::{
+    CodeBlockText, CustomWeight, FormattedImage, FormattedIndentTextInline, FormattedTable,
+    FormattedTaskList, FormattedText, FormattedTextFragment, FormattedTextHeader,
+    FormattedTextInline, FormattedTextLine, FormattedTextStyles, Hyperlink,
+    OrderedFormattedIndentTextInline, TableAlignment,
+};
 
 const HEADER_TAG_MIN_COUNT: usize = 1;
 const HEADER_TAG_MAX_COUNT: usize = 6;

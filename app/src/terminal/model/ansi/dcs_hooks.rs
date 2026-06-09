@@ -1,12 +1,14 @@
 //! This module defines the schema for DCS hooks sent from the shell to the Rust
 //! app -- for example, the payloads sent from shell precmd and preexec.
-use crate::terminal::model::block::BlockId;
-use crate::terminal::model::session::SessionId;
-use ordered_float::OrderedFloat;
-use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
+
+use ordered_float::OrderedFloat;
+use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::command::ExitCode;
+
+use crate::terminal::model::block::BlockId;
+use crate::terminal::model::session::SessionId;
 
 /// Indicates that the following JSON-encoded message is hex-encoded for Warp's lifecycle hooks.
 /// In DCS, it is used as the final char in the DCS start sequence.
@@ -22,6 +24,13 @@ pub(super) const UNENCODED_JSON_MARKER: char = 'f';
 /// hooks via key-value pairs.
 /// In OSC< it is used as the first parameter.
 pub(super) const UNENCODED_KV_MARKER: char = 'k';
+/// Session IDs decoded from shell hook payloads.
+///
+/// These are optional at the schema layer because several hook structs implement
+/// `Default`; `None` means the hook omitted the field, while `Some(0)` means the
+/// hook explicitly carried the legacy/default session ID. The ANSI processor
+/// rejects missing or unregistered IDs for hooks that require a registered session.
+pub type HookSessionId = Option<u64>;
 
 /// Enum representing all possible JSON payloads for Warp's DCS's.
 #[derive(Serialize, Debug, Deserialize)]
@@ -109,6 +118,54 @@ impl DProtoHook {
         }
     }
 
+    /// Extracts the session_id from whichever variant carries it. Returns `None`
+    /// for hook types that don't (yet) include a session_id field.
+    pub fn session_id(&self) -> Option<SessionId> {
+        match self {
+            DProtoHook::InitShell { value } => Some(value.session_id),
+            DProtoHook::Precmd { value } => value.session_id.map(SessionId::from),
+            DProtoHook::ExitShell { value } => Some(value.session_id),
+            DProtoHook::Preexec { value } => value.session_id.map(SessionId::from),
+            DProtoHook::CommandFinished { value } => value.session_id.map(SessionId::from),
+            DProtoHook::Bootstrapped { value } => value.session_id.map(SessionId::from),
+            DProtoHook::InputBuffer { value } => value.session_id.map(SessionId::from),
+            DProtoHook::Clear { value } => value.session_id.map(SessionId::from),
+            DProtoHook::FinishUpdate { value } => value.session_id.map(SessionId::from),
+            DProtoHook::PreInteractiveSSHSession { value } => value.session_id.map(SessionId::from),
+            DProtoHook::SSH { value } => value.session_id.map(SessionId::from),
+            DProtoHook::InitSubshell { value } => value.session_id.map(SessionId::from),
+            DProtoHook::InitSsh { value } => value.session_id.map(SessionId::from),
+            DProtoHook::SourcedRcFileForWarp { .. }
+            | DProtoHook::RemoteWarpificationIsUnavailable { .. }
+            | DProtoHook::SshTmuxInstaller { .. }
+            | DProtoHook::TmuxInstallFailed { .. } => None,
+        }
+    }
+
+    /// Returns whether this hook mutates terminal/session state enough to require a recognized
+    /// session_id before dispatch.
+    pub fn requires_registered_session(&self) -> bool {
+        match self {
+            DProtoHook::CommandFinished { .. }
+            | DProtoHook::Precmd { .. }
+            | DProtoHook::Preexec { .. }
+            | DProtoHook::Bootstrapped { .. }
+            | DProtoHook::PreInteractiveSSHSession { .. }
+            | DProtoHook::SSH { .. }
+            | DProtoHook::InitShell { .. }
+            | DProtoHook::InputBuffer { .. }
+            | DProtoHook::Clear { .. }
+            | DProtoHook::InitSubshell { .. }
+            | DProtoHook::InitSsh { .. }
+            | DProtoHook::FinishUpdate { .. }
+            | DProtoHook::ExitShell { .. } => true,
+            DProtoHook::SourcedRcFileForWarp { .. }
+            | DProtoHook::RemoteWarpificationIsUnavailable { .. }
+            | DProtoHook::SshTmuxInstaller { .. }
+            | DProtoHook::TmuxInstallFailed { .. } => false,
+        }
+    }
+
     /// This function exists because there doesn't yet exist meaningful defaults for all shell
     /// hooks.
     pub fn default_from_name(hook: &str) -> Option<Self> {
@@ -186,6 +243,7 @@ impl DProtoHook {
                 "next_block_id" => {
                     value.next_block_id = v.to_string().into();
                 }
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field to CommandFinished");
                 }
@@ -306,6 +364,7 @@ impl DProtoHook {
                 "wsl_name" => {
                     value.wsl_name = map_empty_to_none(v);
                 }
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field {key} to Bootstrapped hook");
                 }
@@ -314,17 +373,37 @@ impl DProtoHook {
                 "command" => {
                     value.command = v;
                 }
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field {key} to Preexec hook");
                 }
             },
-            DProtoHook::Clear { .. } => {
-                log::warn!("Tried to add unknown field {key} to Clear hook");
-            }
+            DProtoHook::PreInteractiveSSHSession { value } => match key.as_ref() {
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
+                _ => {
+                    log::warn!("Tried to add unknown field {key} to PreInteractiveSSHSession hook");
+                }
+            },
+            DProtoHook::SSH { value } => match key.as_ref() {
+                "socket_path" => value.socket_path = v.into(),
+                "remote_shell" => value.remote_shell = v,
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
+                "remote_session_id" => value.remote_session_id = v.parse::<u64>().ok(),
+                _ => {
+                    log::warn!("Tried to add unknown field {key} to SSH hook");
+                }
+            },
+            DProtoHook::Clear { value } => match key.as_ref() {
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
+                _ => {
+                    log::warn!("Tried to add unknown field {key} to Clear hook");
+                }
+            },
             DProtoHook::FinishUpdate { value } => match key.as_ref() {
                 "update_id" => {
                     value.update_id = v;
                 }
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field {key} to FinishUpdate hook");
                 }
@@ -333,8 +412,25 @@ impl DProtoHook {
                 "buffer" => {
                     value.buffer = v;
                 }
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field {key} to InputBuffer hook");
+                }
+            },
+            DProtoHook::InitSubshell { value } => match key.as_ref() {
+                "shell" => value.shell = v,
+                "uname" => value.uname = map_empty_to_none(v),
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
+                _ => {
+                    log::warn!("Tried to add unknown field {key} to InitSubshell hook");
+                }
+            },
+            DProtoHook::InitSsh { value } => match key.as_ref() {
+                "shell" => value.shell = v,
+                "uname" => value.uname = map_empty_to_none(v),
+                "session_id" => value.session_id = v.parse::<u64>().ok(),
+                _ => {
+                    log::warn!("Tried to add unknown field {key} to InitSsh hook");
                 }
             },
             DProtoHook::ExitShell { value } => match key.as_ref() {
@@ -412,6 +508,8 @@ pub struct TmuxInstallFailedInfo {
 pub struct CommandFinishedValue {
     pub exit_code: ExitCode,
     pub next_block_id: BlockId,
+    #[serde(default)]
+    pub session_id: HookSessionId,
 }
 
 /// Received from the pty at precmd.
@@ -448,7 +546,7 @@ pub struct PrecmdValue {
     #[serde(deserialize_with = "empty_string_is_none", default)]
     pub kube_config: Option<String>,
 
-    pub session_id: Option<u64>,
+    pub session_id: HookSessionId,
 
     /// Whether this PrecmdValue was emitted after the completion of an in-band command.
     #[serde(default)]
@@ -496,12 +594,17 @@ pub struct PreexecValue {
     /// include up to the first job control indicator, e.g. '|', '&&'). This is due to a
     /// shortcoming of the bash_preexec library we use to simulate preexec hooks in bash.
     pub command: String,
+    #[serde(default)]
+    pub session_id: HookSessionId,
 }
 
 /// Received from the pty after the shell has finished executing Warp's
 /// bootstrap script.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct BootstrappedValue {
+    #[serde(default)]
+    pub session_id: HookSessionId,
+
     #[serde(deserialize_with = "empty_string_is_none")]
     pub histfile: Option<String>,
 
@@ -607,7 +710,10 @@ fn parse_float_from_string(s: String) -> Option<OrderedFloat<f64>> {
 /// Received from the pty when Warp's SSH wrapper is executed, prior to
 /// bootstrapping the SSH session.
 #[derive(Debug, Default, PartialEq, Eq, Deserialize, Serialize, Clone)]
-pub struct PreInteractiveSSHSessionValue {}
+pub struct PreInteractiveSSHSessionValue {
+    #[serde(default)]
+    pub session_id: HookSessionId,
+}
 
 /// Received from the pty after establishing an SSH connection, prior to
 /// bootstrapping the session.
@@ -615,6 +721,10 @@ pub struct PreInteractiveSSHSessionValue {}
 pub struct SSHValue {
     pub socket_path: PathBuf,
     pub remote_shell: String,
+    #[serde(default)]
+    pub session_id: HookSessionId,
+    #[serde(default)]
+    pub remote_session_id: HookSessionId,
 }
 
 /// Received from the pty after the shell session has been initialized, marking
@@ -643,6 +753,8 @@ pub struct InitShellValue {
 pub struct InitSshValue {
     pub shell: String,
     pub uname: Option<String>,
+    #[serde(default)]
+    pub session_id: HookSessionId,
 }
 
 /// Emitted as part of the tmux bootstrapping process.
@@ -650,6 +762,8 @@ pub struct InitSshValue {
 pub struct InitSubshellValue {
     pub shell: String,
     pub uname: Option<String>,
+    #[serde(default)]
+    pub session_id: HookSessionId,
 }
 
 /// Emitted by a snippet included in the user's RC file, which signals a new session is being
@@ -671,18 +785,25 @@ pub struct SourcedRcFileForWarpValue {
 #[derive(Debug, Default, PartialEq, Eq, Clone, Deserialize, Serialize)]
 pub struct InputBufferValue {
     pub buffer: String,
+    #[serde(default)]
+    pub session_id: HookSessionId,
 }
 
 /// Received from the pty when the terminal screen should be cleared (e.g. via
 /// the `clear` command or ctrl-l).
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct ClearValue {}
+pub struct ClearValue {
+    #[serde(default)]
+    pub session_id: HookSessionId,
+}
 
 /// Received from the pty when warp_finish_update is called at the end of an
 /// assisted auto-update.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct FinishUpdateValue {
     pub update_id: String,
+    #[serde(default)]
+    pub session_id: HookSessionId,
 }
 
 /// Received from the pty right before the remote shell exits (via `exit`,

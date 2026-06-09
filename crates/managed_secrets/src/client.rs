@@ -1,14 +1,11 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use async_trait::async_trait;
-
 use anyhow::Result;
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use vec1::Vec1;
-
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretConfig, ManagedSecretType};
-
 pub use warp_graphql::queries::task_secrets::ManagedSecretValue;
 
 /// An OIDC identity token issued for a task workload.
@@ -42,7 +39,7 @@ pub struct ManagedSecretConfigs {
     pub team_secrets: HashMap<String, ManagedSecretConfig>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SecretOwner {
     CurrentUser,
     Team { team_uid: String },

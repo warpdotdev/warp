@@ -5,34 +5,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-
 use async_channel::Sender;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::{ByteOffset, CharCounter};
-use warp_editor::editor::NavigationKey;
-use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
-
-use crate::code::icon_from_file_path;
-use crate::debounce::debounce;
-use crate::editor::{
-    EditorOptions, EditorView, Event as EditorEvent, InteractionState,
-    PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, TextOptions,
-};
-use crate::search::ItemHighlightState as SearchHighlightState;
-use crate::ui_components::blended_colors;
-use crate::ui_components::icons::Icon as UiIcon;
-use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
-use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
-use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
-use crate::workspace::view::global_search::model::GlobalSearch;
-use crate::workspace::view::global_search::SearchConfig;
-use crate::TelemetryEvent;
+use warp_core::r#async::debounce;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{AnsiColorIdentifier, Fill as ThemeFill};
 use warp_core::ui::Icon;
+use warp_editor::editor::NavigationKey;
+use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Fill, Flex, FormattedTextElement,
@@ -51,6 +34,22 @@ use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle, WeakViewHandle,
 };
+
+use crate::code::icon_from_file_path;
+use crate::coding_panel_enablement_state::CodingPanelEnablementState;
+use crate::editor::{
+    EditorOptions, EditorView, Event as EditorEvent, InteractionState,
+    PropagateAndNoOpNavigationKeys, PropagateHorizontalNavigationKeys, TextOptions,
+};
+use crate::search::ItemHighlightState as SearchHighlightState;
+use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon as UiIcon;
+use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
+use crate::ui_components::render_file_search_row::{render_file_search_row, FileSearchRowOptions};
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
+use crate::workspace::view::global_search::model::GlobalSearch;
+use crate::workspace::view::global_search::SearchConfig;
+use crate::TelemetryEvent;
 
 const BORDER_RADIUS: f32 = 6.;
 const BORDER_WIDTH: f32 = 1.;

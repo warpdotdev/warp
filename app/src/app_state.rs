@@ -1,28 +1,28 @@
-use pathfinder_geometry::rect::RectF;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use warpui::platform::FullscreenState;
 
-use warpui::AppContext;
+use pathfinder_geometry::rect::RectF;
+use serde::{Deserialize, Serialize};
+use warpui::platform::FullscreenState;
+use warpui::{AppContext, SingletonEntity as _};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::AgentManagementFilters;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::InputConfig;
-use crate::ai::blocklist::SerializedBlockListItem;
+use crate::ai::blocklist::{InputConfig, SerializedBlockListItem};
 use crate::code::editor_management::CodeSource;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::root_view::quake_mode_window_id;
 use crate::server::ids::SyncId;
-use crate::settings_view::{environments_page::EnvironmentsPage, SettingsSection};
+use crate::settings_view::environments_page::EnvironmentsPage;
+use crate::settings_view::SettingsSection;
 use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::left_panel::ToolPanelView;
 use crate::workspace::WorkspaceRegistry;
-use warpui::SingletonEntity as _;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
@@ -57,6 +57,17 @@ pub struct WindowSnapshot {
     pub left_panel_width: Option<f32>,
     pub right_panel_width: Option<f32>,
     pub agent_management_filters: Option<PersistedAgentManagementFilters>,
+    /// Tab groups defined in this window. Group order is implicit from
+    /// member tabs' positions, so no explicit ordering is persisted.
+    pub tab_groups: Vec<TabGroupSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabGroupSnapshot {
+    pub id: TabGroupId,
+    pub name: Option<String>,
+    pub color: SelectedTabColor,
+    pub collapsed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +78,8 @@ pub struct TabSnapshot {
     pub selected_color: SelectedTabColor,
     pub left_panel: Option<LeftPanelSnapshot>,
     pub right_panel: Option<RightPanelSnapshot>,
+    /// Tab group this tab belongs to, if any.
+    pub group_id: Option<TabGroupId>,
 }
 
 impl TabSnapshot {

@@ -1,9 +1,3 @@
-use crate::auth::UserUid;
-use crate::terminal::model::ansi::{CommandFinishedValue, Handler};
-use crate::terminal::model::blocks::BlockList;
-use crate::terminal::model::test_utils::TestBlockListBuilder;
-use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
-
 use std::collections::{HashMap, HashSet};
 use std::iter;
 
@@ -13,6 +7,12 @@ use session_sharing_protocol::common::{
 };
 use warp_core::command::ExitCode;
 use warpui::App;
+
+use crate::auth::UserUid;
+use crate::terminal::model::ansi::{CommandFinishedValue, Handler};
+use crate::terminal::model::blocks::BlockList;
+use crate::terminal::model::test_utils::TestBlockListBuilder;
+use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
 
 fn viewer_with_uid(uid: &str, is_present: bool) -> Viewer {
     Viewer {
@@ -312,6 +312,7 @@ fn block_list_for_test(max_block_index: usize) -> BlockList {
         block_list.command_finished(CommandFinishedValue {
             exit_code: ExitCode::from(0),
             next_block_id: i.to_string().into(),
+            session_id: None,
         });
         block_list.precmd(Default::default());
     }

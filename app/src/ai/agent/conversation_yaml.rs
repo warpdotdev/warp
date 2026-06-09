@@ -9,11 +9,10 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use warp_multi_agent_api as api;
-
 use api::message::tool_call::Tool;
 use api::message::tool_call_result::Result as ToolCallResultType;
 use api::message::Message;
+use warp_multi_agent_api as api;
 
 use super::task::helper::{SubagentExt, ToolExt};
 
@@ -544,6 +543,36 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
             Some(api::run_agents_result::Outcome::Launched(launched)) => {
                 out.push_str("status: launched\n");
                 out.push_str(&format!("agent_count: {}\n", launched.agents.len()));
+                if !launched.agents.is_empty() {
+                    out.push_str("agents:\n");
+                    for agent in &launched.agents {
+                        out.push_str(&format!(
+                            "  - name: \"{}\"\n",
+                            escape_yaml_string(&agent.name)
+                        ));
+                        match &agent.result {
+                            Some(api::run_agents_result::agent_outcome::Result::Launched(
+                                launched,
+                            )) => {
+                                out.push_str("    status: launched\n");
+                                out.push_str(&format!("    agent_id: {}\n", launched.agent_id));
+                            }
+                            Some(api::run_agents_result::agent_outcome::Result::Failed(failed)) => {
+                                out.push_str("    status: failed\n");
+                                out.push_str(&format!(
+                                    "    error: \"{}\"\n",
+                                    escape_yaml_string(&failed.error)
+                                ));
+                            }
+                            None => {
+                                out.push_str("    status: unknown\n");
+                            }
+                        }
+                    }
+                    out.push_str(
+                        "next_step: \"Use send_message_to_agent with the existing agent_id instead of running agents again.\"\n",
+                    );
+                }
             }
             Some(api::run_agents_result::Outcome::Denied(denied)) => {
                 out.push_str("status: launch_denied\n");

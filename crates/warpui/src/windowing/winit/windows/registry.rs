@@ -1,6 +1,7 @@
-use crate::platform::SystemTheme;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
+
+use crate::platform::SystemTheme;
 
 const SYSTEM_THEME_SUBKEY_PATH: &str =
     "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";

@@ -3,10 +3,8 @@ mod tab_config_step;
 mod welcome_banner;
 
 pub use hoa_onboarding_flow::{init, HoaOnboardingFlow, HoaOnboardingFlowEvent, HoaOnboardingStep};
-
-use warpui::AppContext;
-
 use warp_core::user_preferences::GetUserPreferences;
+use warpui::AppContext;
 
 const HAS_COMPLETED_HOA_ONBOARDING_KEY: &str = "HasCompletedHOAOnboarding";
 

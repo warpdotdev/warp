@@ -1,28 +1,23 @@
-use crate::keyboard::{remove_custom_keybinding, write_custom_keybinding, UserDefinedKeybinding};
-use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use std::borrow::Cow;
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
 use enum_iterator::{all, Sequence};
 use fuzzy_match::match_indices_case_insensitive;
 use itertools::Itertools;
 use lazy_static::lazy_static;
-
 use regex::Regex;
-use std::borrow::Cow;
-use std::{
-    cmp::Ordering,
-    collections::{HashMap, HashSet},
-    sync::Arc,
+use warpui::actions::StandardAction;
+use warpui::keymap::{
+    BindingDescription, BindingId, BindingLens, CustomTag, DescriptionContext, EditableBindingLens,
+    IsBindingValid, Keystroke, Trigger,
 };
-use warpui::keymap::{BindingId, IsBindingValid};
 use warpui::platform::OperatingSystem;
-use warpui::{
-    actions::StandardAction,
-    keymap::{
-        BindingDescription, BindingLens, CustomTag, DescriptionContext, EditableBindingLens,
-        Keystroke, Trigger,
-    },
-    Action,
-};
-use warpui::{AppContext, SingletonEntity};
+use warpui::{Action, AppContext, SingletonEntity};
+
+use crate::keyboard::{remove_custom_keybinding, write_custom_keybinding, UserDefinedKeybinding};
+use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
 
 pub const MAC_MENUS_CONTEXT: DescriptionContext = DescriptionContext::Custom("mac_menus");
 
@@ -406,9 +401,9 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         }
         CustomAction::ToggleProjectExplorer => {
             if OperatingSystem::get().is_mac() {
-                Keystroke::parse("ctrl-2").ok()
+                Keystroke::parse("ctrl-1").ok()
             } else {
-                Keystroke::parse("ctrl-shift-2").ok()
+                Keystroke::parse("alt-1").ok()
             }
         }
         CustomAction::OpenRepository => {
@@ -428,9 +423,9 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         }
         CustomAction::ToggleConversationListView => {
             if OperatingSystem::get().is_mac() {
-                Keystroke::parse("ctrl-1").ok()
+                Keystroke::parse("ctrl-2").ok()
             } else {
-                Keystroke::parse("alt-1").ok()
+                Keystroke::parse("alt-2").ok()
             }
         }
         CustomAction::NewTerminalTab
@@ -901,21 +896,21 @@ pub fn is_binding_pty_compliant(binding: BindingLens) -> IsBindingValid {
     let Some(keystroke) = trigger_to_keystroke(trigger) else {
         return IsBindingValid::Yes;
     };
-
-    let is_binding_in_allowlist = (OperatingSystem::get().is_mac()
-        && MAC_PTY_NON_COMPLIANT_ACTIONS.contains(binding.name))
-        || (OperatingSystem::get().is_windows()
-            && WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES.contains(&keystroke))
-        || PTY_NON_COMPLIANT_KEYSTROKES.contains(&keystroke);
-
     if CONTROL_CHARACTER_KEY_REGEX.is_match(keystroke.normalized().as_str())
-        && !is_binding_in_allowlist
+        && !is_pty_non_compliant_binding_allowed(binding.name, &keystroke)
     {
         // The binding interferes with a control character so it is not valid.
         IsBindingValid::No
     } else {
         IsBindingValid::Yes
     }
+}
+
+fn is_pty_non_compliant_binding_allowed(binding_name: &str, keystroke: &Keystroke) -> bool {
+    (OperatingSystem::get().is_mac() && MAC_PTY_NON_COMPLIANT_ACTIONS.contains(binding_name))
+        || (OperatingSystem::get().is_windows()
+            && WINDOWS_PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke))
+        || PTY_NON_COMPLIANT_KEYSTROKES.contains(keystroke)
 }
 
 /// Validates all that bindings are cross-platform by returning [`IsBindingValid::No`] if a `cmd-*`

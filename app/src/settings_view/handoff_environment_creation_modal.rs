@@ -1,3 +1,14 @@
+use pathfinder_color::ColorU;
+use warpui::elements::{
+    Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, CrossAxisAlignment, Dismiss,
+    Element, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
+};
+use warpui::ui_components::components::UiComponent;
+use warpui::{
+    AppContext, Entity, FocusContext, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
+};
+
 use crate::ai::ambient_agents::github_auth_url::{AuthSource, GithubAuthRedirectTarget};
 use crate::ai::cloud_environments;
 use crate::appearance::Appearance;
@@ -10,13 +21,6 @@ use crate::settings_view::update_environment_form::{
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::ui_components::icons::Icon;
-use pathfinder_color::ColorU;
-use warpui::elements::{
-    Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, CrossAxisAlignment, Dismiss,
-    Element, Flex, MouseStateHandle, ParentElement, ScrollbarWidth,
-};
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 const DIALOG_WIDTH: f32 = 600.;
 
@@ -237,5 +241,11 @@ impl View for HandoffEnvironmentCreationModal {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         self.render_dialog(appearance, app)
+    }
+
+    fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
+        if focus_ctx.is_self_focused() {
+            ctx.focus(&self.environment_form);
+        }
     }
 }

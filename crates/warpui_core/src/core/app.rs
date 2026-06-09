@@ -1,79 +1,66 @@
-use crate::{
-    assets::{
-        asset_cache::{AssetCache, AssetHandle, AssetSource, AssetState},
-        AssetProvider,
-    },
-    event::KeyState,
-    fonts::FallbackFontModel,
-    image_cache::{self, ImageCache},
-    modals::{
-        AlertDialog, AlertDialogWithCallbacks, AppModalCallback, ModalId, PlatformModalResponseData,
-    },
-    platform::{
-        app::TerminationResult,
-        file_picker::{FilePickerConfiguration, FilePickerError},
-        keyboard::KeyCode,
-        FullscreenState, MicrophoneAccessState, SaveFilePickerConfiguration, SystemTheme,
-        TerminationMode, WindowContext,
-    },
-    r#async::{block_on, SpawnableOutput, Timer},
-    windowing::{self, WindowCallbacks, WindowManager},
-    AccessibilityData, AddSingletonModel, Clipboard, Scene, ZoomFactor,
-};
+use std::any::{Any, TypeId};
+use std::cell::{RefCell, RefMut};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::Debug;
+use std::path::Path;
+use std::pin::pin;
+use std::rc::{self, Rc};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, OnceLock};
+
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use futures::{future::join_all, prelude::*};
+use futures::future::join_all;
+use futures::prelude::*;
 use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
-use pathfinder_geometry::{rect::RectF, vector::Vector2F};
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::Vector2F;
 use rustc_hash::FxHashMap;
-use std::{
-    any::{Any, TypeId},
-    cell::{RefCell, RefMut},
-    collections::{HashMap, HashSet, VecDeque},
-    fmt::Debug,
-    path::Path,
-    pin::pin,
-    rc::{self, Rc},
-    sync::{
-        atomic::{AtomicI64, Ordering},
-        Arc, OnceLock,
-    },
-};
-
-use crate::{
-    accessibility::{AccessibilityVerbosity, ActionAccessibilityContent},
-    actions::StandardAction,
-    app_focus_telemetry::AppFocusInfo,
-    assets,
-    core::{ActionType, Window},
-    fonts::{self, ExternalFontFamily, RequestedFallbackFontSource},
-    keymap::{
-        BindingLens, Context, CustomTag, DescriptionContext, EditableBinding, EditableBindingLens,
-        FixedBinding, IsBindingValid, Keystroke, MatchResult, Matcher, Trigger,
-    },
-    notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification},
-    platform::{self, Cursor, WindowBounds, WindowOptions, WindowStyle},
-    presenter::{CursorUpdate, DispatchedActionKind},
-    r#async::{
-        executor::{self, Background, Foreground, ForegroundTask},
-        FutureId,
-    },
-    rendering,
-    util::post_inc,
-    Action, AddWindowOptions, AnyModel, AnyModelHandle, AnyView, ApplicationBundleInfo, CursorInfo,
-    Effect, Element, Entity, EntityId, Event, GetSingletonModelHandle, ModelAsRef, ModelContext,
-    ModelHandle, NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView,
-    SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
-    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation,
-};
 
 use super::{
     autotracking, ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
     InvalidationCallback, Observation, PendingUnsubscribes, RefCounts, Subscription, TaskCallback,
     TypedActionCallback, ViewType,
+};
+use crate::accessibility::{AccessibilityVerbosity, ActionAccessibilityContent};
+use crate::actions::StandardAction;
+use crate::app_focus_telemetry::AppFocusInfo;
+use crate::assets::asset_cache::{AssetCache, AssetHandle, AssetSource, AssetState};
+use crate::assets::AssetProvider;
+use crate::core::{ActionType, Window};
+use crate::event::KeyState;
+use crate::fonts::{self, ExternalFontFamily, FallbackFontModel, RequestedFallbackFontSource};
+use crate::image_cache::{self, ImageCache};
+use crate::keymap::{
+    BindingLens, Context, CustomTag, DescriptionContext, EditableBinding, EditableBindingLens,
+    FixedBinding, IsBindingValid, Keystroke, MatchResult, Matcher, Trigger,
+};
+use crate::modals::{
+    AlertDialog, AlertDialogWithCallbacks, AppModalCallback, ModalId, PlatformModalResponseData,
+};
+use crate::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
+use crate::platform::app::TerminationResult;
+use crate::platform::file_picker::{FilePickerConfiguration, FilePickerError};
+use crate::platform::keyboard::KeyCode;
+use crate::platform::{
+    self, Cursor, FullscreenState, MicrophoneAccessState, SaveFilePickerConfiguration, SystemTheme,
+    TerminationMode, WindowBounds, WindowContext, WindowOptions, WindowStyle,
+};
+use crate::presenter::{CursorUpdate, DispatchedActionKind};
+use crate::r#async::executor::{self, Background, Foreground, ForegroundTask};
+use crate::r#async::{block_on, FutureId, SpawnableOutput, Timer};
+use crate::util::post_inc;
+use crate::windowing::{self, WindowCallbacks, WindowManager};
+use crate::{
+    assets, rendering, AccessibilityData, Action, AddSingletonModel, AddWindowOptions, AnyModel,
+    AnyModelHandle, AnyView, ApplicationBundleInfo, Clipboard, CursorInfo, Effect, Element, Entity,
+    EntityId, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
+    NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
+    SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
+    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor,
 };
 
 lazy_static! {
@@ -592,6 +579,9 @@ pub struct AppContext {
     /// is the fastest commonly-used hasher for this type.
     singleton_models: FxHashMap<TypeId, AnyModelHandle>,
     last_frame_position_cache: HashMap<WindowId, crate::presenter::PositionCache>,
+    /// Last cursor position observed after scene layout, used to notify platform IME code only
+    /// when layout moves the active cursor.
+    last_observed_active_cursor_positions: HashMap<WindowId, Option<CursorInfo>>,
     pub(super) windows: HashMap<WindowId, Window>,
     pub(super) ref_counts: Arc<Mutex<RefCounts>>,
     pub(super) platform_delegate: Box<dyn platform::Delegate>,
@@ -765,6 +755,7 @@ impl AppContext {
             windows: Default::default(),
             ref_counts: Arc::new(Mutex::new(RefCounts::default())),
             last_frame_position_cache: Default::default(),
+            last_observed_active_cursor_positions: Default::default(),
             platform_delegate,
             // AppContext fields
             actions: Default::default(),
@@ -930,6 +921,22 @@ impl AppContext {
 
     pub fn report_active_cursor_position_update(&self) {
         self.windows().active_cursor_position_updated();
+    }
+
+    /// Notifies the platform when a scene rebuild changes the active cursor position.
+    pub fn report_active_cursor_position_update_if_changed(&mut self, window_id: WindowId) {
+        let active_cursor_position = self.active_cursor_position(window_id);
+        let did_change = match self.last_observed_active_cursor_positions.get(&window_id) {
+            Some(previous_position) => previous_position != &active_cursor_position,
+            None => active_cursor_position.is_some(),
+        };
+
+        self.last_observed_active_cursor_positions
+            .insert(window_id, active_cursor_position);
+
+        if did_change && self.windows().active_window() == Some(window_id) {
+            self.report_active_cursor_position_update();
+        }
     }
 
     pub fn rendering_config(&self) -> rendering::Config {
@@ -2566,6 +2573,8 @@ impl AppContext {
         self.presenters.remove(&window_id);
         self.invalidation_callbacks.remove(&window_id);
         self.window_invalidations.remove(&window_id);
+        self.last_observed_active_cursor_positions
+            .remove(&window_id);
         autotracking::close_window(window_id);
 
         let mut subscriptions = HashMap::new();
@@ -2777,6 +2786,8 @@ impl AppContext {
                 self.handle_window_event(event, window_id, presenter.clone());
             }
         }
+
+        self.report_active_cursor_position_update_if_changed(window_id);
 
         scene
     }

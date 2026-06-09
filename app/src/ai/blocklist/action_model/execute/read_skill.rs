@@ -1,15 +1,11 @@
+use ai::agent::action_result::{AnyFileContent, FileContext};
+use futures::future::{BoxFuture, FutureExt};
+use warpui::{Entity, ModelContext, SingletonEntity};
+
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
+use crate::ai::agent::{AIAgentActionType, ReadSkillRequest, ReadSkillResult};
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
 use crate::send_telemetry_from_ctx;
-use ai::agent::action_result::AnyFileContent;
-use warpui::{ModelContext, SingletonEntity};
-
-use crate::ai::agent::AIAgentActionType;
-use crate::ai::agent::ReadSkillRequest;
-use crate::ai::agent::ReadSkillResult;
-use ai::agent::action_result::FileContext;
-use futures::future::{BoxFuture, FutureExt};
-use warpui::Entity;
 
 pub struct ReadSkillExecutor;
 
@@ -51,7 +47,7 @@ impl ReadSkillExecutor {
                     ctx
                 );
                 let content = FileContext::new(
-                    skill.path.to_string_lossy().into_owned(),
+                    skill.path.display_path(),
                     AnyFileContent::StringContent(skill.content.clone()),
                     skill.line_range.clone(),
                     None,

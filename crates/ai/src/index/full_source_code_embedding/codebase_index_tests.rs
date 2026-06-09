@@ -1,34 +1,32 @@
 #![allow(clippy::single_range_in_vec_init)]
-use chrono::Utc;
-use string_offset::ByteOffset;
-use virtual_fs::{Stub, VirtualFS};
-
-use crate::index::full_source_code_embedding::changed_files::ChangedFiles;
-use crate::index::full_source_code_embedding::codebase_index::MAX_DEPTH;
-use crate::index::full_source_code_embedding::fragment_metadata::{
-    FragmentLocation, LeafToFragmentMetadata,
-};
-
-use crate::index::full_source_code_embedding::merkle_tree::MerkleHash;
-use crate::index::full_source_code_embedding::merkle_tree::MerkleTree;
-use crate::index::full_source_code_embedding::store_client::MockStoreClient;
-use crate::index::full_source_code_embedding::{
-    ContentHash, EmbeddingConfig, Fragment, FragmentMetadata,
-};
-use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
-use futures::executor::block_on;
-use repo_metadata::DirectoryWatcher;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use chrono::Utc;
+use futures::executor::block_on;
+use repo_metadata::DirectoryWatcher;
+use string_offset::ByteOffset;
+use virtual_fs::{Stub, VirtualFS};
 use warp_util::standardized_path::StandardizedPath;
-use warpui::{App, SingletonEntity};
+use warpui_core::{App, SingletonEntity};
 
 use super::{
     CodebaseIndex, CodebaseIndexTimeStampMetadata, ServerSyncResult, TreeSourceSyncState,
     DEFAULT_INCREMENAL_SYNC_FLUSH_INTERVAL,
 };
+use crate::index::full_source_code_embedding::changed_files::ChangedFiles;
+use crate::index::full_source_code_embedding::codebase_index::MAX_DEPTH;
+use crate::index::full_source_code_embedding::fragment_metadata::{
+    FragmentLocation, LeafToFragmentMetadata,
+};
+use crate::index::full_source_code_embedding::merkle_tree::{MerkleHash, MerkleTree};
+use crate::index::full_source_code_embedding::store_client::MockStoreClient;
+use crate::index::full_source_code_embedding::{
+    ContentHash, EmbeddingConfig, Fragment, FragmentMetadata,
+};
+use crate::index::locations::{CodeContextLocation, FileFragmentLocation};
 
 impl CodebaseIndex {
     fn new_for_test(

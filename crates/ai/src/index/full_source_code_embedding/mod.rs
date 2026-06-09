@@ -5,23 +5,21 @@ mod fragment_metadata;
 pub mod manager;
 mod merkle_tree;
 mod priority_queue;
+pub mod search_shaping;
 mod snapshot;
 pub mod store_client;
 mod sync_client;
 
-use std::{
-    ops::Range,
-    path::{Path, PathBuf},
-    time::Duration,
-};
-pub use sync_client::SyncTask;
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub use codebase_index::{CodebaseIndex, RetrievalID, SyncProgress};
+pub use fragment_metadata::{FragmentLocation as FragmentMetadataLocation, FragmentMetadata};
 pub use merkle_tree::{ContentHash, NodeHash};
 pub use snapshot::SnapshotStorage;
-
-pub use fragment_metadata::FragmentMetadata;
 use string_offset::ByteOffset;
+pub use sync_client::SyncTask;
 use thiserror::Error;
 use warp_graphql::queries::rerank_fragments::FragmentLocationInput;
 

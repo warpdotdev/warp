@@ -1,7 +1,6 @@
 pub(crate) mod agent_input_footer;
 mod agent_message_bar;
 mod agent_view_block;
-pub mod child_agent_status_card;
 mod controller;
 mod ephemeral_message_model;
 mod inline_agent_view_header;
@@ -13,6 +12,8 @@ pub mod orchestration_pill_bar_model;
 pub mod shortcuts;
 mod zero_state_block;
 
+use std::sync::LazyLock;
+
 pub use agent_input_footer::*;
 pub use agent_message_bar::*;
 pub use agent_view_block::*;
@@ -20,16 +21,14 @@ pub use controller::*;
 pub use ephemeral_message_model::*;
 pub use inline_agent_view_header::*;
 pub use orchestration_pill_bar::{render_orchestration_breadcrumbs, OrchestrationPillBar};
-use warpui::fonts::Properties;
-pub use zero_state_block::*;
-
-use std::sync::LazyLock;
-
 use pathfinder_color::ColorU;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::blend::Blend;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, color::blend::Blend};
+use warpui::fonts::Properties;
 use warpui::keymap::Keystroke;
 use warpui::{AppContext, SingletonEntity};
+pub use zero_state_block::*;
 
 use crate::terminal::model::TerminalModel;
 use crate::view_components::action_button::ActionButtonTheme;
@@ -74,9 +73,7 @@ pub static ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE: LazyLock<Keystroke
         }
     });
 
-/// Returns `true` when the current pane is in a cloud or remote context where
-/// local-to-cloud handoff is not applicable. Use this to gate the `&` hint,
-/// handoff chip, `/handoff` command activation, and `&` prefix activation.
+/// Returns `true` when the current pane is in a cloud or remote context.
 pub fn is_in_cloud_context(
     agent_view_state: &AgentViewState,
     terminal_model: &TerminalModel,

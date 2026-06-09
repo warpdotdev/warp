@@ -1,11 +1,13 @@
+use std::any::Any;
+
 use pathfinder_geometry::vector::Vector2F;
 
 use super::Point;
+use crate::event::DispatchedEvent;
 use crate::{
-    event::DispatchedEvent, AfterLayoutContext, AppContext, ClipBounds, Element, EventContext,
-    LayoutContext, PaintContext, SizeConstraint,
+    AfterLayoutContext, AppContext, ClipBounds, Element, EventContext, LayoutContext, PaintContext,
+    SizeConstraint,
 };
-use std::any::Any;
 
 /// Element that clips a child to its bounds
 pub struct Clipped {

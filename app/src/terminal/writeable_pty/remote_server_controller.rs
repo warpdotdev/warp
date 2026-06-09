@@ -1,29 +1,27 @@
-use crate::auth::auth_state::AuthStateProvider;
-use crate::remote_server::auth_context::server_api_auth_context;
-use instant::Instant;
-use remote_server::auth::RemoteServerAuthContext;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use instant::Instant;
+use remote_server::auth::RemoteServerAuthContext;
+use remote_server::setup::{
+    PreinstallCheckResult, PreinstallStatus, RemoteLibc, RemotePlatform, UnsupportedReason,
+};
+use remote_server::transport::Error;
+use settings::Setting;
 use warp_core::SessionId;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
-use settings::Setting;
-
-use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
-
+use super::pty_controller::{EventLoopSender, PtyController};
+use crate::auth::auth_state::AuthStateProvider;
+use crate::remote_server::auth_context::server_api_auth_context;
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::remote_server::ssh_transport::SshTransport;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
 use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
+use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
-use remote_server::setup::{
-    PreinstallCheckResult, PreinstallStatus, RemoteLibc, RemotePlatform, UnsupportedReason,
-};
-use remote_server::transport::Error;
-
-use super::pty_controller::{EventLoopSender, PtyController};
 
 /// Per-SSH-init state machine. Encoding the state as an enum makes invalid
 /// transitions unrepresentable and ensures the `SessionInfo` stash cannot be
@@ -155,7 +153,13 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
             | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
             | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
-            | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
+            | RemoteServerManagerEvent::GetBranchesResponse { .. }
+            | RemoteServerManagerEvent::CommitChainResponse { .. }
+            | RemoteServerManagerEvent::GitPushResponse { .. }
+            | RemoteServerManagerEvent::CreatePrResponse { .. }
+            | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+            | RemoteServerManagerEvent::GetPrInfoResponse { .. }
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => {}
         });
 
         Self {
@@ -557,18 +561,26 @@ impl<T: EventLoopSender> RemoteServerController<T> {
 }
 
 fn connection_label_for_session_info(session_info: &SessionInfo) -> String {
-    let host = if session_info.hostname.is_empty() {
-        session_info
-            .subshell_info
-            .as_ref()
-            .and_then(|info| info.ssh_connection_info.as_ref())
-            .and_then(|ssh| ssh.host.as_deref())
-            .map(connection_label_from_ssh_host)
-    } else {
-        Some(session_info.hostname.clone())
-    };
+    let ssh_host = session_info
+        .subshell_info
+        .as_ref()
+        .and_then(|info| info.ssh_connection_info.as_ref())
+        .and_then(|ssh| ssh.host.as_deref());
 
-    connection_label_from_user_and_host(&session_info.user, host.as_deref())
+    connection_label_from_session_hosts(&session_info.user, &session_info.hostname, ssh_host)
+}
+
+fn connection_label_from_session_hosts(
+    user: &str,
+    hostname: &str,
+    ssh_host: Option<&str>,
+) -> String {
+    let host = ssh_host
+        .filter(|host| !host.is_empty())
+        .map(connection_label_from_ssh_host)
+        .or_else(|| (!hostname.is_empty()).then(|| hostname.to_string()));
+
+    connection_label_from_user_and_host(user, host.as_deref())
 }
 
 fn connection_label_from_user_and_host(user: &str, host: Option<&str>) -> String {
@@ -623,35 +635,5 @@ fn send_unsupported_telemetry<T: EventLoopSender>(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{connection_label_from_ssh_host, connection_label_from_user_and_host};
-
-    #[test]
-    fn connection_label_from_ssh_host_strips_user_prefix() {
-        assert_eq!(
-            connection_label_from_ssh_host("moira@moira.devbox.namespace"),
-            "moira.devbox.namespace"
-        );
-        assert_eq!(
-            connection_label_from_ssh_host("moira.devbox.namespace"),
-            "moira.devbox.namespace"
-        );
-    }
-
-    #[test]
-    fn connection_label_from_user_and_host_matches_udi_format() {
-        assert_eq!(
-            connection_label_from_user_and_host("kevinyang", Some("ssh-testing")),
-            "kevinyang@ssh-testing"
-        );
-        assert_eq!(
-            connection_label_from_user_and_host("kevinyang", None),
-            "kevinyang"
-        );
-        assert_eq!(
-            connection_label_from_user_and_host("", Some("ssh-testing")),
-            "ssh-testing"
-        );
-        assert_eq!(connection_label_from_user_and_host("", None), "Remote host");
-    }
-}
+#[path = "remote_server_controller_tests.rs"]
+mod tests;

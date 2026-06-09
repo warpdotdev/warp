@@ -2,13 +2,15 @@
 //! an active `OrchestrationConfigSnapshot`. Shows a "Use orchestration"
 //! toggle, Cloud/Local picker, and run-wide config dropdowns.
 
+use std::collections::HashMap;
+
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use std::collections::HashMap;
 use warp_cli::agent::Harness;
 use warp_core::send_telemetry_from_ctx;
+use warp_core::ui::theme::WarpTheme;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
     Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
@@ -19,8 +21,6 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
-
-use crate::workspace::WorkspaceAction;
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::inline_action::create_environment_modal::{
@@ -46,8 +46,8 @@ use crate::ai::harness_availability::{
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
+use crate::workspace::WorkspaceAction;
 use crate::BlocklistAIHistoryModel;
-use warp_core::ui::theme::WarpTheme;
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
@@ -112,7 +112,7 @@ const BASE_MODEL_HELPER: &str = "The primary model all agents will use.";
 
 // ── Action type ─────────────────────────────────────────────────────
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OrchestrationConfigBlockAction {
     ToggleApproval,
     ToggleDetails,
@@ -281,15 +281,20 @@ impl OrchestrationConfigBlockView {
                 }
                 HarnessAvailabilityEvent::Changed
                 | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
                     // Repopulate even on fetch failure to replace "Loading…".
+                    // The Deleted event also triggers a refresh so any
+                    // already-mounted picker drops the deleted entry from
+                    // its menu.
                     if me.pickers_initialized {
                         oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
                     }
                     me.maybe_auto_open_create_modal(ctx);
                     ctx.notify();
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
+                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
 
@@ -437,7 +442,7 @@ impl OrchestrationConfigBlockView {
             self.edit_state.model_id.clone()
         };
         let is_local = !self.edit_state.execution_mode.is_remote();
-        let model_handle = oc::new_standard_picker_dropdown(&colors, ctx);
+        let model_handle = oc::new_standard_filterable_picker_dropdown(&styles, ctx);
         model_handle.update(ctx, |d, c| d.set_use_overlay_layer(true, c));
         oc::populate_model_picker_for_harness(
             &model_handle,

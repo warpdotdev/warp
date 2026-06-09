@@ -1,82 +1,75 @@
-use std::{borrow::Cow, mem, ops::Range, sync::Arc};
+use std::borrow::Cow;
+use std::mem;
+use std::ops::Range;
+use std::sync::Arc;
 
 use async_channel::Sender;
 use itertools::Itertools;
 use lazy_static::lazy_static;
+use markdown_parser::markdown_parser::CODE_BLOCK_DEFAULT_MARKDOWN_LANG;
 use pathfinder_color::ColorU;
 use string_offset::{ByteOffset, CharOffset};
-use syntect::{
-    easy::HighlightLines,
-    highlighting::{self, Theme, ThemeSet},
-    parsing::SyntaxSet,
-    util::LinesWithEndings,
-};
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{self, Theme, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
+use ui_components::lightbox::{LightboxImage, LightboxImageSource};
 use warp_completer::signatures::CommandRegistry;
-use warp_editor::{
-    content::{
-        anchor::Anchor,
-        buffer::{Buffer, BufferEvent, EditOrigin},
-        selection_model::BufferSelectionModel,
-        text::{
-            BlockType, BufferBlockStyle, CodeBlockType, CODE_BLOCK_DEFAULT_DISPLAY_LANG,
-            CODE_BLOCK_SHELL_DISPLAY_LANG,
-        },
-    },
-    editor::RunnableCommandModel,
+use warp_core::r#async::debounce;
+use warp_editor::content::anchor::Anchor;
+use warp_editor::content::buffer::{Buffer, BufferEvent, EditOrigin};
+use warp_editor::content::mermaid_diagram::mermaid_asset_source;
+use warp_editor::content::selection_model::BufferSelectionModel;
+use warp_editor::content::text::{
+    BlockType, BufferBlockStyle, CodeBlockType, CODE_BLOCK_DEFAULT_DISPLAY_LANG,
+    CODE_BLOCK_SHELL_DISPLAY_LANG,
 };
-
-use markdown_parser::markdown_parser::CODE_BLOCK_DEFAULT_MARKDOWN_LANG;
+use warp_editor::editor::RunnableCommandModel;
 use warp_util::user_input::UserInput;
-use warpui::{elements::Align, platform::Cursor, r#async::SpawnedFutureHandle, AppContext};
+use warpui::elements::{
+    Align, Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
+    MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+};
+use warpui::fonts::Properties;
+use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{
-    elements::{
-        Border, Container, CornerRadius, CrossAxisAlignment, Empty, Flex, MainAxisAlignment,
-        MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
-    },
-    fonts::Properties,
-    presenter::ChildView,
-    ui_components::components::{UiComponent, UiComponentStyles},
-    Element, Entity, ModelAsRef, ModelContext, ModelHandle, SingletonEntity, ViewHandle,
-    WeakModelHandle, WindowId,
+    AppContext, AssetProvider as _, Element, Entity, ModelAsRef, ModelContext, ModelHandle,
+    SingletonEntity, ViewHandle, WeakModelHandle, WindowId,
 };
 
-use crate::{
-    appearance::Appearance,
-    completer::SessionAgnosticContext,
-    debounce::debounce,
-    drive::workflows::arguments::ArgumentsState,
-    editor::InteractionState,
-    features::FeatureFlag,
-    menu::MenuItemFields,
-    notebooks::{
-        file::MarkdownDisplayMode,
-        styles::block_footer_action_button,
-        telemetry::{ActionEntrypoint, BlockInfo},
-    },
-    settings::FontSettings,
-    terminal::input::{
-        decorations::{parse_current_commands_and_tokens, ParsedTokenData, ParsedTokensSnapshot},
-        DEBOUNCE_INPUT_DECORATION_PERIOD,
-    },
-    themes::theme::{AnsiColorIdentifier, AnsiColors},
-    ui_components::{buttons::icon_button, icons::Icon},
-    util::{
-        bindings::CustomAction,
-        color::{ContrastingColor, MinimumAllowedContrast},
-    },
-    view_components::{dropdown::DropdownAction, Dropdown},
-    workflows::{workflow::Workflow, WorkflowType},
-    Assets,
+use super::interaction_state_model::InteractionStateModel;
+use super::keys::{custom_action_to_display, NotebookKeybindings};
+use super::model::ChildModelHandle;
+use super::view::EditorViewAction;
+use super::{rich_text_styles, NotebookWorkflow};
+use crate::appearance::Appearance;
+use crate::completer::SessionAgnosticContext;
+use crate::drive::workflows::arguments::ArgumentsState;
+use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
+use crate::menu::MenuItemFields;
+use crate::notebooks::file::MarkdownDisplayMode;
+use crate::notebooks::styles::block_footer_action_button;
+use crate::notebooks::telemetry::{ActionEntrypoint, BlockInfo};
+use crate::settings::FontSettings;
+use crate::terminal::input::decorations::{
+    parse_current_commands_and_tokens, ParsedTokenData, ParsedTokensSnapshot,
 };
-
-use super::{
-    interaction_state_model::InteractionStateModel,
-    keys::{custom_action_to_display, NotebookKeybindings},
-    model::ChildModelHandle,
-    rich_text_styles,
-    view::EditorViewAction,
-    NotebookWorkflow,
-};
+use crate::terminal::input::DEBOUNCE_INPUT_DECORATION_PERIOD;
+use crate::themes::theme::{AnsiColorIdentifier, AnsiColors};
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
+use crate::util::bindings::CustomAction;
+use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
+use crate::view_components::dropdown::DropdownAction;
+use crate::view_components::Dropdown;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::WorkflowType;
+use crate::workspace::WorkspaceAction;
+use crate::ASSETS;
 
 lazy_static! {
     static ref SUPPORTED_LANGUAGES: &'static [&'static str] = &[
@@ -101,6 +94,7 @@ struct MouseStateHandles {
     copy_button_state: MouseStateHandle,
     mermaid_raw_button_state: MouseStateHandle,
     mermaid_rendered_button_state: MouseStateHandle,
+    mermaid_fullscreen_button_state: MouseStateHandle,
 }
 
 struct CachedHighlightKey {
@@ -201,7 +195,7 @@ impl NotebookCommand {
             dropdown.set_rich_items(
                 CodeBlockType::all().map(|code_block_type| {
                     let mut item = MenuItemFields::new(code_block_type.to_string())
-                        .with_on_select_action(DropdownAction::SelectActionAndClose(
+                        .with_on_select_action(DropdownAction::select_action_and_close(
                             EditorViewAction::CodeBlockTypeSelectedAtOffset {
                                 code_block_type: code_block_type.clone(),
                                 start_anchor: start.clone(),
@@ -229,9 +223,8 @@ impl NotebookCommand {
 
         let syntax_config = {
             let ps = SyntaxSet::load_defaults_newlines();
-            if let Some(asset) = Assets::get("bundled/syntax_theme/base16.tmTheme") {
-                let binary = asset.data;
-                let mut cursor = std::io::Cursor::new(binary);
+            if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
+                let mut cursor = std::io::Cursor::new(asset);
                 match ThemeSet::load_from_reader(&mut cursor) {
                     Ok(theme) => Some((ps, theme)),
                     Err(e) => {
@@ -733,6 +726,43 @@ impl RunnableCommandModel for NotebookCommand {
                 .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
                 .finish(),
             );
+
+            if !is_raw {
+                let fullscreen_model = self.handle.clone();
+                footer.add_child(
+                    Align::new(
+                        block_footer_action_button(
+                            appearance,
+                            Icon::Maximize,
+                            self.mouse_state_handles
+                                .mermaid_fullscreen_button_state
+                                .clone(),
+                            "Open full screen",
+                            None,
+                        )
+                        .on_click(move |ctx, app, _| {
+                            if let Some(command_model) = fullscreen_model.upgrade(app) {
+                                if let Some(source) = command_model.as_ref(app).command(app) {
+                                    if !source.trim().is_empty() {
+                                        ctx.dispatch_typed_action(WorkspaceAction::OpenLightbox {
+                                            images: vec![LightboxImage {
+                                                source: LightboxImageSource::Resolved {
+                                                    asset_source: mermaid_asset_source(&source),
+                                                },
+                                                description: None,
+                                            }],
+                                            initial_index: 0,
+                                        });
+                                    }
+                                }
+                            }
+                        })
+                        .finish(),
+                    )
+                    .right()
+                    .finish(),
+                );
+            }
         }
         footer.add_child(Shrinkable::new(1.0, Empty::new().finish()).finish());
         footer.add_child(

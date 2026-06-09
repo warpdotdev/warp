@@ -19,10 +19,8 @@ use std::path::{Path, PathBuf};
 use cfg_if::cfg_if;
 use directories::BaseDirs;
 
-use crate::{
-    channel::{Channel, ChannelState},
-    AppId,
-};
+use crate::channel::{Channel, ChannelState};
+use crate::AppId;
 
 /// The name of the directory in which to put non-global Warp-specific files.
 ///
@@ -297,7 +295,7 @@ pub fn app_group_container_path() -> Option<PathBuf> {
 
 /// Returns the path to resources included in the Warp distribution.
 ///
-/// Unlike [`warpui::AssetProvider`] assets, which are generally embedded in the binary, these are
+/// Unlike [`warpui_core::AssetProvider`] assets, which are generally embedded in the binary, these are
 /// stored on the filesystem alongside the rest of Warp.
 ///
 /// ## macOS

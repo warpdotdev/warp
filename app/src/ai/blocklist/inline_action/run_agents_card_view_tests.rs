@@ -1,10 +1,12 @@
+use std::path::PathBuf;
+
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 use ai::agent::action_result::{
     RunAgentsAgentOutcome, RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode,
     RunAgentsResult,
 };
 use ai::skills::SkillReference;
-use std::path::PathBuf;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::RunAgentsEditState;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
@@ -136,7 +138,7 @@ fn cloud_with_opencode_disables_accept() {
 
 #[test]
 fn local_with_any_harness_does_not_disable_accept() {
-    for harness in ["oz", "gemini", "opencode"] {
+    for harness in ["oz", "claude", "gemini", "opencode"] {
         let state =
             RunAgentsEditState::from_request(&make_request(harness, RunAgentsExecutionMode::Local));
         assert!(
@@ -147,20 +149,12 @@ fn local_with_any_harness_does_not_disable_accept() {
 }
 
 #[test]
-fn local_with_disabled_claude_or_codex_disables_accept() {
-    for (harness, expected) in [
-        (
-            "claude",
-            "Local Claude Code child agents are temporarily disabled.",
-        ),
-        (
-            "codex",
-            "Local Codex child agents are temporarily disabled.",
-        ),
-    ] {
-        let state = make_edit_state_with_orch_fields(harness, RunAgentsExecutionMode::Local);
-        assert_eq!(state.orch.accept_disabled_reason(), Some(expected));
-    }
+fn local_with_disabled_codex_disables_accept() {
+    let state = make_edit_state_with_orch_fields("codex", RunAgentsExecutionMode::Local);
+    assert_eq!(
+        state.orch.accept_disabled_reason(),
+        Some("Local Codex child agents are temporarily disabled.")
+    );
 }
 
 #[test]
@@ -230,7 +224,9 @@ fn to_request_round_trips_request_fields() {
         },
         vec![
             SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
-            SkillReference::Path(PathBuf::from("/tmp/skill/SKILL.md")),
+            SkillReference::Path(LocalOrRemotePath::Local(PathBuf::from(
+                "/tmp/skill/SKILL.md",
+            ))),
         ],
     );
     req.plan_id = "plan-1".to_string();
@@ -357,9 +353,10 @@ mod format_terminal_state_tests {
 }
 
 mod override_from_approved_config_tests {
+    use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
+
     use super::super::RunAgentsEditState;
     use super::*;
-    use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationExecutionMode};
 
     fn local_config(model: &str, harness: &str) -> OrchestrationConfig {
         OrchestrationConfig {
@@ -499,73 +496,10 @@ mod override_from_approved_config_tests {
             RunAgentsEditState::from_request(&make_request("oz", RunAgentsExecutionMode::Local));
         state
             .orch
-            .override_from_approved_config(&local_config("auto", "claude"));
+            .override_from_approved_config(&local_config("auto", "codex"));
         assert_eq!(
             state.orch.accept_disabled_reason(),
-            Some("Local Claude Code child agents are temporarily disabled.")
-        );
-    }
-}
-
-mod compute_is_denied_tests {
-    use super::super::compute_is_denied;
-    use ai::agent::orchestration_config::{
-        OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
-    };
-
-    fn some_config(
-        status: OrchestrationConfigStatus,
-    ) -> Option<(OrchestrationConfig, OrchestrationConfigStatus)> {
-        Some((
-            OrchestrationConfig {
-                model_id: "auto".to_string(),
-                harness_type: "oz".to_string(),
-                execution_mode: OrchestrationExecutionMode::Local,
-            },
-            status,
-        ))
-    }
-
-    #[test]
-    fn false_when_no_denied_result_and_no_config() {
-        assert!(!compute_is_denied(false, &None));
-    }
-
-    #[test]
-    fn true_when_has_denied_result_from_history() {
-        assert!(compute_is_denied(true, &None));
-    }
-
-    #[test]
-    fn true_when_config_is_disapproved() {
-        let config = some_config(OrchestrationConfigStatus::Disapproved);
-        assert!(compute_is_denied(false, &config));
-    }
-
-    #[test]
-    fn true_when_both_denied_and_disapproved() {
-        let config = some_config(OrchestrationConfigStatus::Disapproved);
-        assert!(compute_is_denied(true, &config));
-    }
-
-    #[test]
-    fn false_when_config_is_approved() {
-        let config = some_config(OrchestrationConfigStatus::Approved);
-        assert!(!compute_is_denied(false, &config));
-    }
-
-    #[test]
-    fn false_when_config_status_is_none() {
-        let config = some_config(OrchestrationConfigStatus::None);
-        assert!(!compute_is_denied(false, &config));
-    }
-
-    #[test]
-    fn denied_result_overrides_approved_config() {
-        let config = some_config(OrchestrationConfigStatus::Approved);
-        assert!(
-            compute_is_denied(true, &config),
-            "History denied result should take precedence over approved config"
+            Some("Local Codex child agents are temporarily disabled.")
         );
     }
 }

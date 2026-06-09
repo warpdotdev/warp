@@ -1,9 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
-};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use itertools::Itertools;
 use repo_metadata::{BuildTreeError, DirectoryWatcher, Repository};
@@ -13,12 +11,12 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use chrono::Utc;
         use super::changed_files::ChangedFiles;
-        use crate::index::path_passes_filters;
+        use crate::index::{is_git_internal_path, matches_gitignores};
         use ignore::gitignore::Gitignore;
         use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
         use warp_core::features::FeatureFlag;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
-        use warpui::r#async::Timer;
+        use warpui_core::r#async::Timer;
         use warp_core::{send_telemetry_from_ctx, report_if_error};
         use crate::telemetry::AITelemetryEvent;
         use instant::Instant;
@@ -27,21 +25,16 @@ cfg_if::cfg_if! {
     }
 }
 use warp_core::safe_anyhow;
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
+use warpui_core::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
-use super::{
-    codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress},
-    fragment_metadata::FragmentMetadata,
-    priority_queue::{BuildQueue, Priority},
-    snapshot::*,
-    store_client::StoreClient,
-    CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash,
-};
-
-use crate::{
-    index::locations::CodeContextLocation,
-    workspace::{WorkspaceMetadata, WorkspaceMetadataEvent},
-};
+use super::codebase_index::{CodebaseIndexEvent, RetrievalID, SyncProgress};
+use super::fragment_metadata::FragmentMetadata;
+use super::priority_queue::{BuildQueue, Priority};
+use super::snapshot::*;
+use super::store_client::StoreClient;
+use super::{CodebaseIndex, ContentHash, EmbeddingConfig, Error as CodebaseIndexError, NodeHash};
+use crate::index::locations::CodeContextLocation;
+use crate::workspace::{WorkspaceMetadata, WorkspaceMetadataEvent};
 
 /// The interval for debouncing filesystem events.
 const REPO_WATCHER_DEBOUNCE_DURATION: Duration = Duration::from_secs(10);
@@ -260,6 +253,7 @@ pub struct CodebaseIndexManagerConfig {
     embedding_generation_batch_size: usize,
     store_client: Arc<dyn StoreClient>,
     indexing_enabled: bool,
+    restore_persisted_indices_on_startup: bool,
 }
 
 impl CodebaseIndexManagerConfig {
@@ -278,7 +272,13 @@ impl CodebaseIndexManagerConfig {
             embedding_generation_batch_size,
             store_client,
             indexing_enabled,
+            restore_persisted_indices_on_startup: true,
         }
+    }
+
+    pub fn defer_persisted_index_restore(mut self) -> Self {
+        self.restore_persisted_indices_on_startup = false;
+        self
     }
 }
 
@@ -368,6 +368,7 @@ impl CodebaseIndexManager {
             embedding_generation_batch_size,
             store_client,
             indexing_enabled,
+            restore_persisted_indices_on_startup,
         } = config;
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -423,7 +424,8 @@ impl CodebaseIndexManager {
         }
 
         // For the moment, we've decided to load all snapshots regardless of the index count.
-        let build_queue = BuildQueue::new_with_persisted(valid_metadata);
+        let build_queue =
+            BuildQueue::new_with_persisted(valid_metadata, restore_persisted_indices_on_startup);
 
         let mut me = Self {
             codebase_indices: HashMap::new(),
@@ -440,10 +442,7 @@ impl CodebaseIndexManager {
             snapshot_storage,
         };
 
-        // Start building the first index in the queue.
-        if let Some(next_repo) = me.build_queue.pick_next_sync() {
-            me.build_and_sync_codebase_index(BuildSource::FromPersistedMetadata(next_repo), ctx);
-        }
+        me.start_next_queued_index(ctx);
 
         me
     }
@@ -815,6 +814,15 @@ impl CodebaseIndexManager {
         self.indexing_enabled
     }
 
+    pub fn start_persisted_index_restore(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.is_indexing_enabled() {
+            return;
+        }
+        if self.build_queue.start() {
+            self.start_next_queued_index(ctx);
+        }
+    }
+
     pub fn index_directory(&mut self, directory: PathBuf, ctx: &mut ModelContext<Self>) -> bool {
         if !self.is_indexing_enabled() {
             return false;
@@ -842,9 +850,21 @@ impl CodebaseIndexManager {
         gitignores: Arc<Vec<Gitignore>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let watch_filter = WatchFilter::with_filter(Arc::new(move |path| {
-            path_passes_filters(path, gitignores.as_slice())
-        }));
+        // The codebase indexer only cares about source files:
+        // skip anything inside `.git/` and anything matched by gitignore
+        // (including descendants of an ignored ancestor directory).
+        // The same predicate gates both directory descent and event emission.
+        let filter = Arc::new(move |path: &Path| {
+            !is_git_internal_path(path)
+                && !matches_gitignores(
+                    path,
+                    path.is_dir(),
+                    gitignores.as_slice(),
+                    true, /* check_ancestors */
+                )
+        });
+
+        let watch_filter = WatchFilter::with_filter(filter.clone(), filter);
         self.watcher.update(ctx, |watcher, _ctx| {
             std::mem::drop(watcher.register_path(
                 root_path,
@@ -1095,7 +1115,10 @@ impl CodebaseIndexManager {
         let Ok(_) = self.get_codebase_index_internal(finished_repo) else {
             return;
         };
+        self.start_next_queued_index(ctx);
+    }
 
+    fn start_next_queued_index(&mut self, ctx: &mut ModelContext<Self>) {
         if let Some(next_repo) = self.build_queue.pick_next_sync() {
             self.build_and_sync_codebase_index(BuildSource::FromPersistedMetadata(next_repo), ctx);
         }

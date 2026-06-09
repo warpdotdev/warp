@@ -1,31 +1,24 @@
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::stream::AbortHandle;
 use markdown_parser::markdown_parser::parse_markdown_to_raw_text;
-use warpui::{
-    r#async::SpawnedFutureHandle, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle,
-    WindowId,
-};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle, WindowId};
 
-use crate::{
-    cloud_object::{
-        model::persistence::{CloudModel, CloudModelEvent},
-        Owner,
-    },
-    drive::OpenWarpDriveObjectSettings,
-    pane_group::{NotebookPane, PaneContent},
-    safe_debug, safe_warn,
-    server::{
-        cloud_objects::update_manager::{
-            ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
-        },
-        ids::SyncId,
-    },
-    workspace::PaneViewLocator,
+use super::notebook::NotebookView;
+use super::CloudNotebook;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
+use crate::cloud_object::Owner;
+use crate::drive::OpenWarpDriveObjectSettings;
+use crate::pane_group::{NotebookPane, PaneContent};
+use crate::server::cloud_objects::update_manager::{
+    ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
-
-use super::{notebook::NotebookView, CloudNotebook};
+use crate::server::ids::SyncId;
+use crate::workspace::PaneViewLocator;
+use crate::{safe_debug, safe_warn};
 
 #[cfg(test)]
 #[path = "manager_tests.rs"]

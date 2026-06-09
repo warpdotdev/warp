@@ -1,9 +1,8 @@
-use warpui::{async_assert, async_assert_eq, integration::AssertionCallback};
+use warpui::integration::AssertionCallback;
+use warpui::{async_assert, async_assert_eq};
 
-use crate::{
-    integration_testing::view_getters::{command_search_view, workspace_view},
-    search::QueryFilter,
-};
+use crate::integration_testing::view_getters::{command_search_view, workspace_view};
+use crate::search::QueryFilter;
 
 pub fn assert_command_search_is_open() -> AssertionCallback {
     Box::new(move |app, window_id| {
@@ -22,6 +21,18 @@ pub fn assert_history_filter_is_active() -> AssertionCallback {
             async_assert_eq!(
                 search_bar.as_ref(ctx).active_query_filter(ctx),
                 Some(QueryFilter::History)
+            )
+        })
+    })
+}
+
+pub fn assert_command_search_has_results() -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let command_search_view = command_search_view(app, window_id);
+        command_search_view.read(app, |command_search_view, ctx| {
+            async_assert!(
+                command_search_view.has_search_results(ctx),
+                "Expected command search to have results, but it was empty"
             )
         })
     })
