@@ -43,7 +43,7 @@ pub(crate) fn rename_conversation<T: View>(
     ctx.spawn(future, move |_, conversation, ctx| match conversation {
         Some(CloudConversationData::Oz(conversation)) => {
             history.update(ctx, |history, _| {
-                history.cache_loaded_conversation(*conversation);
+                history.insert_loaded_conversation_without_terminal_view(*conversation);
             });
             if conversation_title_matches(conversation_id, &title, ctx) {
                 return;

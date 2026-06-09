@@ -557,8 +557,14 @@ impl BlocklistAIHistoryModel {
         }
     }
 
-    /// Caches a loaded conversation without assigning it to a terminal view.
-    pub(crate) fn cache_loaded_conversation(&mut self, conversation: AIConversation) {
+    /// Inserts a lazily loaded conversation without marking it live in any terminal view.
+    ///
+    /// Use this after `load_conversation_data` when a metadata-only entry needs full
+    /// conversation state for a local mutation, but should not be restored into a session.
+    pub(crate) fn insert_loaded_conversation_without_terminal_view(
+        &mut self,
+        conversation: AIConversation,
+    ) {
         let conversation_id = conversation.id();
         let metadata = AIConversationMetadata::from(&conversation);
 
