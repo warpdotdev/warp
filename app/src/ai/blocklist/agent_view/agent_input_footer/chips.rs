@@ -25,10 +25,6 @@ impl AgentInputFooter {
                             .map(|v| v.to_string())
                             .unwrap_or_default()
                         || chip.chip_kind() != chip_result.kind()
-                        // For parity with PromptDisplay: compare the whole on-click list, not just
-                        // the first entry. Today only ShellGitBranch fills it in (the branch
-                        // selector's dropdown), so it stays empty for every other chip and forces a
-                        // rebuild only when the set of branches actually changes.
                         || chip.on_click_values() != chip_result.on_click_values()
                 })
             })
