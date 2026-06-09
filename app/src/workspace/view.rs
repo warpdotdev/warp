@@ -26777,6 +26777,8 @@ impl Workspace {
         // it out of its group. The dragged tab is the one whose
         // `DraggableState` reports an active drag, so trust that identity
         // over the captured index.
+        //
+        // TODO(johnturcoo): determine the right shape for a long-term solution.
         let current_index = if self
             .tabs
             .get(current_index)
