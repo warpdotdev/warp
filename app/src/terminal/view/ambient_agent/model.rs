@@ -64,6 +64,12 @@ const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
 
+/// Surfaced when a cloud run's shared session ends while environment setup is
+/// still running (before the agent produces its first exchange) — e.g. a setup
+/// command exited non-zero. The Oz webapp shows this as a terminal failure, so
+/// the client matches it instead of staying stuck on "Running setup commands…".
+const CLOUD_SETUP_FAILED_MESSAGE: &str = "Environment setup failed before the agent could start.";
+
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
 pub struct AgentProgress {
@@ -1049,6 +1055,34 @@ impl AmbientAgentViewModel {
             ctx.emit(AmbientAgentViewModelEvent::RunLifecycleChanged);
         }
         self.last_ended_execution_session_id = Some(session_id);
+    }
+
+    /// Transitions an in-flight cloud run to [`Status::Failed`] when its shared
+    /// session ends during the environment-setup phase (before the agent's
+    /// first exchange). The spawn-status stream completes once the setup session
+    /// becomes joinable, so a setup-command failure that happens afterwards is
+    /// only observable to the client as the shared session ending mid-setup;
+    /// without this the UI stays stuck on "Running setup commands…".
+    ///
+    /// Finishes the active setup-command group so the summary stops reporting
+    /// "Running setup commands…", then reuses [`Self::handle_spawn_error`] so the
+    /// same terminal failed UI (tombstone, error conversation status) the Oz
+    /// webapp shows is surfaced in the client.
+    ///
+    /// The caller is responsible for confirming the run is still in the
+    /// pre-first-exchange phase (see `is_cloud_agent_pre_first_exchange`).
+    /// No-op once the run has already resolved to a failed, cancelled, or
+    /// auth-required state.
+    pub(crate) fn fail_due_to_setup_termination(&mut self, ctx: &mut ModelContext<Self>) {
+        if matches!(
+            self.status,
+            Status::Failed { .. } | Status::Cancelled { .. } | Status::NeedsGithubAuth { .. }
+        ) {
+            return;
+        }
+        let group_id = self.setup_commands_state.current_group_id();
+        self.finish_setup_command_group(group_id, ctx);
+        self.handle_spawn_error(CLOUD_SETUP_FAILED_MESSAGE.to_string(), ctx);
     }
 
     /// Attach a new execution session to an existing ambient agent pane (e.g. when the

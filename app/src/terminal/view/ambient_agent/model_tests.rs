@@ -666,3 +666,57 @@ fn empty_prompt_submit_handoff_with_idle_source_and_no_snapshot_sends_none_on_th
         });
     });
 }
+
+#[test]
+fn fail_due_to_setup_termination_transitions_running_run_to_failed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, _| {
+            // Mirror the post-`SessionStarted` state: the run is "running" (the
+            // setup session is joinable) but the setup-command group is still
+            // marked running because no first exchange has arrived yet.
+            model.status = Status::AgentRunning;
+            let group_id = model.setup_command_state().current_group_id();
+            assert!(model.setup_command_state().is_running(group_id));
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.fail_due_to_setup_termination(ctx);
+        });
+
+        model.read(&app, |model, _| {
+            assert!(model.is_failed());
+            assert_eq!(model.error_message(), Some(CLOUD_SETUP_FAILED_MESSAGE));
+            let group_id = model.setup_command_state().current_group_id();
+            assert!(
+                !model.setup_command_state().is_running(group_id),
+                "the setup-command group should be finished so the summary stops \
+                 reporting \"Running setup commands…\"",
+            );
+        });
+    });
+}
+
+#[test]
+fn fail_due_to_setup_termination_is_noop_once_already_resolved() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let model = add_model(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.status = Status::Failed {
+                progress: AgentProgress::new(),
+                error_message: "original failure".to_string(),
+            };
+            model.fail_due_to_setup_termination(ctx);
+        });
+
+        model.read(&app, |model, _| {
+            // The pre-existing failure message must be preserved, not clobbered
+            // by the setup-termination message.
+            assert_eq!(model.error_message(), Some("original failure"));
+        });
+    });
+}
