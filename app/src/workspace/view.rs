@@ -19027,14 +19027,19 @@ impl Workspace {
             }
         }
 
-        let container = Container::new(row.finish())
-            .with_border(
-                Border::all(1.)
-                    // Left border only on the first slot to avoid double borders.
-                    .with_sides(false, is_first_in_bar, false, true)
-                    .with_border_fill(internal_colors::fg_overlay_1(theme)),
-            )
-            .finish();
+        // Additional padding on expanded groups,
+        // allowing tabs to be dropped into the last position of the group.
+        const EXPANDED_GROUP_TRAILING_PADDING: f32 = 8.;
+        let mut container = Container::new(row.finish()).with_border(
+            Border::all(1.)
+                // Left border only on the first slot to avoid double borders.
+                .with_sides(false, is_first_in_bar, false, true)
+                .with_border_fill(internal_colors::fg_overlay_1(theme)),
+        );
+        if !is_collapsed {
+            container = container.with_padding_right(EXPANDED_GROUP_TRAILING_PADDING);
+        }
+        let container = container.finish();
 
         let group_id = group.id;
         let group_draggable_state = group.draggable_state.clone();
@@ -26762,6 +26767,31 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         const DETACH_SENSITIVITY: f32 = 10.0;
+        // `current_index` was captured by the tab's `Draggable` closure at
+        // render time. Mid-drag mutations (swaps, hops over collapsed
+        // blocks, membership changes) reorder `self.tabs`, and mouse events
+        // that arrive before the next repaint still carry the pre-mutation
+        // index — which can point at an innocent bystander. E.g. after the
+        // dragged tab hops over a collapsed block, the stale index lands on
+        // a member of that block and the membership logic below would rip
+        // it out of its group. The dragged tab is the one whose
+        // `DraggableState` reports an active drag, so trust that identity
+        // over the captured index.
+        let current_index = if self
+            .tabs
+            .get(current_index)
+            .is_some_and(|tab| tab.draggable_state.is_dragging())
+        {
+            current_index
+        } else {
+            self.tabs
+                .iter()
+                .position(|tab| tab.draggable_state.is_dragging())
+                .unwrap_or(current_index)
+        };
+        if current_index >= self.tabs.len() {
+            return;
+        }
         // Only detach when the drag leaves every tab-bar presentation on its
         // perpendicular axis. Windows with vertical tabs still render the
         // horizontal bar, so checking only the horizontal rect would make
