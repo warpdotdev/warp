@@ -44,6 +44,8 @@ pub mod elements;
 mod event;
 mod geometry;
 pub mod presenter;
+pub mod renderer;
+pub mod runtime;
 
 pub use buffer::{Cell, TuiBuffer, TuiStyle};
 pub use elements::{
@@ -55,4 +57,6 @@ pub use event::{
 };
 pub use geometry::{TuiConstraint, TuiRect, TuiSize};
 pub use presenter::{TuiFrame, TuiPresenter};
+pub use renderer::TuiFrameRenderer;
+pub use runtime::{CrosstermTerminal, TuiRuntime, TuiTerminal};
 pub use warpui_core::TuiView;
