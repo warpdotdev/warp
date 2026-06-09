@@ -74,6 +74,7 @@ struct ReconnectParams {
 #[cfg(not(target_family = "wasm"))]
 struct InitializeHandshake {
     host_id: HostId,
+    bundled_resources_dir: Option<String>,
     event_rx: async_channel::Receiver<ClientEvent>,
     failure_rx: async_channel::Receiver<crate::client::RequestFailedEvent>,
     host_response_rx: async_channel::Receiver<crate::proto::ServerMessage>,
@@ -1237,6 +1238,8 @@ pub struct RemoteServerManager {
     sessions: HashMap<SessionId, RemoteSessionState>,
     /// Reverse index: host → sessions for O(1) lookup by `HostId`.
     host_to_sessions: HashMap<HostId, HashSet<SessionId>>,
+    /// Packaged resources directory advertised by each connected remote host.
+    bundled_resources_dirs: HashMap<HostId, String>,
     /// User-facing connection labels by session, applied after the initialize
     /// handshake returns a host ID.
     session_labels: HashMap<SessionId, String>,
@@ -1283,6 +1286,7 @@ impl RemoteServerManager {
         Self {
             sessions: HashMap::new(),
             host_to_sessions: HashMap::new(),
+            bundled_resources_dirs: HashMap::new(),
             session_labels: HashMap::new(),
             spawner: ctx.spawner(),
             last_navigation: HashMap::new(),
@@ -2220,6 +2224,8 @@ impl RemoteServerManager {
 
         Ok(InitializeHandshake {
             host_id: HostId::new(resp.host_id),
+            bundled_resources_dir: (!resp.bundled_resources_dir.is_empty())
+                .then_some(resp.bundled_resources_dir),
             event_rx,
             failure_rx,
             host_response_rx,
@@ -2420,6 +2426,15 @@ impl RemoteServerManager {
     /// reverse index.
     pub fn sessions_for_host(&self, host_id: &HostId) -> Option<&HashSet<SessionId>> {
         self.host_to_sessions.get(host_id)
+    }
+    /// Returns all host IDs with at least one connected session.
+    pub fn connected_host_ids(&self) -> impl Iterator<Item = &HostId> {
+        self.host_to_sessions.keys()
+    }
+
+    /// Returns the packaged resources directory advertised by a connected host.
+    pub fn bundled_resources_dir_for_host(&self, host_id: &HostId) -> Option<&str> {
+        self.bundled_resources_dirs.get(host_id).map(String::as_str)
     }
 
     fn connected_session_for_host(
@@ -3436,6 +3451,7 @@ impl RemoteServerManager {
     ) {
         let InitializeHandshake {
             host_id,
+            bundled_resources_dir,
             event_rx,
             failure_rx,
             host_response_rx,
@@ -3469,6 +3485,10 @@ impl RemoteServerManager {
             .entry(host_id.clone())
             .or_default()
             .insert(session_id);
+        if let Some(bundled_resources_dir) = bundled_resources_dir {
+            self.bundled_resources_dirs
+                .insert(host_id.clone(), bundled_resources_dir);
+        }
         ctx.spawn_stream_local(
             event_rx,
             move |me, event, ctx| {
@@ -3916,6 +3936,7 @@ impl RemoteServerManager {
     /// fails any pending host-scoped requests that targeted this host.
     fn handle_host_disconnected(&mut self, host_id: &HostId, ctx: &mut ModelContext<Self>) {
         if !self.host_to_sessions.contains_key(host_id) {
+            self.bundled_resources_dirs.remove(host_id);
             ctx.emit(RemoteServerManagerEvent::HostDisconnected {
                 host_id: host_id.clone(),
             });

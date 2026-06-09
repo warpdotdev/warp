@@ -160,17 +160,18 @@ impl RemoteTransport for SshTransport {
                 remote_server::setup::CHECK_TIMEOUT,
             )
             .await?;
-            // `<binary> --version` exits 0 when present, executable, and
-            // functional. Exit 127 means the binary was not found, and 126
-            // means it exists but is not executable. Any other non-zero
-            // exit (e.g. SSH exit 255 for a dead connection, or signal
-            // termination) is treated as a transport-level failure.
+            // The bundle checks exit 0 when the compatibility symlink,
+            // executable, and resources are all present and functional.
+            // Exit 1 means a `test` failed, 127 means the binary was not
+            // found, and 126 means it exists but is not executable. Any other
+            // non-zero exit (e.g. SSH exit 255 for a dead connection, or
+            // signal termination) is treated as a transport-level failure.
             let code = output.status.code();
             let stdout = String::from_utf8_lossy(&output.stdout);
             log::info!("Binary check result: exit={code:?} stdout={stdout}");
             match code {
                 Some(0) => Ok(true),
-                Some(126) | Some(127) => Ok(false),
+                Some(1) | Some(126) | Some(127) => Ok(false),
                 Some(code) => {
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     Err(Error::Other(anyhow::anyhow!(
@@ -286,8 +287,8 @@ impl RemoteTransport for SshTransport {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
         let socket_path = self.socket_path.clone();
         Box::pin(async move {
-            let cmd = format!("rm -f {}", remote_server::setup::remote_server_binary());
-            log::info!("Removing stale remote server binary: {cmd}");
+            let cmd = remote_server::setup::remote_server_removal_command();
+            log::info!("Removing stale remote server install: {cmd}");
             let output = remote_server::ssh::run_ssh_command(
                 &socket_path,
                 &cmd,
@@ -298,7 +299,9 @@ impl RemoteTransport for SshTransport {
                 Ok(())
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                Err(anyhow::anyhow!("Failed to remove binary: {stderr}"))
+                Err(anyhow::anyhow!(
+                    "Failed to remove remote server install: {stderr}"
+                ))
             }
         })
     }

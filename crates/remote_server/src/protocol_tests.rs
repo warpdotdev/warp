@@ -40,6 +40,7 @@ async fn round_trip_server_message() {
             InitializeResponse {
                 server_version: "0.1.0".to_string(),
                 host_id: "test-host".to_string(),
+                bundled_resources_dir: "/opt/warp/resources".to_string(),
             },
         )),
     };
@@ -54,6 +55,7 @@ async fn round_trip_server_message() {
     match decoded.message {
         Some(server_message::Message::InitializeResponse(resp)) => {
             assert_eq!(resp.server_version, "0.1.0");
+            assert_eq!(resp.bundled_resources_dir, "/opt/warp/resources");
         }
         other => panic!("unexpected message variant: {other:?}"),
     }

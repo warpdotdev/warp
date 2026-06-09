@@ -11,7 +11,7 @@ use super::super::proto::{
 };
 use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
-use super::{ConnectionId, PendingFileOps, ServerModel};
+use super::{bundled_resources_dir_for_executable, ConnectionId, PendingFileOps, ServerModel};
 use crate::auth::auth_state::AuthState;
 use crate::code_review::diff_state::DiffMode;
 use crate::remote_server::diff_state_tracker::DiffModelKey;
@@ -23,6 +23,7 @@ fn test_model(app: &mut App) -> ServerModel {
         grace_timer_cancel: None,
         in_progress: HashMap::new(),
         host_id: "test-host-id".to_string(),
+        bundled_resources_dir: None,
         executors: HashMap::new(),
         pending_file_ops: PendingFileOps::new(),
         auth_state: Arc::new(AuthState::new_logged_out_for_test()),
@@ -39,6 +40,27 @@ fn test_key(repo: &str, mode: DiffMode) -> DiffModelKey {
         repo_path: StandardizedPath::try_new(repo).unwrap(),
         mode,
     }
+}
+
+/// The compatibility symlink must resolve resources from its canonical bundle.
+#[cfg(unix)]
+#[test]
+fn bundled_resources_dir_is_discovered_beside_canonical_executable() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let bundle_dir = temp_dir.path().join("bundle");
+    let executable = bundle_dir.join("oz");
+    let resources_dir = bundle_dir.join("resources");
+    let compatibility_symlink = temp_dir.path().join("oz");
+    std::fs::create_dir_all(&resources_dir).unwrap();
+    std::fs::write(&executable, "").unwrap();
+    symlink(&executable, &compatibility_symlink).unwrap();
+
+    assert_eq!(
+        bundled_resources_dir_for_executable(&compatibility_symlink),
+        Some(std::fs::canonicalize(resources_dir).unwrap())
+    );
 }
 
 #[test]

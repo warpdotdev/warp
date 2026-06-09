@@ -113,6 +113,7 @@ FEATURES="release_bundle,crash_reporting,standalone,agent_mode_debug,remote_code
 WARP_BIN="warp"
 BINARY_NAME="oz-local"
 REMOTE_DIR=".warp-local/remote-server"
+BUNDLE_VERSION="unversioned"
 
 # Determine the output directory
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT/target}"
@@ -125,6 +126,7 @@ case "$CARGO_PROFILE" in
     ;;
 esac
 BUILT_BINARY="$OUTPUT_DIR/$WARP_BIN"
+LOCAL_BUNDLE_DIR="$OUTPUT_DIR/remote-server-bundle"
 
 echo "==> Building Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
 echo "    Binary: $WARP_BIN -> $BINARY_NAME"
@@ -150,6 +152,16 @@ fi
 BINARY_SIZE=$(du -h "$BUILT_BINARY" | cut -f1)
 echo ""
 echo "==> Build complete ($BINARY_SIZE)"
+# Prepare the same executable + resources layout used by downloaded remote
+# server bundles. The compatibility binary path on the remote will symlink to
+# this bundle so canonicalizing the executable finds its sibling resources.
+rm -rf "$LOCAL_BUNDLE_DIR"
+mkdir -p "$LOCAL_BUNDLE_DIR"
+cp "$BUILT_BINARY" "$LOCAL_BUNDLE_DIR/$BINARY_NAME"
+"$WORKSPACE_ROOT/script/prepare_bundled_resources" \
+  "$LOCAL_BUNDLE_DIR/resources" \
+  local \
+  "$CARGO_PROFILE"
 
 # Resolve $HOME on the remote so our upload lands in the same directory the
 # Warp client checks. The client runs `test -x ~/.warp-local/...` and lets
@@ -164,6 +176,7 @@ if [[ -z "$REMOTE_HOME" ]]; then
 fi
 
 REMOTE_ABS_DIR="$REMOTE_HOME/$REMOTE_DIR"
+REMOTE_ABS_BUNDLE_DIR="$REMOTE_ABS_DIR/bundles/$BUNDLE_VERSION"
 
 # Ensure rsync is available on the remote host
 if ! ssh "$HOST" "command -v rsync" &>/dev/null; then
@@ -175,19 +188,38 @@ if ! ssh "$HOST" "command -v rsync" &>/dev/null; then
   fi
 fi
 
-# Ensure the remote directory exists
-ssh "$HOST" "mkdir -p $REMOTE_ABS_DIR"
+# Ensure the remote bundle directory exists
+ssh "$HOST" "mkdir -p $REMOTE_ABS_BUNDLE_DIR"
 
-echo "==> Uploading to $HOST:$REMOTE_ABS_DIR/$BINARY_NAME"
+echo "==> Uploading bundle to $HOST:$REMOTE_ABS_BUNDLE_DIR"
 
 # Upload via rsync with delta transfer and compression.
 # After the first deploy, only changed bytes are transferred.
-rsync -z -t --partial --progress \
-  "$BUILT_BINARY" \
-  "$HOST:$REMOTE_ABS_DIR/$BINARY_NAME"
+rsync -z -rlt --delete --partial --progress \
+  "$LOCAL_BUNDLE_DIR/" \
+  "$HOST:$REMOTE_ABS_BUNDLE_DIR/"
 
 # Set executable permissions (done separately for openrsync compatibility on macOS)
-ssh "$HOST" "chmod 755 $REMOTE_ABS_DIR/$BINARY_NAME"
+ssh "$HOST" "chmod 755 $REMOTE_ABS_BUNDLE_DIR/$BINARY_NAME"
+
+# Atomically replace the historical expected binary path with a relative
+# symlink into the complete bundle.
+ssh "$HOST" bash -s -- "$REMOTE_ABS_DIR" "$BUNDLE_VERSION" "$BINARY_NAME" <<'EOF'
+set -euo pipefail
+
+remote_dir="$1"
+bundle_version="$2"
+binary_name="$3"
+symlink_tmp="$remote_dir/.$binary_name.link.$$"
+
+cleanup() {
+  rm -f "$symlink_tmp"
+}
+trap cleanup EXIT
+
+ln -s "bundles/$bundle_version/$binary_name" "$symlink_tmp"
+mv -f "$symlink_tmp" "$remote_dir/$binary_name"
+EOF
 
 echo "==> Stopping stale remote-server daemons on $HOST"
 ssh "$HOST" bash <<'EOF'
@@ -231,5 +263,6 @@ done
 EOF
 
 echo ""
-echo "==> Done! Binary deployed to $HOST:$REMOTE_ABS_DIR/$BINARY_NAME"
+echo "==> Done! Bundle deployed to $HOST:$REMOTE_ABS_BUNDLE_DIR"
+echo "    Compatibility symlink: $REMOTE_ABS_DIR/$BINARY_NAME"
 echo "    (resolved from ~/$REMOTE_DIR/$BINARY_NAME on remote)"

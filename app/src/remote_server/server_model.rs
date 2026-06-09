@@ -90,6 +90,21 @@ use crate::terminal::model::session::command_executor::{
 };
 use crate::util::git;
 
+/// Resolves packaged resources installed beside the standalone remote-server executable.
+///
+/// This deliberately does not use `warp_core::paths::bundled_resources_dir`,
+/// whose macOS behavior resolves resources inside an app bundle. Remote-server
+/// executables use the same sibling `resources` layout on every supported host.
+fn bundled_resources_dir_for_executable(executable: &Path) -> Option<PathBuf> {
+    let executable = std::fs::canonicalize(executable).ok()?;
+    let resources_dir = executable.parent()?.join("resources");
+    resources_dir.is_dir().then_some(resources_dir)
+}
+
+fn remote_server_bundled_resources_dir() -> Option<PathBuf> {
+    bundled_resources_dir_for_executable(&std::env::current_exe().ok()?)
+}
+
 /// Outcome of dispatching a request-style `ClientMessage`.
 ///
 /// Notifications (fire-and-forget messages like `SessionBootstrapped` and
@@ -230,6 +245,8 @@ pub struct ServerModel {
     /// Returned in every `InitializeResponse` so clients can deduplicate
     /// host-scoped models.
     host_id: String,
+    /// Packaged resources installed beside this daemon executable.
+    bundled_resources_dir: Option<PathBuf>,
     /// Per-session command executors created from `SessionBootstrapped` notifications.
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
@@ -266,6 +283,7 @@ impl ServerModel {
             grace_timer_cancel: None,
             in_progress: HashMap::new(),
             host_id,
+            bundled_resources_dir: remote_server_bundled_resources_dir(),
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
@@ -1466,6 +1484,11 @@ impl ServerModel {
             InitializeResponse {
                 server_version,
                 host_id: self.host_id.clone(),
+                bundled_resources_dir: self
+                    .bundled_resources_dir
+                    .as_deref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
             },
         ))
     }

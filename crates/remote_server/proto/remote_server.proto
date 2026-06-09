@@ -170,6 +170,9 @@ message Abort {
 message InitializeResponse {
   string server_version = 1;
   string host_id = 2;
+  // Absolute path to the packaged resources installed beside the daemon.
+  // Empty when the daemon has no packaged resources available.
+  string bundled_resources_dir = 3;
 }
 
 // Sent by the client after the SSH session has been bootstrapped.
@@ -238,6 +241,7 @@ message ErrorResponse {
   ErrorCode code = 1;
   string message = 2;
 }
+
 
 // ── Shared repo metadata sub-messages ─────────────────────────────
 // Mirror the Rust types in repo_metadata/src/file_tree_update.rs.

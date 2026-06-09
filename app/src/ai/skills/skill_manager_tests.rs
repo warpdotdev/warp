@@ -376,7 +376,8 @@ fn cloud_environment_skills_always_included() {
 #[test]
 fn test_read_bundled_skills_with_variable_substitution() {
     let temp_dir = TempDir::new().unwrap();
-    let skills_dir = temp_dir.path();
+    let resources_dir = temp_dir.path();
+    let skills_dir = resources_dir.join("bundled/skills");
 
     // Create a test skill with variables
     let skill_dir = skills_dir.join("test-skill");
@@ -394,7 +395,13 @@ Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
     )
     .unwrap();
 
-    let skills = futures::executor::block_on(read_bundled_skills(skills_dir));
+    let resources_dir = LocalOrRemotePath::Local(resources_dir.to_path_buf());
+    let host_skills_dir = LocalOrRemotePath::Local(skills_dir.clone());
+    let skills = futures::executor::block_on(read_bundled_skills(
+        &skills_dir,
+        &host_skills_dir,
+        &resources_dir,
+    ));
 
     assert_eq!(skills.len(), 1);
     let skill = skills.get("test-skill").unwrap();
@@ -407,9 +414,57 @@ Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
 }
 
 #[test]
+fn test_read_bundled_skills_renders_remote_host_paths() {
+    let temp_dir = TempDir::new().unwrap();
+    let source_skills_dir = temp_dir.path().join("bundled/skills");
+    let source_skill_dir = source_skills_dir.join("test-skill");
+    fs::create_dir_all(&source_skill_dir).unwrap();
+    fs::write(
+        source_skill_dir.join("SKILL.md"),
+        r#"---
+name: test-skill
+description: Test remote rendering
+---
+
+Use {{skill_dir}} and {{settings_schema_path}}.
+"#,
+    )
+    .unwrap();
+
+    let host_id = HostId::new("remote-host".to_string());
+    let remote_resources_dir = LocalOrRemotePath::Remote(RemotePath::new(
+        host_id.clone(),
+        StandardizedPath::try_new("/opt/warp/resources").unwrap(),
+    ));
+    let remote_skills_dir = remote_resources_dir.join("bundled/skills");
+    let skills = futures::executor::block_on(read_bundled_skills(
+        &source_skills_dir,
+        &remote_skills_dir,
+        &remote_resources_dir,
+    ));
+
+    let skill = skills.get("test-skill").unwrap();
+    assert_eq!(
+        skill.path,
+        LocalOrRemotePath::Remote(RemotePath::new(
+            host_id,
+            StandardizedPath::try_new("/opt/warp/resources/bundled/skills/test-skill/SKILL.md")
+                .unwrap(),
+        ))
+    );
+    assert!(skill
+        .content
+        .contains("/opt/warp/resources/bundled/skills/test-skill"));
+    assert!(skill
+        .content
+        .contains("/opt/warp/resources/settings_schema.json"));
+}
+
+#[test]
 fn test_read_bundled_skills_preserves_other_content() {
     let temp_dir = TempDir::new().unwrap();
-    let skills_dir = temp_dir.path();
+    let resources_dir = temp_dir.path();
+    let skills_dir = resources_dir.join("bundled/skills");
 
     // Create a test skill with both warp and non-warp variables
     let skill_dir = skills_dir.join("test-skill");
@@ -422,26 +477,34 @@ name: test-skill
 description: Test skill with mixed variables
 ---
 
-Use {{other_var}} and {{warp_cli_binary_name}} together.
+Use {{other_var}}, {{warp_cli_binary_name}}, and {{skill_dir}} together.
 "#,
     )
     .unwrap();
 
-    let skills = futures::executor::block_on(read_bundled_skills(skills_dir));
+    let resources_dir = LocalOrRemotePath::Local(resources_dir.to_path_buf());
+    let host_skills_dir = LocalOrRemotePath::Local(skills_dir.clone());
+    let skills = futures::executor::block_on(read_bundled_skills(
+        &skills_dir,
+        &host_skills_dir,
+        &resources_dir,
+    ));
 
     assert_eq!(skills.len(), 1);
     let skill = skills.get("test-skill").unwrap();
 
     let expected_cli = ChannelState::channel().cli_command_name();
     assert!(skill.content.contains(&format!(
-        "Use {{{{other_var}}}} and {expected_cli} together."
+        "Use {{{{other_var}}}}, {expected_cli}, and {} together.",
+        skill_dir.display()
     )));
 }
 
 #[test]
 fn test_read_bundled_skills_no_variables() {
     let temp_dir = TempDir::new().unwrap();
-    let skills_dir = temp_dir.path();
+    let resources_dir = temp_dir.path();
+    let skills_dir = resources_dir.join("bundled/skills");
 
     // Create a test skill with no variables
     let skill_dir = skills_dir.join("test-skill");
@@ -459,7 +522,13 @@ Plain content with no variables.
     )
     .unwrap();
 
-    let skills = futures::executor::block_on(read_bundled_skills(skills_dir));
+    let resources_dir = LocalOrRemotePath::Local(resources_dir.to_path_buf());
+    let host_skills_dir = LocalOrRemotePath::Local(skills_dir.clone());
+    let skills = futures::executor::block_on(read_bundled_skills(
+        &skills_dir,
+        &host_skills_dir,
+        &resources_dir,
+    ));
 
     assert_eq!(skills.len(), 1);
     let skill = skills.get("test-skill").unwrap();
@@ -468,16 +537,31 @@ Plain content with no variables.
 
 #[test]
 fn test_build_bundled_skill_context() {
-    let context = build_bundled_skill_context();
+    let temp_dir = TempDir::new().unwrap();
+    let resources_dir = temp_dir.path();
+    let skill_dir = resources_dir.join("bundled/skills/test-skill");
+    let context = build_bundled_skill_context(
+        &LocalOrRemotePath::Local(resources_dir.to_path_buf()),
+        &LocalOrRemotePath::Local(skill_dir.clone()),
+    );
 
-    // At least 5 entries: server_url, cli_binary_name, url_scheme, settings_file_path, keybindings_file_path.
-    // settings_schema_path is only present when bundled_resources_dir() returns Some.
-    assert!(context.len() >= 5);
+    assert_eq!(context.len(), 7);
     assert!(context.contains_key("warp_server_url"));
     assert!(context.contains_key("warp_cli_binary_name"));
     assert!(context.contains_key("warp_url_scheme"));
     assert!(context.contains_key("settings_file_path"));
     assert!(context.contains_key("keybindings_file_path"));
+    assert_eq!(
+        context.get("settings_schema_path").unwrap(),
+        &resources_dir
+            .join("settings_schema.json")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        context.get("skill_dir").unwrap(),
+        &skill_dir.display().to_string()
+    );
 
     assert_eq!(
         context.get("warp_server_url").unwrap(),

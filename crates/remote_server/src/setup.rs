@@ -467,8 +467,8 @@ pub fn binary_name() -> &'static str {
     ChannelState::channel().cli_command_name()
 }
 
-/// Returns the full remote binary path for the current channel and client
-/// version.
+/// Returns the compatibility symlink path used to launch the remote binary for
+/// the current channel and client version.
 ///
 /// The path-versioning rule is keyed strictly off [`Channel`]:
 ///
@@ -495,15 +495,36 @@ pub fn remote_server_binary() -> String {
     }
 }
 
-/// Returns the shell command to verify the remote server binary is
-/// installed and functional by running it with `--version`.
+/// Returns the shell command to verify the complete remote-server bundle is
+/// installed and functional by running its compatibility symlink with
+/// `--version`.
 ///
-/// Exits 0 when the binary is present, executable, and can parse its
-/// own arguments. A missing binary produces exit 127 (command not
-/// found) or 126 (not executable), and a corrupted binary will fail
-/// with a non-zero exit of its own.
+/// Exits 0 when the compatibility path is a symlink, the bundle executable is
+/// present and executable, the bundle resources directory exists, and the
+/// executable can parse its own arguments.
 pub fn binary_check_command() -> String {
-    format!("{} --version", remote_server_binary())
+    format!(
+        "test -L {} && test \"$(readlink {})\" = \"{}\" && test -x {} && test -d {} && {} --version",
+        remote_server_binary(),
+        remote_server_binary(),
+        remote_server_binary_symlink_target(),
+        remote_server_bundle_binary(),
+        remote_server_bundle_resources_dir(),
+        remote_server_binary(),
+    )
+}
+
+/// Returns the shell command to remove the current remote-server install.
+///
+/// Removes both the compatibility path and its version-scoped bundle. This is
+/// safe for legacy binary-only installs because `rm -f` also removes a regular
+/// file at the compatibility path and `rm -rf` tolerates a missing bundle.
+pub fn remote_server_removal_command() -> String {
+    format!(
+        "rm -f {} && rm -rf {}",
+        remote_server_binary(),
+        remote_server_bundle_dir()
+    )
 }
 
 /// Returns the version string used to pin remote-server installs on
@@ -531,6 +552,42 @@ pub fn remote_server_artifact_version() -> &'static str {
             pinned_version()
         }
     }
+}
+/// Returns the version-scoped directory containing the remote-server
+/// executable and its resources.
+///
+/// Keeping the executable and resources together ensures
+/// [`warp_core::paths::bundled_resources_dir`] can find the resources after
+/// canonicalizing the compatibility symlink returned by
+/// [`remote_server_binary`].
+pub fn remote_server_bundle_dir() -> String {
+    format!(
+        "{}/bundles/{}",
+        remote_server_dir(),
+        remote_server_artifact_version()
+    )
+}
+
+/// Returns the executable path inside the current version-scoped bundle.
+pub fn remote_server_bundle_binary() -> String {
+    format!("{}/{}", remote_server_bundle_dir(), binary_name())
+}
+
+/// Returns the resources directory inside the current version-scoped bundle.
+pub fn remote_server_bundle_resources_dir() -> String {
+    format!("{}/resources", remote_server_bundle_dir())
+}
+
+/// Returns the relative symlink target used by [`remote_server_binary`].
+///
+/// A relative target keeps installs relocatable with the remote user's home
+/// directory while still resolving to [`remote_server_bundle_binary`].
+fn remote_server_binary_symlink_target() -> String {
+    format!(
+        "bundles/{}/{}",
+        remote_server_artifact_version(),
+        binary_name()
+    )
 }
 
 /// The install script template, loaded from a standalone `.sh` file for
@@ -565,6 +622,11 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
         .replace("{binary_name}", binary_name())
         .replace("{version_query}", &vq)
         .replace("{version_suffix}", &version_suffix)
+        .replace("{bundle_version}", remote_server_artifact_version())
+        .replace(
+            "{binary_symlink_target}",
+            &remote_server_binary_symlink_target(),
+        )
         .replace(
             "{no_http_client_exit_code}",
             &NO_HTTP_CLIENT_EXIT_CODE.to_string(),

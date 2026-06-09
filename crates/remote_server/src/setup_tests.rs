@@ -1,3 +1,11 @@
+#[cfg(unix)]
+use std::fs;
+#[cfg(unix)]
+use std::process::Stdio;
+
+#[cfg(unix)]
+use command::blocking::Command;
+
 use super::*;
 
 #[test]
@@ -240,6 +248,166 @@ fn parse_preinstall_unsupported_non_glibc() {
     assert!(!result.is_supported());
 }
 
+#[test]
+fn remote_server_bundle_paths_are_version_scoped() {
+    let expected_bundle_dir = format!(
+        "{}/bundles/{}",
+        remote_server_dir(),
+        remote_server_artifact_version()
+    );
+
+    assert_eq!(remote_server_bundle_dir(), expected_bundle_dir);
+    assert_eq!(
+        remote_server_bundle_binary(),
+        format!("{expected_bundle_dir}/{}", binary_name())
+    );
+    assert_eq!(
+        remote_server_bundle_resources_dir(),
+        format!("{expected_bundle_dir}/resources")
+    );
+}
+
+#[test]
+fn binary_check_requires_symlink_executable_and_resources() {
+    let command = binary_check_command();
+
+    assert!(command.contains(&format!("test -L {}", remote_server_binary())));
+    assert!(command.contains(&format!(
+        "test \"$(readlink {})\" = \"{}\"",
+        remote_server_binary(),
+        remote_server_binary_symlink_target()
+    )));
+    assert!(command.contains(&format!("test -x {}", remote_server_bundle_binary())));
+    assert!(command.contains(&format!("test -d {}", remote_server_bundle_resources_dir())));
+    assert!(command.ends_with(&format!("{} --version", remote_server_binary())));
+}
+
+#[test]
+fn removal_command_removes_compatibility_path_and_bundle() {
+    assert_eq!(
+        remote_server_removal_command(),
+        format!(
+            "rm -f {} && rm -rf {}",
+            remote_server_binary(),
+            remote_server_bundle_dir()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn install_script_installs_complete_bundle_and_compatibility_symlink() {
+    let test_root = std::env::temp_dir().join(format!(
+        "remote-server-bundle-install-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let fake_home = test_root.join("home");
+    let tar_source = test_root.join("tar-source");
+    let resources = tar_source.join("resources/bundled/skills/test-skill");
+    let tarball = test_root.join("oz.tar.gz");
+    fs::create_dir_all(&fake_home).unwrap();
+    fs::create_dir_all(&resources).unwrap();
+    fs::write(
+        tar_source.join("oz-test"),
+        "#!/usr/bin/env bash\n[ \"$1\" = \"--version\" ]\n",
+    )
+    .unwrap();
+    fs::write(resources.join("SKILL.md"), "test skill").unwrap();
+    // Decoy: skills may ship companion files whose names also start with `oz`.
+    // The installer must not mistake them for the executable.
+    fs::write(
+        resources.join("oz-decoy.sh"),
+        "#!/usr/bin/env bash\nexit 1\n",
+    )
+    .unwrap();
+
+    let tar_output = Command::new("tar")
+        .arg("-czf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&tar_source)
+        .arg("oz-test")
+        .arg("resources")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to create test tarball");
+    assert!(
+        tar_output.status.success(),
+        "tar failed: {}",
+        String::from_utf8_lossy(&tar_output.stderr)
+    );
+
+    let script = install_script(Some(tarball.to_str().unwrap()));
+    let install_output = Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .env("HOME", &fake_home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run install script");
+    assert!(
+        install_output.status.success(),
+        "install failed: {}",
+        String::from_utf8_lossy(&install_output.stderr)
+    );
+
+    let resolve_remote_path = |path: String| path.replacen('~', fake_home.to_str().unwrap(), 1);
+    let compatibility_binary = resolve_remote_path(remote_server_binary());
+    let bundle_binary = resolve_remote_path(remote_server_bundle_binary());
+    let bundle_resources = resolve_remote_path(remote_server_bundle_resources_dir());
+
+    assert!(fs::symlink_metadata(&compatibility_binary)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(
+        fs::read_link(&compatibility_binary).unwrap(),
+        std::path::PathBuf::from(remote_server_binary_symlink_target())
+    );
+    assert_eq!(
+        fs::canonicalize(&compatibility_binary).unwrap(),
+        fs::canonicalize(&bundle_binary).unwrap()
+    );
+    assert!(fs::metadata(&bundle_binary).unwrap().is_file());
+    assert!(fs::metadata(&bundle_resources).unwrap().is_dir());
+    assert!(std::path::Path::new(&bundle_resources)
+        .join("bundled/skills/test-skill/SKILL.md")
+        .is_file());
+    assert!(std::path::Path::new(&bundle_resources)
+        .join("bundled/skills/test-skill/oz-decoy.sh")
+        .is_file());
+
+    let check_output = Command::new("bash")
+        .arg("-c")
+        .arg(binary_check_command())
+        .env("HOME", &fake_home)
+        .output()
+        .expect("failed to run binary check command");
+    assert!(check_output.status.success());
+    fs::remove_dir_all(&bundle_resources).unwrap();
+    let missing_resources_check = Command::new("bash")
+        .arg("-c")
+        .arg(binary_check_command())
+        .env("HOME", &fake_home)
+        .output()
+        .expect("failed to run binary check command without resources");
+    assert!(!missing_resources_check.status.success());
+
+    let removal_output = Command::new("bash")
+        .arg("-c")
+        .arg(remote_server_removal_command())
+        .env("HOME", &fake_home)
+        .output()
+        .expect("failed to run removal command");
+    assert!(removal_output.status.success());
+    assert!(!std::path::Path::new(&compatibility_binary).exists());
+    assert!(!std::path::Path::new(&bundle_binary).exists());
+
+    fs::remove_dir_all(test_root).unwrap();
+}
+
 /// Regression: the install script's tilde-expansion logic must work
 /// across the bash versions we actually invoke at install time
 /// (`run_ssh_script` pipes the script into `bash -s` on the remote).
@@ -270,10 +438,6 @@ fn parse_preinstall_unsupported_non_glibc() {
 #[cfg(unix)]
 #[test]
 fn install_script_tilde_expansion_resolves_correctly() {
-    use std::process::Stdio;
-
-    use command::blocking::Command;
-
     let bash = if std::path::Path::new("/bin/bash").exists() {
         "/bin/bash"
     } else {
