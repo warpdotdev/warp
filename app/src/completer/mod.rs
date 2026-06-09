@@ -46,6 +46,8 @@ pub struct SessionContext {
     #[cfg(feature = "completions_v2")]
     js_ctx: Option<js::SessionJsExecutionContext>,
 
+    /// Directory listings keyed by absolute path. Callers that must reflect a directory's
+    /// current contents should use `refresh_directory_entries` to re-read from disk.
     cached_directory_entries: Arc<dashmap::DashMap<TypedPathBuf, Arc<Vec<EngineDirEntry>>>>,
 
     /// Snapshot of all Warp workflow aliases.
@@ -53,6 +55,20 @@ pub struct SessionContext {
 }
 
 impl SessionContext {
+    /// Lists `directory` fresh from disk and caches the results.
+    pub(crate) async fn refresh_directory_entries(
+        &self,
+        directory: TypedPathBuf,
+    ) -> Arc<Vec<EngineDirEntry>> {
+        let result = Arc::new(
+            self.list_directory_entries_internal(&directory.to_path())
+                .await,
+        );
+        self.cached_directory_entries
+            .insert(directory, result.clone());
+        result
+    }
+
     async fn list_directory_entries_internal(
         &self,
         directory: &TypedPath<'_>,
