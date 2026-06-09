@@ -5,109 +5,32 @@
 
 ## Summary
 
-Add native support for the `agy` (Antigravity) CLI agent in Warp. This enables the terminal to automatically identify `agy` command executions, transition the active pane into "Agent Mode" (with dedicated layouts, toolbars, and branding), and support one-click installation and update flows for the `agy-warp` plugin. Warp will listen to and display structured OSC 777 session notifications (session status, permission requests, tool output, and task completion).
+Add native support for the `agy` (Antigravity) CLI agent in Warp. This enables the terminal to automatically identify `agy` command executions and transition the active pane into "Agent Mode" (with dedicated layouts, toolbars, and branding).
 
 ## Problem
 
-The Antigravity CLI agent (`agy`) is an autonomous developer tool that performs code editing, terminal commands, and workspace analysis. While it is designed to communicate with the terminal using the standard `warp://cli-agent` OSC 777 protocol, Warp currently lacks native support for it:
-
+The Antigravity CLI agent (`agy`) is an autonomous developer tool. While users can run it in Warp today, Warp currently lacks native support for it as a recognized agent:
 1. Running `agy` does not trigger the terminal's Agent Mode layout or toolbar.
-2. Warp does not listen to or parse structured notifications from `agy` sessions.
-3. No install/update chip or setup instructions are available to help the user configure the `agy-warp` integration plugin.
-4. No feature flag exists to gate or control `agy` plugin integrations.
+2. The UI does not brand the session with the Antigravity logo or colors.
+
+Note: Richer notifications (OSC 777) and plugin installation are deferred until an official Antigravity plugin for Warp exists.
 
 ## Goals
 
 - Native command detection: typing or running `agy` triggers Agent Mode immediately.
 - Custom branding: render the dedicated Antigravity toolbar with custom colors (Indigo `#6366F1`) and a custom logo.
-- Auto-install and auto-update: provide inline terminal chips that automatically configure or update the `agy-warp` plugin.
-- Fallback instructions: offer a split pane with manual setup commands if auto-installation fails.
-- Notification streams: process and display structured notifications (e.g. blocked, success, permission requests) in the agent inbox.
-- Feature gating: The `agy` plugin chip installation and update flows are gated by the `AntigravityNotifications` feature flag (consistent with existing agents like `GeminiNotifications`, `CodexNotifications`). Command detection, Agent Mode entry, and notification listener wiring are unconditional, matching the established pattern for all CLI agents.
 
 ## Non-Goals
 
-- Hosting or modifying the `agy-warp` plugin codebase (maintained in a separate repository, e.g., `warpdotdev/agy-warp`).
-- Implementing remote execution environment / Oz harness support for `agy` (future milestone).
-
-## How agy CLI Extensions Work
-
-The Antigravity CLI agent supports an extension ecosystem:
-
-- **Install Command**: `agy extensions install <github-url>` — clones or downloads the extension to `~/.antigravitycli/extensions/<name>/`.
-- **Update Command**: `agy extensions update <name>` — updates the extension to the latest upstream release.
-- **Manifest**: Located at `~/.antigravitycli/extensions/<name>/agy-extension.json`. Contains metadata fields like `version` and `description`.
-- **Hooks**: Triggers hook scripts (e.g. `SessionStart`, `AfterAgent`, `Notification`) which emit the OSC 777 `warp://cli-agent` sequences.
-
-## User Experience
-
-### Install Chip
-
-If a user launches an `agy` session and the extension is not found on disk:
-- A green chip appears in the input footer: "Notifications setup instructions".
-- Clicking the chip triggers auto-installation via:
-  ```bash
-  agy extensions install https://github.com/warpdotdev/agy-warp
-  ```
-- On success, a toast is shown: "Warp plugin installed. Please restart the session to activate."
-- On failure, an error toast is shown, and the user can click (ⓘ) to open manual instructions in a split pane.
-
-**Manual Instructions (split pane):**
-- Title: "Install Warp Plugin for Antigravity"
-- Subtitle: "Run the following command, then restart Antigravity."
-- Steps:
-  1. "Install the Warp extension" — command: `agy extensions install https://github.com/warpdotdev/agy-warp`
-- Post-install notes: "Restart the session to activate the plugin."
-
-### Update Chip
-
-When the plugin is active but its version is below `MINIMUM_PLUGIN_VERSION`:
-- A chip appears: "Plugin update available".
-- Clicking triggers auto-updates via:
-  ```bash
-  agy extensions update agy-warp
-  ```
-- On success, a toast is shown: "Warp plugin updated. Please restart the session to activate."
-- On failure, an error toast is shown, and the user can click (ⓘ) to open manual update instructions.
-
-### Version Detection
-
-Determined by:
-1. **Filesystem check**: Read the `version` field from `~/.antigravitycli/extensions/agy-warp/agy-extension.json`.
-2. **Runtime notification**: Check the `plugin_version` payload in the `SessionStart` OSC 777 event.
-
-### Chip Visibility Logic
-
-Consistent with other agents (Claude Code, Gemini CLI):
-1. Connected + version >= minimum → **no chip**
-2. Connected + version < minimum → **update chip**
-3. Not connected + installed on disk + version >= minimum → **no chip** (wait for connect)
-4. Not connected + installed on disk + version < minimum → **update chip**
-5. Not connected + not installed on disk → **install chip**
-6. Notifications disabled in settings → **no chip**
-
-## Security
-
-Warp intentionally trusts the latest extension code published to the official `warpdotdev/agy-warp` repository, consistent with the trust model used by all existing agent plugin managers (Gemini CLI, Claude Code, etc.):
-
-1. **Trusted source**: Only the official `warpdotdev` GitHub organization URL is hardcoded in `EXTENSION_REPO`. Users cannot redirect the install to an arbitrary repository.
-2. **HTTPS transport**: All downloads use HTTPS, relying on GitHub's TLS integrity.
-3. **Post-update version verification**: After an update, the plugin manager reads the on-disk manifest to verify the installed version is at least `MINIMUM_PLUGIN_VERSION`. If it is not, the update is treated as a failure (matching the `GeminiPluginManager` pattern).
+- Providing inline terminal chips for plugin installation or updates (deferred).
+- Processing structured OSC 777 notifications (deferred).
+- Reading local `.antigravitycli/skills` directories (deferred).
 
 ## Success Criteria
 
 1. Running `agy` in Warp launches Agent Mode and styles the pane with Antigravity branding.
-2. Green install chips appear on the first launch if the plugin is missing.
-3. Clicking the install chip runs the setup command and resolves the setup state.
-4. Outdated plugin manifests prompt an update chip.
-5. Setup instructions display correctly in a split pane.
-6. Structured events from the `agy` session are handled and displayed in the terminal UI.
-7. When `AntigravityNotifications` is disabled, no plugin chips are active, but `agy` is still detected and Agent Mode still activates.
+2. The command is properly classified as a one-off shell command.
 
 ## Validation
 
-- **Unit tests**: Validate filesystem verification (`is_installed`, `needs_update`) using temporary directory structures.
-- **Unit tests**: Test CLI detection, brand styling, and plugin instructions.
-- **Unit tests**: Validate the core OSC 777 parser, listener, and session-model data flow for `agent: "agy"` to ensure the notification stream works correctly.
-- **Unit tests**: Verify that disabling the `AntigravityNotifications` flag prevents plugin manager instantiation while leaving command detection and listener wiring functional.
-- **Manual verification**: Verify the end-to-end setup and notifications flow inside a live terminal window.
+- **Manual verification**: Verify the end-to-end command execution inside a live terminal window.
