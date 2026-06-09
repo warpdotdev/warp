@@ -149,6 +149,7 @@ pub struct Network {
 }
 
 impl Network {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         session_id: SessionId,
         channel_event_proxy: ChannelEventListener,

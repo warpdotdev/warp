@@ -8015,13 +8015,13 @@ impl TerminalView {
     ) {
         let state = if agent_has_control {
             LongRunningCommandAgentInteractionState::InControl
-        } else if {
-            let model = self.model.lock();
-            model
-                .block_list()
-                .block_with_id(&block_id)
-                .is_some_and(|block| block.is_agent_tagged_in())
-        } {
+        } else if self
+            .model
+            .lock()
+            .block_list()
+            .block_with_id(&block_id)
+            .is_some_and(|block| block.is_agent_tagged_in())
+        {
             LongRunningCommandAgentInteractionState::TaggedIn
         } else {
             LongRunningCommandAgentInteractionState::NotInteracting
