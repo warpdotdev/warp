@@ -334,6 +334,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     set -l escaped_node_version ""
     set -l escaped_git_head ""
     set -l escaped_git_branch ""
+    set -l escaped_aws_profile ""
 
     # Only fill these fields once we've finished bootstrapping, as the
     # blocks created during the bootstrap process don't have visible
@@ -396,6 +397,18 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       end
       set escaped_git_head (warp_escape_json "$git_head")
       set escaped_git_branch (warp_escape_json "$git_branch")
+
+      set -l _warp_aws_profile ""
+      if set -q AWS_VAULT; and test -n "$AWS_VAULT"
+        set _warp_aws_profile $AWS_VAULT
+      else if set -q AWS_PROFILE; and test -n "$AWS_PROFILE"
+        set _warp_aws_profile $AWS_PROFILE
+      else if set -q AWS_DEFAULT_PROFILE; and test -n "$AWS_DEFAULT_PROFILE"
+        set _warp_aws_profile $AWS_DEFAULT_PROFILE
+      end
+      if test -n "$_warp_aws_profile"
+        set escaped_aws_profile (warp_escape_json "$_warp_aws_profile")
+      end
     end
 
     warp_update_prompt_vars
@@ -422,6 +435,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       \"virtual_env\": \"$escaped_virtual_env\",
       \"conda_env\": \"$escaped_conda_env\",
       \"node_version\": \"$escaped_node_version\",
+      \"aws_profile\": \"$escaped_aws_profile\",
       \"session_id\": $WARP_SESSION_ID
       }}"
     else
@@ -435,6 +449,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       \"virtual_env\": \"$escaped_virtual_env\",
       \"conda_env\": \"$escaped_conda_env\",
       \"node_version\": \"$escaped_node_version\",
+      \"aws_profile\": \"$escaped_aws_profile\",
       \"session_id\": $WARP_SESSION_ID
       }}"
     end

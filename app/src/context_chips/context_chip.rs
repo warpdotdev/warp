@@ -211,6 +211,7 @@ pub enum ChipFingerprintInput {
     NodeVersion,
     SessionUser,
     SessionHostname,
+    AwsProfile,
     ExternalCommandsState,
     RequiredExecutablesPresence,
     /// A per-chip monotonic counter that increments each time a user command matching
@@ -341,6 +342,8 @@ pub struct Environment {
     conda_environment: Option<String>,
     /// The Node.js version.
     node_version: Option<String>,
+    /// The active AWS profile.
+    aws_profile: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -404,6 +407,28 @@ impl ContextChip {
                 from_context_fn: generator,
             },
             on_click_generator: None,
+            icon_path: None,
+            refresh_config,
+            runtime_policy,
+            allow_empty_value: false,
+        }
+    }
+
+    /// Like [`Self::builtin_with_runtime_policy`] but also attaches a shell command generator
+    /// for the chip's selectable list (used for on-click menus).
+    pub fn context_aware_with_shell_on_click(
+        title: impl Into<String>,
+        generator: fn(&GeneratorContext) -> Option<ChipValue>,
+        on_click_generator: ShellCommandGenerator,
+        refresh_config: RefreshConfig,
+        runtime_policy: ChipRuntimePolicy,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            generator: PromptGenerator::Contextual {
+                from_context_fn: generator,
+            },
+            on_click_generator: Some(PromptGenerator::ShellCommand(on_click_generator)),
             icon_path: None,
             refresh_config,
             runtime_policy,
@@ -498,6 +523,13 @@ impl ContextChip {
 
 impl Environment {
     /// Create a new environment with the given values.
+    ///
+    /// This is a test-only constructor that takes only the historically-tracked
+    /// fields. New env-derived fields (like `aws_profile`, `git_branch`) are
+    /// not parameters here on purpose — production code should use
+    /// [`Self::from_block`] which inherits every field from a [`Block`].
+    /// If you're adding a new field, default it to `None` here and populate
+    /// it in `from_block` instead of growing this signature.
     pub fn new(
         python_virtualenv: Option<String>,
         conda_environment: Option<String>,
@@ -508,6 +540,7 @@ impl Environment {
             python_virtualenv,
             conda_environment,
             node_version,
+            aws_profile: None,
         }
     }
 
@@ -518,6 +551,7 @@ impl Environment {
             python_virtualenv: block.virtual_env_short_name(),
             conda_environment: block.conda_env().cloned(),
             node_version: block.node_version().cloned(),
+            aws_profile: block.aws_profile().cloned(),
         }
     }
 
@@ -535,5 +569,9 @@ impl Environment {
 
     pub fn node_version(&self) -> Option<&String> {
         self.node_version.as_ref()
+    }
+
+    pub fn aws_profile(&self) -> Option<&String> {
+        self.aws_profile.as_ref()
     }
 }

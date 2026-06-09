@@ -380,6 +380,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       local escaped_git_head=""
       local escaped_git_branch=""
       local escaped_kube_config=""
+      local escaped_aws_profile=""
 
       # Only fill these fields once we've finished bootstrapping, as the
       # blocks created during the bootstrap process don't have visible
@@ -434,6 +435,11 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
           escaped_kube_config=$(warp_escape_json $KUBECONFIG)
         fi
 
+        local _warp_aws_profile="${AWS_VAULT:-${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-}}}"
+        if [[ -n $_warp_aws_profile ]]; then
+          escaped_aws_profile=$(warp_escape_json "$_warp_aws_profile")
+        fi
+
         # Note: We explicitly do _not_ use command -p here, as `git` is a command that can be
         # installed in non-standard locations and so is not always available on the shell's
         # default PATH. Instead, we rely on the active PATH, as if the user doesn't have git
@@ -471,6 +477,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       \"conda_env\": \"$escaped_conda_env\",
       \"node_version\": \"$escaped_node_version\",
       \"kube_config\": \"$escaped_kube_config\",
+      \"aws_profile\": \"$escaped_aws_profile\",
       \"session_id\": $WARP_SESSION_ID
       }}"
       warp_send_json_message "$escaped_json"

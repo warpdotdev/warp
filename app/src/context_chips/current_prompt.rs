@@ -439,6 +439,9 @@ impl CurrentPrompt {
                 ChipFingerprintInput::NodeVersion => {
                     context.current_environment.node_version().hash(&mut hasher);
                 }
+                ChipFingerprintInput::AwsProfile => {
+                    context.current_environment.aws_profile().hash(&mut hasher);
+                }
                 ChipFingerprintInput::SessionUser => {
                     context.active_session.map(Session::user).hash(&mut hasher);
                 }

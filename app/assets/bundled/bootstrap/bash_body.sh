@@ -558,6 +558,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         local escaped_node_version=""
         local escaped_git_head=""
         local escaped_git_branch=""
+        local escaped_aws_profile=""
         local git_head=""
         local git_branch=""
 
@@ -623,6 +624,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           if [ "$WARP_IN_MSYS2" = false ]; then
             escaped_git_head=$(warp_escape_json "$git_head")
             escaped_git_branch=$(warp_escape_json "$git_branch")
+            local _warp_aws_profile="${AWS_VAULT:-${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-}}}"
+            if [[ -n "$_warp_aws_profile" ]]; then
+              escaped_aws_profile=$(warp_escape_json "$_warp_aws_profile")
+            fi
           fi
         fi
 
@@ -658,6 +663,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           warp_send_hook_kv_pair "virtual_env" "$VIRTUAL_ENV"
           warp_send_hook_kv_pair "conda_env" "$CONDA_DEFAULT_ENV"
           warp_send_hook_kv_pair "node_version" "$node_version"
+          warp_send_hook_kv_pair "aws_profile" "${AWS_VAULT:-${AWS_PROFILE:-${AWS_DEFAULT_PROFILE:-}}}"
           warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
@@ -671,6 +677,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           \"virtual_env\": \"$escaped_virtual_env\",
           \"conda_env\": \"$escaped_conda_env\",
           \"node_version\": \"$escaped_node_version\",
+          \"aws_profile\": \"$escaped_aws_profile\",
           \"session_id\": $WARP_SESSION_ID
           }}"
           warp_send_json_message "$escaped_json"

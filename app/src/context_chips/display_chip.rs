@@ -51,7 +51,9 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model_events::ModelEventDispatcher;
+use crate::terminal::shell::ShellType;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
+use crate::themes::theme::PromptColors;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::keybinding_name_to_display_string;
@@ -381,6 +383,10 @@ pub enum DisplayChipKind {
         menu_open: bool,
         menu: ViewHandle<DisplayChipMenu>,
     },
+    AwsProfile {
+        menu_open: bool,
+        menu: ViewHandle<DisplayChipMenu>,
+    },
     GithubPullRequest,
     GitDiffStats {
         line_changes_info: Option<GitLineChanges>,
@@ -393,6 +399,7 @@ impl DisplayChipKind {
             DisplayChipKind::WorkingDirectory { menu_open, .. } => *menu_open,
             DisplayChipKind::NodeVersion { popup_open, .. } => *popup_open,
             DisplayChipKind::GitBranch { menu_open, .. } => *menu_open,
+            DisplayChipKind::AwsProfile { menu_open, .. } => *menu_open,
             DisplayChipKind::GithubPullRequest
             | DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::Text
@@ -510,6 +517,27 @@ impl GenericMenuItem for CreateGitBranch {
 
     fn icon(&self, _app: &AppContext) -> Option<Icon> {
         Some(Icon::Plus)
+    }
+
+    fn action_data(&self) -> String {
+        self.0.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AwsProfile(String);
+
+impl GenericMenuItem for AwsProfile {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> String {
+        self.0.clone()
+    }
+
+    fn icon(&self, _app: &AppContext) -> Option<Icon> {
+        Some(Icon::Cloud)
     }
 
     fn action_data(&self) -> String {
@@ -639,6 +667,60 @@ impl DisplayChip {
                 });
 
                 DisplayChipKind::GitBranch {
+                    menu_open: false,
+                    menu: menu_view,
+                }
+            }
+            ContextChipKind::AwsProfile => {
+                // Hide the currently-active profile from the picker so the user only
+                // sees profiles they can switch *to* — selecting your current profile
+                // would just re-run the export with no observable effect.
+                let current_profile = chip_result
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.as_text())
+                    .map(str::to_string);
+                let profile_items: Vec<AwsProfile> = chip_result
+                    .on_click_values
+                    .iter()
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                    .filter(|name| current_profile.as_deref() != Some(*name))
+                    .map(|name| AwsProfile(name.to_string()))
+                    .collect();
+
+                let menu_view = ctx.add_typed_action_view(move |ctx| {
+                    DisplayChipMenu::new(profile_items, None, ChipMenuType::AwsProfiles, ctx)
+                });
+                ctx.subscribe_to_view(&menu_view, |me, _, event, ctx| match event {
+                    PromptDisplayMenuEvent::MenuAction(generic_event) => {
+                        let Some(profile) = generic_event
+                            .action_item
+                            .as_any()
+                            .downcast_ref::<AwsProfile>()
+                        else {
+                            log::warn!("MenuAction event should contain AwsProfile action item");
+                            return;
+                        };
+
+                        let shell = me
+                            .session_context
+                            .as_ref()
+                            .map(|sc| sc.session.shell().shell_type());
+                        ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(
+                            format_aws_profile_command(&profile.name(), shell),
+                        ));
+                        me.close_aws_profile_menu(ctx);
+                        ctx.notify();
+                    }
+                    PromptDisplayMenuEvent::CloseMenu => {
+                        me.close_aws_profile_menu(ctx);
+                        ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
+                        ctx.notify();
+                    }
+                });
+
+                DisplayChipKind::AwsProfile {
                     menu_open: false,
                     menu: menu_view,
                 }
@@ -918,6 +1000,15 @@ impl DisplayChip {
         }
     }
 
+    pub fn close_aws_profile_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if let DisplayChipKind::AwsProfile { menu_open, menu } = &mut self.display_chip_kind {
+            *menu_open = false;
+            menu.update(ctx, |menu, _| {
+                menu.reset_selected_index();
+            });
+        }
+    }
+
     pub fn close_working_directory_menu(&mut self, ctx: &mut ViewContext<Self>) {
         if let DisplayChipKind::WorkingDirectory {
             menu_open, menu, ..
@@ -942,7 +1033,8 @@ impl DisplayChip {
                     return true;
                 }
             }
-            DisplayChipKind::GitBranch { menu_open, menu } => {
+            DisplayChipKind::GitBranch { menu_open, menu }
+            | DisplayChipKind::AwsProfile { menu_open, menu } => {
                 if *menu_open {
                     ctx.focus(menu);
                     return true;
@@ -1059,6 +1151,80 @@ impl DisplayChip {
             }
             _ => true,
         }
+    }
+
+    fn aws_profile_chip(
+        &self,
+        menu_open: bool,
+        menu: &ViewHandle<DisplayChipMenu>,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let prompt_colors: PromptColors = appearance.theme().clone().into();
+        let font_color = if self.is_in_agent_view {
+            agent_view_chip_color(appearance)
+        } else {
+            prompt_colors.input_prompt_aws
+        };
+
+        let is_interactive =
+            !self.is_shared_session_viewer && !self.is_cli_agent_session_active(app);
+        let is_in_agent_view = self.is_in_agent_view;
+        let chip_text = self.text.clone();
+        let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
+            let hovered = state.is_hovered() && is_interactive;
+            let mut config =
+                UdiChipConfig::new_with_icon(Icon::Cloud, font_color, chip_text.clone())
+                    .with_hovered(hovered);
+            if is_in_agent_view {
+                config = config.for_agent_view();
+            }
+            let chip_element = render_udi_chip(config, appearance);
+
+            let mut stack = Stack::new().with_child(chip_element);
+            if state.is_hovered() && is_interactive && !menu_open {
+                let tool_tip = appearance
+                    .ui_builder()
+                    .tool_tip("Switch AWS profile".to_string())
+                    .build()
+                    .finish();
+                stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
+            }
+            stack.finish()
+        });
+
+        let hover = if !is_interactive {
+            hover.finish()
+        } else {
+            hover
+                .on_click(|ctx, _app, _position| {
+                    ctx.dispatch_typed_action(DisplayChipAction::ToggleMenu);
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish()
+        };
+
+        let mut stack = Stack::new().with_child(hover);
+
+        if menu_open {
+            let positioning = self.menu_positioning_provider.menu_position(app);
+            let (parent_anchor, child_anchor) = Self::positioning_to_anchors(positioning);
+            let offset = match positioning {
+                MenuPositioning::BelowInputBox => vec2f(0., 4.),
+                MenuPositioning::AboveInputBox => vec2f(0., -4.),
+            };
+            stack.add_positioned_overlay_child(
+                ChildView::new(menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    offset,
+                    ParentOffsetBounds::WindowByPosition,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
+        }
+
+        stack.finish()
     }
 
     fn git_branch_chip(
@@ -1563,6 +1729,9 @@ impl DisplayChip {
             DisplayChipKind::GitBranch { menu_open, menu } => {
                 Some(self.git_branch_chip(*menu_open, menu, app))
             }
+            DisplayChipKind::AwsProfile { menu_open, menu } => {
+                Some(self.aws_profile_chip(*menu_open, menu, app))
+            }
             DisplayChipKind::GithubPullRequest => Some(self.github_pull_request_chip(app)),
             DisplayChipKind::GitDiffStats { line_changes_info } => {
                 self.git_diff_stats_chip(line_changes_info, app)
@@ -1641,6 +1810,13 @@ impl TypedActionView for DisplayChip {
                     });
                     ctx.notify();
                 }
+                DisplayChipKind::AwsProfile { menu_open, menu } => {
+                    *menu_open = false;
+                    menu.update(ctx, |menu, _| {
+                        menu.reset_selected_index();
+                    });
+                    ctx.notify();
+                }
                 DisplayChipKind::WorkingDirectory {
                     menu_open, menu, ..
                 } => {
@@ -1689,6 +1865,32 @@ impl TypedActionView for DisplayChip {
                             send_telemetry_from_ctx!(
                                 TelemetryEvent::ContextChipInteracted {
                                     chip_type: "git_branch".to_string(),
+                                    action: "opened".to_string(),
+                                    is_udi_enabled,
+                                },
+                                ctx
+                            );
+                        }
+                        ctx.notify();
+                    }
+                    DisplayChipKind::AwsProfile { menu, menu_open } => {
+                        *menu_open = !*menu_open;
+                        let is_menu_open = *menu_open;
+                        if is_menu_open {
+                            ctx.focus(menu);
+                        } else {
+                            menu.update(ctx, |menu, _| {
+                                menu.reset_selected_index();
+                            });
+                        }
+                        ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: is_menu_open });
+                        if is_menu_open {
+                            let is_udi_enabled = InputSettings::as_ref(ctx)
+                                .is_universal_developer_input_enabled(ctx);
+
+                            send_telemetry_from_ctx!(
+                                TelemetryEvent::ContextChipInteracted {
+                                    chip_type: "aws_profile".to_string(),
                                     action: "opened".to_string(),
                                     is_udi_enabled,
                                 },
@@ -1883,6 +2085,45 @@ pub fn format_git_branch_command(encoded_git_branch_on_click_value: &str) -> Str
 /// characters that survived our front-end validation.
 pub fn format_create_git_branch_command(branch_name: &str) -> String {
     format!("git checkout -b {} --", shell_single_quote(branch_name))
+}
+
+pub fn format_aws_profile_command(profile_name: &str, shell: Option<ShellType>) -> String {
+    // Clicking the chip is an explicit profile override. The chip resolves
+    // the active profile as `AWS_VAULT` > `AWS_PROFILE` > ..., so in an
+    // aws-vault session merely setting `AWS_PROFILE` would not change the
+    // displayed profile. We also clear the temporary credentials that
+    // `aws-vault exec` injects (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`
+    // / `AWS_SESSION_TOKEN`); otherwise the AWS SDK would keep using the
+    // prior vault credentials while the chip displayed a different profile,
+    // producing confusing "wrong account" behavior.
+    match shell {
+        Some(ShellType::PowerShell) => {
+            // PowerShell: single quotes preserve literal; escape `'` as `''`.
+            format!(
+                "Remove-Item \
+                 Env:AWS_VAULT,Env:AWS_ACCESS_KEY_ID,Env:AWS_SECRET_ACCESS_KEY,Env:AWS_SESSION_TOKEN \
+                 -ErrorAction SilentlyContinue; \
+                 $env:AWS_PROFILE = '{}'",
+                profile_name.replace('\'', "''")
+            )
+        }
+        Some(ShellType::Fish) => {
+            // Fish has no standard `unset` or `export` builtins. Use `set -e`
+            // to clear, `set -gx` to export. Single-quote escaping `'\''`
+            // works in fish because outside-of-quotes `\'` is a literal `'`.
+            format!(
+                "set -e AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+                 set -gx AWS_PROFILE '{}'",
+                profile_name.replace('\'', "'\\''")
+            )
+        }
+        // Bash, Zsh — POSIX-style single-quote escaping: `'` → `'\''`.
+        _ => format!(
+            "unset AWS_VAULT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; \
+             export AWS_PROFILE='{}'",
+            profile_name.replace('\'', "'\\''")
+        ),
+    }
 }
 
 pub(crate) fn chip_container(
