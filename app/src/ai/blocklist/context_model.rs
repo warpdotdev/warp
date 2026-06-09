@@ -340,6 +340,21 @@ impl BlocklistAIContextModel {
         !self.pending_attachments.is_empty()
     }
 
+    /// Returns `true` if the user has explicitly attached context for the next query:
+    /// selected blocks, selected text, image/file attachments, or a document.
+    ///
+    /// Auto-attached agent-view blocks are intentionally excluded because they are not the
+    /// result of a deliberate user selection. This is used to bypass the keybinding
+    /// second-press confirmation for starting a new conversation: when the user has
+    /// deliberately attached context, a `cmd-enter` clearly signals intent to start a new
+    /// conversation with that context.
+    pub fn has_pending_user_context(&self) -> bool {
+        !self.pending_context_block_ids.is_empty()
+            || self.pending_context_selected_text.is_some()
+            || !self.pending_attachments.is_empty()
+            || self.pending_document_id.is_some()
+    }
+
     /// Returns the set `BlockId`s corresponding to blocks to be included as context with the next
     /// query.
     pub fn pending_context_block_ids(&self) -> &HashSet<BlockId> {

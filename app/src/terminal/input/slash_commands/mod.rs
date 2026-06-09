@@ -426,7 +426,16 @@ impl Input {
                 // Keybindings can be triggered reflexively while users are already in an active
                 // conversation, so we gate only this path behind a second-press confirmation.
                 // Typed `/agent`/`/new` and slash-menu execution stay single-step by design.
-                if trigger.is_keybinding() && self.agent_view_controller.as_ref(ctx).is_active() {
+                //
+                // When the user has deliberately attached context (e.g. selected a block via
+                // `cmd-enter`), the intent to start a new conversation with that context is
+                // unambiguous, so we skip the confirmation and proceed in a single step.
+                let has_pending_user_context =
+                    self.ai_context_model.as_ref(ctx).has_pending_user_context();
+                if trigger.is_keybinding()
+                    && self.agent_view_controller.as_ref(ctx).is_active()
+                    && !has_pending_user_context
+                {
                     let should_start_new_conversation =
                         self.agent_view_controller.update(ctx, |controller, ctx| {
                             controller

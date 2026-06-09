@@ -178,6 +178,56 @@ fn has_locking_attachment_is_false_with_only_pending_block_id() {
 }
 
 #[test]
+fn has_pending_user_context_is_false_for_default_state() {
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.read(&app, |m, _| assert!(!m.has_pending_user_context()));
+    });
+}
+
+#[test]
+fn has_pending_user_context_is_true_with_pending_block_id() {
+    // A deliberately selected block signals intent to start a new conversation with that
+    // context, so `cmd-enter` should bypass the second-press confirmation.
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.insert_pending_block_id_for_test(BlockId::new());
+        });
+
+        model.read(&app, |m, _| assert!(m.has_pending_user_context()));
+    });
+}
+
+#[test]
+fn has_pending_user_context_is_true_with_pending_selected_text() {
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.set_pending_selected_text_for_test(Some("hello".to_owned()));
+        });
+
+        model.read(&app, |m, _| assert!(m.has_pending_user_context()));
+    });
+}
+
+#[test]
+fn has_pending_user_context_is_true_with_pending_attachment() {
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![make_image_attachment("a.png")]);
+        });
+
+        model.read(&app, |m, _| assert!(m.has_pending_user_context()));
+    });
+}
+
+#[test]
 fn repository_context_from_repository_info_converts_to_agent_context() {
     let repository_info = RepositoryInfo {
         name: "warp-internal".to_owned(),
