@@ -145,6 +145,11 @@ struct CardState {
     /// Use this ID to look up the full data from the model
     item_id: ManagementCardItemId,
 }
+/// State for the active inline conversation rename editor.
+struct InlineRenameState {
+    editor: ViewHandle<EditorView>,
+    conversation_id: Option<AIConversationId>,
+}
 
 pub struct AgentManagementView {
     list_state: ListState<()>,
@@ -189,8 +194,7 @@ pub struct AgentManagementView {
 
     /// Details panel for showing task/conversation metadata
     details_panel: ViewHandle<ConversationDetailsPanel>,
-    rename_editor: ViewHandle<EditorView>,
-    renaming_conversation_id: Option<AIConversationId>,
+    inline_rename: InlineRenameState,
     /// Currently selected item ID (for rendering details)
     selected_item_id: Option<ManagementCardItemId>,
 }
@@ -399,8 +403,10 @@ impl AgentManagementView {
             agent_type_selector,
             is_agent_type_selector_open: false,
             details_panel,
-            rename_editor,
-            renaming_conversation_id: None,
+            inline_rename: InlineRenameState {
+                editor: rename_editor,
+                conversation_id: None,
+            },
             selected_item_id: None,
         };
 
@@ -1100,22 +1106,22 @@ impl AgentManagementView {
             return;
         };
 
-        self.renaming_conversation_id = Some(conversation_id);
+        self.inline_rename.conversation_id = Some(conversation_id);
         let title = entry.display.title;
-        self.rename_editor.update(ctx, |editor, ctx| {
+        self.inline_rename.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
             editor.insert_selected_text(&title, ctx);
         });
-        ctx.focus(&self.rename_editor);
+        ctx.focus(&self.inline_rename.editor);
         ctx.notify();
     }
 
     fn finish_rename(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(conversation_id) = self.renaming_conversation_id.take() else {
+        let Some(conversation_id) = self.inline_rename.conversation_id.take() else {
             return;
         };
-        let title = self.rename_editor.as_ref(ctx).buffer_text(ctx);
-        self.rename_editor.update(ctx, |editor, ctx| {
+        let title = self.inline_rename.editor.as_ref(ctx).buffer_text(ctx);
+        self.inline_rename.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
         rename_conversation(conversation_id, title, "Conversation not found", ctx);
@@ -1123,10 +1129,10 @@ impl AgentManagementView {
     }
 
     fn cancel_rename(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.renaming_conversation_id.take().is_none() {
+        if self.inline_rename.conversation_id.take().is_none() {
             return;
         }
-        self.rename_editor.update(ctx, |editor, ctx| {
+        self.inline_rename.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
         ctx.notify();
@@ -1711,8 +1717,9 @@ impl AgentManagementView {
             .expect("action buttons hover state lock poisoned")
             .is_mouse_over_element();
         let action_buttons_is_empty = card_state.action_buttons_view.as_ref(app).is_empty();
-        let is_renaming = entry.identity.local_conversation_id == self.renaming_conversation_id;
-        let rename_editor = self.rename_editor.clone();
+        let is_renaming =
+            entry.identity.local_conversation_id == self.inline_rename.conversation_id;
+        let rename_editor = self.inline_rename.editor.clone();
 
         let card_hoverable = Hoverable::new(card_state.hover_state.clone(), move |mouse_state| {
             let mut card_content = Flex::column()
@@ -1800,22 +1807,6 @@ impl AgentManagementView {
         card_hoverable.finish()
     }
 
-    fn render_inline_rename_editor(
-        rename_editor: &ViewHandle<EditorView>,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        TextInput::new(
-            rename_editor.clone(),
-            UiComponentStyles::default()
-                .set_background(ElementFill::None)
-                .set_border_radius(CornerRadius::with_all(Radius::Pixels(0.)))
-                .set_border_width(0.)
-                .set_font_size(appearance.ui_font_size()),
-        )
-        .build()
-        .finish()
-    }
-
     fn render_header_row(
         card_state: &CardState,
         entry: &AgentConversationEntry,
@@ -1828,7 +1819,16 @@ impl AgentManagementView {
         let font_size = appearance.ui_font_size();
         let title_element: Box<dyn Element> =
             if let Some(rename_editor) = rename_editor.filter(|_| is_renaming) {
-                Self::render_inline_rename_editor(rename_editor, appearance)
+                TextInput::new(
+                    rename_editor.clone(),
+                    UiComponentStyles::default()
+                        .set_background(ElementFill::None)
+                        .set_border_radius(CornerRadius::with_all(Radius::Pixels(0.)))
+                        .set_border_width(0.)
+                        .set_font_size(appearance.ui_font_size()),
+                )
+                .build()
+                .finish()
             } else {
                 Text::new_inline(entry.display.title.clone(), font_family, font_size)
                     .with_color(theme.active_ui_text_color().into())
