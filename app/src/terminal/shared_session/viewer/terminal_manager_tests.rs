@@ -22,6 +22,7 @@ use crate::ai::blocklist::QueuedQueryModel;
 use crate::terminal::TerminalManager as _;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspace::ToastStack;
 
 /// Stub UUID used for the orchestrator's `AmbientAgentTaskId`; opaque to
 /// the manager.
@@ -104,6 +105,7 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
 fn command_execution_request_failed_clears_queued_command_in_flight() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| ToastStack);
 
         let terminal = add_window_with_terminal(&mut app, None);
         let terminal_view_id = terminal.id();
