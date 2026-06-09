@@ -842,6 +842,47 @@ fn error_drain_of_command_restores_text_in_shell_mode() {
     });
 }
 
+/// Verifies failed command auto-fire keeps the row queued when the input has a draft.
+#[test]
+fn complete_drain_keeps_command_row_when_dispatch_fails_with_draft() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, command_query("echo 1"), ctx)
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content("draft in progress", ctx);
+            });
+            view.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "draft in progress"
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].id(), query_id);
+            assert_eq!(queue[0].text(), "echo 1");
+            assert!(queue[0].is_command());
+        });
+    });
+}
+
 #[test]
 fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
     // The host skips autofire when the queue head is being edited and the input already contains

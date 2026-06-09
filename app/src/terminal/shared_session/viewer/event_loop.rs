@@ -295,14 +295,8 @@ impl EventLoop {
                     self.process_resize_event(window_size, ctx)
                 }
                 OrderedTerminalEventType::CommandExecutionFinished { .. } => {
-                    // Advance the queued-prompts queue when a remote command the queue dispatched
-                    // finishes. No-ops unless a queued command is in flight for the active
-                    // conversation (see `TerminalView::on_queued_command_finished`).
-                    if let Some(view) = self.terminal_view.upgrade(ctx) {
-                        view.update(ctx, |view, ctx| {
-                            view.on_queued_command_finished(ctx);
-                        });
-                    }
+                    // Queue advancement waits for block completion so input cleanup can observe
+                    // the in-flight queued command and preserve any local draft.
                 }
                 OrderedTerminalEventType::AgentResponseEvent {
                     response_initiator,

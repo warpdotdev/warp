@@ -6859,20 +6859,6 @@ impl Input {
         &mut self,
         command: &str,
         participant_id: ParticipantId,
-        ctx: &mut ViewContext<Self>,
-    ) -> bool {
-        self.try_execute_command_on_behalf_of_shared_session_participant_with_options(
-            command,
-            participant_id,
-            false,
-            ctx,
-        )
-    }
-
-    fn try_execute_command_on_behalf_of_shared_session_participant_with_options(
-        &mut self,
-        command: &str,
-        participant_id: ParticipantId,
         preserve_input: bool,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
@@ -6978,7 +6964,7 @@ impl Input {
             else {
                 return false;
             };
-            self.try_execute_command_on_behalf_of_shared_session_participant_with_options(
+            self.try_execute_command_on_behalf_of_shared_session_participant(
                 command,
                 participant_id,
                 preserve_input,
@@ -13672,8 +13658,7 @@ impl Input {
         }
 
         // A shell-mode submission queues as a command; an AI-mode submission queues as a prompt.
-        // (Before #11912 shell mode bailed here, so a shell command interrupted the agent instead
-        // of queueing.) Command queueing is gated on the V2 surface.
+        // Command queueing is gated on the V2 surface.
         let is_command = !self.ai_input_model.as_ref(ctx).is_ai_input_enabled();
         if is_command && !FeatureFlag::QueuedPromptsV2.is_enabled() {
             return false;

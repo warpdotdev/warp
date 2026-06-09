@@ -4840,11 +4840,11 @@ impl TerminalView {
         self.drain_queued_prompts(conversation_id, finish_reason, ctx);
     }
 
-    /// Advances the queued-prompts queue after a dispatched queued command finishes. Shared by the
-    /// local `AfterBlockCompleted` path and the shared-session `CommandExecutionFinished` path.
+    /// Advances the queued-prompts queue after a dispatched queued command's block completes.
+    /// Runs after input cleanup so queued-command draft preservation can observe the in-flight
+    /// flag first.
     /// No-ops unless a queued command is in flight for a conversation owned by this terminal view;
-    /// clearing the flag before draining keeps it idempotent if both signals arrive for the same
-    /// command.
+    /// clearing the flag before draining keeps repeated calls idempotent.
     pub(crate) fn on_queued_command_finished(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(conversation_id) = QueuedQueryModel::as_ref(ctx)
             .command_in_flight_for_terminal_view(
@@ -5346,30 +5346,24 @@ impl TerminalView {
                         });
                     }
                     Some(AutofireAction::ExecuteCommand { query_id, command }) => {
-                        // Remove the row immediately (like a fired prompt) and arm the in-flight
-                        // flag: the queue keeps accepting rows while the command runs and the next
-                        // item only fires once the command finishes (see
-                        // `on_queued_command_finished`).
-                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                            model.remove_fired_row(conversation_id, query_id, ctx);
-                        });
                         let started = self.input.update(ctx, |input, ctx| {
                             input.execute_queued_command(&command, conversation_id, ctx)
                         });
                         // If the command couldn't start (e.g. precmd not yet received) no
-                        // completion will arrive, so don't wedge the queue: clear the flag and
-                        // restore the command text into an empty input.
-                        if !started {
-                            QueuedQueryModel::handle(ctx).update(ctx, |model, _ctx| {
-                                model.clear_command_in_flight(conversation_id);
+                        // completion will arrive. Keep the row queued when the user has a draft;
+                        // otherwise restore it into the empty input and remove the row.
+                        if started {
+                            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.remove_fired_row(conversation_id, query_id, ctx);
                             });
-                            if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
-                                self.input.update(ctx, |input, ctx| {
-                                    input.replace_buffer_content(&command, ctx);
-                                    input
-                                        .set_input_mode_terminal(/* steal_focus */ false, ctx);
-                                });
-                            }
+                        } else if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
+                            self.input.update(ctx, |input, ctx| {
+                                input.replace_buffer_content(&command, ctx);
+                                input.set_input_mode_terminal(/* steal_focus */ false, ctx);
+                            });
+                            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                                model.remove_fired_row(conversation_id, query_id, ctx);
+                            });
                         }
                     }
                     Some(AutofireAction::PopFromEditMode {

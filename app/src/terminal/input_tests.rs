@@ -1325,27 +1325,21 @@ fn queued_command_completion_preserves_draft() {
     });
 }
 
+/// Verifies deleting a queued row does not overwrite an existing draft.
 #[test]
-fn deleted_command_row_restores_text_in_shell_mode() {
+fn row_deleted_event_preserves_existing_draft() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |view, _| view.input().clone());
         input.update(&mut app, |input, ctx| {
-            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
-            input.handle_queued_prompts_panel_event(
-                &QueuedPromptsPanelEvent::RowDeleted {
-                    text: "echo 1".to_owned(),
-                    is_command: true,
-                },
-                ctx,
-            );
+            input.replace_buffer_content("draft in progress", ctx);
+            input.handle_queued_prompts_panel_event(&QueuedPromptsPanelEvent::RowDeleted, ctx);
         });
 
         input.read(&app, |input, ctx| {
-            assert_eq!(input.buffer_text(ctx), "echo 1");
-            assert!(!input.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+            assert_eq!(input.buffer_text(ctx), "draft in progress");
         });
     });
 }
