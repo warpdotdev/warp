@@ -10,6 +10,9 @@ pub mod windows;
 
 pub mod headless;
 
+#[cfg(feature = "tui")]
+pub mod tui;
+
 pub mod current {
     cfg_if::cfg_if! {
         if #[cfg(target_family = "wasm")] {

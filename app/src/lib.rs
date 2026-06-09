@@ -130,6 +130,8 @@ pub mod settings_view;
 pub mod tab_configs;
 pub mod terminal;
 pub mod themes;
+#[cfg(feature = "tui")]
+pub mod tui;
 use ::ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerConfig,
 };
@@ -321,6 +323,10 @@ pub static ASSETS: warp_assets::Assets = warp_assets::Assets;
 fn determine_agent_source(
     launch_mode: &LaunchMode,
 ) -> Option<crate::ai::ambient_agents::AgentSource> {
+    // The TUI surface drives the agent locally and interactively, like the CLI.
+    if is_tui_mode() {
+        return Some(crate::ai::ambient_agents::AgentSource::Cli);
+    }
     match launch_mode {
         LaunchMode::CommandLine { .. } => {
             if std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true") {
@@ -762,6 +768,48 @@ pub fn run_integration_test(driver: TestDriver) -> Result<()> {
     run_internal(launch)
 }
 
+/// Process-global flag set by [`run_tui`] so the bootstrap launches the
+/// experimental terminal-UI agent surface instead of the GUI workspace.
+#[cfg(feature = "tui")]
+static TUI_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Returns whether the process was started in TUI mode (see [`run_tui`]).
+#[cfg(feature = "tui")]
+fn is_tui_mode() -> bool {
+    TUI_MODE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(not(feature = "tui"))]
+fn is_tui_mode() -> bool {
+    false
+}
+
+/// Runs the experimental terminal-UI (TUI) agent surface.
+///
+/// Reuses the full app bootstrap (so the agent's dependencies are initialized),
+/// but selects the TUI platform backend and opens the TUI window instead of the
+/// GUI workspace.
+#[cfg(feature = "tui")]
+pub fn run_tui() -> Result<()> {
+    platform::init();
+    features::init_feature_flags();
+
+    // The PTY layer starts its terminal-server worker by re-executing this same
+    // binary with a `terminal-server` subcommand (see `TerminalServer::new`).
+    // Route any subcommand through `run()` so the spawned child runs the worker
+    // and exits; otherwise each child would boot another full TUI and spawn yet
+    // another terminal server, fork-bombing the machine.
+    if warp_cli::Args::from_env().command().is_some() {
+        return run();
+    }
+
+    TUI_MODE.store(true, std::sync::atomic::Ordering::SeqCst);
+    run_internal(LaunchMode::App {
+        args: warp_cli::AppArgs::default(),
+        api_key: None,
+    })
+}
+
 /// Runs the app (or CLI / daemon).
 fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let mut timer = IntervalTimer::new();
@@ -794,8 +842,16 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         tracing::init()?;
     }
 
-    let log_destination = launch_mode.log_destination();
-    let is_cli = log_destination.is_some();
+    // The TUI owns the terminal (raw mode + alternate screen), and env_logger
+    // defaults to stderr when stdout is a TTY, so logs would paint over the
+    // rendered frame. Force file logging in TUI mode. `is_cli` only selects the
+    // CLI log subdirectory/rotation, which the App-mode TUI should not use.
+    let log_destination = if is_tui_mode() {
+        Some(LogDestination::File)
+    } else {
+        launch_mode.log_destination()
+    };
+    let is_cli = log_destination.is_some() && !is_tui_mode();
 
     cfg_if::cfg_if! {
         if #[cfg(enable_crash_recovery)] {
@@ -941,6 +997,23 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
     let pty_spawner =
         terminal::local_tty::spawner::PtySpawner::new().context("Failed to create pty spawner")?;
 
+    #[cfg(feature = "tui")]
+    let mut app_builder = if is_tui_mode() {
+        warpui::platform::AppBuilder::new_tui(app_callbacks(false), Box::new(ASSETS), None)
+    } else if launch_mode.is_headless() {
+        warpui::platform::AppBuilder::new_headless(
+            app_callbacks(launch_mode.is_integration_test()),
+            Box::new(ASSETS),
+            launch_mode.take_test_driver(),
+        )
+    } else {
+        warpui::platform::AppBuilder::new(
+            app_callbacks(launch_mode.is_integration_test()),
+            Box::new(ASSETS),
+            launch_mode.take_test_driver(),
+        )
+    };
+    #[cfg(not(feature = "tui"))]
     let mut app_builder = if launch_mode.is_headless() {
         warpui::platform::AppBuilder::new_headless(
             app_callbacks(launch_mode.is_integration_test()),
@@ -955,8 +1028,9 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         )
     };
 
+    // The macOS GUI setup below configures the Cocoa backend; skip it in TUI mode.
     #[cfg(target_os = "macos")]
-    {
+    if !is_tui_mode() {
         use warpui::platform::mac::AppExt;
         use warpui::AssetProvider as _;
 
@@ -1116,7 +1190,10 @@ pub(crate) fn initialize_app(
     let user_defaults_on_startup = settings::init(startup_toml_parse_error, ctx);
     timer.mark_interval_end("READ_USER_DEFAULTS_AND_INITIALIZE_SETTINGS");
 
-    if FeatureFlag::UIZoom.is_enabled() {
+    // The TUI renders one scene unit per terminal cell and has no pixel zoom;
+    // applying the GUI zoom factor would lay out the scene at a size the cell
+    // renderer doesn't match, pushing content off-screen. Keep zoom at 1.0.
+    if FeatureFlag::UIZoom.is_enabled() && !is_tui_mode() {
         ctx.set_zoom_factor(WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor());
     }
 
@@ -1486,12 +1563,18 @@ pub(crate) fn initialize_app(
                     .set_has_lower_power_gpu(warpui::rendering::is_low_power_gpu_available(), ctx);
             });
 
-            for window_id in ctx.window_ids().collect_vec() {
-                SettingsPaneManager::handle(ctx)
-                    .read(ctx, |model, _| model.settings_view(window_id))
-                    .update(ctx, |settings, ctx| {
-                        settings.refresh_preferred_graphics_backend_dropdown(ctx);
-                    })
+            // The per-window settings view (and its graphics-backend dropdown)
+            // only exists for GUI windows opened through the workspace flow. The
+            // TUI window has none, so skip this refresh in TUI mode rather than
+            // panicking on the missing view.
+            if !is_tui_mode() {
+                for window_id in ctx.window_ids().collect_vec() {
+                    SettingsPaneManager::handle(ctx)
+                        .read(ctx, |model, _| model.settings_view(window_id))
+                        .update(ctx, |settings, ctx| {
+                            settings.refresh_preferred_graphics_backend_dropdown(ctx);
+                        })
+                }
             }
 
             send_telemetry_from_app_ctx!(event, ctx);
@@ -2537,6 +2620,14 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
     // For now, we only specify application-level fallback fonts on web.
     #[cfg(target_family = "wasm")]
     ctx.set_fallback_font_fn(font_fallback::fallback_font_fn);
+
+    // In TUI mode, open the terminal-UI agent surface instead of the GUI
+    // workspace. All other app initialization has already run.
+    if is_tui_mode() {
+        #[cfg(feature = "tui")]
+        crate::tui::bootstrap::open_tui_window(ctx);
+        return;
+    }
 
     match launch_mode {
         LaunchMode::App { .. } | LaunchMode::Test { .. } => {

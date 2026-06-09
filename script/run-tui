@@ -1,0 +1,101 @@
+#!/bin/bash
+#
+# Build and run the experimental Warp agent TUI (the `tui` bin) attached to the
+# current terminal.
+#
+# The TUI is a plain CLI binary that must stay attached to the terminal
+# (stdin/stdout), so it can't go through `./script/run`, which bundles and
+# launches a GUI `.app`.
+#
+# Keychain note: the full app reads credentials from the macOS keychain at
+# startup. A `cargo`-built binary whose code signature changes every rebuild
+# would make macOS re-prompt ("Warp wants to use your confidential
+# information") on every run. To avoid that, this script codesigns the built
+# binary with a STABLE identifier (dev.warp.Warp-Dev) so its designated
+# requirement stays stable and the keychain "Always Allow" grant persists
+# across rebuilds.
+#
+# By default the TUI runs with your real account (real agent responses). Pass
+# `--fast-dev` to use `fast_dev` instead (a test user, no real login, no
+# keychain access).
+#
+# Usage:
+#   ./script/run-tui [--fast-dev] [--release] [--features extra,features] [-- <args for tui>]
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+cd "${REPO_ROOT}"
+
+USE_FAST_DEV=false
+FEATURES="tui"
+PROFILE_DIR="debug"
+CARGO_PARAMS=()
+TUI_ARGS=()
+
+while (("$#")); do
+  case "$1" in
+  --)
+    shift
+    TUI_ARGS=("$@")
+    break
+    ;;
+  --fast-dev)
+    USE_FAST_DEV=true
+    shift
+    ;;
+  --features)
+    if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+      FEATURES="${FEATURES},$2"
+      shift 2
+    else
+      echo "Error: argument for --features is missing" >&2
+      exit 1
+    fi
+    ;;
+  --release)
+    CARGO_PARAMS+=("$1")
+    PROFILE_DIR="release"
+    shift
+    ;;
+  *)
+    echo "Error: unknown argument '$1' (pass arguments for the tui binary after --)" >&2
+    exit 1
+    ;;
+  esac
+done
+
+if [ "${USE_FAST_DEV}" = true ]; then
+  # `fast_dev` enables `skip_login` (a test user), so the app never reads the
+  # real keychain items and macOS never prompts.
+  FEATURES="${FEATURES},fast_dev"
+  echo "Running with fast_dev (test user, no keychain prompts)."
+  echo "For real agent responses, run: ./script/run-tui"
+else
+  cat >&2 <<'EOF'
+Running with real login. On first run macOS may prompt to access the
+"dev.warp.Warp-Dev" keychain item(s). Click "Always Allow" -- because this
+script codesigns the binary with a stable identifier (dev.warp.Warp-Dev), that
+grant persists across rebuilds and you won't be prompted again.
+EOF
+fi
+
+echo "Building tui (features: ${FEATURES})..."
+cargo build --bin tui --features "${FEATURES}" "${CARGO_PARAMS[@]}"
+
+BIN="target/${PROFILE_DIR}/tui"
+
+# Codesign the built binary with a STABLE identifier so its designated
+# requirement doesn't change across rebuilds. This is what lets the macOS
+# keychain "Always Allow" grant persist instead of re-prompting every run. The
+# ad-hoc fallback ("-") keeps the script working without a cert, but it won't
+# stop the re-prompt (still cdhash-based) -- a real "Apple Development" cert is
+# required for the one-time-authorize behavior.
+if command -v codesign >/dev/null 2>&1; then
+  echo "Codesigning ${BIN}..."
+  SIGNING_CERT="$(security find-identity -p codesigning -v | grep 'Apple Development' | awk '{print $2}' | head -1)"
+  codesign --force --options runtime --sign "${SIGNING_CERT:--}" --identifier dev.warp.Warp-Dev --entitlements script/Debug-Entitlements.plist "${BIN}"
+fi
+
+echo "Launching ${BIN}..."
+exec "${BIN}" "${TUI_ARGS[@]}"
