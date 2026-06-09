@@ -55,8 +55,10 @@ use crate::auth::auth_state::AuthState;
 use crate::auth::AuthStateProvider;
 use crate::banner::BannerState;
 use crate::context_chips::current_prompt::CurrentPrompt;
+use crate::context_chips::prompt::Prompt;
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
 use crate::context_chips::prompt_type::PromptType;
+use crate::context_chips::ContextChipKind;
 use crate::editor::CrdtOperation;
 use crate::features::FeatureFlag;
 use crate::network::{NetworkStatusEvent, NetworkStatusKind};
@@ -74,7 +76,9 @@ use crate::terminal::model::session::Sessions;
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::session_settings::{
+    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
+};
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shared_session::presence_manager::PresenceManager;
@@ -1082,6 +1086,28 @@ impl TerminalManager {
         let is_honor_ps1_enabled = *SessionSettings::as_ref(ctx).honor_ps1;
         let is_crash_reporting_enabled = PrivacySettings::as_ref(ctx).is_crash_reporting_enabled;
 
+        // Determine whether the Node.js Version chip is enabled anywhere it could be
+        // shown (the Warp prompt, the agent footer, or the CLI agent footer). When it
+        // is not, the shell bootstrap skips the expensive per-prompt `node --version`
+        // detection. The chip value is fed by the same precmd payload regardless of
+        // where it is displayed, so we must check all three locations.
+        let node_version_chip_enabled = {
+            let in_prompt = !is_honor_ps1_enabled
+                && Prompt::as_ref(ctx)
+                    .chip_kinds()
+                    .contains(&ContextChipKind::NodeVersion);
+            let settings = SessionSettings::as_ref(ctx);
+            in_prompt
+                || settings
+                    .agent_footer_chip_selection
+                    .all_chips()
+                    .contains(&ContextChipKind::NodeVersion)
+                || settings
+                    .cli_agent_footer_chip_selection
+                    .all_chips()
+                    .contains(&ContextChipKind::NodeVersion)
+        };
+
         // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
         let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
             *WarpifySettings::as_ref(ctx)
@@ -1102,6 +1128,7 @@ impl TerminalManager {
             enable_ssh_wrapper,
             shell_debug_mode: is_shell_debug_mode_enabled,
             honor_ps1: is_honor_ps1_enabled,
+            node_version_chip_enabled,
             close_fds: true,
         };
 

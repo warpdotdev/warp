@@ -347,37 +347,63 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
           set escaped_conda_env (warp_escape_json "$CONDA_DEFAULT_ENV")
       end
       
-        # Get Node.js version if node is available and we're in a Node.js project
-        if command -v node > /dev/null 2>&1
+        # Get the Node.js version, but only when the Node.js Version chip is enabled.
+        # Warp sets WARP_PROMPT_NODE_VERSION_ENABLED to "0" when the chip is not in the
+        # prompt (defaulting to enabled when unset), so we avoid spawning `node` on
+        # every prompt when the chip is not shown.
+        if test "$WARP_PROMPT_NODE_VERSION_ENABLED" != "0"; and command -v node > /dev/null 2>&1
             # Check for package.json in current directory and parent directories
             set current_dir (pwd)
             set found_package_json false
             set package_json_dir ""
-            while test "$current_dir" != "/"
+            while test -n "$current_dir"
                 if test -f "$current_dir/package.json"
                     set found_package_json true
                     set package_json_dir "$current_dir"
                     break
                 end
-                set current_dir (dirname "$current_dir")
+                if test "$current_dir" = "/"
+                    break
+                end
+                # Strip the last path segment without spawning `dirname`.
+                set current_dir (string replace -r '/[^/]*$' '' -- "$current_dir")
+                if test -z "$current_dir"
+                    set current_dir "/"
+                end
             end
             
             # Only show node version if package.json is within a git repository
             if test "$found_package_json" = true
                 set git_dir "$package_json_dir"
                 set in_git_repo false
-                while test "$git_dir" != "/"
+                while test -n "$git_dir"
                     if test -d "$git_dir/.git"
                         set in_git_repo true
                         break
                     end
-                    set git_dir (dirname "$git_dir")
+                    if test "$git_dir" = "/"
+                        break
+                    end
+                    set git_dir (string replace -r '/[^/]*$' '' -- "$git_dir")
+                    if test -z "$git_dir"
+                        set git_dir "/"
+                    end
                 end
                 
                 if test "$in_git_repo" = true
-                    set node_version (node --version 2>/dev/null)
-                    if test -n "$node_version"
-                        set escaped_node_version (warp_escape_json "$node_version")
+                    # Cache the resolved version keyed on PWD + PATH so we only spawn
+                    # `node --version` when the directory or PATH changes (PATH changes
+                    # on `nvm use`). Use global cache vars so they persist across calls.
+                    set -l node_cache_key "$PWD:$PATH"
+                    if test "$node_cache_key" = "$_WARP_NODE_VERSION_CACHE_KEY"
+                        set escaped_node_version "$_WARP_NODE_VERSION_CACHE_VALUE"
+                    else
+                        set -l node_version (node --version 2>/dev/null)
+                        if test -n "$node_version"
+                            set escaped_node_version (warp_escape_json "$node_version")
+                        end
+                        set -g _WARP_NODE_VERSION_CACHE_KEY "$node_cache_key"
+                        set -g _WARP_NODE_VERSION_CACHE_VALUE "$escaped_node_version"
                     end
                 end
             end

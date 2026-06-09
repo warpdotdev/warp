@@ -21,6 +21,7 @@ fn host_bash_command_sets_history_size_sentinels() {
         false,
         false,
         false,
+        true,
     );
 
     assert_eq!(
@@ -51,6 +52,7 @@ fn host_non_bash_command_does_not_set_history_size_sentinels() {
         false,
         false,
         false,
+        true,
     );
 
     assert_eq!(env_value(&command, "HISTFILESIZE"), None);
@@ -63,8 +65,15 @@ fn host_non_bash_command_does_not_set_history_size_sentinels() {
 fn docker_sandbox_command_sets_history_size_sentinels() {
     let docker_starter =
         DockerSandboxShellStarter::new(shell_starter(ShellType::Bash, "sbx"), None);
-    let command =
-        build_docker_sandbox_command(&docker_starter, None, HashMap::new(), false, false, false);
+    let command = build_docker_sandbox_command(
+        &docker_starter,
+        None,
+        HashMap::new(),
+        false,
+        false,
+        false,
+        true,
+    );
 
     assert_eq!(
         env_value(&command, "HISTFILESIZE"),
