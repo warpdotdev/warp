@@ -1,0 +1,16 @@
+[package]
+name = "warpui_tui"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+publish.workspace = true
+license = "MIT"
+
+[dependencies]
+crossterm = "0.29.0"
+unicode-segmentation = "1.11.0"
+unicode-width.workspace = true
+# The TUI backend instantiation of the shared core lives behind the `tui`
+# feature. Enabling it here is what makes `AppContext`/`App`/`TuiView` resolve to
+# the TUI backend for everything built on top of this crate.
+warpui_core = { workspace = true, features = ["tui"] }
