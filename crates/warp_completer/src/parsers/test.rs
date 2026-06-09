@@ -49,7 +49,7 @@ pub fn test_classify_command_classifies_known_command() {
     )
 }
 
-/// TODO(CORE-2797)
+/// TODO(CORE-2797): Add tests for flag handling edge cases.
 #[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_classify_command_classifies_known_command_with_flags() {
