@@ -2533,7 +2533,7 @@ fn render_grouped_tabs_header(
     // Collapsed groups show the icon collage (same component as horizontal tab
     // groups) in place of the chevron, sized to VERTICAL_TABS_ICON_SIZE so
     // the 2-icon variant matches the tab Summary Pair layout exactly.
-    let leading_slot = if is_collapsed {
+    let tab_group_icon = if is_collapsed {
         let kinds = collapsed_member_kinds.unwrap_or(&[]);
         render_group_member_icon_collage(kinds, VERTICAL_TABS_ICON_SIZE, appearance)
     } else {
@@ -2554,7 +2554,7 @@ fn render_grouped_tabs_header(
             .with_child(chevron_button)
             .finish()
     };
-    let leading_slot = ConstrainedBox::new(leading_slot)
+    let tab_group_icon = ConstrainedBox::new(tab_group_icon)
         .with_width(VERTICAL_TABS_ICON_SIZE)
         .with_height(VERTICAL_TABS_ICON_SIZE)
         .finish();
@@ -2635,7 +2635,7 @@ fn render_grouped_tabs_header(
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(ICON_WITH_STATUS_GAP)
-                    .with_child(leading_slot)
+                    .with_child(tab_group_icon)
                     .with_child(Shrinkable::new(1., text_column).finish())
                     .finish(),
             )
