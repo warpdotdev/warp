@@ -773,6 +773,9 @@ impl TerminalManager {
                             ctx,
                         );
                     }
+                    // TODO(roland): we do not apply universal_developer_input_context.long_running_command_agent_interaction here
+                    // because the block it should apply to won't exist yet, until the `OrderedTerminalEvents` that come after are processed.
+                    // We should try to apply it after catching up to the latest state.
                 }
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
