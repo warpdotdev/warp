@@ -165,9 +165,8 @@ if (-not (Get-Command -Name protoc -Type Application -ErrorAction SilentlyContin
 
 # LLVM provides libclang, which is required by bindgen.
 winget install -e --id LLVM.LLVM
-if (-not (Get-Command -Name clang -Type Application -ErrorAction SilentlyContinue)) {
-    $env:PATH += ";$env:ProgramFiles\LLVM\bin"
-}
+$env:PATH += ";$env:ProgramFiles\LLVM\bin"
+$env:LIBCLANG_PATH = "$env:ProgramFiles\LLVM\bin"
 
 # If we don't see gcloud command, try adding the install location to the PATH.
 if (-not (Get-Command -Name gcloud -Type Application -ErrorAction SilentlyContinue)) {
