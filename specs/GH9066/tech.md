@@ -293,24 +293,25 @@ impl CliAgentPluginManager for KiroPluginManager {
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Enable Warp Integration for Kiro",
-        subtitle: "Install the Kiro CLI and enable the Warp plugin to get real-time status tracking while you work.",
+        title: "Install Kiro CLI",
+        subtitle: "Install the Kiro CLI to enable the branded footer and rich input composer in Warp. Real-time session status tracking will activate automatically once a Kiro release ships Warp event-protocol support (see follow-ups).",
         steps: &[
             PluginInstructionStep {
-                description: "Install the Kiro CLI. Follow the instructions on the Kiro download page.",
+                description: "Install the Kiro CLI from the official download page (.dmg installer on macOS, .deb/.rpm on Linux).",
                 command: "",
                 executable: false,
                 link: Some("https://kiro.dev/downloads/"),
             },
             PluginInstructionStep {
-                description: "Enable the Warp plugin in your Kiro configuration so that Kiro emits structured status events that Warp can display. See the Kiro documentation for the exact config key.",
-                command: "",
-                executable: false,
-                link: Some("https://kiro.dev/docs/"),
+                description: "Verify the install by running `kiro --version` in a new Warp terminal.",
+                command: "kiro --version",
+                executable: true,
+                link: None,
             },
         ],
         post_install_notes: &[
-            "Restart your terminal session after installation.",
+            "Restart your terminal session after installation so the `kiro` binary is on PATH.",
+            "Status tracking (InProgress / Blocked / Success) requires Kiro CLI to emit Warp's structured event protocol. Until a Kiro release ships that support, only the branded footer and rich input composer are available.",
         ],
     }
 });
