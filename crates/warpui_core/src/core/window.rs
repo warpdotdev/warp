@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::backend::Backend;
 use crate::core::view::AnyViewHandle;
-use crate::{AnyView, EntityId};
+use crate::EntityId;
 
 /// A unique identifier for a window.
 ///
@@ -36,14 +37,28 @@ impl fmt::Display for WindowId {
 
 /// A structure holding all application state that is linked to a particular
 /// window.
-#[derive(Default)]
-pub(super) struct Window {
+///
+/// Generic over the active [`Backend`]: only `views` is backend-specific (it holds
+/// the backend's type-erased view object). `root_view`/`focused_view` couple to
+/// neither the view trait nor `B` and are shared across backends.
+pub(super) struct Window<B: Backend> {
     /// The set of views owned by this window, keyed by view ID.
-    pub views: HashMap<EntityId, Box<dyn AnyView>>,
+    pub views: HashMap<EntityId, Box<B::AnyView>>,
 
     /// A handle to the window's root view (top of the view hierarchy), if any.
     pub root_view: Option<AnyViewHandle>,
 
     /// The ID of the currently focused view, if any.
     pub focused_view: Option<EntityId>,
+}
+
+// Manual impl: `#[derive(Default)]` would wrongly require `B: Default`.
+impl<B: Backend> Default for Window<B> {
+    fn default() -> Self {
+        Self {
+            views: HashMap::new(),
+            root_view: None,
+            focused_view: None,
+        }
+    }
 }

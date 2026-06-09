@@ -8,6 +8,10 @@ license = "MIT"
 
 [features]
 traces = []
+# Selects the TUI backend instead of the default GUI backend. A build is
+# GUI xor TUI: under this feature the public `AppContext` alias resolves to the
+# TUI backend instantiation (the TUI backend itself is added in a later milestone).
+tui = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["dep:minimp4", "dep:openh264"]
 # If enabled, writes named telemetry events to the info log.  Should never be

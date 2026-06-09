@@ -21,9 +21,9 @@ use pathfinder_geometry::vector::Vector2F;
 use rustc_hash::FxHashMap;
 
 use super::{
-    autotracking, ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
-    InvalidationCallback, Observation, PendingUnsubscribes, RefCounts, Subscription, TaskCallback,
-    TypedActionCallback, ViewType,
+    autotracking, ActionCallback, Backend, BlurContext, FocusContext, GlobalActionCallback,
+    GlobalShortcut, GuiBackend, GuiPresenterState, Observation, PendingUnsubscribes, RefCounts,
+    Subscription, TaskCallback, TypedActionCallback, ViewType,
 };
 use crate::accessibility::{AccessibilityVerbosity, ActionAccessibilityContent};
 use crate::actions::StandardAction;
@@ -566,7 +566,10 @@ pub type FrameDrawnCallback = dyn Fn(&mut AppContext, WindowId);
 
 pub type BeforeOpenUrlCallback = dyn Fn(&str, &AppContext) -> String;
 
-pub struct AppContext {
+/// The generic application context. The public [`AppContext`] name is a
+/// feature-gated type alias to a fixed instantiation of this struct (GUI by
+/// default), so existing call sites that name `AppContext` never mention `B`.
+pub struct AppContextImpl<B: Backend> {
     /////////////////////////
     // Fields from AppContext
     /////////////////////////
@@ -578,8 +581,7 @@ pub struct AppContext {
     /// We use an FxHashMap here because `TypeId` hashes as a u64, and FxHasher
     /// is the fastest commonly-used hasher for this type.
     singleton_models: FxHashMap<TypeId, AnyModelHandle>,
-    last_frame_position_cache: HashMap<WindowId, crate::presenter::PositionCache>,
-    pub(super) windows: HashMap<WindowId, Window>,
+    pub(super) windows: HashMap<WindowId, Window<B>>,
     pub(super) ref_counts: Arc<Mutex<RefCounts>>,
     pub(super) platform_delegate: Box<dyn platform::Delegate>,
 
@@ -595,7 +597,10 @@ pub struct AppContext {
     /// Safety Note: The `TypedActionCallback` must only be called with parameters that match the
     /// type keys, as it requires the values to appropriately downcast.
     typed_actions: HashMap<ActionType, HashMap<ViewType, Box<TypedActionCallback>>>,
-    presenters: HashMap<WindowId, Rc<RefCell<Presenter>>>,
+    /// Backend-specific presentation state, hoisted into [`Backend::Presenter`] so
+    /// the generic core never names a GUI-only presenter/position-cache/
+    /// invalidation type. GUI: [`GuiPresenterState`].
+    presentation: B::Presenter,
     /// Configuration options related to rendering of the application.
     rendering_config: rendering::Config,
     global_actions: HashMap<String, Vec<Box<GlobalActionCallback>>>,
@@ -608,8 +613,6 @@ pub struct AppContext {
     /// When `emit_event` is processing callbacks, unsubscribes are deferred here to avoid
     /// O(N²) tombstone scanning. The unsubscribes are processed at the end of event emission.
     pub(super) pending_unsubscribes: Option<PendingUnsubscribes>,
-    window_invalidations: HashMap<WindowId, WindowInvalidation>,
-    invalidation_callbacks: HashMap<WindowId, Box<InvalidationCallback>>,
     disabled_key_bindings_windows: HashSet<WindowId>,
     window_bounds: HashMap<WindowId, Option<RectF>>,
     next_window_bounds_map: HashMap<WindowId, NextNewWindowsHasThisWindowsBoundsUponClose>,
@@ -708,6 +711,12 @@ pub struct AppContext {
     fallback_font_source_provider: Option<Box<dyn Fn(&str) -> AssetSource>>,
 }
 
+/// The public application-context name. Existing call sites use this alias and
+/// never mention `B`. A build is GUI **xor** TUI; the TUI instantiation is added
+/// in a later milestone.
+#[cfg(not(feature = "tui"))]
+pub type AppContext = AppContextImpl<GuiBackend>;
+
 impl AppContext {
     pub(crate) fn new(
         platform_delegate: Box<dyn platform::Delegate>,
@@ -751,13 +760,12 @@ impl AppContext {
             singleton_models: Default::default(),
             windows: Default::default(),
             ref_counts: Arc::new(Mutex::new(RefCounts::default())),
-            last_frame_position_cache: Default::default(),
             platform_delegate,
             // AppContext fields
             actions: Default::default(),
             typed_actions: Default::default(),
             global_actions: Default::default(),
-            presenters: Default::default(),
+            presentation: GuiPresenterState::default(),
             rendering_config: Default::default(),
             keystroke_matcher: Default::default(),
             disabled_key_bindings_windows: Default::default(),
@@ -768,8 +776,6 @@ impl AppContext {
             next_window_bounds_map: Default::default(),
             observations: Default::default(),
             pending_unsubscribes: None,
-            window_invalidations: Default::default(),
-            invalidation_callbacks: Default::default(),
             window_bounds: Default::default(),
             window_last_mouse_moved_event: Default::default(),
             foreground: foreground.clone(),
@@ -931,7 +937,8 @@ impl AppContext {
     }
 
     pub fn has_window_invalidations(&self, window_id: WindowId) -> bool {
-        self.window_invalidations
+        self.presentation
+            .window_invalidations
             .get(&window_id)
             .is_some_and(|invalidation| {
                 !invalidation.updated.is_empty() || !invalidation.removed.is_empty()
@@ -942,14 +949,15 @@ impl AppContext {
         // The presenter may not exist if there is a race condition where a window event comes in
         // after the window is closed (for example, if a fullscreen window is closed, a resize event
         // comes in after the window is closed.
-        self.presenters.get(&window_id).cloned()
+        self.presentation.presenters.get(&window_id).cloned()
     }
 
     fn invalidate_all_views_for_window(&mut self, window_id: WindowId) {
         let Some(window) = self.windows.get(&window_id) else {
             return;
         };
-        self.window_invalidations
+        self.presentation
+            .window_invalidations
             .entry(window_id)
             .or_default()
             .updated = window.views.keys().cloned().collect();
@@ -974,7 +982,8 @@ impl AppContext {
         window_id: WindowId,
         callback: F,
     ) {
-        self.invalidation_callbacks
+        self.presentation
+            .invalidation_callbacks
             .insert(window_id, Box::new(callback));
     }
 
@@ -2307,7 +2316,8 @@ impl AppContext {
         // from the last closed position after a new window has been created.
         self.next_window_bounds = None;
 
-        self.presenters
+        self.presentation
+            .presenters
             .insert(window_id, Rc::new(RefCell::new(Presenter::new(window_id))));
 
         let window_options = WindowOptions {
@@ -2550,9 +2560,9 @@ impl AppContext {
         WindowManager::handle(self).update(self, |windowing_state, ctx| {
             windowing_state.remove_window(window_id, ctx);
         });
-        self.presenters.remove(&window_id);
-        self.invalidation_callbacks.remove(&window_id);
-        self.window_invalidations.remove(&window_id);
+        self.presentation.presenters.remove(&window_id);
+        self.presentation.invalidation_callbacks.remove(&window_id);
+        self.presentation.window_invalidations.remove(&window_id);
         autotracking::close_window(window_id);
 
         let mut subscriptions = HashMap::new();
@@ -2748,7 +2758,8 @@ impl AppContext {
                 );
 
                 // Cache the last position cache after rendering.
-                self.last_frame_position_cache
+                self.presentation
+                    .last_frame_position_cache
                     .insert(window_id, presenter.position_cache().clone());
             }
 
@@ -2805,7 +2816,8 @@ impl AppContext {
                 panic!("Window does not exist");
             }
             self.view_to_window.insert(view_id, window_id);
-            self.window_invalidations
+            self.presentation
+                .window_invalidations
                 .entry(window_id)
                 .or_default()
                 .updated
@@ -2898,7 +2910,8 @@ impl AppContext {
         // Register the action handler for this view type (if it hasn't already been added)
         self.add_typed_action::<V>();
         // Mark the view as needing to be drawn
-        self.window_invalidations
+        self.presentation
+            .window_invalidations
             .entry(window_id)
             .or_default()
             .updated
@@ -2937,7 +2950,8 @@ impl AppContext {
 
         // Mark the view as removed from the source window's invalidation set.
         // This tells the renderer to stop tracking this view in the source window.
-        self.window_invalidations
+        self.presentation
+            .window_invalidations
             .entry(source_window_id)
             .or_default()
             .removed
@@ -2954,7 +2968,8 @@ impl AppContext {
         target_window.views.insert(view_id, view);
         self.view_to_window.insert(view_id, target_window_id);
 
-        self.window_invalidations
+        self.presentation
+            .window_invalidations
             .entry(target_window_id)
             .or_default()
             .updated
@@ -3099,7 +3114,8 @@ impl AppContext {
                 self.structural_parent_to_children.remove(&view_id);
 
                 if let Some(window) = self.windows.get_mut(&current_window_id) {
-                    self.window_invalidations
+                    self.presentation
+                        .window_invalidations
                         .entry(current_window_id)
                         .or_default()
                         .removed
@@ -3156,6 +3172,7 @@ impl AppContext {
 
     fn update_windows(&mut self) {
         let invalidated_window_ids = self
+            .presentation
             .window_invalidations
             .keys()
             .chain(autotracking::windows_with_invalidations().iter())
@@ -3163,9 +3180,12 @@ impl AppContext {
             .cloned()
             .collect_vec();
         for window_id in invalidated_window_ids {
-            if let Some(mut callback) = self.invalidation_callbacks.remove(&window_id) {
+            if let Some(mut callback) = self.presentation.invalidation_callbacks.remove(&window_id)
+            {
                 callback(window_id, self);
-                self.invalidation_callbacks.insert(window_id, callback);
+                self.presentation
+                    .invalidation_callbacks
+                    .insert(window_id, callback);
             }
         }
     }
@@ -3180,6 +3200,7 @@ impl AppContext {
         window_id: WindowId,
     ) -> WindowInvalidation {
         let mut invalidations = self
+            .presentation
             .window_invalidations
             .remove(&window_id)
             .unwrap_or_default();
@@ -3286,7 +3307,8 @@ impl AppContext {
 
                 // If the timer is no longer in repaint_tasks, it was cancelled.
                 if app.repaint_tasks.remove(&task_id).is_some() {
-                    app.window_invalidations
+                    app.presentation
+                        .window_invalidations
                         .entry(window_id)
                         .or_default()
                         .redraw_requested = true;
@@ -3341,7 +3363,7 @@ impl AppContext {
 
                 // If the timer is no longer in repaint_tasks, it was cancelled.
                 if app.repaint_tasks.remove(&task_id).is_some() {
-                    app.window_invalidations
+                    app.presentation.window_invalidations
                         .entry(window_id)
                         .or_default()
                         .redraw_requested = true;
@@ -3453,7 +3475,8 @@ impl AppContext {
         }
 
         // Trigger a redraw on the window.
-        self.window_invalidations
+        self.presentation
+            .window_invalidations
             .entry(window_id)
             .or_default()
             .redraw_requested = true;
@@ -3772,7 +3795,8 @@ impl AppContext {
     }
 
     fn notify_view_observers(&mut self, window_id: WindowId, view_id: EntityId) {
-        self.window_invalidations
+        self.presentation
+            .window_invalidations
             .entry(window_id)
             .or_default()
             .updated
@@ -4357,7 +4381,7 @@ impl AddSingletonModel for AppContext {
 
 pub struct ClosedWindowData {
     pub window_id: WindowId,
-    window: Window,
+    window: Window<GuiBackend>,
     subscriptions: HashMap<EntityId, Vec<Subscription>>,
     observations: HashMap<EntityId, Vec<Observation>>,
     view_to_window: HashMap<EntityId, WindowId>,
@@ -4494,7 +4518,8 @@ impl AppContext {
     where
         S: AsRef<str>,
     {
-        self.last_frame_position_cache
+        self.presentation
+            .last_frame_position_cache
             .get(&window_id)
             .and_then(|position_cache| position_cache.get_position(id))
     }

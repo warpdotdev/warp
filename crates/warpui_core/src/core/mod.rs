@@ -1,6 +1,7 @@
 mod action;
 mod app;
 mod autotracking;
+mod backend;
 mod entity;
 mod model;
 mod view;
@@ -20,6 +21,7 @@ pub use action::*;
 use anyhow::Error;
 pub use app::*;
 pub use autotracking::Tracked;
+pub use backend::{Backend, BackendView, ErasedView, GuiBackend, GuiPresenterState};
 use derivative::Derivative;
 pub use entity::*;
 use futures_util::future::BoxFuture;
