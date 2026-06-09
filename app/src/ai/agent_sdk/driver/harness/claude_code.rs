@@ -27,7 +27,9 @@ use super::{
     JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
 };
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::mcp::JSONTransportType;
@@ -45,7 +47,7 @@ use parent_bridge::{
     parent_bridge_char_count, parent_bridge_event_cursor_file, parent_bridge_hook_output_ack_file,
     parent_bridge_hook_output_file, parent_bridge_root, parent_bridge_staged_message_path,
     parent_bridge_surfaced_message_path, prepare_parent_bridge_hook_output,
-    prime_parent_bridge_for_wake, read_parent_bridge_event_cursor,
+    prime_parent_bridge_staged_for_self_managed_wake, read_parent_bridge_event_cursor,
     render_parent_bridge_message_block, stage_parent_bridge_message,
     write_parent_bridge_event_cursor, MessageBridgeHookOutput, MessageBridgeMessageRecord,
     MESSAGE_BRIDGE_CONTEXT_PREAMBLE,
@@ -506,6 +508,10 @@ impl HarnessRunner for ClaudeHarnessRunner {
             conversation_id,
             block_id: command_handle.block_id().clone(),
         };
+
+        setup_events
+            .post_timeline_event(OzRunTimelineEvent::AgentStarted)
+            .await;
 
         Ok(command_handle)
     }

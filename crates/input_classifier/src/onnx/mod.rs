@@ -24,12 +24,14 @@ use crate::{
 #[include = "bert_tiny_tokenizer.json"]
 #[cfg_attr(feature = "nld_classifier_v1", include = "bert_tiny_v1.onnx")]
 #[cfg_attr(feature = "nld_classifier_v2", include = "bert_tiny_v2.onnx")]
+#[cfg_attr(feature = "nld_classifier_v3", include = "bert_tiny_v3.onnx")]
 struct Models;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Model {
     BertTinyV1,
     BertTinyV2,
+    BertTinyV3,
 }
 
 impl Model {
@@ -45,12 +47,13 @@ impl Model {
         match self {
             Model::BertTinyV1 => "bert_tiny_v1.onnx",
             Model::BertTinyV2 => "bert_tiny_v2.onnx",
+            Model::BertTinyV3 => "bert_tiny_v3.onnx",
         }
     }
 
     fn tokenizer_path(&self) -> &'static str {
         match self {
-            Model::BertTinyV1 | Model::BertTinyV2 => "bert_tiny_tokenizer.json",
+            Model::BertTinyV1 | Model::BertTinyV2 | Model::BertTinyV3 => "bert_tiny_tokenizer.json",
         }
     }
 }
@@ -225,69 +228,5 @@ impl HasPanicked {
 }
 
 #[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use futures::executor::block_on;
-    use warp_completer::meta::SpannedItem;
-    use warp_completer::{ParsedTokenData, ParsedTokensSnapshot};
-
-    use super::*;
-
-    struct FailingInferenceRunner;
-
-    impl InferenceRunner for FailingInferenceRunner {
-        fn run_inference(&self, _input: &ParsedTokensSnapshot) -> Result<ClassificationResult> {
-            Err(anyhow::anyhow!("inference failed"))
-        }
-    }
-
-    fn parsed_input_without_descriptions(buffer_text: &str) -> ParsedTokensSnapshot {
-        let mut next_search_start = 0;
-        let parsed_tokens = buffer_text
-            .split_whitespace()
-            .enumerate()
-            .map(|(token_index, token)| {
-                let token_start =
-                    buffer_text[next_search_start..].find(token).unwrap() + next_search_start;
-                let token_end = token_start + token.len();
-                next_search_start = token_end;
-
-                ParsedTokenData {
-                    token: token.to_string().spanned((token_start, token_end)),
-                    token_index,
-                    token_description: None,
-                }
-            })
-            .collect();
-
-        ParsedTokensSnapshot {
-            buffer_text: buffer_text.to_owned(),
-            parsed_tokens,
-        }
-    }
-
-    #[test]
-    fn test_inference_error_reports_current_input_fallback_source() {
-        block_on(async move {
-            let classifier = OnnxClassifier {
-                inference_runner: Box::new(FailingInferenceRunner),
-                has_panicked: HasPanicked::new(),
-            };
-            let context = Context {
-                current_input_type: InputType::AI,
-                is_agent_follow_up: false,
-            };
-            let input = parsed_input_without_descriptions("help migrate database");
-
-            let decision = classifier.detect_input_type(input, &context).await;
-
-            assert_eq!(
-                decision,
-                InputClassificationResult::new(
-                    InputType::AI,
-                    InputClassifierDecisionSource::InputClassifierFallbackCurrentInput,
-                )
-            );
-        });
-    }
-}
+#[path = "mod_tests.rs"]
+mod tests;

@@ -1,11 +1,7 @@
-#![allow(deprecated)]
+use std::ptr::NonNull;
 
-use std::ffi::CStr;
-
-use cocoa::base::{id, nil};
-use core_foundation::base::TCFType;
-use core_foundation::string::{CFString, CFStringRef};
-use objc::{class, msg_send, sel, sel_impl};
+use objc2_core_foundation::{CFRetained, CFString};
+use objc2_foundation::NSBundle;
 use warp_core::channel::{Channel, ChannelState};
 
 // Launch Services constants
@@ -18,47 +14,43 @@ const K_LS_ROLES_SHELL: LSRolesMask = 0x00000008;
 extern "C" {
     // Launch Services bindings
     fn LSCopyDefaultRoleHandlerForContentType(
-        in_content_type: CFStringRef,
+        in_content_type: &CFString,
         in_role: LSRolesMask,
-    ) -> CFStringRef;
+    ) -> *mut CFString;
 
     fn LSSetDefaultRoleHandlerForContentType(
-        in_content_type: CFStringRef,
+        in_content_type: &CFString,
         in_role: LSRolesMask,
-        in_handler_bundle_id: CFStringRef,
+        in_handler_bundle_id: &CFString,
     ) -> OSStatus;
 }
 
 pub fn can_become_default_terminal() -> bool {
-    unsafe {
-        let bundle_class = class!(NSBundle);
-        let main_bundle: id = msg_send![bundle_class, mainBundle];
-        let bundle_id: id = msg_send![main_bundle, bundleIdentifier];
-        bundle_id != nil && ChannelState::channel() != Channel::Local
-    }
+    NSBundle::mainBundle().bundleIdentifier().is_some() && ChannelState::channel() != Channel::Local
 }
 
 pub fn is_warp_default_terminal() -> bool {
-    unsafe {
-        let unix_executable_content_type = CFString::new("public.unix-executable");
-        let handler = LSCopyDefaultRoleHandlerForContentType(
-            unix_executable_content_type.as_concrete_TypeRef(),
-            K_LS_ROLES_SHELL,
-        );
+    let unix_executable_content_type = CFString::from_str("public.unix-executable");
+    let handler = unsafe {
+        LSCopyDefaultRoleHandlerForContentType(&unix_executable_content_type, K_LS_ROLES_SHELL)
+    };
 
-        if handler.is_null() {
-            return false;
-        }
+    let Some(handler) = NonNull::new(handler) else {
+        return false;
+    };
 
-        let Some(warp_bundle_id) = get_warp_bundle_id() else {
-            return false;
-        };
+    // `LSCopyDefaultRoleHandlerForContentType` follows the Core Foundation
+    // create rule, so take ownership of the +1 reference immediately;
+    // `CFRetained` releases it on every exit path.
+    let handler_string = unsafe { CFRetained::from_raw(handler) };
 
-        let handler_string = CFString::wrap_under_create_rule(handler);
-        let current_handler = handler_string.to_string();
+    let Some(warp_bundle_id) = get_warp_bundle_id() else {
+        return false;
+    };
 
-        current_handler == warp_bundle_id
-    }
+    let current_handler = handler_string.to_string();
+
+    current_handler == warp_bundle_id
 }
 
 pub fn set_warp_as_default_terminal() -> Result<(), String> {
@@ -72,42 +64,28 @@ pub fn set_warp_as_default_terminal() -> Result<(), String> {
 fn set_default_terminal(bundle_id: &str) -> Result<(), String> {
     log::debug!("Setting default terminal to bundle ID: {bundle_id}");
 
-    unsafe {
-        let unix_executable_content_type = CFString::new("public.unix-executable");
+    let unix_executable_content_type = CFString::from_str("public.unix-executable");
 
-        let bundle_id_cf = CFString::new(bundle_id);
+    let bundle_id_cf = CFString::from_str(bundle_id);
 
-        let result = LSSetDefaultRoleHandlerForContentType(
-            unix_executable_content_type.as_concrete_TypeRef(),
+    let result = unsafe {
+        LSSetDefaultRoleHandlerForContentType(
+            &unix_executable_content_type,
             K_LS_ROLES_SHELL,
-            bundle_id_cf.as_concrete_TypeRef(),
-        );
+            &bundle_id_cf,
+        )
+    };
 
-        match result {
-            0 => Ok(()),
-            _ => Err(format!(
-                "LSSetDefaultRoleHandlerForContentType failed with stats: {result}"
-            )),
-        }
+    match result {
+        0 => Ok(()),
+        _ => Err(format!(
+            "LSSetDefaultRoleHandlerForContentType failed with stats: {result}"
+        )),
     }
 }
 
 /// Gets Warp's bundle identifier. This may be `None` if not running as a bundle, i.e. through
 /// `cargo run` without `cargo bundle`.
 fn get_warp_bundle_id() -> Option<String> {
-    unsafe {
-        let bundle_class = class!(NSBundle);
-        let main_bundle: id = msg_send![bundle_class, mainBundle];
-        let bundle_id: id = msg_send![main_bundle, bundleIdentifier];
-
-        if bundle_id == nil {
-            return None;
-        }
-
-        let bundle_id_str: *const i8 = msg_send![bundle_id, UTF8String];
-        let bundle_id_cstr = CStr::from_ptr(bundle_id_str);
-        String::from_utf8(bundle_id_cstr.to_bytes().into())
-            .inspect_err(|err| log::error!("Error converting bundle ID to string: {err:#}"))
-            .ok()
-    }
+    Some(NSBundle::mainBundle().bundleIdentifier()?.to_string())
 }

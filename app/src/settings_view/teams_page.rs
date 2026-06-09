@@ -105,6 +105,7 @@ const TEXT_FIELD_TOP_PADDING: f32 = 12.;
 const HORIZONTAL_BAR_TO_SUB_HEADER_PADDING: f32 = 9.;
 const SUBSECTION_HEADER_FONT_SIZE: f32 = 18.;
 const SUBSUBSECTION_HEADER_FONT_SIZE: f32 = 14.;
+const OWNER_STATE_CHIP_ACCENT_OPACITY: u8 = 30;
 
 const INVITE_LINK_PREFIX: &str = "/team/";
 const INVALID_DOMAINS_INSTRUCTIONS: &str =
@@ -130,6 +131,13 @@ lazy_static! {
     static ref PAST_DUE_BADGE_COLOR: ColorU = ColorU::new(254, 253, 194, 255);
     static ref UNPAID_BADGE_COLOR: ColorU = ColorU::new(255, 130, 114, 255);
     static ref DELINQUENCY_BADGE_TEXT_COLOR: ColorU = ColorU::new(0, 0, 0, 190);
+}
+
+fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
+    let chip_background = theme
+        .background()
+        .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
+    theme.main_text_color(chip_background).into_solid()
 }
 
 #[derive(Debug, Clone)]
@@ -3502,14 +3510,20 @@ impl TeamsWidget {
                         );
                     }
                     ItemState::Owner => {
-                        pending_and_close_row.add_child(self.render_state_chip(
-                            appearance,
-                            "OWNER".into(),
-                            appearance.theme().accent().into(),
-                            appearance.theme().accent().with_opacity(30).into(),
-                            appearance.ui_font_size() - 1.,
-                            Weight::Normal,
-                        ));
+                        pending_and_close_row.add_child(
+                            self.render_state_chip(
+                                appearance,
+                                "OWNER".into(),
+                                owner_state_chip_text_color(appearance.theme()),
+                                appearance
+                                    .theme()
+                                    .accent()
+                                    .with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY)
+                                    .into(),
+                                appearance.ui_font_size() - 1.,
+                                Weight::Normal,
+                            ),
+                        );
                     }
                     ItemState::Admin => {
                         pending_and_close_row.add_child(
@@ -4423,4 +4437,31 @@ pub fn test_valid_domains() {
     assert!(TeamsPageView::is_valid_domain("warp0.dev0"));
     assert!(TeamsPageView::is_valid_domain("warp.dev"));
     assert!(TeamsPageView::is_valid_domain("miniclip.com"));
+}
+
+#[cfg(test)]
+#[test]
+pub fn test_owner_state_chip_text_contrasts_with_accent_overlay() {
+    let theme_config = themes::theme::WarpThemeConfig::new();
+
+    for theme_kind in [
+        themes::theme::ThemeKind::CyberWave,
+        themes::theme::ThemeKind::WillowDream,
+        themes::theme::ThemeKind::SolarFlare,
+    ] {
+        let theme = theme_config.theme(&theme_kind);
+        let chip_background = theme
+            .background()
+            .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
+        let text_color = owner_state_chip_text_color(&theme);
+
+        assert!(
+            crate::util::color::high_enough_contrast(
+                text_color,
+                chip_background.into_solid(),
+                crate::util::color::MinimumAllowedContrast::Text,
+            ),
+            "{theme_kind} owner chip text should contrast with its accent overlay"
+        );
+    }
 }

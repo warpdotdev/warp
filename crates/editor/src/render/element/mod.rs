@@ -10,17 +10,17 @@ use string_offset::CharOffset;
 use temporary_block::RenderableTemporaryBlock;
 use vim::vim::VimMode;
 use warp_core::ui::theme::Fill as ThemeFill;
-use warpui::color::ColorU;
-use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
-use warpui::elements::{
+use warpui_core::color::ColorU;
+use warpui_core::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
+use warpui_core::elements::{
     Axis, Border, Dash, Point, ScrollData, ScrollableElement, Vector2FExt, ZIndex,
 };
-use warpui::event::{DispatchedEvent, ModifiersState};
-use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{Vector2F, vec2f};
-use warpui::platform::Cursor;
-use warpui::units::{IntoPixels, Pixels};
-use warpui::{
+use warpui_core::event::{DispatchedEvent, ModifiersState};
+use warpui_core::geometry::rect::RectF;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
+use warpui_core::platform::Cursor;
+use warpui_core::units::{IntoPixels, Pixels};
+use warpui_core::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, ModelHandle,
     PaintContext, SizeConstraint, WeakViewHandle,
 };
@@ -84,7 +84,7 @@ pub enum VerticalExpansionBehavior {
 /// An element that renders rich text, with no additional UI or decorations.
 ///
 /// This element caches the positions listed in [`super::model::saved_positions::SavedPositions`],
-/// and the parent view can overlay UI controls on top of them using a [`warpui::elements::Stack`].
+/// and the parent view can overlay UI controls on top of them using a [`warpui_core::elements::Stack`].
 ///
 /// It additionally reserves horizontal gutters, which are considered in-bounds for content hit
 /// testing.
@@ -1084,7 +1084,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
             return;
         };
         ctx.scene
-            .start_layer(warpui::ClipBounds::BoundedBy(clip_bounds));
+            .start_layer(warpui_core::ClipBounds::BoundedBy(clip_bounds));
         // Save the clipped content layer z-index for hover detection.
         self.content_z_index = Some(ctx.scene.z_index());
 
@@ -1243,7 +1243,7 @@ impl<V: EditorView> NewScrollableElement for RichTextElement<V> {
         })
     }
 
-    fn scroll(&mut self, delta: warpui::units::Pixels, axis: Axis, ctx: &mut EventContext) {
+    fn scroll(&mut self, delta: warpui_core::units::Pixels, axis: Axis, ctx: &mut EventContext) {
         if let Some(action) = V::Action::scroll(delta, axis) {
             ctx.dispatch_typed_action(action);
         }
@@ -1264,7 +1264,7 @@ impl<V: EditorView> ScrollableElement for RichTextElement<V> {
         Some(self.vertical_scroll_data(app))
     }
 
-    fn scroll(&mut self, delta: warpui::units::Pixels, ctx: &mut EventContext) {
+    fn scroll(&mut self, delta: warpui_core::units::Pixels, ctx: &mut EventContext) {
         if let Some(action) = V::Action::scroll(delta, Axis::Vertical) {
             ctx.dispatch_typed_action(action);
         }

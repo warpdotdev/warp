@@ -10,6 +10,9 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 
 use super::{DismissalStrategy, EphemeralMessage, EphemeralMessageModel};
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::blocklist::orchestration_topology::{
+    adjacent_orchestration_child_conversation_id, OrchestrationNavigationDirection,
+};
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
 use crate::terminal::TerminalModel;
@@ -177,6 +180,10 @@ pub enum AgentViewEntryOrigin {
 
     /// Entered agent view by clearing the buffer (Cmd+K) while already in agent view.
     ClearBuffer,
+
+    /// Entered agent view via the "Jump to Latest Agent Message" command, which
+    /// returns to the most recent conversation from the terminal.
+    JumpToLatestAgentMessage,
 
     // The variants below actually correspond to callsites where the selected conversation is
     // updated, but don't actually correspond to entering the agent view. They exist so we can
@@ -414,6 +421,21 @@ impl AgentViewController {
 
     pub fn agent_view_state(&self) -> &AgentViewState {
         &self.agent_view_state
+    }
+
+    /// Resolves the conversation adjacent to the active agent-view conversation
+    /// in the canonical orchestration pill order.
+    pub fn adjacent_orchestration_conversation_id(
+        &self,
+        direction: OrchestrationNavigationDirection,
+        app: &AppContext,
+    ) -> Option<AIConversationId> {
+        let active_conversation_id = self.agent_view_state.active_conversation_id()?;
+        adjacent_orchestration_child_conversation_id(
+            BlocklistAIHistoryModel::as_ref(app),
+            active_conversation_id,
+            direction,
+        )
     }
 
     /// Returns whether the user is allowed to exit agent view.

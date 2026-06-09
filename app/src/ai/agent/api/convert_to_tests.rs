@@ -4,9 +4,107 @@ use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, TransferShellCommandControlToUserResult,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentContext,
+    TransferShellCommandControlToUserResult,
 };
 use crate::terminal::model::block::BlockId;
+
+#[test]
+fn git_context_converts_repository_and_pull_request_metadata() {
+    let context = vec![
+        AIAgentContext::Git {
+            head: "abc123".to_string(),
+            branch: Some("feature/repo-pr".to_string()),
+        },
+        AIAgentContext::Repository {
+            name: "warp-internal".to_string(),
+            owner: Some("warpdotdev".to_string()),
+        },
+        AIAgentContext::PullRequest {
+            number: 42,
+            state: "OPEN".to_string(),
+            draft: true,
+            base_branch: "main".to_string(),
+        },
+    ];
+
+    let api_context = super::convert_context(&context);
+    let git = api_context.git.expect("expected git context");
+    assert_eq!(git.head, "abc123");
+    assert_eq!(git.branch, "feature/repo-pr");
+
+    let repository = git.repository.expect("expected repository context");
+    assert_eq!(repository.name, "warp-internal");
+    assert_eq!(repository.owner, "warpdotdev");
+
+    let pull_request = git.pull_request.expect("expected pull request context");
+    assert_eq!(pull_request.number, 42);
+    assert_eq!(
+        pull_request.state,
+        api::input_context::git::pull_request::State::OpenDraft as i32
+    );
+    assert_eq!(pull_request.base_branch, "main");
+}
+
+#[test]
+fn git_context_skips_pull_request_metadata_with_invalid_number() {
+    for number in [0, -1] {
+        let context = vec![
+            AIAgentContext::Git {
+                head: "abc123".to_string(),
+                branch: Some("feature/repo-pr".to_string()),
+            },
+            AIAgentContext::PullRequest {
+                number,
+                state: "OPEN".to_string(),
+                draft: false,
+                base_branch: "main".to_string(),
+            },
+        ];
+
+        let api_context = super::convert_context(&context);
+        let git = api_context.git.expect("expected git context");
+        assert_eq!(git.head, "abc123");
+        assert_eq!(git.branch, "feature/repo-pr");
+        assert_eq!(git.pull_request, None);
+    }
+}
+
+#[test]
+fn git_context_skips_pull_request_metadata_with_unknown_state() {
+    let context = vec![
+        AIAgentContext::Git {
+            head: "abc123".to_string(),
+            branch: Some("feature/repo-pr".to_string()),
+        },
+        AIAgentContext::PullRequest {
+            number: 42,
+            state: "SOMETHING_ELSE".to_string(),
+            draft: false,
+            base_branch: "main".to_string(),
+        },
+    ];
+
+    let api_context = super::convert_context(&context);
+    let git = api_context.git.expect("expected git context");
+    assert_eq!(git.pull_request, None);
+}
+
+#[test]
+fn git_context_deserializes_legacy_string_pull_request_number() {
+    let pull_request = serde_json::from_str::<AIAgentContext>(
+        r#"{"PullRequest":{"number":"42","state":"OPEN","draft":false,"base_branch":"main"}}"#,
+    )
+    .expect("expected legacy serialized pull request context");
+
+    let api_context = super::convert_context(&[pull_request]);
+    let pull_request = api_context
+        .git
+        .expect("expected git context")
+        .pull_request
+        .expect("expected pull request context");
+    assert_eq!(pull_request.number, 42);
+}
 
 #[test]
 fn transfer_control_snapshot_result_converts_to_tool_call_result_input() {

@@ -127,6 +127,29 @@ fn test_shell_launch_data() -> ShellLaunchData {
 }
 
 #[test]
+fn format_upload_artifact_error_preserves_full_error_chain() {
+    let err = anyhow::anyhow!(
+        "Artifact upload limit reached: this conversation already has the maximum allowed number of file artifacts (10). Remove an existing artifact or upload fewer files."
+    )
+    .context("Failed to create file artifact upload target");
+
+    assert_eq!(
+        format_upload_artifact_error(&err),
+        "Artifact upload failed: Failed to create file artifact upload target: Artifact upload limit reached: this conversation already has the maximum allowed number of file artifacts (10). Remove an existing artifact or upload fewer files."
+    );
+}
+
+#[test]
+fn format_upload_artifact_error_keeps_single_layer_errors() {
+    let err = anyhow::anyhow!("Failed to open artifact file '/tmp/missing.txt'");
+
+    assert_eq!(
+        format_upload_artifact_error(&err),
+        "Failed to open artifact file '/tmp/missing.txt'"
+    );
+}
+
+#[test]
 fn should_autoexecute_honors_file_read_permissions_for_resolved_path() {
     let temp_dir = tempfile::tempdir().unwrap();
     let cwd = temp_dir.path().join("workspace");

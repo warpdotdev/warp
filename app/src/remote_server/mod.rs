@@ -4,12 +4,14 @@ use remote_server::manager::RemoteServerManager;
 // `crate::remote_server::*` imports in `app` continue to work.
 pub use remote_server::*;
 #[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
+use warp_server_client::auth::AuthEvent;
+#[cfg(not(target_family = "wasm"))]
+use warpui::SingletonEntity as _;
 
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 #[cfg(not(target_family = "wasm"))]
-use crate::server::server_api::{ServerApiEvent, ServerApiProvider};
+use crate::server::server_api::ServerApiProvider;
 
 #[cfg(not(target_family = "wasm"))]
 pub mod auth_context;
@@ -76,7 +78,7 @@ pub fn wire_auth_token_rotation(ctx: &mut warpui::AppContext) {
     let server_api = ServerApiProvider::handle(ctx);
     let manager = RemoteServerManager::handle(ctx);
     ctx.subscribe_to_model(&server_api, move |_, event, ctx| {
-        if let ServerApiEvent::AccessTokenRefreshed { token } = event {
+        if let AuthEvent::AccessTokenRefreshed { token } = event {
             manager.update(ctx, |manager, _| {
                 manager.rotate_auth_token(token.clone());
             });

@@ -1,4 +1,4 @@
-use warpui::{View, ViewContext};
+use warpui_core::{View, ViewContext};
 
 pub trait OnboardingSlide: View {
     fn on_up(&mut self, _ctx: &mut ViewContext<Self>) {}

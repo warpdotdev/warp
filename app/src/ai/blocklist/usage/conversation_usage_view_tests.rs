@@ -23,6 +23,7 @@
 //! that aren't relevant to the handler's correctness).
 
 use std::collections::HashMap;
+
 use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::App;
@@ -33,6 +34,7 @@ use crate::persistence::model::{ModelTokenUsage, PRIMARY_AGENT_CATEGORY};
 fn placeholder_usage_info() -> ConversationUsageInfo {
     ConversationUsageInfo {
         credits_spent: 0.0,
+        platform_credits_spent: 0.0,
         credits_spent_for_last_block: None,
         tool_calls: 0,
         models: Vec::new(),

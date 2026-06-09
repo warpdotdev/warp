@@ -6,6 +6,7 @@ use std::time::Duration;
 use futures::{pin_mut, FutureExt as _};
 use itertools::Itertools;
 use warp_completer::completer::CommandExitStatus;
+use warp_core::r#async::debounce;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 #[cfg(feature = "local_fs")]
@@ -26,7 +27,6 @@ use super::{chips_to_string, ChipResult, ChipValue, ContextChipKind};
 use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
 #[cfg(feature = "local_fs")]
 use crate::context_chips::display_chip::GitLineChanges;
-use crate::debounce::debounce;
 use crate::editor::EditorView;
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -689,7 +689,6 @@ impl CurrentPrompt {
                 }
             }
         }
-
         match generator {
             PromptGenerator::ShellCommand(cmd) => {
                 let Some(exec_ctx) = self.prepare_shell_command_context(cmd, ctx) else {
@@ -790,7 +789,8 @@ impl CurrentPrompt {
                                 }
                             }
                         }
-                        me.update_chip_value(&chip_kind, output.map(ChipValue::Text));
+                        let chip_value = output.map(ChipValue::Text);
+                        me.update_chip_value(&chip_kind, chip_value);
                         me.set_chip_update_status(&chip_kind, status);
                     },
                 );

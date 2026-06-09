@@ -106,7 +106,7 @@ cargo test --doc
 ## Linting and formatting
 Run before submitting changes:
 ```bash
-cargo fmt
+./script/format
 cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 ```
 

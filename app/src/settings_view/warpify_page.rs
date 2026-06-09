@@ -44,6 +44,20 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 ) {
     // Add all of the toggle settings from the Warpify Page that you want to show up on the Command Palette here.
     let mut toggle_binding_pairs = vec![];
+    if FeatureFlag::SSHTmuxWrapper.is_enabled()
+        && WarpifySettings::as_ref(app)
+            .enable_ssh_warpification
+            .is_supported_on_current_platform()
+    {
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "SSH Warpification",
+            builder(SettingsAction::WarpifyPageToggle(
+                WarpifyPageAction::ToggleSshWarpification,
+            )),
+            context,
+            flags::SSH_WARPIFICATION_CONTEXT_FLAG,
+        ));
+    }
 
     if FeatureFlag::SSHTmuxWrapper.is_enabled()
         && WarpifySettings::as_ref(app)

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use warp_util::standardized_path::StandardizedPath;
 #[cfg(not(target_family = "wasm"))]
-use warpui::SingletonEntity;
+use warpui_core::SingletonEntity;
 
 /// Errors that can occur when working with repository metadata.
 #[derive(Error, Debug)]
@@ -25,6 +25,12 @@ pub enum RepoMetadataError {
     BuildTree(BuildTreeError),
     #[error("Failed to start watcher: {0}")]
     WatcherError(#[from] anyhow::Error),
+    #[error("Repository not indexed")]
+    RepositoryNotIndexed,
+    #[error("Repository indexing in progress")]
+    RepositoryIndexingPending,
+    #[error("Repository indexing failed")]
+    RepositoryIndexingFailed,
 }
 // Re-export the modules
 pub mod entry;
@@ -35,6 +41,7 @@ pub mod remote_model;
 pub mod repositories;
 pub mod repository;
 pub mod repository_identifier;
+pub mod standing_queries;
 mod telemetry;
 pub mod watcher;
 pub mod wrapper_model;
@@ -49,7 +56,7 @@ pub use repository::Repository;
 pub use watcher::{DirectoryWatcher, RepositoryUpdate, TargetFile};
 
 #[cfg(not(target_family = "wasm"))]
-pub fn is_in_repo(path: &str, app: &warpui::AppContext) -> bool {
+pub fn is_in_repo(path: &str, app: &warpui_core::AppContext) -> bool {
     use warp_util::local_or_remote_path::LocalOrRemotePath;
 
     use crate::repositories::DetectedRepositories;
@@ -60,14 +67,17 @@ pub fn is_in_repo(path: &str, app: &warpui::AppContext) -> bool {
 }
 
 #[cfg(target_family = "wasm")]
-pub fn is_in_repo(_path: &str, _app: &warpui::AppContext) -> bool {
+pub fn is_in_repo(_path: &str, _app: &warpui_core::AppContext) -> bool {
     false
 }
 pub use file_tree_store::FileTreeEntry;
-pub use file_tree_update::RepoMetadataUpdate;
-pub use local_model::{LocalRepoMetadataModel, RepoContent};
+pub use file_tree_update::{MetadataUpdateType, RepoMetadataUpdate};
+pub use local_model::{LocalRepoMetadataModel, RepoContent, RepoContents};
 pub use remote_model::RemoteRepoMetadataModel;
 pub use repository_identifier::{RemoteRepositoryIdentifier, RepositoryIdentifier};
+pub use standing_queries::{
+    StandingQueryContent, StandingQueryDefinitions, StandingQueryResults, StandingQueryResultsDelta,
+};
 pub use wrapper_model::{RepoMetadataEvent, RepoMetadataModel};
 
 /// A wrapper around PathBuf that ensures the path is canonicalized.
