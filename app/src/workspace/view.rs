@@ -6881,9 +6881,10 @@ impl Workspace {
 
     /// Ensures the group is expanded (not collapsed). No-op if the group does
     /// not exist or is already expanded.
-    fn expand_tab_group(&mut self, group_id: TabGroupId) {
+    fn expand_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.collapsed = false;
+            ctx.notify();
         }
     }
 
@@ -6989,7 +6990,7 @@ impl Workspace {
             .map(|i| i + 1)
             .unwrap_or(self.tabs.len());
         self.tabs[tab_index].group_id = Some(group_id);
-        self.expand_tab_group(group_id);
+        self.expand_tab_group(group_id, ctx);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
         if let Some(prev) = previous_group_id {
@@ -7076,8 +7077,7 @@ impl Workspace {
             }
             self.move_tab_to_index(new_idx, target_index, ctx);
         }
-        self.expand_tab_group(group_id);
-        ctx.notify();
+        self.expand_tab_group(group_id, ctx);
     }
 
     /// Moves the whole group up or down by one "slot", where a slot is the
@@ -12112,11 +12112,11 @@ impl Workspace {
                         .push(self.tabs.last().unwrap().pane_group.id());
                     self.activate_tab_internal(self.tab_count() - 1, ctx);
                 } else {
-                    // When the new tab won't inherit the active tab's group
-                    // (e.g. settings, notebooks, or other restoration-based tabs)
-                    // but the active tab is inside a group, land after the group's
-                    // last member so the group isn't split in two.
-                    let insert_idx = if active_tab_group_id.is_none() {
+                    // Restoration-based tabs (settings, notebooks, etc.) don't
+                    // inherit the active tab's group. If the active tab is inside
+                    // a group, land after the group's last member so we don't
+                    // split it.
+                    let insert_idx = if is_restoration {
                         active_tab
                             .and_then(|t| t.group_id)
                             .and_then(|gid| {
@@ -12142,7 +12142,7 @@ impl Workspace {
             if let Some(new_tab) = self.tabs.get_mut(new_idx) {
                 new_tab.group_id = Some(group_id);
             }
-            self.expand_tab_group(group_id);
+            self.expand_tab_group(group_id, ctx);
         }
 
         if !is_restoration {

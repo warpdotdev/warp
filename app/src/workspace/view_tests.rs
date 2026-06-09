@@ -3691,8 +3691,6 @@ fn test_new_tab_with_after_current_tab_setting_lands_after_active_tab_in_group()
     });
 }
 
-// --- expand-on-add tests ---
-
 #[test]
 fn test_move_tab_to_group_expands_collapsed_group() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);

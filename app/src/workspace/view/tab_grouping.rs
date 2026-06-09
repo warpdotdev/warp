@@ -46,7 +46,7 @@ impl Workspace {
 
         // Expand any groups within the selected range, so user can see what they are selecting.
         for group_id in &crossed_group_ids {
-            self.expand_tab_group(*group_id);
+            self.expand_tab_group(*group_id, ctx);
         }
 
         // Add tabs in the selected range to the multi-selection.
@@ -326,7 +326,7 @@ impl Workspace {
 
         self.restore_active_tab_index(active_pane_group_id);
 
-        self.expand_tab_group(group_id);
+        self.expand_tab_group(group_id, ctx);
 
         // Prune any groups that are now empty.
         for previous_group_id in previous_group_ids {
