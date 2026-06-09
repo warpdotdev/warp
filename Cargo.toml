@@ -109,7 +109,7 @@ async-task = "4.2.0"
 async-trait = "0.1.89"
 async-fs = "2.1.2"
 backtrace = "0.3.76"
-base64 = "0.22.1"
+base64 = "0.13.0"
 bincode = "1.3.3"
 bitflags = { version = "2.4.0", features = ["serde"] }
 bitflags-serde-legacy = "0.1.1"
@@ -131,7 +131,7 @@ cynic = { version = "3" }
 cynic-codegen = { version = "3", features = ["rkyv"] }
 dashmap = "6.1.0"
 derive_more = "0.99.17"
-diesel = { version = "2.3.9", default-features = false }
+diesel = { version = "2.0.0", default-features = false }
 directories = "6.0"
 dunce = "1.0.1"
 enum-iterator = "1.1.3"
