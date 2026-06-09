@@ -20,18 +20,18 @@ The generic `Warping...` message is currently fixed. Users who personalize Warp'
 - No user-created named packs in the first implementation.
 ## 5. Behavior
 1. Default behavior is unchanged. With no custom verbs configured, the generic loading state displays `Warping...`.
-2. The persisted setting is `agents.warp_agent.custom_warping_verbs`, a user-level `Vec<String>` that syncs like comparable public Warp Agent preferences.
+2. The persisted settings are `agents.warp_agent.spinner_verbs`, an explicit source mode, and `agents.warp_agent.custom_spinner_verbs`, a custom list used only when the source mode is `custom`. Both sync like comparable public Warp Agent preferences.
 3. Settings exposes a `Spinner verbs` control in the Warp Agent/Oz settings area.
 4. The Settings UI offers these modes:
-   - `Default` — clears the custom list and displays `Warping...`.
-   - `Medieval` — writes the built-in medieval pack into the custom list.
-   - `Conspiracy` — writes the built-in conspiracy pack into the custom list.
-   - `Cooking` — writes the built-in cooking pack into the custom list.
-   - `Warpy` — writes the built-in warpy pack into the custom list.
+   - `Default` — stores `spinner_verbs = "default"` and displays `Warping...`.
+   - `Medieval` — stores `spinner_verbs = "medieval"`.
+   - `Conspiracy` — stores `spinner_verbs = "conspiracy"`.
+   - `Cooking` — stores `spinner_verbs = "cooking"`.
+   - `Warpy` — stores `spinner_verbs = "warpy"`.
    - `Custom` — shows an editor for a comma-separated custom list.
-5. Built-in packs are curated, read-only source-code lists. Applying a pack copies that pack's verb list into `agents.warp_agent.custom_warping_verbs`; it does not create a separate pack reference in settings.
+5. Built-in packs are curated, read-only source-code lists. Applying a pack stores the pack identifier in `agents.warp_agent.spinner_verbs`; Warp resolves the current pack phrases from source at render time.
 6. Custom values are entered as comma-separated phrases, for example `Cooking, chopping, slicing`.
-7. The UI saves custom editor content on blur or Enter, not on every keystroke. While the user has unsaved edits, the UI keeps showing the Custom editor and does not overwrite the in-progress text with external setting changes. Once the user saves or selects another mode, later settings changes can resync the editor.
+7. The UI saves custom editor content on blur or Enter, not on every keystroke. While the user has unsaved edits, the UI keeps showing the Custom editor and does not overwrite the in-progress text with external setting changes. Once the user saves or selects another mode, later settings changes can resync the editor. Selecting Default or a pack preserves the saved custom list so users can return to Custom without retyping it.
 8. Each generic warping session chooses one phrase from the normalized list at random. A "warping session" is one LLM response or active response stream, not a full terminal session or conversation. The phrase stays stable for that response. When alternatives exist, the next response avoids immediately repeating the previous raw phrase.
 9. A warping session is keyed by the active response stream when available, falling back to the exchange key. One backend response that appends multiple exchanges should keep the same displayed phrase. A single conversation can include multiple warping sessions and may show different spinner verbs across separate responses.
 10. Rendering appends `...` to a selected phrase unless it already ends in `.`, `!`, `?`, or `…`.
@@ -42,7 +42,7 @@ The generic `Warping...` message is currently fixed. Users who personalize Warp'
     - Drop entries that become empty after trimming/stripping, including dots-only entries.
     - Truncate each phrase to `MAX_WARPING_VERB_CHARS` characters before the render-time ellipsis.
     - Cap the stored/displayed list at `MAX_CUSTOM_WARPING_VERBS` entries.
-12. If normalization produces an empty list, Warp falls back to `Warping...`.
+12. If `spinner_verbs = "custom"` and normalization produces an empty list, Warp falls back to `Warping...`.
 13. The custom list applies only to the generic in-progress spinner for Warp Agent and Oz. More specific progress labels continue to take precedence.
 14. Fallback-model messages continue to render as model-specific `Warping with ...` labels rather than using custom spinner verbs.
 15. Settings-file changes apply without restarting Warp through the existing settings hot-reload path and normal UI re-rendering.
@@ -52,8 +52,8 @@ The generic `Warping...` message is currently fixed. Users who personalize Warp'
 1. With default settings, the generic loading state still displays `Warping...`.
 2. Selecting each built-in pack in Settings updates the generic loading state to use one phrase from that pack.
 3. Entering a comma-separated custom list in Settings updates the generic loading state to use one normalized phrase from that list.
-4. Directly editing `agents.warp_agent.custom_warping_verbs` in the settings file updates the generic loading state after hot reload.
-5. Raw settings or synced values that contain blanks, dots-only entries, trailing ellipses, lowercase starts, over-long entries, or more than the max number of entries are normalized safely before display.
+4. Directly editing `agents.warp_agent.spinner_verbs` and `agents.warp_agent.custom_spinner_verbs` in the settings file updates the generic loading state after hot reload.
+5. Raw settings or synced values that contain blanks, dots-only entries, trailing ellipses, lowercase starts, over-long entries, or more than the max number of entries are normalized safely at the settings boundary and before display.
 6. One LLM response keeps a stable displayed phrase while it streams.
 7. Subsequent responses avoid immediate repeats when the list contains alternatives.
 8. Tool-specific labels and fallback-model labels continue to override custom spinner verbs.
@@ -63,7 +63,7 @@ The generic `Warping...` message is currently fixed. Users who personalize Warp'
 - Manual: start an agent request with default settings and confirm the generic label remains `Warping...`.
 - Manual: select each built-in pack and confirm generic loading uses one of that pack's phrases.
 - Manual: enter custom phrases with spaces, punctuation, emoji, and lowercase starts; confirm the displayed text is normalized and receives a single ellipsis.
-- Manual: edit `agents.warp_agent.custom_warping_verbs` while Warp is running and confirm hot reload updates the next generic loading state without restart.
+- Manual: edit `agents.warp_agent.spinner_verbs` and `agents.warp_agent.custom_spinner_verbs` while Warp is running and confirm hot reload updates the next generic loading state without restart.
 - Manual: make unsaved edits in the Custom editor while changing the setting externally; confirm the in-progress editor text is not overwritten until saved or the mode changes.
 - Manual: trigger codebase search, grep, file glob, command execution, command waiting, MCP calls, summarization, passive diff generation, and fallback-model routing; confirm their specific labels still override custom verbs.
 - Manual: try an over-long custom phrase and confirm the row clips without wrapping or overlapping buttons.

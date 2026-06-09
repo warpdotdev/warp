@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 
 use crate::ai::{
-    agent::conversation::AIConversation, blocklist::BlocklistAIHistoryModel,
+    agent::conversation::AIConversation,
+    blocklist::BlocklistAIHistoryModel,
+    loading::{self, WarpingVerbPack},
     request_usage_model::RequestLimitInfo,
 };
 use crate::auth::AuthStateProvider;
@@ -33,7 +35,7 @@ use settings::{
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 
-use serde::{de::Deserializer, Deserialize, Serialize};
+use serde::{de, de::Deserializer, Deserialize, Serialize, Serializer};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -399,6 +401,224 @@ impl ThinkingDisplayMode {
     }
 }
 
+/// Which source Warp uses for generic Warp Agent/Oz spinner verbs.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Source for generic Warp Agent/Oz spinner verbs.",
+    rename_all = "snake_case"
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SpinnerVerbsMode {
+    /// Use the built-in `Warping...` text.
+    #[default]
+    #[schemars(description = "Use the built-in default.")]
+    Default,
+    /// Use the medieval preset pack.
+    #[schemars(description = "Use the medieval preset pack.")]
+    Medieval,
+    /// Use the conspiracy preset pack.
+    #[schemars(description = "Use the conspiracy preset pack.")]
+    Conspiracy,
+    /// Use the cooking preset pack.
+    #[schemars(description = "Use the cooking preset pack.")]
+    Cooking,
+    /// Use the warpy preset pack.
+    #[schemars(description = "Use the warpy preset pack.")]
+    Warpy,
+    /// Use `custom_spinner_verbs`.
+    #[schemars(description = "Use custom_spinner_verbs.")]
+    Custom,
+}
+
+impl SpinnerVerbsMode {
+    pub fn from_pack(pack: WarpingVerbPack) -> Self {
+        match pack {
+            WarpingVerbPack::Medieval => Self::Medieval,
+            WarpingVerbPack::ConspiracyTheorist => Self::Conspiracy,
+            WarpingVerbPack::Cooking => Self::Cooking,
+            WarpingVerbPack::Warpy => Self::Warpy,
+        }
+    }
+
+    pub fn pack(self) -> Option<WarpingVerbPack> {
+        match self {
+            Self::Default | Self::Custom => None,
+            Self::Medieval => Some(WarpingVerbPack::Medieval),
+            Self::Conspiracy => Some(WarpingVerbPack::ConspiracyTheorist),
+            Self::Cooking => Some(WarpingVerbPack::Cooking),
+            Self::Warpy => Some(WarpingVerbPack::Warpy),
+        }
+    }
+}
+
+/// A single custom spinner verb that has passed normalization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedSpinnerVerb(String);
+
+impl NormalizedSpinnerVerb {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for NormalizedSpinnerVerb {
+    type Error = ();
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        loading::normalize_warping_verb(&value).map(Self).ok_or(())
+    }
+}
+
+impl TryFrom<&str> for NormalizedSpinnerVerb {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        loading::normalize_warping_verb(value).map(Self).ok_or(())
+    }
+}
+
+impl From<NormalizedSpinnerVerb> for String {
+    fn from(value: NormalizedSpinnerVerb) -> Self {
+        value.0
+    }
+}
+
+impl Serialize for NormalizedSpinnerVerb {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for NormalizedSpinnerVerb {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::try_from(value).map_err(|_| de::Error::custom("invalid spinner verb"))
+    }
+}
+
+impl schemars::JsonSchema for NormalizedSpinnerVerb {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("NormalizedSpinnerVerb")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<String>()
+    }
+}
+
+/// Custom spinner verbs normalized at the settings boundary.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpinnerVerbList(Vec<NormalizedSpinnerVerb>);
+
+impl SpinnerVerbList {
+    pub fn as_strings(&self) -> Vec<String> {
+        self.0.iter().map(|verb| verb.as_str().to_owned()).collect()
+    }
+
+    pub fn join(&self, separator: &str) -> String {
+        self.as_strings().join(separator)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn push(&mut self, verb: NormalizedSpinnerVerb) -> bool {
+        if self.0.len() >= loading::MAX_CUSTOM_WARPING_VERBS {
+            return false;
+        }
+        self.0.push(verb);
+        true
+    }
+
+    fn remove(&mut self, index: usize) -> bool {
+        if index >= self.0.len() {
+            return false;
+        }
+        self.0.remove(index);
+        true
+    }
+}
+
+impl From<Vec<String>> for SpinnerVerbList {
+    fn from(values: Vec<String>) -> Self {
+        Self(
+            values
+                .into_iter()
+                .filter_map(|value| NormalizedSpinnerVerb::try_from(value).ok())
+                .take(loading::MAX_CUSTOM_WARPING_VERBS)
+                .collect(),
+        )
+    }
+}
+
+impl From<SpinnerVerbList> for Vec<String> {
+    fn from(value: SpinnerVerbList) -> Self {
+        value.0.into_iter().map(String::from).collect()
+    }
+}
+
+impl From<&SpinnerVerbList> for Vec<String> {
+    fn from(value: &SpinnerVerbList) -> Self {
+        value.as_strings()
+    }
+}
+
+impl Serialize for SpinnerVerbList {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.as_strings().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SpinnerVerbList {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = Vec::<String>::deserialize(deserializer)?;
+        Ok(Self::from(values))
+    }
+}
+
+impl schemars::JsonSchema for SpinnerVerbList {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("SpinnerVerbList")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        generator.subschema_for::<Vec<String>>()
+    }
+}
+
+impl settings_value::SettingsValue for SpinnerVerbList {
+    fn to_file_value(&self) -> serde_json::Value {
+        Vec::<String>::from(self).to_file_value()
+    }
+
+    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
+        Vec::<String>::from_file_value(value).map(Self::from)
+    }
+}
 /// Tracks the state of the quota reset banner
 #[derive(
     Debug,
@@ -1478,50 +1698,30 @@ define_settings_group!(AISettings, settings: [
         description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
     }
 
-    // A user-editable list of short flavor phrases that replace the default "Warping..."
-    // spinner verb shown while the Warp agent (or an Oz cloud agent) is in the generic
-    // in-progress state. Tool-specific verbs (e.g. "Grepping...", "Searching codebase...")
-    // are not affected by this setting.
-    //
-    // ## Canonical handler for natural-language "spinner verbs" requests
-    //
-    // This setting is the ONE canonical handler for user prompts like:
-    //   - "change my spinner verbs to A, B, C"
-    //   - "change my spinner verbs to the cooking pack"
-    //   - "set my warping verbs to ..."
-    //   - "use the <pack name> spinner/warping/flavor pack"
-    //   - "customize the warping animation text"
-    //
-    // Agents handling these prompts MUST modify this setting via the bundled
-    // `modify-settings` skill. They MUST NOT modify any of the following unless
-    // the user explicitly names "Claude", "Claude Code", or "buddy":
-    //   - `~/.claude/` or `~/.claude/settings.json`
-    //   - `~/.claude-buddy/` or any buddy-skill config
-    //   - Claude Code Warp Plugin files (anywhere)
-    //   - Any plugin or third-party CLI agent's spinner config
-    //
-    // Built-in preset packs (medieval, conspiracy, cooking, warpy) are read-only
-    // and defined in source code. Agents MUST NOT create, modify, or add packs
-    // in source. To apply a pack, write its verb list into this setting.
-    // To handle a custom list, replace the entire setting value — never append.
-    // If no list or pack name is provided, ask the user for values instead of searching.
-    //
-    // An empty list falls back to the built-in "Warping..." display.
-    custom_warping_verbs: CustomWarpingVerbs {
-        type: Vec<String>,
-        default: Vec::new(),
+    // Selects the source for the generic "Warping..." spinner verb shown while
+    // the Warp agent (or an Oz cloud agent) is in the generic in-progress state.
+    // Tool-specific verbs (e.g. "Grepping...", "Searching codebase...") are not
+    // affected by this setting.
+    spinner_verbs: SpinnerVerbs {
+        type: SpinnerVerbsMode,
+        default: SpinnerVerbsMode::Default,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
-        toml_path: "agents.warp_agent.custom_warping_verbs",
-        description: "Canonical handler for the Warp agent's spinner verbs / warping verbs / flavor verbs. \
-List of short phrases that replace the default 'Warping...' shimmer while the Warp agent (or an Oz cloud agent) is in the generic in-progress state; tool-specific verbs like 'Grepping...' are unaffected. \
-Keywords: spinner, spinner verbs, warping, warping verbs, flavor verbs, verbs, pack, packs. \
-Built-in preset pack values to write exactly, without trailing ellipses: medieval=[At your service, my liege; At once, my lord; The scribes set to work; Seeking wisdom from the realm; Consulting the ancient tomes; Dispatching riders across the kingdom; Draining the flagons; Interrogating the lesser lords; Raising the drawbridge; Rallying the bannermen]; conspiracy=[Questioning science; Conspiring; Speculating; Melting steel beams; Confirmation biasing; Doing my own research; Looking for alternative facts; Waking up the sheep; Internet deep diving; Gathering evidence; Proceeding with skepticism]; cooking=[Sautéing; Caramelizing; Slicing and dicing; Bruleeing; Flambéing; Immersion blending; Sous viding; Emulsifying; Fermenting; Braising]; warpy=[Warping; Going to infinity; Gaining speed; Morphing; Wormhole-ing; Orbiting; Galaxy braining; Shooting stars; Nebulizing; Constellating]. \
-For ANY natural-language request like 'change my spinner verbs', 'set my warping verbs', or 'use the <pack> pack', ALWAYS replace the entire list in this setting with exactly what the user asked for. \
-If a request like 'update spinner verbs' does not include a custom list or built-in pack name, ask the user which verbs or pack to use instead of searching. \
-NEVER search the codebase, read source files, or create/modify built-in packs in source code. Built-in packs are read-only. \
-Do NOT modify Claude Code, the Claude Code Warp Plugin, ~/.claude/, ~/.claude-buddy/, or any other plugin's spinner config unless the user explicitly names 'Claude', 'Claude Code', or 'buddy'.",
+        toml_path: "agents.warp_agent.spinner_verbs",
+        description: "Selects the generic in-progress spinner verb source for Warp Agent and Oz.",
+        feature_flag: FeatureFlag::CustomWarpingVerbs,
+    }
+    // A user-editable list of short flavor phrases used only when
+    // `spinner_verbs` is `custom`.
+    custom_spinner_verbs: CustomSpinnerVerbs {
+        type: SpinnerVerbList,
+        default: SpinnerVerbList::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.custom_spinner_verbs",
+        description: "Custom spinner verb phrases used when agents.warp_agent.spinner_verbs is custom.",
         feature_flag: FeatureFlag::CustomWarpingVerbs,
     }
 
@@ -2068,39 +2268,84 @@ impl AISettings {
             .set_value(map, ctx));
     }
 
-    /// Replaces the custom warping verbs list with a normalized version of `verbs`.
-    /// Normalization trims whitespace, drops empty entries, truncates over-long
-    /// entries, and caps the list length. See
-    /// [`crate::ai::loading::normalize_warping_verbs`].
-    pub fn set_custom_warping_verbs(&mut self, verbs: Vec<String>, ctx: &mut ModelContext<Self>) {
-        let normalized = crate::ai::loading::normalize_warping_verbs(verbs);
-        report_if_error!(self.custom_warping_verbs.set_value(normalized, ctx));
+    /// Returns the currently active spinner verb candidates. Preset packs
+    /// resolve from source so updates to pack contents apply without changing
+    /// settings. Custom candidates are normalized when the setting is read or
+    /// written; the renderer also normalizes defensively before display.
+    pub fn effective_custom_spinner_verbs(&self) -> Vec<String> {
+        let mode = *self.spinner_verbs.value();
+        match mode {
+            SpinnerVerbsMode::Default => Vec::new(),
+            SpinnerVerbsMode::Custom => self.custom_spinner_verbs.value().as_strings(),
+            SpinnerVerbsMode::Medieval
+            | SpinnerVerbsMode::Conspiracy
+            | SpinnerVerbsMode::Cooking
+            | SpinnerVerbsMode::Warpy => mode
+                .pack()
+                .map(WarpingVerbPack::verbs_as_vec)
+                .unwrap_or_default(),
+        }
     }
 
-    /// Appends a single verb to the custom warping verbs list after normalization.
-    /// No-op if the normalized verb is empty or would push the list past the
-    /// max length.
-    pub fn add_custom_warping_verb(&mut self, verb: &str, ctx: &mut ModelContext<Self>) {
-        let Some(normalized) = crate::ai::loading::normalize_warping_verb(verb) else {
+    /// Restores the built-in "Warping..." display.
+    pub fn set_default_spinner_verbs(&mut self, ctx: &mut ModelContext<Self>) {
+        report_if_error!(self.spinner_verbs.set_value(SpinnerVerbsMode::Default, ctx));
+    }
+
+    /// Selects a built-in spinner verb pack by mode rather than copying its
+    /// phrases into settings.
+    pub fn set_spinner_verb_pack(&mut self, pack: WarpingVerbPack, ctx: &mut ModelContext<Self>) {
+        report_if_error!(self
+            .spinner_verbs
+            .set_value(SpinnerVerbsMode::from_pack(pack), ctx));
+    }
+
+    /// Selects the existing custom spinner verbs list without modifying it.
+    pub fn use_custom_spinner_verbs(&mut self, ctx: &mut ModelContext<Self>) {
+        report_if_error!(self.spinner_verbs.set_value(SpinnerVerbsMode::Custom, ctx));
+    }
+
+    /// Replaces the custom spinner verbs list and switches the mode to custom.
+    /// [`SpinnerVerbList`] normalizes the entries at the settings boundary.
+    pub fn set_custom_spinner_verbs(&mut self, verbs: Vec<String>, ctx: &mut ModelContext<Self>) {
+        report_if_error!(self
+            .custom_spinner_verbs
+            .set_value(SpinnerVerbList::from(verbs), ctx));
+        report_if_error!(self.spinner_verbs.set_value(SpinnerVerbsMode::Custom, ctx));
+    }
+
+    /// Appends a single verb to the custom spinner verbs list after
+    /// normalization. No-op if the normalized verb is empty or would push the
+    /// list past the max length.
+    pub fn add_custom_spinner_verb(&mut self, verb: &str, ctx: &mut ModelContext<Self>) {
+        let Ok(normalized) = NormalizedSpinnerVerb::try_from(verb) else {
             return;
         };
-        let mut list: Vec<String> = self.custom_warping_verbs.clone();
-        if list.len() >= crate::ai::loading::MAX_CUSTOM_WARPING_VERBS {
+        let mut list = self.custom_spinner_verbs.value().clone();
+        if !list.push(normalized) {
             return;
         }
-        list.push(normalized);
-        report_if_error!(self.custom_warping_verbs.set_value(list, ctx));
+        report_if_error!(self.custom_spinner_verbs.set_value(list, ctx));
+        report_if_error!(self.spinner_verbs.set_value(SpinnerVerbsMode::Custom, ctx));
     }
 
-    /// Removes the verb at the given index from the custom warping verbs list.
+    /// Removes the verb at the given index from the custom spinner verbs list.
     /// No-op if the index is out of bounds.
-    pub fn remove_custom_warping_verb(&mut self, index: usize, ctx: &mut ModelContext<Self>) {
-        let mut list: Vec<String> = self.custom_warping_verbs.clone();
-        if index >= list.len() {
+    pub fn remove_custom_spinner_verb(&mut self, index: usize, ctx: &mut ModelContext<Self>) {
+        let mut list = self.custom_spinner_verbs.value().clone();
+        if !list.remove(index) {
             return;
         }
-        list.remove(index);
-        report_if_error!(self.custom_warping_verbs.set_value(list, ctx));
+        report_if_error!(self.custom_spinner_verbs.set_value(list, ctx));
+        report_if_error!(self.spinner_verbs.set_value(SpinnerVerbsMode::Custom, ctx));
+    }
+
+    /// Clears the custom spinner verbs list and restores the default display.
+    pub fn clear_custom_spinner_verbs(&mut self, ctx: &mut ModelContext<Self>) {
+        report_if_error!(self
+            .custom_spinner_verbs
+            .set_value(SpinnerVerbList::default(), ctx));
+        report_if_error!(self.spinner_verbs.set_value(SpinnerVerbsMode::Default, ctx));
     }
 }
 

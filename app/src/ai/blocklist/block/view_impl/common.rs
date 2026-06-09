@@ -132,7 +132,7 @@ const INTERNAL_WARP_ERROR: &str = "Internal Warp error.";
 
 // The default "Warping..." display is owned by `crate::ai::loading::DEFAULT_WARPING_VERB`
 // and picked at render time by `WarpingVerbSelector`, which honors the user's
-// `AISettings::custom_warping_verbs` list.
+// `AISettings::spinner_verbs` and `AISettings::custom_spinner_verbs` settings.
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_PASSIVE_CODE_GEN: &str = "Generating fix...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_CREATING_DIFF: &str = "Creating diff...";

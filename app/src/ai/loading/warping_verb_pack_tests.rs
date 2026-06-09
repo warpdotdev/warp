@@ -1,4 +1,4 @@
-use super::super::{normalize_warping_verbs, MAX_WARPING_VERB_CHARS};
+use super::super::{warping_verb::normalize_warping_verbs, MAX_WARPING_VERB_CHARS};
 use super::*;
 
 #[test]

@@ -1,8 +1,8 @@
 //! Resolves the verb to display in the default "Warping..." spinner state.
 //!
 //! When [`FeatureFlag::CustomWarpingVerbs`] is enabled and the user has
-//! populated [`AISettings::custom_warping_verbs`], this helper picks a verb
-//! from that list instead of the built-in "Warping..." default. A
+//! selected a spinner-verb preset or custom list, this helper picks a verb from
+//! that source instead of the built-in "Warping..." default. A
 //! [`WarpingVerbSelector`] caches the current pick per-session so that the
 //! shimmer animation does not reset every render frame.
 
@@ -106,6 +106,7 @@ fn format_for_display(verb: &str) -> String {
 #[derive(Debug, Default)]
 pub struct WarpingVerbSelector {
     cached: RefCell<Option<CachedVerb>>,
+    normalized_cache: RefCell<NormalizedVerbsCache>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,13 +119,35 @@ struct CachedVerb {
     display: String,
 }
 
+#[derive(Debug, Default)]
+struct NormalizedVerbsCache {
+    source: Option<Vec<String>>,
+    normalized: Vec<String>,
+}
+
+impl NormalizedVerbsCache {
+    fn get(&mut self, verbs: &[String]) -> &[String] {
+        if self.source.as_deref() != Some(verbs) {
+            let source = verbs.to_vec();
+            self.normalized = normalize_warping_verbs(source.clone());
+            self.source = Some(source);
+        }
+        &self.normalized
+    }
+
+    fn clear(&mut self) {
+        self.source = None;
+        self.normalized.clear();
+    }
+}
+
 impl WarpingVerbSelector {
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Resolves the verb to display for the default warping state. If the
-    /// user's `custom_warping_verbs` list is empty or the feature flag is off,
+    /// user's active spinner verb list is empty or the feature flag is off,
     /// returns the built-in [`DEFAULT_WARPING_VERB`].
     ///
     /// `session_key` should identify the current warping session. A new verb is
@@ -132,10 +155,11 @@ impl WarpingVerbSelector {
     pub fn resolve(&self, session_key: &str, app: &AppContext) -> String {
         if !FeatureFlag::CustomWarpingVerbs.is_enabled() {
             self.cached.replace(None);
+            self.normalized_cache.borrow_mut().clear();
             return DEFAULT_WARPING_VERB.to_owned();
         }
 
-        let verbs = AISettings::as_ref(app).custom_warping_verbs.clone();
+        let verbs = AISettings::as_ref(app).effective_custom_spinner_verbs();
         self.resolve_from_verbs(session_key, &verbs)
     }
 
@@ -148,16 +172,20 @@ impl WarpingVerbSelector {
             }
         }
 
-        // Settings file edits and synced values can bypass
-        // AISettings::set_custom_warping_verbs, so normalize again at the
-        // renderer boundary before picking a display value.
-        let verbs = normalize_warping_verbs(verbs.to_vec());
-        if verbs.is_empty() {
-            self.cached.replace(None);
-            return DEFAULT_WARPING_VERB.to_owned();
-        }
         let previous_raw = self.cached.borrow().as_ref().map(|c| c.raw.clone());
-        let picked = pick_verb(&verbs, previous_raw.as_deref());
+        let picked = {
+            // Custom settings are normalized when read into AISettings, but
+            // this boundary can also receive preset packs and test/raw sources.
+            // Normalize defensively before display and cache so this work only
+            // repeats when the source list changes.
+            let mut normalized_cache = self.normalized_cache.borrow_mut();
+            let verbs = normalized_cache.get(verbs);
+            if verbs.is_empty() {
+                self.cached.replace(None);
+                return DEFAULT_WARPING_VERB.to_owned();
+            }
+            pick_verb(verbs, previous_raw.as_deref())
+        };
         let display = format_for_display(&picked);
         self.cached.replace(Some(CachedVerb {
             session_key: session_key.to_owned(),

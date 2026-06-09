@@ -490,8 +490,9 @@ fn modify_spinner_verbs_bundled_skill_has_routing_metadata() {
     assert_eq!(skill.name, "modify-spinner-verbs");
     assert!(skill.description.contains("spinner verbs"));
     assert!(skill.description.contains("Medieval"));
-    assert!(skill.content.contains("custom_warping_verbs"));
-    assert!(skill.content.contains("Interrogating the lesser lords"));
+    assert!(skill.content.contains("spinner_verbs"));
+    assert!(skill.content.contains("custom_spinner_verbs"));
+    assert!(skill.content.contains("medieval"));
 }
 
 // ============================================================================

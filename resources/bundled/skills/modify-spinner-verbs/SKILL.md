@@ -19,17 +19,18 @@ This is always a settings change. Write directly to the current app channel's se
 
 ```toml
 [agents.warp_agent]
-custom_warping_verbs = ["Verb one", "Verb two"]
+spinner_verbs = "custom"
+custom_spinner_verbs = ["Verb one", "Verb two"]
 ```
 
-The setting path is `agents.warp_agent.custom_warping_verbs`.
+The source setting path is `agents.warp_agent.spinner_verbs`. The custom list path is `agents.warp_agent.custom_spinner_verbs`.
 
 ## How to handle requests
 
-- If the user provides a custom list, replace the entire list with exactly those phrases.
-- If the user asks for a built-in pack by name, replace the entire list with the exact pack phrases below.
+- If the user provides a custom list, set `spinner_verbs = "custom"` and replace `custom_spinner_verbs` with exactly those phrases.
+- If the user asks for a built-in pack by name, set `spinner_verbs` to that pack identifier and leave any existing `custom_spinner_verbs` list in place unless the user explicitly asks to clear it.
 - If the user asks to update spinner verbs but does not provide a list or pack name, ask which verbs or pack they want. Do not search.
-- If the user asks to reset or restore the default, set `custom_warping_verbs = []`.
+- If the user asks to reset or restore the default, set `spinner_verbs = "default"` and leave any existing `custom_spinner_verbs` list in place unless the user explicitly asks to clear it.
 - Store raw phrases without trailing ellipses; Warp adds `...` at display time.
 
 ## Built-in pack values
@@ -37,23 +38,23 @@ The setting path is `agents.warp_agent.custom_warping_verbs`.
 Medieval:
 
 ```toml
-custom_warping_verbs = ["At your service, my liege", "At once, my lord", "The scribes set to work", "Seeking wisdom from the realm", "Consulting the ancient tomes", "Dispatching riders across the kingdom", "Draining the flagons", "Interrogating the lesser lords", "Raising the drawbridge", "Rallying the bannermen"]
+spinner_verbs = "medieval"
 ```
 
 Conspiracy:
 
 ```toml
-custom_warping_verbs = ["Questioning science", "Conspiring", "Speculating", "Melting steel beams", "Confirmation biasing", "Doing my own research", "Looking for alternative facts", "Waking up the sheep", "Internet deep diving", "Gathering evidence", "Proceeding with skepticism"]
+spinner_verbs = "conspiracy"
 ```
 
 Cooking:
 
 ```toml
-custom_warping_verbs = ["Sautéing", "Caramelizing", "Slicing and dicing", "Bruleeing", "Flambéing", "Immersion blending", "Sous viding", "Emulsifying", "Fermenting", "Braising"]
+spinner_verbs = "cooking"
 ```
 
 Warpy:
 
 ```toml
-custom_warping_verbs = ["Warping", "Going to infinity", "Gaining speed", "Morphing", "Wormhole-ing", "Orbiting", "Galaxy braining", "Shooting stars", "Nebulizing", "Constellating"]
+spinner_verbs = "warpy"
 ```

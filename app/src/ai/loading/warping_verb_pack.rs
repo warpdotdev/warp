@@ -1,8 +1,8 @@
 //! Built-in verb packs for the custom "warping" spinner.
 //!
 //! Each pack is a curated list of short flavor phrases. Users (or the agent,
-//! via the bundled `modify-settings` skill) can apply a pack by copying its
-//! verbs into the [`AISettings::custom_warping_verbs`] setting.
+//! via the bundled `modify-settings` skill) can apply a pack by selecting its
+//! identifier in the `agents.warp_agent.spinner_verbs` setting.
 //!
 //! Packs are stored as static string slices without trailing ellipses so they
 //! pair cleanly with the render-time normalization, which appends "..." to any
@@ -110,7 +110,7 @@ impl WarpingVerbPack {
     }
 
     /// Returns the pack's verbs allocated as a `Vec<String>`, convenient for
-    /// writing into the [`AISettings::custom_warping_verbs`] setting.
+    /// previews and tests.
     pub fn verbs_as_vec(self) -> Vec<String> {
         self.verbs().iter().map(|v| (*v).to_string()).collect()
     }

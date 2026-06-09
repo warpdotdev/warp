@@ -222,3 +222,19 @@ fn selector_drops_blank_raw_setting_values_before_display() {
         DEFAULT_WARPING_VERB
     );
 }
+
+#[test]
+fn selector_invalidates_normalized_cache_when_raw_verbs_change_after_empty_list() {
+    let selector = WarpingVerbSelector::new();
+    let empty_verbs = vec!["   ".to_owned(), "...".to_owned()];
+    let changed_verbs = vec!["  Working...  ".to_owned()];
+
+    assert_eq!(
+        selector.resolve_from_verbs("stream-1", &empty_verbs),
+        DEFAULT_WARPING_VERB
+    );
+    assert_eq!(
+        selector.resolve_from_verbs("stream-2", &changed_verbs),
+        "Working..."
+    );
+}

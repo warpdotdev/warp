@@ -34,8 +34,8 @@ use crate::settings::{
     NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, RuleSuggestionsEnabled,
     SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
+    ShowConversationHistory, ShowHintText, SpinnerVerbsMode, ThinkingDisplayMode,
+    VoiceInputEnabled, WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -135,22 +135,15 @@ pub enum SpinnerVerbMode {
 }
 
 impl SpinnerVerbMode {
-    fn from_custom_verbs(custom_verbs: &[String]) -> Self {
-        if custom_verbs.is_empty() {
-            return Self::Default;
+    fn from_setting(mode: SpinnerVerbsMode) -> Self {
+        match mode {
+            SpinnerVerbsMode::Default => Self::Default,
+            SpinnerVerbsMode::Medieval => Self::Pack(WarpingVerbPack::Medieval),
+            SpinnerVerbsMode::Conspiracy => Self::Pack(WarpingVerbPack::ConspiracyTheorist),
+            SpinnerVerbsMode::Cooking => Self::Pack(WarpingVerbPack::Cooking),
+            SpinnerVerbsMode::Warpy => Self::Pack(WarpingVerbPack::Warpy),
+            SpinnerVerbsMode::Custom => Self::Custom,
         }
-
-        WarpingVerbPack::all()
-            .iter()
-            .copied()
-            .find(|pack| {
-                pack.verbs()
-                    .iter()
-                    .copied()
-                    .eq(custom_verbs.iter().map(String::as_str))
-            })
-            .map(Self::Pack)
-            .unwrap_or(Self::Custom)
     }
 }
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
@@ -459,8 +452,8 @@ pub struct AISettingsPageView {
     cli_agent_footer_command_editor: ViewHandle<SubmittableTextInput>,
     cli_agent_footer_command_mouse_state_handles: Vec<MouseStateHandle>,
     cli_agent_footer_command_agent_dropdowns: Vec<ViewHandle<Dropdown<AISettingsPageAction>>>,
-    custom_warping_verb_editor: ViewHandle<EditorView>,
-    custom_warping_verb_editor_has_user_edits: bool,
+    custom_spinner_verb_editor: ViewHandle<EditorView>,
+    custom_spinner_verb_editor_has_user_edits: bool,
     agent_toolbar_inline_editor: ViewHandle<AgentToolbarInlineEditor>,
     cli_agent_toolbar_inline_editor: ViewHandle<AgentToolbarInlineEditor>,
 
@@ -586,10 +579,11 @@ impl AISettingsPageView {
 
             dropdown
         });
-        let custom_warping_verbs = AISettings::as_ref(ctx).custom_warping_verbs.value().clone();
-        let spinner_verb_mode = SpinnerVerbMode::from_custom_verbs(&custom_warping_verbs);
-        let custom_warping_verb_editor_text = if spinner_verb_mode == SpinnerVerbMode::Custom {
-            custom_warping_verbs.join(", ")
+        let ai_settings = AISettings::as_ref(ctx);
+        let custom_spinner_verbs = ai_settings.custom_spinner_verbs.value().clone();
+        let spinner_verb_mode = SpinnerVerbMode::from_setting(*ai_settings.spinner_verbs.value());
+        let custom_spinner_verb_editor_text = if spinner_verb_mode == SpinnerVerbMode::Custom {
+            custom_spinner_verbs.join(", ")
         } else {
             String::new()
         };
@@ -821,7 +815,7 @@ impl AISettingsPageView {
             },
         );
 
-        let custom_warping_verb_editor = ctx.add_typed_action_view(move |ctx| {
+        let custom_spinner_verb_editor = ctx.add_typed_action_view(move |ctx| {
             let appearance = Appearance::as_ref(ctx);
             let options = EditorOptions {
                 autogrow: true,
@@ -834,26 +828,26 @@ impl AISettingsPageView {
                 "Enter phrases separated by comma e.g. “Cooking, chopping, slicing”",
                 ctx,
             );
-            if !custom_warping_verb_editor_text.is_empty() {
-                editor.set_buffer_text(&custom_warping_verb_editor_text, ctx);
+            if !custom_spinner_verb_editor_text.is_empty() {
+                editor.set_buffer_text(&custom_spinner_verb_editor_text, ctx);
             }
             editor
         });
         Self::update_editor_interaction_state(
-            custom_warping_verb_editor.clone(),
+            custom_spinner_verb_editor.clone(),
             is_any_ai_enabled,
             ctx,
         );
         ctx.subscribe_to_view(
-            &custom_warping_verb_editor,
+            &custom_spinner_verb_editor,
             |me, _, event, ctx| match event {
                 EditorEvent::Edited(edit_origin) if edit_origin.is_user() => {
                     me.spinner_verb_mode = SpinnerVerbMode::Custom;
-                    me.custom_warping_verb_editor_has_user_edits = true;
+                    me.custom_spinner_verb_editor_has_user_edits = true;
                     ctx.notify();
                 }
                 EditorEvent::Blurred | EditorEvent::Enter => {
-                    me.save_custom_warping_verbs_from_editor(ctx);
+                    me.save_custom_spinner_verbs_from_editor(ctx);
                     if let EditorEvent::Enter = event {
                         ctx.emit(AISettingsPageEvent::FocusModal);
                     }
@@ -990,7 +984,7 @@ impl AISettingsPageView {
                         ctx,
                     );
                     Self::update_editor_interaction_state(
-                        me.custom_warping_verb_editor.clone(),
+                        me.custom_spinner_verb_editor.clone(),
                         is_enabled,
                         ctx,
                     );
@@ -1090,21 +1084,9 @@ impl AISettingsPageView {
                     me.cli_agent_footer_command_agent_dropdowns =
                         Self::create_cli_agent_dropdowns(ctx);
                 }
-                AISettingsChangedEvent::CustomWarpingVerbs { .. } => {
-                    let custom_warping_verbs = AISettings::as_ref(ctx).custom_warping_verbs.value();
-                    let new_spinner_verb_mode =
-                        SpinnerVerbMode::from_custom_verbs(custom_warping_verbs);
-                    if me.custom_warping_verb_editor_has_user_edits {
-                        me.spinner_verb_mode = SpinnerVerbMode::Custom;
-                    } else {
-                        me.spinner_verb_mode = new_spinner_verb_mode;
-                        let editor_text = if new_spinner_verb_mode == SpinnerVerbMode::Custom {
-                            custom_warping_verbs.join(", ")
-                        } else {
-                            String::new()
-                        };
-                        me.sync_custom_warping_verb_editor(&editor_text, ctx);
-                    }
+                AISettingsChangedEvent::SpinnerVerbs { .. }
+                | AISettingsChangedEvent::CustomSpinnerVerbs { .. } => {
+                    me.sync_spinner_verb_state_from_settings(ctx);
                 }
                 AISettingsChangedEvent::ThinkingDisplayMode { .. } => {
                     let current_mode = *AISettings::as_ref(ctx).thinking_display_mode.value();
@@ -1610,8 +1592,8 @@ impl AISettingsPageView {
             cli_agent_footer_command_editor,
             cli_agent_footer_command_mouse_state_handles,
             cli_agent_footer_command_agent_dropdowns: Self::create_cli_agent_dropdowns(ctx),
-            custom_warping_verb_editor,
-            custom_warping_verb_editor_has_user_edits: false,
+            custom_spinner_verb_editor,
+            custom_spinner_verb_editor_has_user_edits: false,
             agent_toolbar_inline_editor,
             cli_agent_toolbar_inline_editor,
             base_model_dropdown,
@@ -1665,18 +1647,35 @@ impl AISettingsPageView {
         ctx.notify();
     }
 
-    fn save_custom_warping_verbs_from_editor(&mut self, ctx: &mut ViewContext<Self>) {
-        let verbs = self.custom_warping_verb_editor.as_ref(ctx).buffer_text(ctx);
-        self.custom_warping_verb_editor_has_user_edits = false;
+    fn save_custom_spinner_verbs_from_editor(&mut self, ctx: &mut ViewContext<Self>) {
+        let verbs = self.custom_spinner_verb_editor.as_ref(ctx).buffer_text(ctx);
+        self.custom_spinner_verb_editor_has_user_edits = false;
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.set_custom_warping_verbs(verbs.split(',').map(str::to_owned).collect(), ctx);
+            settings.set_custom_spinner_verbs(verbs.split(',').map(str::to_owned).collect(), ctx);
         });
         ctx.notify();
     }
+    fn sync_spinner_verb_state_from_settings(&mut self, ctx: &mut ViewContext<Self>) {
+        let ai_settings = AISettings::as_ref(ctx);
+        let new_spinner_verb_mode =
+            SpinnerVerbMode::from_setting(*ai_settings.spinner_verbs.value());
+        if self.custom_spinner_verb_editor_has_user_edits {
+            self.spinner_verb_mode = SpinnerVerbMode::Custom;
+            return;
+        }
 
-    fn sync_custom_warping_verb_editor(&mut self, editor_text: &str, ctx: &mut ViewContext<Self>) {
-        if self.custom_warping_verb_editor.as_ref(ctx).buffer_text(ctx) != editor_text {
-            self.custom_warping_verb_editor.update(ctx, |editor, ctx| {
+        self.spinner_verb_mode = new_spinner_verb_mode;
+        let editor_text = if new_spinner_verb_mode == SpinnerVerbMode::Custom {
+            ai_settings.custom_spinner_verbs.value().join(", ")
+        } else {
+            String::new()
+        };
+        self.sync_custom_spinner_verb_editor(&editor_text, ctx);
+    }
+
+    fn sync_custom_spinner_verb_editor(&mut self, editor_text: &str, ctx: &mut ViewContext<Self>) {
+        if self.custom_spinner_verb_editor.as_ref(ctx).buffer_text(ctx) != editor_text {
+            self.custom_spinner_verb_editor.update(ctx, |editor, ctx| {
                 editor.system_reset_buffer_text(editor_text, ctx);
             });
         }
@@ -2017,9 +2016,7 @@ impl AISettingsPageView {
                 widgets.push(Box::new(AgentsWidget::default()));
                 widgets.push(Box::new(AIInputWidget::default()));
                 if FeatureFlag::CustomWarpingVerbs.is_enabled()
-                    && ai_settings
-                        .custom_warping_verbs
-                        .is_supported_on_current_platform()
+                    && ai_settings.spinner_verbs.is_supported_on_current_platform()
                 {
                     widgets.push(Box::new(WarpingVerbWidget::default()));
                 }
@@ -2079,9 +2076,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 if FeatureFlag::CustomWarpingVerbs.is_enabled()
-                    && ai_settings
-                        .custom_warping_verbs
-                        .is_supported_on_current_platform()
+                    && ai_settings.spinner_verbs.is_supported_on_current_platform()
                 {
                     widgets.push(Box::new(WarpingVerbWidget::default()));
                 }
@@ -2824,9 +2819,9 @@ pub enum AISettingsPageAction {
         agent: Option<CLIAgent>,
     },
     SelectSpinnerVerbMode(SpinnerVerbMode),
-    ApplyWarpingVerbPack(WarpingVerbPack),
-    RemoveCustomWarpingVerb(usize),
-    ClearCustomWarpingVerbs,
+    ApplySpinnerVerbPack(WarpingVerbPack),
+    RemoveCustomSpinnerVerb(usize),
+    ClearCustomSpinnerVerbs,
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -3240,56 +3235,54 @@ impl TypedActionView for AISettingsPageView {
                 self.spinner_verb_mode = *mode;
                 match *mode {
                     SpinnerVerbMode::Default => {
-                        self.custom_warping_verb_editor_has_user_edits = false;
-                        self.sync_custom_warping_verb_editor("", ctx);
+                        self.custom_spinner_verb_editor_has_user_edits = false;
+                        self.sync_custom_spinner_verb_editor("", ctx);
                         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                            settings.set_custom_warping_verbs(Vec::new(), ctx);
+                            settings.set_default_spinner_verbs(ctx);
                         });
                     }
                     SpinnerVerbMode::Pack(pack) => {
-                        self.custom_warping_verb_editor_has_user_edits = false;
-                        self.sync_custom_warping_verb_editor("", ctx);
+                        self.custom_spinner_verb_editor_has_user_edits = false;
+                        self.sync_custom_spinner_verb_editor("", ctx);
                         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                            settings.set_custom_warping_verbs(pack.verbs_as_vec(), ctx);
+                            settings.set_spinner_verb_pack(pack, ctx);
                         });
                     }
                     SpinnerVerbMode::Custom => {
-                        if self
-                            .custom_warping_verb_editor
-                            .as_ref(ctx)
-                            .buffer_text(ctx)
-                            .trim()
-                            .is_empty()
-                        {
-                            self.custom_warping_verb_editor_has_user_edits = false;
-                        } else {
-                            self.save_custom_warping_verbs_from_editor(ctx);
-                        }
+                        self.custom_spinner_verb_editor_has_user_edits = false;
+                        let editor_text = AISettings::as_ref(ctx)
+                            .custom_spinner_verbs
+                            .value()
+                            .join(", ");
+                        self.sync_custom_spinner_verb_editor(&editor_text, ctx);
+                        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                            settings.use_custom_spinner_verbs(ctx);
+                        });
                     }
                 }
                 ctx.notify();
             }
-            AISettingsPageAction::ApplyWarpingVerbPack(pack) => {
+            AISettingsPageAction::ApplySpinnerVerbPack(pack) => {
                 self.spinner_verb_mode = SpinnerVerbMode::Pack(*pack);
-                self.custom_warping_verb_editor_has_user_edits = false;
-                self.sync_custom_warping_verb_editor("", ctx);
+                self.custom_spinner_verb_editor_has_user_edits = false;
+                self.sync_custom_spinner_verb_editor("", ctx);
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    settings.set_custom_warping_verbs(pack.verbs_as_vec(), ctx);
+                    settings.set_spinner_verb_pack(*pack, ctx);
                 });
                 ctx.notify();
             }
-            AISettingsPageAction::RemoveCustomWarpingVerb(index) => {
-                self.custom_warping_verb_editor_has_user_edits = false;
+            AISettingsPageAction::RemoveCustomSpinnerVerb(index) => {
+                self.custom_spinner_verb_editor_has_user_edits = false;
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    settings.remove_custom_warping_verb(*index, ctx);
+                    settings.remove_custom_spinner_verb(*index, ctx);
                 });
             }
-            AISettingsPageAction::ClearCustomWarpingVerbs => {
+            AISettingsPageAction::ClearCustomSpinnerVerbs => {
                 self.spinner_verb_mode = SpinnerVerbMode::Default;
-                self.custom_warping_verb_editor_has_user_edits = false;
-                self.sync_custom_warping_verb_editor("", ctx);
+                self.custom_spinner_verb_editor_has_user_edits = false;
+                self.sync_custom_spinner_verb_editor("", ctx);
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    settings.set_custom_warping_verbs(Vec::new(), ctx);
+                    settings.clear_custom_spinner_verbs(ctx);
                 });
                 ctx.notify();
             }
@@ -5954,7 +5947,7 @@ impl WarpingVerbWidget {
     ) -> Box<dyn Element> {
         appearance
             .ui_builder()
-            .text_input(view.custom_warping_verb_editor.clone())
+            .text_input(view.custom_spinner_verb_editor.clone())
             .with_style(UiComponentStyles {
                 height: Some(SPINNER_VERB_CONTENT_HEIGHT),
                 background: Some(appearance.theme().surface_2().into()),
