@@ -520,6 +520,11 @@ fn execute_publishes_every_parent_owned_plan_before_dispatch() {
     });
 }
 
+/// A run_agents call holds in the `Publishing` state while it waits for the parent's
+/// plans to become server-backed, then dispatches children. This verifies that
+/// cancelling mid-publication prevents fan-out: even when the plan finishes publishing
+/// afterwards (resolving the wait), the post-wait dispatch is skipped because
+/// `cancel_execution` cleared the pending marker that `is_pending` guards on.
 #[test]
 fn cancel_during_plan_publication_does_not_dispatch_children() {
     App::test((), |mut app| async move {
@@ -551,6 +556,7 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
                 )
                 .into()
         });
+        // The action is awaiting plan publication, so it's pending but no children dispatched yet.
         assert!(matches!(execution, AnyActionExecution::Async { .. }));
         state.executor.update(&mut app, |executor, ctx| {
             assert!(executor.is_pending(&action_id));
@@ -558,6 +564,7 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
             assert!(!executor.is_pending(&action_id));
         });
 
+        // Finish publishing the plan, which resolves the wait the dispatch was blocked on.
         AIDocumentModel::handle(&app).update(&mut app, |model, ctx| {
             model.create_document_from_notebook(
                 plan_id,
@@ -573,6 +580,7 @@ fn cancel_during_plan_publication_does_not_dispatch_children() {
             futures_lite::future::yield_now().await;
         }
 
+        // Cancellation won the race: the resolved wait does not fan out children.
         captured.read(&app, |captured, _ctx| {
             assert!(captured.0.is_empty());
         });

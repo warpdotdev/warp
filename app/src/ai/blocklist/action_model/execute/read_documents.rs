@@ -3,10 +3,10 @@ use futures::FutureExt;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, DocumentContext, ReadDocumentsRequest, ReadDocumentsResult,
 };
+use crate::ai::blocklist::orchestration_topology::conversation_participates_in_orchestration;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 
@@ -44,9 +44,13 @@ impl ReadDocumentsExecutor {
         };
 
         let (mut documents, mut missing_documents) = read_documents(document_ids, ctx);
-        if !missing_documents.is_empty()
-            && conversation_participates_in_orchestration(conversation_id, ctx)
-        {
+        // Orchestrated children may reference plans owned by their parent conversation, so their
+        // local document model can legitimately be missing a requested plan.
+        let participates_in_orchestration = conversation_participates_in_orchestration(
+            BlocklistAIHistoryModel::as_ref(ctx),
+            conversation_id,
+        );
+        if !missing_documents.is_empty() && participates_in_orchestration {
             AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
                 for document_id in &missing_documents {
                     if let Err(error) = model.hydrate_saved_plan_from_warp_drive(
@@ -89,6 +93,7 @@ impl ReadDocumentsExecutor {
 impl Entity for ReadDocumentsExecutor {
     type Event = ();
 }
+
 /// Reads requested documents and returns the IDs that are not loaded locally.
 fn read_documents(
     document_ids: &[AIDocumentId],
@@ -114,21 +119,6 @@ fn read_documents(
         });
     }
     (documents, missing_documents)
-}
-
-/// Returns whether a conversation is a parent or child in orchestration.
-fn conversation_participates_in_orchestration(
-    conversation_id: AIConversationId,
-    ctx: &AppContext,
-) -> bool {
-    let history = BlocklistAIHistoryModel::as_ref(ctx);
-    let has_parent = history
-        .conversation(&conversation_id)
-        .is_some_and(|conversation| conversation.is_child_agent_conversation());
-    has_parent
-        || !history
-            .child_conversation_ids_of(&conversation_id)
-            .is_empty()
 }
 
 #[cfg(test)]

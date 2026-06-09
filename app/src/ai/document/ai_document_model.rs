@@ -27,7 +27,8 @@ use crate::appearance::Appearance;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{CloudObject, CloudObjectEventEntrypoint, Owner};
-use crate::drive::{folders::CloudFolder, CloudObjectTypeAndId};
+use crate::drive::folders::CloudFolder;
+use crate::drive::CloudObjectTypeAndId;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::notebooks::editor::model::{
     FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent,
@@ -386,6 +387,7 @@ impl AIDocumentModel {
             self.maybe_update_cloud_notebook_data(document_id, ctx);
         }
     }
+
     fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
         match event {
             CloudModelEvent::ObjectSynced { server_id, .. } => {

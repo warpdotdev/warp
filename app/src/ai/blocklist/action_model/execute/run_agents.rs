@@ -199,11 +199,32 @@ impl RunAgentsExecutor {
             let action_id_for_wait = action_id.clone();
             ctx.spawn(
                 async move {
-                    futures::future::join_all(
-                        pending_plan_publications
-                            .into_iter()
-                            .map(wait_for_plan_publication),
-                    )
+                    // Wait briefly for each plan to become server-backed without blocking
+                    // launch on a failed or slow publication.
+                    futures::future::join_all(pending_plan_publications.into_iter().map(
+                        |pending| async move {
+                            match pending
+                                .save_wait
+                                .recv()
+                                .with_timeout(PLAN_PUBLICATION_TIMEOUT)
+                                .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(_)) => {
+                                    log::error!(
+                                        "Stopped waiting for plan document {} before it became server-backed.",
+                                        pending.document_id
+                                    );
+                                }
+                                Err(_) => {
+                                    log::error!(
+                                        "Timed out waiting for plan document {} to become server-backed before child-agent launch.",
+                                        pending.document_id
+                                    );
+                                }
+                            }
+                        },
+                    ))
                     .await;
                     request
                 },
@@ -505,30 +526,6 @@ fn prepare_plan_publications(
             }
         })
         .collect()
-}
-
-/// Waits briefly for one plan to become server-backed without blocking launch on failure.
-async fn wait_for_plan_publication(pending: PendingPlanPublication) {
-    match pending
-        .save_wait
-        .recv()
-        .with_timeout(PLAN_PUBLICATION_TIMEOUT)
-        .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(_)) => {
-            log::error!(
-                "Stopped waiting for plan document {} before it became server-backed.",
-                pending.document_id
-            );
-        }
-        Err(_) => {
-            log::error!(
-                "Timed out waiting for plan document {} to become server-backed before child-agent launch.",
-                pending.document_id
-            );
-        }
-    }
 }
 
 fn approved_orchestration_config_can_autoexecute(

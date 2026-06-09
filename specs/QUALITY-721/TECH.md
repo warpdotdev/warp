@@ -18,14 +18,6 @@ Before `RunAgentsExecutor` dispatches children, it asks `AIDocumentModel` to pub
 - `BlocklistAIHistoryModel` knows child conversations for it.
 Hydration uses `AIDocumentModel::hydrate_saved_plan_from_warp_drive`, then retries the complete read so result ordering and all-or-nothing behavior remain unchanged. Missing IDs in non-orchestrated conversations, or IDs still missing after hydration, return the existing clear `Document(s) not found` error.
 Hydrated plans retain ordinary `EditDocumentsExecutor` behavior. No inherited-document write policy or stale-revision policy is introduced.
-## Removed transport
-QUALITY-721 does not add inherited plan fields to:
-- `StartAgentRequest` or `StartAgentExecutor::dispatch`;
-- local or remote child startup;
-- `SpawnAgentRequest`, ambient tasks, agent driver options, or task metadata;
-- child prompt attachments or synthetic plan-reference formatting;
-- server request, task, or execution schemas.
-Local and remote Oz children discover plans when an explicit plan ID in their assigned prompt is passed to `read_plans`, which lazily hydrates it when the acting conversation is orchestrated. Third-party harnesses do not expose Warp document tools; their assigned context must still forward the explicit ID, and required plan content must be supplied through a harness-appropriate prompt or context path.
 ## Testing and validation
 Focused Rust coverage verifies:
 - `RunAgentsExecutor` starts publication for every plan owned by the parent conversation before dispatch, without publishing unrelated plans;

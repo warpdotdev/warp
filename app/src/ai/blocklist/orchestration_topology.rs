@@ -233,6 +233,21 @@ pub fn orchestration_aware_conversation_status(
     }
 }
 
+/// Returns whether a conversation is a participant in an orchestration tree,
+/// either as a child agent (has a parent) or as an orchestrator (has children).
+pub(crate) fn conversation_participates_in_orchestration(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+) -> bool {
+    let is_child = history
+        .conversation(&conversation_id)
+        .is_some_and(|conversation| conversation.is_child_agent_conversation());
+    is_child
+        || !history
+            .child_conversation_ids_of(&conversation_id)
+            .is_empty()
+}
+
 #[cfg(test)]
 #[path = "orchestration_topology_tests.rs"]
 mod tests;
