@@ -13,7 +13,7 @@ pub fn init() -> anyhow::Result<Initialization> {
     #[cfg(target_family = "wasm")]
     {
         install_no_subscriber()?;
-        return Ok(Initialization::default());
+        Ok(Initialization::default())
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -30,6 +30,7 @@ fn install_no_subscriber() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(target_family = "wasm", derive(Default))]
 pub struct Initialization {
     initialization_warning: Option<anyhow::Error>,
     #[cfg(not(target_family = "wasm"))]
@@ -40,15 +41,13 @@ pub struct Initialization {
     shutdown_timeout: std::time::Duration,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Default for Initialization {
     fn default() -> Self {
         Self {
             initialization_warning: None,
-            #[cfg(not(target_family = "wasm"))]
             active_spans: None,
-            #[cfg(not(target_family = "wasm"))]
             provider: None,
-            #[cfg(not(target_family = "wasm"))]
             shutdown_timeout: DEFAULT_EXPORT_TIMEOUT,
         }
     }
