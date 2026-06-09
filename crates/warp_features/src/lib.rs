@@ -942,7 +942,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
@@ -953,6 +952,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
     FeatureFlag::DragTabsToWindows,
+    FeatureFlag::GroupedTabs,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -1059,6 +1059,7 @@ impl FeatureFlag {
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
+            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             _ => None,
         }
     }
