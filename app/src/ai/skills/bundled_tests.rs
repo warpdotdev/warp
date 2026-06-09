@@ -40,8 +40,7 @@ fn local_and_remote_catalogs_are_isolated() {
 
     assert_eq!(
         bundled_skills
-            .local()
-            .skill("test-skill")
+            .local_skill("test-skill")
             .map(|skill| skill.content.as_str()),
         Some("local")
     );
@@ -65,8 +64,7 @@ fn local_and_remote_catalogs_are_isolated() {
     bundled_skills.remove_remote(&first_host_id);
     assert_eq!(
         bundled_skills
-            .local()
-            .skill("test-skill")
+            .local_skill("test-skill")
             .map(|skill| skill.content.as_str()),
         Some("local")
     );

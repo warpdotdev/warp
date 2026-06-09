@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::skills::SkillReference;
+use ai::skills::{SkillPathOrigin, SkillReference};
 use async_channel::Sender;
 use base64::Engine as _;
 #[cfg(feature = "local_fs")]
@@ -5491,18 +5491,27 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let is_queued_prompt = queued_query_id.is_some();
-        // Resolve the skill from SkillManager
+        // Resolve the skill from the catalog selected by the active session's host,
+        // so remote sessions invoke the host-rendered bundled skill.
+        let path_origin = self.ai_controller.as_ref(ctx).skill_path_origin(ctx);
         let skill = match SkillManager::handle(ctx)
             .as_ref(ctx)
-            .active_skill_by_reference(&reference, ctx)
+            .active_skill_by_reference_with_origin(&reference, &path_origin, ctx)
         {
             Some(skill) => skill.clone(),
             None => {
                 // Show error toast if skill not found
+                let message = if matches!(&path_origin, SkillPathOrigin::Unavailable)
+                    && matches!(&reference, SkillReference::BundledSkillId(_))
+                {
+                    "Bundled skills are not available on this remote session".to_string()
+                } else {
+                    format!("Skill not found: {reference}")
+                };
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(format!("Skill not found: {}", reference)),
+                        DismissibleToast::error(message),
                         window_id,
                         ctx,
                     );
