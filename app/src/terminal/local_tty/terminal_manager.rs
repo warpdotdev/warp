@@ -2194,8 +2194,8 @@ impl TerminalManager {
                     } else if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
-                        // TODO (roland): this is kept around for backward compatibility. Remove after 6 weeks once clients have
-                        // updated to use context_update.long_running_command_agent_interaction above.
+                        // TODO (roland): this is kept around for backward compatibility. Remove after 6 weeks (around Jul 23, 2026) 
+                        // once clients have updated to use context_update.long_running_command_agent_interaction above
                         terminal_view.update(ctx, |view, ctx| {
                             view.apply_long_running_command_agent_interaction_state(
                                 interaction_state,
