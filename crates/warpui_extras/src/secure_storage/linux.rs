@@ -73,7 +73,18 @@ impl SecureStorage {
             .get_or_init(|| match Collection::open_default_collection() {
                 Ok(collection) => Some(collection),
                 Err(err) => {
-                    log::error!("Failed to acquire default Secret Service collection: {err:#}");
+                    // The OS keyring / Secret Service is frequently unavailable in
+                    // headless environments (CI, GitHub Actions, minimal Linux setups
+                    // without a running keyring daemon / D-Bus session). This is not
+                    // fatal: secret reads and writes transparently fall back to
+                    // encrypted on-disk storage (see `read_value` / `write_value`), so
+                    // we log at WARN rather than ERROR to avoid alarming users in those
+                    // environments.
+                    log::warn!(
+                        "OS Secret Service (keyring) unavailable; falling back to \
+                         encrypted on-disk secure storage. This is expected in headless \
+                         environments such as CI / GitHub Actions. Error: {err:#}"
+                    );
                     None
                 }
             })
