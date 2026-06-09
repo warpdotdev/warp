@@ -161,6 +161,12 @@ fn every_host_scoped_request_has_a_response_disposition() {
             M::DropCodebaseIndex(_) => "manager::drop_codebase_index",
             M::ResyncCodebase(_) => "manager::resync_codebase",
             M::ResolveConflict(_) => "manager::resolve_conflict",
+            M::GitCommitChain(_) => "manager::commit_chain",
+            M::GitPush(_) => "manager::push",
+            M::GitCreatePr(_) => "manager::create_pr",
+            M::GitGetPrInfo(_) => "manager::get_pr_info",
+            M::GitGenerateCommitMessage(_) => "manager::generate_commit_message",
+            M::GitGetCommittedBranchFiles(_) => "manager::get_committed_branch_files",
         }
     }
 

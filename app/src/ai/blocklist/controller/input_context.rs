@@ -80,9 +80,7 @@ pub(super) fn input_context_for_request(
 
     if FeatureFlag::ListSkills.is_enabled() {
         let skills = list_skills_if_changed(
-            active_session
-                .current_working_directory_location(app)
-                .as_ref(),
+            current_working_directory_location.as_ref(),
             conversation_id,
             app,
         );
@@ -246,29 +244,6 @@ pub(super) fn parse_context_attachments(
                 referenced_attachments.insert(reference_string, attachment.clone());
             }
         }
-    }
-
-    // Add pending file attachments as FilePathReference.
-    // Duplicate basenames get a (1), (2), ... suffix to avoid collisions,
-    // matching the pattern in build_file_attachment_map.
-    for file in context_model.pending_files().iter() {
-        let attachment = AIAgentAttachment::FilePathReference {
-            file_id: uuid::Uuid::new_v4().to_string(),
-            file_name: file.file_name.clone(),
-            file_path: file.file_path.to_string_lossy().to_string(),
-        };
-        let mut key = file.file_name.clone();
-        if referenced_attachments.contains_key(&key) {
-            let mut suffix = 1;
-            loop {
-                key = format!("{} ({suffix})", file.file_name);
-                if !referenced_attachments.contains_key(&key) {
-                    break;
-                }
-                suffix += 1;
-            }
-        }
-        referenced_attachments.insert(key, attachment);
     }
 
     // Add pending AI document as attachment if present

@@ -39,6 +39,10 @@ pub const TOGGLE_AUTOEXECUTE_MODE_KEYBINDING: &str = "terminal:toggle_autoexecut
 pub const TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING: &str = "terminal:toggle_queue_next_prompt";
 pub const TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING: &str = "terminal:toggle_hide_cli_responses";
 pub const OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING: &str = "terminal:open_cli_agent_rich_input";
+pub const CYCLE_NEXT_ORCHESTRATION_CHILD_AGENT_KEYBINDING: &str =
+    "terminal:cycle_next_orchestration_child_agent";
+pub const CYCLE_PREVIOUS_ORCHESTRATION_CHILD_AGENT_KEYBINDING: &str =
+    "terminal:cycle_previous_orchestration_child_agent";
 
 const SELECT_NEXT_BLOCK_ACTION_NAME: &str = "terminal:select_next_block";
 pub const SELECT_PREVIOUS_BLOCK_ACTION_NAME: &str = "terminal:select_previous_block";
@@ -1112,6 +1116,31 @@ pub fn init(app: &mut AppContext) {
     )
     .with_group(bindings::BindingGroup::WarpAi.as_str())
     .with_context_predicate(id!("Terminal") & id!(CAN_SHOW_CONVERSATION_DETAILS_KEY))]);
+
+    app.register_editable_bindings([
+        EditableBinding::new(
+            CYCLE_NEXT_ORCHESTRATION_CHILD_AGENT_KEYBINDING,
+            "Cycle to next orchestration session",
+            TerminalAction::CycleNextOrchestrationChildAgent,
+        )
+        .with_group(bindings::BindingGroup::WarpAi.as_str())
+        .with_context_predicate(
+            id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED) & id!(flags::ACTIVE_AGENT_VIEW),
+        )
+        .with_mac_key_binding("ctrl-alt-]")
+        .with_linux_or_windows_key_binding("ctrl-alt-]"),
+        EditableBinding::new(
+            CYCLE_PREVIOUS_ORCHESTRATION_CHILD_AGENT_KEYBINDING,
+            "Cycle to previous orchestration session",
+            TerminalAction::CyclePreviousOrchestrationChildAgent,
+        )
+        .with_group(bindings::BindingGroup::WarpAi.as_str())
+        .with_context_predicate(
+            id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED) & id!(flags::ACTIVE_AGENT_VIEW),
+        )
+        .with_mac_key_binding("ctrl-alt-[")
+        .with_linux_or_windows_key_binding("ctrl-alt-["),
+    ]);
 
     // Register bindings for starting a new cloud agent conversation.
     {

@@ -185,8 +185,13 @@ pub enum QueuedPromptsPanelAction {
 /// Events emitted to the host input view.
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelEvent {
-    /// A row was removed via its send-now button. The host should immediately submit `text`.
-    SendNow { text: String },
+    /// A row's send-now button was clicked. The row is left in the queue so the host can read its
+    /// attachments by id; the host submits `text` immediately and then removes the fired row.
+    SendNow {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        text: String,
+    },
     /// A row was deleted via the trash button. The host should refocus the input.
     RowDeleted,
     /// An inline edit was committed or cancelled. The host should refocus the input.
@@ -595,11 +600,19 @@ impl TypedActionView for QueuedPromptsPanelView {
                     self.commit_edit(ctx);
                 }
 
-                let removed = QueuedQueryModel::handle(ctx)
-                    .update(ctx, |model, ctx| model.remove_by_id(conv_id, query_id, ctx));
-                if let Some(removed) = removed {
+                // Leave the row in the queue so the host can read its attachments by id when it
+                // fires; the host removes the fired row afterward. Locked rows (the initial
+                // cloud-mode prompt) are not send-now-able.
+                let text = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
+                    .iter()
+                    .find(|row| row.id() == query_id && !row.is_locked())
+                    .map(|row| row.text().to_owned());
+                if let Some(text) = text {
                     ctx.emit(QueuedPromptsPanelEvent::SendNow {
-                        text: removed.text().to_owned(),
+                        conversation_id: conv_id,
+                        query_id,
+                        text,
                     });
                 }
             }

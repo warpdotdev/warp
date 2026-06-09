@@ -255,6 +255,7 @@ use crate::ai::blocklist::inline_action::code_diff_view::{CodeDiffView, FileDiff
 use crate::ai::blocklist::model::{
     AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus,
 };
+use crate::ai::blocklist::orchestration_topology::OrchestrationNavigationDirection;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::summarization_cancel_dialog::SummarizationCancelDialog;
@@ -4668,7 +4669,13 @@ impl TerminalView {
                     | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
                     | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
                     | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
-                    | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
+                    | RemoteServerManagerEvent::GetBranchesResponse { .. }
+                    | RemoteServerManagerEvent::CommitChainResponse { .. }
+                    | RemoteServerManagerEvent::GitPushResponse { .. }
+                    | RemoteServerManagerEvent::CreatePrResponse { .. }
+                    | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+                    | RemoteServerManagerEvent::GetPrInfoResponse { .. }
+                    | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => {}
                 }
             });
         }
@@ -5123,10 +5130,6 @@ impl TerminalView {
 
             let mut finish_reason: Option<FinishReason> = None;
             if let Some(active_ai_block) = self.active_ai_block(ctx) {
-                // Focus the block so that the user can interact
-                // with any blocking actions (if any).
-                self.focus_ai_block_if_self_focused(active_ai_block, ctx);
-
                 // A new exchange is already active, so callbacks for the
                 // just-finished exchange will be skipped. Clear any pending
                 // user query now to prevent its callback from firing when
@@ -5247,8 +5250,15 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if FeatureFlag::QueuedPromptsV2.is_enabled() {
+            let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                context_model.take_pending_attachments(ctx)
+            });
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx);
+                model.append(
+                    conversation_id,
+                    QueuedQuery::new_with_attachments(prompt, origin, attachments),
+                    ctx,
+                );
             });
         } else {
             self.send_user_query_after_next_conversation_finished(
@@ -5275,21 +5285,39 @@ impl TerminalView {
                     return;
                 }
 
-                let action = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.pop_for_autofire(conversation_id, ctx)
-                });
+                // Peek the head row's action without removing it so the send path can read its
+                // attachments by id; the row is removed afterward via `remove_fired_row`.
+                let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
-                    Some(AutofireAction::Submit { text }) => {
+                    Some(AutofireAction::Submit { query_id, text }) => {
                         self.input.update(ctx, |input, ctx| {
-                            input.submit_queued_prompt_for_active_pane(text, ctx);
+                            input.submit_queued_prompt_for_active_pane(
+                                text,
+                                conversation_id,
+                                query_id,
+                                ctx,
+                            );
+                        });
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
                         });
                     }
-                    Some(AutofireAction::PopFromEditMode { text }) => {
-                        self.input.update(ctx, |input, ctx| {
-                            if input.buffer_text(ctx).is_empty() {
+                    Some(AutofireAction::PopFromEditMode {
+                        query_id,
+                        text,
+                        attachments,
+                    }) => {
+                        if self.input.as_ref(ctx).buffer_text(ctx).is_empty() {
+                            self.input.update(ctx, |input, ctx| {
                                 input.replace_buffer_content(&text, ctx);
                                 input.focus_input_box(ctx);
-                            }
+                            });
+                            self.ai_context_model.update(ctx, |context_model, ctx| {
+                                context_model.append_pending_attachments(attachments, ctx);
+                            });
+                        }
+                        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.remove_fired_row(conversation_id, query_id, ctx);
                         });
                     }
                     None => {}
@@ -5324,6 +5352,10 @@ impl TerminalView {
                 if let Some(query) = popped {
                     self.input.update(ctx, |input, ctx| {
                         input.replace_buffer_content(query.text(), ctx);
+                    });
+                    // Re-stage the restored row's attachments so a manual re-submit keeps them.
+                    self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.append_pending_attachments(query.attachments().to_vec(), ctx);
                     });
                 }
             }
@@ -7992,6 +8024,20 @@ impl TerminalView {
         ctx.notify();
     }
 
+    fn current_long_running_command_agent_interaction_state(
+        &self,
+    ) -> LongRunningCommandAgentInteractionState {
+        let model = self.model.lock();
+        let active_block = model.block_list().active_block();
+        if active_block.is_agent_in_control() {
+            LongRunningCommandAgentInteractionState::InControl
+        } else if active_block.is_agent_tagged_in() {
+            LongRunningCommandAgentInteractionState::TaggedIn
+        } else {
+            LongRunningCommandAgentInteractionState::NotInteracting
+        }
+    }
+
     fn emit_long_running_command_agent_interaction_state_changed(
         &self,
         agent_has_control: bool,
@@ -8012,10 +8058,6 @@ impl TerminalView {
                 LongRunningCommandAgentInteractionState::NotInteracting
             }
         };
-        log::info!(
-            "emit_long_running_command_agent_interaction_state_changed: \
-             agent_has_control={agent_has_control}, emitting state={state:?}"
-        );
         ctx.emit(Event::LongRunningCommandAgentInteractionStateChanged { state });
     }
 
@@ -8025,6 +8067,10 @@ impl TerminalView {
         state: LongRunningCommandAgentInteractionState,
         ctx: &mut ViewContext<Self>,
     ) {
+        if self.current_long_running_command_agent_interaction_state() == state {
+            return;
+        }
+        log::info!("Applying shared-session LRC interaction_state={state:?}");
         match state {
             LongRunningCommandAgentInteractionState::InControl => {
                 self.cli_subagent_controller.update(ctx, |controller, ctx| {
@@ -25966,6 +26012,8 @@ impl TypedActionView for TerminalView {
             | OpenChildAgentInNewTab { .. }
             | StopAgentConversation { .. }
             | KillAgentConversation { .. }
+            | CyclePreviousOrchestrationChildAgent
+            | CycleNextOrchestrationChildAgent
             | ToggleCLIAgentRichInput
             | ToggleSessionRecording => Empty,
         }
@@ -27113,6 +27161,22 @@ impl TypedActionView for TerminalView {
                 ctx.emit(Event::KillAgentConversation {
                     conversation_id: *conversation_id,
                 });
+            }
+            CyclePreviousOrchestrationChildAgent | CycleNextOrchestrationChildAgent => {
+                let direction = match action {
+                    CyclePreviousOrchestrationChildAgent => {
+                        OrchestrationNavigationDirection::Previous
+                    }
+                    CycleNextOrchestrationChildAgent => OrchestrationNavigationDirection::Next,
+                    _ => unreachable!("matched orchestration cycle action"),
+                };
+                if let Some(conversation_id) = self
+                    .agent_view_controller
+                    .as_ref(ctx)
+                    .adjacent_orchestration_conversation_id(direction, ctx)
+                {
+                    ctx.emit(Event::RevealChildAgent { conversation_id });
+                }
             }
             ToggleSessionRecording => {
                 self.pty_recorder.update(ctx, |recorder, ctx| {

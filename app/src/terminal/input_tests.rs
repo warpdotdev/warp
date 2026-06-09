@@ -1167,10 +1167,25 @@ fn send_now_event_submits_through_active_pane_and_preserves_draft() {
             });
         });
 
+        // Seed a queued row so the host can identify it by id, fire it, and remove it afterward.
+        let conversation_id = AIConversationId::new();
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(
+                    "queued prompt".to_owned(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            )
+        });
+
         input.update(&mut app, |input, ctx| {
             input.replace_buffer_content("draft in progress", ctx);
             input.handle_queued_prompts_panel_event(
                 &QueuedPromptsPanelEvent::SendNow {
+                    conversation_id,
+                    query_id,
                     text: "queued prompt".to_owned(),
                 },
                 ctx,
@@ -1179,9 +1194,13 @@ fn send_now_event_submits_through_active_pane_and_preserves_draft() {
 
         // The queued prompt was submitted immediately...
         assert_eq!(submitted_prompts.borrow().as_slice(), ["queued prompt"]);
-        // ...and the in-progress draft the user typed was left untouched.
+        // ...the in-progress draft the user typed was left untouched...
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "draft in progress");
+        });
+        // ...and the host removed the fired row from the queue.
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
         });
     });
 }

@@ -708,6 +708,9 @@ pub enum FeatureFlag {
     /// / `ChildStatusChanged` events. See `specs/orch-viewer-polling/TECH.md`.
     OrchestrationViewerStreamer,
 
+    /// Uses a parent-family ancestor stream for owner-side orchestrator event delivery.
+    OwnerOrchestrationAncestorStreamer,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -790,6 +793,9 @@ pub enum FeatureFlag {
 
     /// Enables tab configs — user-definable TOML templates for launching custom tab layouts.
     TabConfigs,
+
+    /// Enables Warp local control through the standalone warpctrl CLI.
+    WarpControlCli,
 
     /// When enabled, free-tier users are blocked from AI features (no-AI experiment arm).
     FreeUserNoAi,
@@ -889,6 +895,8 @@ static FEATURES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Features used in debugging.
 pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::RuntimeFeatureFlags];
+/// Features enabled only for the WarpLocal developer build.
+pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
 
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
@@ -987,7 +995,9 @@ impl FeatureFlag {
         // Allow calling this in integration tests because we sometimes use it in the app
         // during flows that integration tests cover.
         if cfg!(test) && cfg!(not(feature = "integration_tests")) {
-            panic!("Tried to globally enable {self:?} in a test. Use FeatureFlag::{self:?}.override_enabled instead");
+            panic!(
+                "Tried to globally enable {self:?} in a test. Use FeatureFlag::{self:?}.override_enabled instead"
+            );
         }
         FLAG_STATES[self as usize].store(enabled, Ordering::Relaxed);
     }
@@ -1030,15 +1040,25 @@ impl FeatureFlag {
             BlocklistMarkdownImages => {
                 Some("Enables rendering markdown images inline in AI block list responses.")
             }
-            CloudEnvironments => Some("Enables creating and managing Warp Environments via the CLI."),
-            CreateEnvironmentSlashCommand => Some("Enables the /create environment slash command for setting up Warp Environments with custom configurations."),
+            CloudEnvironments => {
+                Some("Enables creating and managing Warp Environments via the CLI.")
+            }
+            CreateEnvironmentSlashCommand => Some(
+                "Enables the /create environment slash command for setting up Warp Environments with custom configurations.",
+            ),
             GlobalSearch => Some("Enables global search in the left panel"),
             BlocklistMarkdownTableRendering => {
                 Some("Enables rendering markdown tables inline in AI block list responses.")
             }
-            MarkdownTables => Some("Enables rendering and interaction support for markdown tables in notebooks."),
-            SettingsFile => Some("Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values."),
-            GitOperationsInCodeReview => Some("Enables commit, push, and create-PR actions directly from the code review panel."),
+            MarkdownTables => {
+                Some("Enables rendering and interaction support for markdown tables in notebooks.")
+            }
+            SettingsFile => Some(
+                "Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values.",
+            ),
+            GitOperationsInCodeReview => Some(
+                "Enables commit, push, and create-PR actions directly from the code review panel.",
+            ),
             _ => None,
         }
     }

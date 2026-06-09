@@ -101,7 +101,12 @@ enum DiffSize {
   DIFF_SIZE_UNSPECIFIED = 0;
   DIFF_SIZE_NORMAL = 1;
   DIFF_SIZE_LARGE = 2;
-  DIFF_SIZE_UNRENDERABLE = 3;
+  // The diff/patch itself is too large to render. (Was DIFF_SIZE_UNRENDERABLE;
+  // value 3 is preserved for wire compatibility.)
+  DIFF_SIZE_UNRENDERABLE_DIFF_TOO_LARGE = 3;
+  // The base file content was withheld because it exceeded the per-file wire
+  // budget; the client renders a "file too large" placeholder.
+  DIFF_SIZE_UNRENDERABLE_FILE_TOO_LARGE = 4;
 }
 
 // Mirrors FileDiff + FileDiffAndContent in Rust.
@@ -117,8 +122,9 @@ message FileDiff {
   bool has_hidden_bidi_chars = 7;
   DiffSize size = 8;
   // File content at HEAD or merge-base, used by the code review editor to
-  // render inline diff decorations (set_base). Absent for binary files or
-  // when git show fails.
+  // render inline diff decorations (set_base). Absent for binary files, for
+  // files whose content exceeds the per-file wire budget (size =
+  // DIFF_SIZE_UNRENDERABLE_FILE_TOO_LARGE), or when git show fails.
   optional string content_at_base = 9;
 }
 
@@ -140,6 +146,10 @@ message DiffStats {
 // Mirrors DiffMetadataAgainstBase in Rust.
 message DiffMetadataAgainstBase {
   DiffStats aggregate_stats = 1;
+  // Per-file change entries for this base, captured from the same numstat that
+  // produces aggregate_stats so the git dialog's Changes box can render
+  // without a working-tree read (lets the box populate for remote repos).
+  repeated FileChangeEntry files = 2;
 }
 
 // Mirrors Commit in Rust (util/git.rs).
@@ -149,6 +159,16 @@ message Commit {
   uint64 files_changed = 3;
   uint64 additions = 4;
   uint64 deletions = 5;
+  // Per-file changes in this commit, captured up front so the push dialog can
+  // render a commit's file list on expansion without a follow-up RPC.
+  repeated FileChangeEntry files = 6;
+}
+
+// Mirrors FileChangeEntry in Rust (util/git.rs).
+message FileChangeEntry {
+  string path = 1;
+  uint64 additions = 2;
+  uint64 deletions = 3;
 }
 
 // Mirrors PrInfo in Rust (util/git.rs).
@@ -295,4 +315,152 @@ message GetBranchesSuccess {
 
 message GetBranchesError {
   string message = 1;
+}
+
+// ── Git operations (commit / push / create-PR / PR info) ──────────
+// Run git / gh on the remote filesystem. These mirror the local code
+// review git dialog operations in app/src/code_review/git_dialog/*.
+
+// Shared error payload for git operation responses. The message is the
+// raw git/gh error, mapped to user-facing copy on the client.
+message GitOpError {
+  string message = 1;
+}
+
+// Post-operation delta applied to DiffMetadata so the client refreshes the
+// header immediately, without waiting for the next watcher-driven snapshot.
+message GitOpDelta {
+  repeated Commit unpushed_commits = 1;
+  optional string upstream_ref = 2;
+}
+
+// Client → server: run the commit chain (commit, then optionally push, then
+// optionally create-PR) host-local in a single round trip. The daemon
+// sequences the underlying git / gh subprocesses (see handle_git_commit_chain), so
+// the SSH link carries one request/response instead of the 2–3 a client-side
+// chain would send.
+message GitCommitChainRequest {
+  string repo_path = 1;
+  string message = 2;
+  bool include_unstaged = 3;
+  // Branch to push / open the PR against. Ignored for COMMIT_ONLY.
+  string branch = 4;
+  GitCommitChainMode mode = 5;
+  // When mode is COMMIT_AND_CREATE_PR, generate the PR title/body via AI on the
+  // daemon (get_diff_for_pr + generate_code_review_content), falling back to
+  // `gh pr create --fill`. Ignored for the other modes.
+  bool autogenerate_pr_content = 6;
+}
+
+// What to run after the commit succeeds.
+enum GitCommitChainMode {
+  GIT_COMMIT_CHAIN_MODE_COMMIT_ONLY = 0;
+  GIT_COMMIT_CHAIN_MODE_COMMIT_AND_PUSH = 1;
+  GIT_COMMIT_CHAIN_MODE_COMMIT_AND_CREATE_PR = 2;
+}
+
+message GitCommitChainResponse {
+  oneof result {
+    GitCommitChainSuccess success = 1;
+    GitOpError error = 2;
+  }
+}
+
+// Final post-chain delta plus the PR when one was created (absent for
+// COMMIT_ONLY / COMMIT_AND_PUSH).
+message GitCommitChainSuccess {
+  GitOpDelta delta = 1;
+  optional PrInfo pr_info = 2;
+}
+
+// Client → server: push `branch` to origin, setting upstream tracking.
+message GitPushRequest {
+  string repo_path = 1;
+  string branch = 2;
+}
+
+message GitPushResponse {
+  oneof result {
+    GitOpDelta success = 1;
+    GitOpError error = 2;
+  }
+}
+
+// Client → server: create a PR for the current branch (must be pushed).
+// Absent title/body => `gh pr create --fill`, unless autogenerate_content is
+// set (then the daemon generates the title/body via AI first).
+message GitCreatePrRequest {
+  string repo_path = 1;
+  // Current branch name, passed as context to daemon-side AI generation.
+  string branch = 2;
+  // When true and title/body are both absent, the daemon generates the PR
+  // title + body via AI (get_diff_for_pr + generate_code_review_content)
+  // before running `gh pr create`, falling back to `--fill` on failure.
+  bool autogenerate_content = 3;
+}
+
+message GitCreatePrResponse {
+  oneof result {
+    PrInfo success = 1;
+    GitOpError error = 2;
+  }
+}
+
+// Client → server: look up the PR for the current branch (`gh pr view`).
+// This is the remote PR get/view command; it does not depend on a remote
+// git-status model.
+message GitGetPrInfoRequest {
+  string repo_path = 1;
+}
+
+message GitGetPrInfoResponse {
+  oneof result {
+    GitGetPrInfoSuccess success = 1;
+    GitOpError error = 2;
+  }
+}
+
+// `pr_info` absent => there is no open PR for the current branch.
+message GitGetPrInfoSuccess {
+  optional PrInfo pr_info = 1;
+}
+
+// Client → server: list the committed file changes for the current branch's
+// PR-ready diff (merge_base(HEAD, main)..HEAD). Backs the Create PR dialog's
+// Changes box; deliberately committed-only (no working-tree edits, no
+// untracked files) so it matches what `gh pr create` would include.
+message GitGetCommittedBranchFilesRequest {
+  string repo_path = 1;
+}
+
+message GitGetCommittedBranchFilesResponse {
+  oneof result {
+    GitGetCommittedBranchFilesSuccess success = 1;
+    GitOpError error = 2;
+  }
+}
+
+message GitGetCommittedBranchFilesSuccess {
+  repeated FileChangeEntry files = 1;
+}
+
+// Client → server: generate a commit message via AI on the remote host.
+// The daemon computes the working-tree diff locally and calls the Warp
+// server's code-review content endpoint, returning the message string. Sent
+// at commit-dialog open time, mirroring the local open-time autogen.
+message GitGenerateCommitMessageRequest {
+  string repo_path = 1;
+  // Whether to include unstaged changes in the diff sent to AI (mirrors the
+  // commit dialog's include-unstaged toggle).
+  bool include_unstaged = 2;
+  // Current branch name, passed as context to the AI request.
+  string branch_name = 3;
+}
+
+message GitGenerateCommitMessageResponse {
+  oneof result {
+    // The generated commit message (already trimmed, non-empty).
+    string message = 1;
+    GitOpError error = 2;
+  }
 }

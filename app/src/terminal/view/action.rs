@@ -459,6 +459,12 @@ pub enum TerminalAction {
     KillAgentConversation {
         conversation_id: AIConversationId,
     },
+    /// Navigate to the previous child agent conversation in the active
+    /// orchestration tree.
+    CyclePreviousOrchestrationChildAgent,
+    /// Navigate to the next child agent conversation in the active
+    /// orchestration tree.
+    CycleNextOrchestrationChildAgent,
     /// Toggle PTY recording for this session.
     ToggleSessionRecording,
     /// Toggle the rich input editor for composing a prompt to send to a CLI agent.
@@ -745,6 +751,10 @@ impl fmt::Debug for TerminalAction {
             OpenChildAgentInNewTab { .. } => write!(f, "OpenChildAgentInNewTab"),
             StopAgentConversation { .. } => write!(f, "StopAgentConversation"),
             KillAgentConversation { .. } => write!(f, "KillAgentConversation"),
+            CyclePreviousOrchestrationChildAgent => {
+                write!(f, "CyclePreviousOrchestrationChildAgent")
+            }
+            CycleNextOrchestrationChildAgent => write!(f, "CycleNextOrchestrationChildAgent"),
             ToggleSessionRecording => write!(f, "ToggleSessionRecording"),
             ToggleCLIAgentRichInput => write!(f, "ToggleCLIAgentRichInput"),
         }
