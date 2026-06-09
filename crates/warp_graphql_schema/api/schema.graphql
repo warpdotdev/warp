@@ -793,6 +793,7 @@ type ConversationUsageMetadata {
   """Token usage using a user's API key, keyed by model."""
   byokTokenUsage: [TokenUsage!]!
   contextWindowUsage: Float!
+  longContextUsed: Boolean!
 
   """The total number of inference credits spent so far in the conversation"""
   creditsSpent: Float!

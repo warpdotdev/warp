@@ -1380,6 +1380,8 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
     pub context_window_usage: f32,
+    #[serde(default)]
+    pub long_context_used: bool,
     pub credits_spent: f32,
     #[serde(default)]
     pub platform_credits_spent: f32,

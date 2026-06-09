@@ -672,6 +672,9 @@ impl AIConversation {
     pub fn context_window_usage(&self) -> f32 {
         self.conversation_usage_metadata.context_window_usage
     }
+    pub fn long_context_used(&self) -> bool {
+        self.conversation_usage_metadata.long_context_used
+    }
 
     /// Total credits spent in the conversation, including both LLM inference
     /// and platform credits.
@@ -1906,6 +1909,7 @@ impl AIConversation {
         if let Some(usage_metadata) = usage_metadata {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
+            self.conversation_usage_metadata.long_context_used = usage_metadata.long_context_used;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
             self.conversation_usage_metadata.platform_credits_spent =
                 usage_metadata.platform_credits_spent;

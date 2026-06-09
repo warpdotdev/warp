@@ -502,6 +502,7 @@ impl BlocklistAIController {
                 .conversation(&conv_id)
                 .map(|conversation| stream_finished::ConversationUsageMetadata {
                     context_window_usage: conversation.context_window_usage(),
+                    long_context_used: conversation.long_context_used(),
                     credits_spent: conversation.inference_credits_spent(),
                     platform_credits_spent: conversation.platform_credits_spent(),
                     summarized: conversation.was_summarized(),
