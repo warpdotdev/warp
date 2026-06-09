@@ -25,9 +25,9 @@ use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::appearance::Appearance;
 use crate::auth::auth_state::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{CloudObject, CloudObjectEventEntrypoint, Owner};
-use crate::drive::folders::CloudFolder;
+use crate::drive::{folders::CloudFolder, CloudObjectTypeAndId};
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::notebooks::editor::model::{
     FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent,
@@ -192,6 +192,9 @@ impl AIDocumentModel {
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), |me, event, ctx| {
             me.handle_update_manager_event(event, ctx);
         });
+        ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, event, ctx| {
+            me.handle_cloud_model_event(event, ctx);
+        });
 
         // Subscribe to history events so we can hydrate the orchestration
         // config from OrchestrationConfigSnapshot messages that arrive
@@ -239,6 +242,9 @@ impl AIDocumentModel {
     /// Returns true if the create document request was sent successfully (or if there was already a notebook entry).
     /// Actually creating the notebook is done asynchronously in the background.
     pub fn sync_to_warp_drive(&mut self, id: AIDocumentId, ctx: &mut ModelContext<Self>) -> bool {
+        if self.reconcile_document_server_backing(&id, ctx) {
+            return true;
+        }
         let Some(document) = self.documents.get(&id) else {
             return false;
         };
@@ -292,6 +298,7 @@ impl AIDocumentModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) -> Vec<AIDocumentId> {
+        self.reconcile_all_document_server_backing(ctx);
         let document_ids = self
             .documents
             .iter()
@@ -325,6 +332,34 @@ impl AIDocumentModel {
         awaiting_server_backing
     }
 
+    /// Reconciles a document with an existing server-backed Warp Drive notebook.
+    fn reconcile_document_server_backing(
+        &mut self,
+        document_id: &AIDocumentId,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let server_sync_id = CloudModel::as_ref(ctx)
+            .get_all_active_notebooks()
+            .find(|notebook| {
+                notebook.id.into_server().is_some()
+                    && notebook.model().ai_document_id.as_ref() == Some(document_id)
+            })
+            .map(|notebook| notebook.id);
+        let Some(server_sync_id) = server_sync_id else {
+            return false;
+        };
+        self.set_document_server_backing(*document_id, server_sync_id, ctx);
+        true
+    }
+
+    /// Reconciles all loaded documents with server-backed Warp Drive notebooks.
+    fn reconcile_all_document_server_backing(&mut self, ctx: &mut ModelContext<Self>) {
+        let document_ids = self.documents.keys().copied().collect::<Vec<_>>();
+        for document_id in document_ids {
+            self.reconcile_document_server_backing(&document_id, ctx);
+        }
+    }
+
     /// Refreshes the latest content for a plan whose Warp Drive creation is in progress.
     fn refresh_saving_document_content(
         &mut self,
@@ -351,6 +386,80 @@ impl AIDocumentModel {
             self.maybe_update_cloud_notebook_data(document_id, ctx);
         }
     }
+    fn handle_cloud_model_event(&mut self, event: &CloudModelEvent, ctx: &mut ModelContext<Self>) {
+        match event {
+            CloudModelEvent::ObjectSynced { server_id, .. } => {
+                self.reconcile_server_backed_notebook(SyncId::ServerId(*server_id), ctx);
+            }
+            CloudModelEvent::ObjectCreated {
+                type_and_id: CloudObjectTypeAndId::Notebook(sync_id),
+            }
+            | CloudModelEvent::ObjectUpdated {
+                type_and_id: CloudObjectTypeAndId::Notebook(sync_id),
+                ..
+            } => {
+                self.reconcile_server_backed_notebook(*sync_id, ctx);
+            }
+            CloudModelEvent::InitialLoadCompleted => {
+                self.reconcile_all_document_server_backing(ctx);
+            }
+            CloudModelEvent::ObjectMoved { .. }
+            | CloudModelEvent::ObjectUpdated { .. }
+            | CloudModelEvent::ObjectTrashed { .. }
+            | CloudModelEvent::ObjectUntrashed { .. }
+            | CloudModelEvent::ObjectDeleted { .. }
+            | CloudModelEvent::ObjectPermissionsUpdated { .. }
+            | CloudModelEvent::ObjectForceExpanded { .. }
+            | CloudModelEvent::ObjectCreated { .. }
+            | CloudModelEvent::NotebookEditorChangedFromServer { .. } => {}
+        }
+    }
+    /// Reconciles one server-backed notebook with its loaded AI document.
+    fn reconcile_server_backed_notebook(&mut self, sync_id: SyncId, ctx: &mut ModelContext<Self>) {
+        if sync_id.into_server().is_none() {
+            return;
+        }
+        let document_id = CloudModel::as_ref(ctx)
+            .get_notebook(&sync_id)
+            .and_then(|notebook| notebook.model().ai_document_id);
+        if let Some(document_id) = document_id {
+            self.set_document_server_backing(document_id, sync_id, ctx);
+        }
+    }
+
+    /// Updates a document and its conversation artifact with server backing.
+    fn set_document_server_backing(
+        &mut self,
+        document_id: AIDocumentId,
+        sync_id: SyncId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(document) = self.documents.get_mut(&document_id) else {
+            return;
+        };
+        if document.sync_id == Some(sync_id) {
+            return;
+        }
+        document.sync_id = Some(sync_id);
+        let conversation_id = document.conversation_id;
+        ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(document_id));
+
+        let Some(server_id) = sync_id.into_server() else {
+            return;
+        };
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            let terminal_view_id =
+                history_model.terminal_view_id_for_conversation(&conversation_id);
+            if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
+                conversation.update_plan_notebook_uid(
+                    document_id,
+                    NotebookId::from(server_id),
+                    terminal_view_id,
+                    ctx,
+                );
+            }
+        });
+    }
 
     fn handle_update_manager_event(
         &mut self,
@@ -365,7 +474,7 @@ impl AIDocumentModel {
         {
             return;
         }
-        let (Some(client_id), Some(server_id)) = (result.client_id, result.server_id) else {
+        if result.server_id.is_none() {
             return;
         };
 
@@ -393,36 +502,6 @@ impl AIDocumentModel {
                 }
             }
         }
-
-        let Some((doc_id, doc)) = self
-            .documents
-            .iter_mut()
-            .find(|(_, doc)| doc.sync_id.and_then(|id| id.into_client()) == Some(client_id))
-        else {
-            return;
-        };
-
-        let conversation_id = doc.conversation_id;
-        let ai_document_id = *doc_id;
-        doc.sync_id = Some(SyncId::ServerId(server_id));
-        ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(
-            ai_document_id,
-        ));
-
-        // Update the plan artifact's notebook_uid in the conversation
-        let notebook_uid = NotebookId::from(server_id);
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-            let terminal_view_id =
-                history_model.terminal_view_id_for_conversation(&conversation_id);
-            if let Some(conversation) = history_model.conversation_mut(&conversation_id) {
-                conversation.update_plan_notebook_uid(
-                    ai_document_id,
-                    notebook_uid,
-                    terminal_view_id,
-                    ctx,
-                );
-            }
-        });
     }
 
     /// Create a new document with default title/content and return its ID.
@@ -1031,25 +1110,7 @@ impl AIDocumentModel {
             ctx,
         );
 
-        // Update the sync status of a document by checking if it exists in Warp Drive.
-        let Some(doc) = self.documents.get(&id) else {
-            return;
-        };
-
-        if doc.sync_id.is_some() {
-            return;
-        }
-
-        let matching_notebook = CloudModel::as_ref(ctx)
-            .get_all_active_notebooks()
-            .find(|notebook| notebook.model().ai_document_id == Some(id));
-
-        if let Some(notebook) = matching_notebook {
-            if let Some(doc) = self.documents.get_mut(&id) {
-                doc.sync_id = Some(notebook.id);
-                ctx.emit(AIDocumentModelEvent::DocumentSaveStatusUpdated(id));
-            }
-        }
+        self.reconcile_document_server_backing(&id, ctx);
     }
 
     /// This is used for restoring EditDocuments results where we already have the final content.

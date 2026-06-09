@@ -4,6 +4,7 @@ Orchestrated child agents need to read parent-created plans when explicitly give
 ## Architecture
 ### Publish parent plans before fan-out
 Before `RunAgentsExecutor` dispatches children, it asks `AIDocumentModel` to publish every document owned by the parent conversation.
+- `AIDocumentModel` keeps its cached backing identity synchronized with `CloudModel`: live `ObjectSynced` events update matching plans by stable `ai_document_id`, initial-load completion reconciles restored documents, and explicit sync/publication calls reconcile defensively before creating or waiting.
 - Unbacked plans start Warp Drive creation.
 - Plans already being created refresh their queued or client-backed notebook content before remaining in the wait set.
 - Server-backed plans immediately queue their latest content for update instead of waiting for the normal two-second document save throttle.
@@ -29,6 +30,7 @@ Local and remote Oz children discover plans when an explicit plan ID in their as
 Focused Rust coverage verifies:
 - `RunAgentsExecutor` starts publication for every plan owned by the parent conversation before dispatch, without publishing unrelated plans;
 - saving-plan publication refreshes content edited after Warp Drive creation began;
+- already server-backed plans do not wait when their local document has a stale client sync ID;
 - cancellation during the publication wait prevents child dispatch;
 - a remote child with only a parent run ID can lazily hydrate and read a requested saved plan;
 - a non-orchestrated conversation retains the missing-document error;

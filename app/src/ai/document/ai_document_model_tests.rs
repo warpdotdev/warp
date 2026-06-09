@@ -8,6 +8,10 @@ use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{
+    CloudObjectMetadata, CloudObjectPermissions, CloudObjectStatuses, CloudObjectSyncStatus, Owner,
+};
+use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::server::ids::SyncId;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -15,6 +19,46 @@ fn initialize_app_for_ai_document_tests(app: &mut App) {
     initialize_settings_for_tests(app);
     app.add_singleton_model(|_| Appearance::mock());
     app.add_singleton_model(|_| CloudModel::new(None, Vec::new(), None));
+}
+fn add_server_backed_plan_notebook(app: &mut App, document_id: AIDocumentId) -> SyncId {
+    let sync_id = SyncId::ServerId(123.into());
+    let notebook = CloudNotebook::new(
+        sync_id,
+        CloudNotebookModel {
+            title: "Plan".to_string(),
+            data: "# Server backed".to_string(),
+            ai_document_id: Some(document_id),
+            conversation_id: None,
+        },
+        CloudObjectMetadata {
+            pending_changes_statuses: CloudObjectStatuses {
+                content_sync_status: CloudObjectSyncStatus::NoLocalChanges,
+                has_pending_metadata_change: false,
+                has_pending_permissions_change: false,
+                pending_untrash: false,
+                pending_delete: false,
+            },
+            folder_id: None,
+            revision: Default::default(),
+            metadata_last_updated_ts: Default::default(),
+            current_editor_uid: Default::default(),
+            trashed_ts: Default::default(),
+            is_welcome_object: false,
+            creator_uid: None,
+            last_editor_uid: None,
+            last_task_run_ts: None,
+        },
+        CloudObjectPermissions {
+            owner: Owner::mock_current_user(),
+            guests: Vec::new(),
+            permissions_last_updated_ts: None,
+            anyone_with_link: None,
+        },
+    );
+    CloudModel::handle(app).update(app, |cloud_model, _| {
+        cloud_model.add_object(sync_id, notebook);
+    });
+    sync_id
 }
 
 #[test]
@@ -47,6 +91,47 @@ fn test_create_document() {
 
             // Should have no versions initially
             assert!(model.get_earlier_document_versions(&doc_id).is_none());
+        });
+    });
+}
+#[test]
+fn cloud_model_sync_event_reconciles_stale_document_client_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_| AIDocumentModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let stale_client_id = ClientId::new();
+        let document_id = model_handle.update(&mut app, |model, ctx| {
+            let document_id = model.create_document("Plan", "# Local", conversation_id, None, ctx);
+            model
+                .documents
+                .get_mut(&document_id)
+                .expect("document should exist")
+                .sync_id = Some(SyncId::ClientId(stale_client_id));
+            document_id
+        });
+        let server_sync_id = add_server_backed_plan_notebook(&mut app, document_id);
+        let server_id = server_sync_id
+            .into_server()
+            .expect("test notebook should be server-backed");
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.handle_cloud_model_event(
+                &CloudModelEvent::ObjectSynced {
+                    type_and_id: crate::drive::CloudObjectTypeAndId::Notebook(server_sync_id),
+                    client_id: stale_client_id,
+                    server_id,
+                },
+                ctx,
+            );
+            assert_eq!(
+                model
+                    .get_current_document(&document_id)
+                    .expect("document should exist")
+                    .sync_id,
+                Some(server_sync_id)
+            );
+            assert!(model.get_document_save_status(&document_id).is_saved());
         });
     });
 }
