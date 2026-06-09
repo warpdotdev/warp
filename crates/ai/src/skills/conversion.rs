@@ -60,8 +60,11 @@ impl SkillPathOrigin {
             SkillPathOrigin::Local | SkillPathOrigin::RestoredDisplayOnly => {
                 // Normalize the path to collapse duplicate separators (e.g. `//workspace/...`
                 // → `/workspace/...`) so skill cache lookups match the filesystem-derived keys.
-                let normalized: PathBuf = PathBuf::from(&path).components().collect();
-                Ok(LocalOrRemotePath::Local(normalized))
+                // We operate on the raw string rather than using `PathBuf::components().collect()`
+                // because the latter re-serialises with platform-specific separators (backslashes
+                // on Windows) and treats leading `//` as a UNC prefix on Windows.
+                let normalized = collapse_slashes(&path);
+                Ok(LocalOrRemotePath::Local(PathBuf::from(normalized)))
             }
             SkillPathOrigin::Remote { host_id } => {
                 let path = StandardizedPath::try_new(&path)
@@ -74,6 +77,28 @@ impl SkillPathOrigin {
             SkillPathOrigin::Unavailable => Err(SkillConversionError::PathOriginUnavailable),
         }
     }
+}
+
+/// Collapse consecutive `/` separators into a single one.
+///
+/// Skill paths are always forward-slash POSIX-style paths on all platforms, so we normalise
+/// at the string level rather than using [`std::path::PathBuf::components`], which would
+/// re-serialise with backslashes on Windows and misinterpret `//prefix` as a UNC path.
+fn collapse_slashes(path: &str) -> String {
+    let mut result = String::with_capacity(path.len());
+    let mut prev_slash = false;
+    for ch in path.chars() {
+        if ch == '/' {
+            if !prev_slash {
+                result.push(ch);
+            }
+            prev_slash = true;
+        } else {
+            result.push(ch);
+            prev_slash = false;
+        }
+    }
+    result
 }
 
 fn skill_reference_for_path(
