@@ -10,6 +10,11 @@ use super::display_menu::GenericMenuItem;
 use crate::completer::SessionContext;
 use crate::ui_components::icons::Icon;
 
+/// Maximum number of directory items to keep in the fetcher.
+/// Prevents unbounded memory growth for directories with a very large number of
+/// entries (e.g. `node_modules`, `.git/objects`, build output directories).
+const MAX_DIRECTORY_ITEMS: usize = 1_000;
+
 /// DirectoryFetcher model that caches directory state and provides an explicit refetch API
 pub struct DirectoryFetcher {
     current_directory: String,
@@ -94,7 +99,9 @@ impl DirectoryFetcher {
         // Use SessionContext to get directory entries (works for both local and remote sessions)
         let entries = session_context.list_directory_entries(typed_path).await;
 
-        // Convert EngineDirEntry to GenericMenuItem, filtering out hidden files
+        // Convert EngineDirEntry to GenericMenuItem, filtering out hidden files.
+        // Cap the number of items to prevent unbounded memory growth for huge
+        // directories (the sort below ensures the most useful items are kept).
         let mut items: Vec<DirectoryItem> = entries
             .iter()
             .filter(|entry| !entry.is_hidden()) // Skip hidden files (starting with '.')
@@ -103,6 +110,7 @@ impl DirectoryFetcher {
 
         // Sort: directories first, then text files, then other files, all alphabetically within their groups
         sort_menu_items(&mut items);
+        items.truncate(MAX_DIRECTORY_ITEMS);
         items
     }
 
