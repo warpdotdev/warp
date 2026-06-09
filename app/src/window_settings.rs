@@ -22,7 +22,7 @@ define_settings_group!(WindowSettings, settings: [
         storage_key: "OverrideBlurTexture",
         toml_path: "appearance.window.override_blur_texture",
         description: "Whether to apply a blur texture to the window background.",
-    }
+    },
     background_opacity: BackgroundOpacity {
         type: u8,
         default: 100,
@@ -107,7 +107,7 @@ impl BackgroundBlurRadius {
             Self::MIN
         } else if new_value > Self::MAX {
             log::warn!(
-                "Window background blur radius should not be smaller than {}",
+                "Window background blur radius should not be bigger than {}",
                 Self::MAX
             );
             Self::MAX
