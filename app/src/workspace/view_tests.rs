@@ -3690,3 +3690,184 @@ fn test_new_tab_with_after_current_tab_setting_lands_after_active_tab_in_group()
         });
     });
 }
+
+#[test]
+fn test_move_tab_to_group_expands_collapsed_group() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Create a group and a second ungrouped tab.
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[workspace.active_tab_index()]
+                .group_id
+                .expect("active tab should be in a group");
+            workspace.add_terminal_tab(false, ctx);
+
+            // Find the ungrouped tab.
+            let ungrouped_idx = workspace
+                .tabs
+                .iter()
+                .position(|t| t.group_id.is_none())
+                .expect("expected an ungrouped tab");
+
+            // Collapse the group, then move the ungrouped tab into it.
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(
+                workspace.tab_groups[&group_id].collapsed,
+                "group should be collapsed"
+            );
+
+            workspace.handle_action(
+                &WorkspaceAction::MoveTabToGroup {
+                    tab_index: ungrouped_idx,
+                    group_id,
+                },
+                ctx,
+            );
+
+            assert!(
+                !workspace.tab_groups[&group_id].collapsed,
+                "group should expand when a tab is moved into it"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_move_selected_tabs_to_group_expands_collapsed_group() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Add two extra tabs while no group exists so they remain ungrouped.
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+
+            // Create a group from the first tab (moves it to index 0) leaving
+            // the other two tabs ungrouped.
+            workspace.handle_action(&WorkspaceAction::NewTabGroupFromTab(0), ctx);
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("tab 0 should be in the new group");
+
+            // Collapse the group.
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(
+                workspace.tab_groups[&group_id].collapsed,
+                "group should be collapsed"
+            );
+
+            // Select the two ungrouped tabs and move them to the group.
+            let ungrouped_indices: Vec<usize> = workspace
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.group_id.is_none())
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(ungrouped_indices.len(), 2);
+            workspace.activate_tab(ungrouped_indices[0], ctx);
+            workspace.tabs[ungrouped_indices[0]].in_multi_selection = true;
+            workspace.tabs[ungrouped_indices[1]].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::MoveSelectedTabsToGroup { group_id }, ctx);
+
+            assert!(
+                !workspace.tab_groups[&group_id].collapsed,
+                "group should expand when selected tabs are moved into it"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_new_tab_in_group_expands_collapsed_group_non_member_active() {
+    // When the active tab is NOT a member of the group, `new_tab_in_group`
+    // must still expand the target group.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Create a group, then activate an ungrouped tab so the active
+            // tab is NOT a member of the group.
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[workspace.active_tab_index()]
+                .group_id
+                .expect("active tab should be in a group");
+            workspace.add_terminal_tab(false, ctx);
+
+            let ungrouped_idx = workspace
+                .tabs
+                .iter()
+                .position(|t| t.group_id.is_none())
+                .expect("expected an ungrouped tab");
+            workspace.activate_tab(ungrouped_idx, ctx);
+
+            // Collapse the group, then open a new tab inside it.
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(
+                workspace.tab_groups[&group_id].collapsed,
+                "group should be collapsed"
+            );
+
+            workspace.handle_action(&WorkspaceAction::NewTabInGroup(group_id), ctx);
+
+            assert!(
+                !workspace.tab_groups[&group_id].collapsed,
+                "group should expand when a new tab is opened in it"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_new_tab_in_group_expands_collapsed_group_member_active() {
+    // When the active tab IS a member of the group, `new_tab_in_group` takes
+    // the inheritance path; the group must still expand.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[workspace.active_tab_index()]
+                .group_id
+                .expect("active tab should be in a group");
+
+            // Collapse the group, keeping the group member as the active tab.
+            workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
+            assert!(
+                workspace.tab_groups[&group_id].collapsed,
+                "group should be collapsed"
+            );
+
+            workspace.handle_action(&WorkspaceAction::NewTabInGroup(group_id), ctx);
+
+            assert!(
+                !workspace.tab_groups[&group_id].collapsed,
+                "group should expand when a new tab is opened in it"
+            );
+        });
+    });
+}
