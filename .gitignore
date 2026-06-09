@@ -15,10 +15,8 @@ crates/command-signatures-v2/js/node_modules
 # For testing changes to the channel versions file
 channel_versions_test.json
 
-# Don't include any profiling output by accident.
+# Don't include any CPU profiling output by accident.
 profile.pb
-*.mm_profdata
-chrome_profiler.json
 
 # Don't include any files that we write for testing purposes.
 crates/warp_files/test_data/test_write
@@ -51,14 +49,14 @@ app/src/persistence/schema.rs.orig
 # Don't include personal Claude Code settings
 .claude/settings.local.json
 
+# External context files (Confluence exports, API specs, etc.)
+.artifacts/
+
+# Kiro agent configuration and knowledge base
+.kiro/
+
 # Don't include Claude Code worktrees
 .claude/worktrees/
-
-# Don't include Claude Code scheduled task lock
-.claude/scheduled_tasks.lock
-
-# Don't include ctags output
-tags
 
 # Tab drag development notes
 pr_cleanup.md
@@ -66,6 +64,3 @@ desired_behavior.md
 
 # Don't include the python cache for bundled skills.
 __pycache__/
-
-# Project notes
-.note/
