@@ -253,11 +253,13 @@ impl FileSearchModel {
 
     /// Builds the [`GetContentsArgs`] used to traverse repo metadata.
     ///
-    /// For an empty `query` this returns the default args (unfiltered). For a
-    /// non-empty `query` it installs a traversal filter that keeps only entries
+    /// For an empty `query` this returns the default args (unfiltered, folders included). For a
+    /// non-empty `query` it installs a traversal filter that keeps only file entries
     /// whose repo-relative path (produced by `relative_path`) fuzzy-matches the
-    /// query. Pushing the query into traversal ensures the result cap applies
-    /// to *matching* files rather than the first files encountered.
+    /// query. Folders are excluded when a query is present because they are
+    /// filtered out in the search results anyway; excluding them ensures the
+    /// result cap applies only to *matching files* rather than being shared with
+    /// matching directories.
     #[cfg(feature = "local_fs")]
     fn contents_args<F>(query: &str, relative_path: F) -> GetContentsArgs
     where
@@ -267,10 +269,12 @@ impl FileSearchModel {
             return GetContentsArgs::default();
         }
         let query = query.to_string();
-        GetContentsArgs::default().with_filter(move |content| {
-            relative_path(content)
-                .is_some_and(|path| FileSearchModel::fuzzy_match_path(&path, &query).is_some())
-        })
+        GetContentsArgs::default()
+            .exclude_folders()
+            .with_filter(move |content| {
+                relative_path(content)
+                    .is_some_and(|path| FileSearchModel::fuzzy_match_path(&path, &query).is_some())
+            })
     }
 
     /// Gets repository contents for a local or remote repo root, converting
