@@ -173,31 +173,125 @@ impl Entity for CallMCPToolExecutor {
 /// MCP tool args round-trip through `google.protobuf.Struct` on the wire, whose
 /// `NumberValue` stores everything as `f64`. Without this fix, serde_json emits
 /// whole-number floats as `"5.0"`, which strict MCP servers reject for integer fields.
+///
+/// Walks the schema recursively, so nested objects, array items, and `oneOf` /
+/// `anyOf` / `allOf` composition are all covered. Nullable integer fields
+/// (`"type": ["integer", "null"]`) are recognized. `$ref` resolution is not
+/// implemented; schemas that rely on it will fall through unchanged.
+///
+/// Composition handling is intentionally permissive: when multiple branches of
+/// `oneOf` / `anyOf` declare integer-compatible types, the value is coerced
+/// without disambiguating which branch actually matches. Strict `oneOf`
+/// validation would require full schema evaluation; for the wire-format bug
+/// this guards against (`5.0` → `5`), the permissive form is sufficient and
+/// never widens behavior beyond what schema-aware servers will already accept.
 pub(crate) fn coerce_integer_args(
     args: &mut serde_json::Map<String, serde_json::Value>,
     input_schema: &serde_json::Map<String, serde_json::Value>,
 ) {
-    let Some(properties) = input_schema.get("properties").and_then(|p| p.as_object()) else {
-        return;
-    };
+    coerce_object_against_schema(args, input_schema);
+}
 
-    for (key, prop_def) in properties {
-        let is_integer = prop_def.get("type").and_then(|t| t.as_str()) == Some("integer");
-        if !is_integer {
-            continue;
+fn coerce_object_against_schema(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    schema: &serde_json::Map<String, serde_json::Value>,
+) {
+    for &key in COMPOSITION_KEYS {
+        if let Some(serde_json::Value::Array(branches)) = schema.get(key) {
+            for branch in branches {
+                if let Some(branch_schema) = branch.as_object() {
+                    coerce_object_against_schema(obj, branch_schema);
+                }
+            }
         }
-        let Some(serde_json::Value::Number(n)) = args.get_mut(key) else {
-            continue;
-        };
-        let Some(f) = n.as_f64() else { continue };
-        if f.fract() != 0.0 {
-            continue;
-        }
-        if let Ok(i) = i64::try_from(f as i128) {
-            *n = serde_json::Number::from(i);
+    }
+
+    if let Some(serde_json::Value::Object(properties)) = schema.get("properties") {
+        for (prop_key, prop_schema) in properties {
+            if let Some(child) = obj.get_mut(prop_key) {
+                coerce_value_against_schema(child, prop_schema);
+            }
         }
     }
 }
+
+fn coerce_value_against_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
+    let Some(schema_obj) = schema.as_object() else {
+        return;
+    };
+
+    if let serde_json::Value::Number(n) = value {
+        if schema_declares_integer(schema_obj) {
+            try_coerce_number_to_integer(n);
+        }
+    }
+
+    // Composition: best-effort — if any branch declares integer, the coercion
+    // above will fire. This is intentionally permissive; strict `oneOf`
+    // disambiguation would require full schema evaluation.
+    for &key in COMPOSITION_KEYS {
+        if let Some(serde_json::Value::Array(branches)) = schema_obj.get(key) {
+            for branch in branches {
+                coerce_value_against_schema(value, branch);
+            }
+        }
+    }
+
+    match value {
+        serde_json::Value::Object(map) => {
+            coerce_object_against_schema(map, schema_obj);
+        }
+        serde_json::Value::Array(arr) => match schema_obj.get("items") {
+            Some(items_schema @ serde_json::Value::Object(_)) => {
+                for item in arr.iter_mut() {
+                    coerce_value_against_schema(item, items_schema);
+                }
+            }
+            Some(serde_json::Value::Array(items_schemas)) => {
+                // Tuple form: each subschema applies positionally. Array
+                // elements past the tuple length are left alone — JSON Schema
+                // would route them through `additionalItems`, which we don't
+                // implement here.
+                for (item, item_schema) in arr.iter_mut().zip(items_schemas) {
+                    coerce_value_against_schema(item, item_schema);
+                }
+            }
+            Some(
+                serde_json::Value::Null
+                | serde_json::Value::Bool(_)
+                | serde_json::Value::Number(_)
+                | serde_json::Value::String(_),
+            )
+            | None => {}
+        },
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
+fn schema_declares_integer(schema: &serde_json::Map<String, serde_json::Value>) -> bool {
+    match schema.get("type") {
+        Some(serde_json::Value::String(s)) => s == "integer",
+        Some(serde_json::Value::Array(types)) => {
+            types.iter().any(|t| t.as_str() == Some("integer"))
+        }
+        _ => false,
+    }
+}
+
+fn try_coerce_number_to_integer(n: &mut serde_json::Number) {
+    let Some(f) = n.as_f64() else { return };
+    if f.fract() != 0.0 {
+        return;
+    }
+    if let Ok(i) = i64::try_from(f as i128) {
+        *n = serde_json::Number::from(i);
+    }
+}
+
+const COMPOSITION_KEYS: &[&str] = &["oneOf", "anyOf", "allOf"];
 
 #[cfg(test)]
 #[path = "call_mcp_tool_tests.rs"]
