@@ -260,8 +260,6 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_zsh_bootstraps_with_nounset_option);
     register_test!(test_legacy_ssh_into_bash);
     register_test!(test_legacy_ssh_into_zsh);
-    register_test!(test_tmux_ssh_into_bash);
-    register_test!(test_tmux_ssh_into_zsh);
     register_test!(test_ssh_into_fish);
     register_test!(test_ssh_into_sh);
     register_test!(test_ssh_into_ash);

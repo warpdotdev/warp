@@ -16,8 +16,6 @@ use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::kitty::{KittyAction, KittyChunk, KittyResponse};
 use crate::terminal::model::selection::ScrollDelta;
 use crate::terminal::model::session::SessionId;
-use crate::terminal::model::terminal_model::TmuxInstallationState;
-use crate::terminal::model::tmux::ControlModeEvent;
 
 /// Trait to be implemented by model objects that handle pty output. The
 /// ansi::Performer (our pty output parser) delegates handling of specific
@@ -316,15 +314,6 @@ pub trait Handler {
     /// assisted auto-update.
     fn finish_update(&mut self, _data: FinishUpdateValue) {}
 
-    /// Callback emitted from the warpify_ssh_session script if it's discovered
-    /// that we can't warpify the remote session.
-    fn remote_warpification_is_unavailable(&mut self, _data: WarpificationUnavailableReason) {}
-
-    /// How tmux was installed.
-    fn notify_ssh_tmux_is_installed(&mut self, _tmux_installation: TmuxInstallationState) {}
-
-    fn tmux_install_failed(&mut self, _data: TmuxInstallFailedInfo) {}
-
     /// Callback to handle an "in-band command output start" OSC.
     ///
     /// Chars received via `handler::input()` represent the in-band command output itself.
@@ -343,9 +332,6 @@ pub trait Handler {
 
     /// Hook that gets called upon receiving a "Reset Grid" OSC from ConPTY.
     fn on_reset_grid(&mut self) {}
-
-    /// tmux control mode event
-    fn tmux_control_mode_event(&mut self, _event: ControlModeEvent) {}
 
     /// Callback that tells the terminal that the shell is ready to receive
     /// the string to run completions for.

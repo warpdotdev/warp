@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::io;
-use std::io::Write;
 use std::path::PathBuf;
 
 use hex;
@@ -1137,45 +1136,4 @@ fn parse_osc7_empty_payload_ignored() {
     let (_, handler) = parse_bytes(bytes);
 
     assert!(handler.cwd_updates.is_empty());
-}
-
-#[test]
-fn tmux_pane_writer_formats_bytes_as_send_keys() {
-    // Test that TmuxPaneWriter correctly converts writes to tmux send-keys format
-    let mut output = Vec::new();
-    {
-        let mut writer = super::TmuxPaneWriter::new(&mut output, 123);
-        // Write a cursor position response (ESC[1;1R)
-        writer.write_all(b"\x1b[1;1R").unwrap();
-    }
-
-    let output_str = String::from_utf8(output).unwrap();
-    // The output should be a send-keys command with hex bytes
-    // Format: send-keys -Ht %{pane_id} {hex} {hex}...\n
-    assert!(output_str.starts_with("send-keys -Ht %123"));
-    assert!(output_str.contains("1B")); // ESC = 0x1B
-    assert!(output_str.ends_with('\n'));
-}
-
-#[test]
-fn tmux_pane_writer_empty_write_returns_zero() {
-    let mut output = Vec::new();
-    let mut writer = super::TmuxPaneWriter::new(&mut output, 42);
-    let result = writer.write(&[]).unwrap();
-
-    assert_eq!(result, 0);
-    assert!(output.is_empty());
-}
-
-#[test]
-fn tmux_pane_writer_returns_original_byte_count() {
-    let mut output = Vec::new();
-    let mut writer = super::TmuxPaneWriter::new(&mut output, 42);
-    let input = b"test";
-    let result = writer.write(input).unwrap();
-
-    assert_eq!(result, 4);
-    let output_str = String::from_utf8(output).unwrap();
-    assert!(output_str.starts_with("send-keys -Ht %42"));
-    assert!(output_str.ends_with('\n'));
 }

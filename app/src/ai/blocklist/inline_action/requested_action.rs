@@ -10,7 +10,6 @@
 //! for an example on how that transformation could be made.
 
 use std::borrow::Cow;
-use std::rc::Rc;
 
 use lazy_static::lazy_static;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -18,15 +17,12 @@ use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors::neutral_2;
 use warpui::elements::{
-    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MouseStateHandle, ParentElement,
-    Radius, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Text, Wrap, WrapFill,
+    Align, Border, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
+    FormattedTextElement, MainAxisAlignment, ParentElement, Radius, Shrinkable, Wrap, WrapFill,
 };
 use warpui::fonts::FamilyId;
 use warpui::keymap::Keystroke;
-use warpui::platform::Cursor;
-use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::{AppContext, Element, EventContext, SingletonEntity};
+use warpui::{AppContext, Element, SingletonEntity};
 
 use super::inline_action_header::HeaderConfig;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
@@ -37,11 +33,6 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::ui_components::blended_colors;
-
-const REQUESTED_ACTION_CANCEL_LABEL: &str = "Cancel";
-const REQUESTED_ACTION_RUN_LABEL: &str = "Run";
-
-const KEYBOARD_SHORTCUT_MARGIN_RIGHT: f32 = 8.;
 
 lazy_static! {
     pub static ref ENTER_KEYSTROKE: Keystroke = Keystroke {
@@ -226,126 +217,6 @@ impl RenderableAction {
     }
 }
 
-/// Create the buttons representing Run and Cancel on the requested action.
-/// Note that keyboard events aren't automatically propagated to the buttons.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn render_header_buttons(
-    on_accept: impl Fn(&mut EventContext) + 'static,
-    on_cancel: impl Fn(&mut EventContext) + 'static,
-    run_keystroke: &Keystroke,
-    cancel_keystroke: &Keystroke,
-    run_button: &MouseStateHandle,
-    cancel_button: &MouseStateHandle,
-    should_show_accept_button: bool,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    const BUTTON_MARGIN_RIGHT: f32 = 16.;
-
-    let appearance = Appearance::as_ref(app);
-
-    let width_required_for_full_size_layout = approx_keystroke_button_width(
-        REQUESTED_ACTION_CANCEL_LABEL,
-        appearance.monospace_font_size(),
-        cancel_keystroke,
-        None,
-        app,
-    ) + BUTTON_MARGIN_RIGHT
-        + approx_keystroke_button_width(
-            REQUESTED_ACTION_RUN_LABEL,
-            appearance.monospace_font_size(),
-            run_keystroke,
-            None,
-            app,
-        )
-        + INLINE_ACTION_HORIZONTAL_PADDING;
-
-    let compact_button_font_size = (appearance.monospace_font_size() - 2.).max(4.);
-    let compact_button_styles = UiComponentStyles {
-        font_size: Some(compact_button_font_size),
-        ..Default::default()
-    };
-    let width_required_for_compact_layout = approx_keystroke_button_width(
-        REQUESTED_ACTION_CANCEL_LABEL,
-        compact_button_font_size,
-        cancel_keystroke,
-        Some(compact_button_styles),
-        app,
-    )
-    .max(approx_keystroke_button_width(
-        REQUESTED_ACTION_RUN_LABEL,
-        compact_button_font_size,
-        run_keystroke,
-        Some(compact_button_styles),
-        app,
-    ));
-
-    let cancel_callback = Rc::new(on_cancel);
-    let cancel_clone = Rc::clone(&cancel_callback);
-    let accept_callback = Rc::new(on_accept);
-    let accept_clone = Rc::clone(&accept_callback);
-
-    let mut default_row = Flex::row().with_child(
-        Container::new(render_keyboard_shortcut_button(
-            REQUESTED_ACTION_CANCEL_LABEL,
-            Some(cancel_keystroke.clone()),
-            cancel_button.clone(),
-            cancel_callback,
-            None,
-            app,
-        ))
-        .with_margin_right(BUTTON_MARGIN_RIGHT)
-        .finish(),
-    );
-
-    let mut size_constrained_column = Flex::column().with_child(render_keyboard_shortcut_button(
-        REQUESTED_ACTION_CANCEL_LABEL,
-        Some(cancel_keystroke.clone()),
-        cancel_button.clone(),
-        cancel_clone,
-        Some(compact_button_styles),
-        app,
-    ));
-
-    if should_show_accept_button {
-        default_row.add_child(render_keyboard_shortcut_button(
-            REQUESTED_ACTION_RUN_LABEL,
-            Some(run_keystroke.clone()),
-            run_button.clone(),
-            accept_callback,
-            None,
-            app,
-        ));
-
-        size_constrained_column.add_child(
-            Container::new(render_keyboard_shortcut_button(
-                REQUESTED_ACTION_RUN_LABEL,
-                Some(run_keystroke.clone()),
-                run_button.clone(),
-                accept_clone,
-                Some(compact_button_styles),
-                app,
-            ))
-            .with_margin_top(8.)
-            .finish(),
-        );
-    }
-
-    SizeConstraintSwitch::new(
-        default_row.finish(),
-        vec![
-            (
-                SizeConstraintCondition::WidthLessThan(width_required_for_compact_layout),
-                Empty::new().finish(),
-            ),
-            (
-                SizeConstraintCondition::WidthLessThan(width_required_for_full_size_layout),
-                size_constrained_column.finish(),
-            ),
-        ],
-    )
-    .finish()
-}
-
 pub fn render_requested_action_body_text(
     text: Cow<str>,
     font_family: FamilyId,
@@ -481,122 +352,4 @@ fn render_requested_action_row_for_element(
             INLINE_ACTION_HEADER_VERTICAL_PADDING
         })
         .finish()
-}
-
-pub fn render_keyboard_shortcut_button(
-    label: &'static str,
-    keystroke: Option<Keystroke>,
-    mouse_state: MouseStateHandle,
-    on_click: Rc<impl Fn(&mut EventContext) + 'static>,
-    style_overrides: Option<UiComponentStyles>,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-    Hoverable::new(mouse_state, |mouse_state| {
-        let text_color = if mouse_state.is_hovered() {
-            blended_colors::accent(theme).into_solid()
-        } else {
-            blended_colors::text_main(theme, theme.surface_1())
-        };
-
-        let mut shortcut_styles = UiComponentStyles {
-            font_color: Some(text_color),
-            font_size: Some(appearance.monospace_font_size()),
-            background: Some(neutral_2(theme).into()),
-            ..Default::default()
-        };
-        if let Some(style_overrides) = style_overrides {
-            shortcut_styles = shortcut_styles.merge(style_overrides)
-        }
-
-        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        if let Some(keystroke) = keystroke {
-            row.add_child(
-                Container::new(
-                    appearance
-                        .ui_builder()
-                        .keyboard_shortcut(&keystroke)
-                        .with_style(shortcut_styles)
-                        .build()
-                        .finish(),
-                )
-                .with_margin_right(KEYBOARD_SHORTCUT_MARGIN_RIGHT)
-                .finish(),
-            );
-        }
-        row.with_child(
-            Text::new_inline(
-                label,
-                appearance.ui_font_family(),
-                shortcut_styles
-                    .font_size
-                    .unwrap_or(appearance.monospace_font_size()),
-            )
-            .with_color(text_color)
-            .with_selectable(false)
-            .finish(),
-        )
-        .finish()
-    })
-    .on_click(move |ctx, _, _| on_click(ctx))
-    .with_cursor(Cursor::PointingHand)
-    .finish()
-}
-
-fn approx_keystroke_button_width(
-    label: &str,
-    label_font_size: f32,
-    keystroke: &Keystroke,
-    keystroke_style_overrides: Option<UiComponentStyles>,
-    app: &AppContext,
-) -> f32 {
-    let appearance = Appearance::as_ref(app);
-    let approx_text_width = (label.len() as f32)
-        * app
-            .font_cache()
-            .em_width(appearance.ui_font_family(), label_font_size);
-    let keystroke_len_ems = {
-        let mut len = 0;
-        if keystroke.ctrl {
-            len += 2
-        }
-        if keystroke.alt {
-            len += 2
-        }
-        if keystroke.shift {
-            len += 2
-        }
-        if keystroke.cmd {
-            len += 2
-        }
-        if keystroke.meta {
-            len += 2
-        }
-        len += keystroke.key.len();
-        len
-    };
-
-    let mut keystroke_styles = appearance.ui_builder().default_keyboard_shortcut_styles();
-    if let Some(style_overrides) = keystroke_style_overrides {
-        keystroke_styles = keystroke_styles.merge(style_overrides);
-    }
-
-    let approx_keystroke_width = (keystroke_len_ems as f32)
-        * app.font_cache().em_width(
-            appearance.ui_font_family(),
-            keystroke_styles
-                .font_size
-                .unwrap_or(appearance.ui_font_size()),
-        )
-        + keystroke_styles
-            .padding
-            .map(|padding| padding.right + padding.left)
-            .unwrap_or(0.)
-        + keystroke_styles
-            .margin
-            .map(|margin| margin.right + margin.left)
-            .unwrap_or(0.);
-
-    approx_text_width + KEYBOARD_SHORTCUT_MARGIN_RIGHT + approx_keystroke_width
 }
