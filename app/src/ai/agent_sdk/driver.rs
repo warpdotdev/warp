@@ -418,8 +418,12 @@ pub enum AgentDriverError {
     InvalidRuntimeState,
     #[error("Requested MCP server not found: {0}")]
     MCPServerNotFound(uuid::Uuid),
-    #[error("Failed to start MCP servers: {details}")]
-    MCPStartupFailed { details: String },
+    #[error("Failed to start MCP servers: {}", .details.join("; "))]
+    MCPStartupFailed {
+        /// One line per unavailable server (e.g. "'datadog' failed to start:
+        /// connection refused").
+        details: Vec<String>,
+    },
     #[error("Failed to parse MCP server JSON: {0}")]
     MCPJsonParseError(String),
     #[error("MCP server configuration is missing required variables")]
@@ -1053,10 +1057,12 @@ impl AgentDriver {
         servers: HashMap<Uuid, String>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), AgentDriverError>> {
+        // If no servers to wait for, complete immediately.
         if servers.is_empty() {
             return Either::Right(future::ready(Ok(())));
         }
 
+        // Stall for user-configured timeout, else 20 seconds (configured in [`AgentDriverOptions`]).
         let timeout = self.mcp_startup_timeout;
         let (tx, rx) = oneshot::channel::<()>();
         let mut tx = Some(tx);
@@ -1080,6 +1086,7 @@ impl AgentDriver {
                 return;
             };
             let Some(name) = pending_servers.get(uuid).cloned() else {
+                // If we receive a state change for a server that we're not waiting for, ignore it.
                 return;
             };
             match state {
@@ -1092,9 +1099,10 @@ impl AgentDriver {
                         .get_server_error_message(*uuid)
                         .map(|message| format!(": {message}"))
                         .unwrap_or_default();
-                    log::warn!("MCP server '{name}' failed to start{error}");
+                    let detail = format!("'{name}' failed to start{error}");
+                    log::warn!("MCP server {detail}");
                     if let Ok(mut failed_servers) = failed_for_subscription.lock() {
-                        failed_servers.push(name);
+                        failed_servers.push(detail);
                     }
                 }
                 MCPServerState::NotRunning
@@ -1141,30 +1149,21 @@ impl AgentDriver {
                 }
             }
 
-            let mut failed_names = failed
+            let mut details = failed
                 .lock()
                 .map(|failed_servers| failed_servers.clone())
                 .unwrap_or_default();
-            failed_names.sort();
-
-            let mut details = Vec::new();
-            if !failed_names.is_empty() {
-                details.push(format!("failed to start: {}", failed_names.join(", ")));
-            }
-            if !still_starting.is_empty() {
-                details.push(format!(
-                    "still starting after {}s: {}",
-                    timeout.as_secs(),
-                    still_starting.join(", ")
-                ));
-            }
+            details.sort();
+            details.extend(
+                still_starting
+                    .iter()
+                    .map(|name| format!("'{name}' did not start within {}s", timeout.as_secs())),
+            );
 
             if details.is_empty() {
                 Ok(())
             } else {
-                Err(AgentDriverError::MCPStartupFailed {
-                    details: details.join("; "),
-                })
+                Err(AgentDriverError::MCPStartupFailed { details })
             }
         })
     }
@@ -1178,7 +1177,7 @@ impl AgentDriver {
         match result {
             Ok(()) => Ok(()),
             Err(AgentDriverError::MCPStartupFailed { details }) => {
-                degraded.push(details);
+                degraded.extend(details);
                 Ok(())
             }
             Err(other) => Err(other),
@@ -1200,7 +1199,7 @@ impl AgentDriver {
         let AgentDriverError::MCPStartupFailed { details } = &error else {
             return Err(error);
         };
-        let details = details.clone();
+        let details = details.join("; ");
 
         let strict = foreground.spawn(|me, _| me.strict_mcp_startup).await?;
         if strict {
@@ -1879,9 +1878,7 @@ impl AgentDriver {
                     if degraded.is_empty() {
                         Ok(())
                     } else {
-                        Err(AgentDriverError::MCPStartupFailed {
-                            details: degraded.join("; "),
-                        })
+                        Err(AgentDriverError::MCPStartupFailed { details: degraded })
                     }
                 })
                 .await;

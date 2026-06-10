@@ -73,16 +73,25 @@ fn mcp_server_not_found_is_failed_with_env_setup() {
 }
 
 #[test]
-fn mcp_startup_failed_is_failed_with_env_setup_and_details() {
+fn mcp_startup_failed_is_failed_with_env_setup_and_per_server_details() {
     let (state, update) = classify_driver_error(&AgentDriverError::MCPStartupFailed {
-        details: "failed to start: devin".into(),
+        details: vec![
+            "'devin' failed to start: connection refused".to_string(),
+            "'datadog' did not start within 20s".to_string(),
+        ],
     });
     assert_eq!(state, AgentTaskState::Failed);
     assert_eq!(
         update.error_code,
         Some(PlatformErrorCode::EnvironmentSetupFailed)
     );
-    assert!(update.message.contains("failed to start: devin"));
+    // Each unavailable server is rendered as its own bullet line.
+    assert!(update
+        .message
+        .contains("- 'devin' failed to start: connection refused"));
+    assert!(update
+        .message
+        .contains("- 'datadog' did not start within 20s"));
 }
 
 #[test]
