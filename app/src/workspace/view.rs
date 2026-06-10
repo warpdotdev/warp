@@ -6191,7 +6191,7 @@ impl Workspace {
                         self.open_code(
                             code_source,
                             crate::util::openable_file_type::EditorLayout::SplitPane,
-                            None,
+                            *line_col,
                             false,
                             &[],
                             ctx,
