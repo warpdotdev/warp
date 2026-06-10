@@ -52,6 +52,23 @@ impl ClaudeCodePluginManager {
             .map(|path| HashMap::from([("PATH".to_owned(), path.to_owned())]));
         run_cli_command_logged("claude", args, &self.executor, env_vars, log).await
     }
+
+    async fn attempt_to_install_oz_harness_support_plugin(&self, log: &mut String) -> Result<(), PluginInstallError> {
+        if self
+            .run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], log)
+            .await
+            .is_err()
+        {
+            self.run_logged(
+                &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
+                log,
+            )
+            .await?;
+            self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], log)
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -174,19 +191,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
 
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         let mut log = String::new();
-        if self
-            .run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
-            .await
-            .is_err()
-        {
-            self.run_logged(
-                &["plugin", "marketplace", "add", PLATFORM_MARKETPLACE_REPO],
-                &mut log,
-            )
-            .await?;
-            self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
-                .await?;
-        }
+        self.attempt_to_install_oz_harness_support_plugin(&mut log).await?;
         let still_outdated = claude_home_dir()
             .ok()
             .and_then(|dir| installed_platform_plugin_version(&dir))
@@ -208,8 +213,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
             &mut log,
         )
         .await?;
-        self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
-            .await?;
+        self.attempt_to_install_oz_harness_support_plugin(&mut log).await?;
         let still_outdated = claude_home_dir()
             .ok()
             .and_then(|dir| installed_platform_plugin_version(&dir))
