@@ -57,7 +57,10 @@ use crate::BlocklistAIHistoryModel;
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 const TAB_INDICATOR_HEIGHT: f32 = 14.0;
 
-/// Label for the tab right-click menu's "Move to group" submenu parent.
+/// Stable identifier for the tab right-click menu's "Move to group" submenu
+/// parent. Used as a save-position anchor in `workspace/view.rs`
+/// (NOT as a user-facing label — display text comes from
+/// `crate::menu_label("workspace.tab_grouping.move_to_group", ...)`).
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
@@ -565,13 +568,22 @@ impl TabData {
             .into_item()];
         let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != self.group_id);
         if has_other_groups {
-            menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
+            menu_items.push(
+                MenuItemFields::new_submenu(crate::menu_label(
+                    "workspace.tab_grouping.move_to_group",
+                    "Move to group",
+                ))
+                .into_item(),
+            );
         }
         if self.group_id.is_some() {
             menu_items.push(
-                MenuItemFields::new("Remove from group")
-                    .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.tab_grouping.remove_from_group",
+                    "Remove from group",
+                ))
+                .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
+                .into_item(),
             );
         }
         menu_items

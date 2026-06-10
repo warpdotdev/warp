@@ -341,6 +341,29 @@ en:
     copy_access_token: "Copy access token to clipboard"
     view_privacy_policy: "View privacy policy (opens external link)"
 
+  # ── Workspace Tab Group ──
+  workspace.tab_group:
+    move_up: "Move group up"
+    move_down: "Move group down"
+    move_left: "Move group left"
+    move_right: "Move group right"
+    close_all: "Close all tabs in group"
+    close_others: "Close other tabs"
+    close_above: "Close tabs above"
+    close_below: "Close tabs below"
+    close_left: "Close tabs to the left"
+    close_right: "Close tabs to the right"
+    ungroup: "Ungroup tabs"
+    new_tab_in_group: "New tab in group"
+    rename: "Rename"
+
+  # ── Workspace Tab Grouping ──
+  workspace.tab_grouping:
+    remove_from_group: "Remove from group"
+    create_group: "Create group from tabs"
+    move_to_group: "Move to group"
+    untitled_group: "Untitled group"
+
   # ── Workspace Debug ──
   workspace.debug:
     dump_debug_info: "Dump debug info"
@@ -1825,6 +1848,16 @@ en:
     bundled_cannot_edit: "Bundled skills cannot be edited"
     editing_not_supported: "Editing skills is not supported in this build"
     no_skills: "No skills found"
+
+  # ── Terminal OSC 52 (Clipboard) ──
+  terminal.osc52:
+    banner_text: "A terminal program tried to access your clipboard. This is disabled by default for security reasons."
+    allow_button: "Allow"
+    dont_show_again: "Don't show again"
+    write_blocked_text: "A terminal program tried to write to your clipboard. This is disabled by default for security reasons, to protect against malicious software."
+    read_blocked_text: "A terminal program tried to read your clipboard. This is disabled by default for security reasons, to protect against malicious software."
+    allow_writes: "Allow clipboard writes"
+    allow_reads_and_writes: "Allow clipboard reads and writes"
 
   # ── Agent Management ──
   agent:

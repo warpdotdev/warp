@@ -341,9 +341,8 @@ use crate::settings_view::{flags, SettingsSection, SettingsView, SettingsViewEve
 #[cfg(all(target_os = "windows", feature = "local_tty"))]
 use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
-    tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
-    TabBarState, TabComponent, TabData, TabTelemetryAction, MOVE_TO_GROUP_LABEL,
-    TAB_BAR_BORDER_HEIGHT,
+    tab_position_id, uses_vertical_tabs, MOVE_TO_GROUP_LABEL, NewSessionMenuItem, PaneNameMenuTarget,
+    SelectedTabColor, TabBarState, TabComponent, TabData, TabTelemetryAction, TAB_BAR_BORDER_HEIGHT,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -9432,9 +9431,9 @@ impl Workspace {
             let mut items = vec![];
             if has_tabs_above {
                 let label = if is_vertical {
-                    "Move group up"
+                    crate::menu_label("workspace.tab_group.move_up", "Move group up")
                 } else {
-                    "Move group left"
+                    crate::menu_label("workspace.tab_group.move_left", "Move group left")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9444,9 +9443,9 @@ impl Workspace {
             }
             if has_tabs_below {
                 let label = if is_vertical {
-                    "Move group down"
+                    crate::menu_label("workspace.tab_group.move_down", "Move group down")
                 } else {
-                    "Move group right"
+                    crate::menu_label("workspace.tab_group.move_right", "Move group right")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9458,21 +9457,27 @@ impl Workspace {
         };
 
         let close_section = {
-            let mut items = vec![MenuItemFields::new("Close all tabs in group")
-                .with_on_select_action(WorkspaceAction::CloseTabGroup(group_id))
-                .into_item()];
+            let mut items = vec![MenuItemFields::new(crate::menu_label(
+                "workspace.tab_group.close_all",
+                "Close all tabs in group",
+            ))
+            .with_on_select_action(WorkspaceAction::CloseTabGroup(group_id))
+            .into_item()];
             if has_tabs_outside {
                 items.push(
-                    MenuItemFields::new("Close other tabs")
-                        .with_on_select_action(WorkspaceAction::CloseTabsOutsideGroup(group_id))
-                        .into_item(),
+                    MenuItemFields::new(crate::menu_label(
+                        "workspace.tab_group.close_others",
+                        "Close other tabs",
+                    ))
+                    .with_on_select_action(WorkspaceAction::CloseTabsOutsideGroup(group_id))
+                    .into_item(),
                 );
             }
             if has_tabs_above {
                 let label = if is_vertical {
-                    "Close tabs above"
+                    crate::menu_label("workspace.tab_group.close_above", "Close tabs above")
                 } else {
-                    "Close tabs to the left"
+                    crate::menu_label("workspace.tab_group.close_left", "Close tabs to the left")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9482,9 +9487,9 @@ impl Workspace {
             }
             if has_tabs_below {
                 let label = if is_vertical {
-                    "Close tabs below"
+                    crate::menu_label("workspace.tab_group.close_below", "Close tabs below")
                 } else {
-                    "Close tabs to the right"
+                    crate::menu_label("workspace.tab_group.close_right", "Close tabs to the right")
                 };
                 items.push(
                     MenuItemFields::new(label)
@@ -9498,15 +9503,24 @@ impl Workspace {
         let mut menu_items = vec![];
         for section_items in [
             vec![
-                MenuItemFields::new("Ungroup tabs")
-                    .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
-                    .into_item(),
-                MenuItemFields::new("New tab in group")
-                    .with_on_select_action(WorkspaceAction::NewTabInGroup(group_id))
-                    .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.tab_group.ungroup",
+                    "Ungroup tabs",
+                ))
+                .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
+                .into_item(),
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.tab_group.new_tab_in_group",
+                    "New tab in group",
+                ))
+                .with_on_select_action(WorkspaceAction::NewTabInGroup(group_id))
+                .into_item(),
             ],
             move_section,
-            vec![MenuItemFields::new("Rename")
+            vec![MenuItemFields::new(crate::menu_label(
+                "workspace.tab_group.rename",
+                "Rename",
+            ))
                 .with_on_select_action(WorkspaceAction::RenameTabGroup(group_id))
                 .into_item()],
             close_section,
