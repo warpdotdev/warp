@@ -762,7 +762,15 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       # holds the pristine value, whose width annotations are still needed if
       # we later switch to honoring the PS1.
       if [[ "$PROMPT" != "${WARP_STRIPPED_ORIGINAL_PROMPT:-}" ]]; then
-        ORIGINAL_PROMPT=$PROMPT
+        if [[ -n "${WARP_STRIPPED_ORIGINAL_PROMPT:-}" && "$PROMPT" == *"$WARP_STRIPPED_ORIGINAL_PROMPT"* ]]; then
+          # Another hook added content around the stripped prompt that we
+          # installed (e.g. a virtualenv prefix). Rehydrate the stripped
+          # portion back to its pristine value before saving, so that the
+          # width annotations survive alongside the added content.
+          ORIGINAL_PROMPT=${PROMPT//$WARP_STRIPPED_ORIGINAL_PROMPT/$ORIGINAL_PROMPT}
+        else
+          ORIGINAL_PROMPT=$PROMPT
+        fi
       fi
       PROMPT="$prompt_prefix$PROMPT$suffix"
     fi
