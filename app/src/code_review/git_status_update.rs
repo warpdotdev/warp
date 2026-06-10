@@ -167,6 +167,7 @@ pub struct GitRepoStatusModel {
 }
 
 #[cfg(not(feature = "local_fs"))]
+#[allow(dead_code)]
 pub struct GitRepoStatusModel;
 
 #[cfg(not(feature = "local_fs"))]
