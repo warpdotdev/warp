@@ -58,9 +58,14 @@ pub fn ssh_args(socket_path: &Path) -> Vec<String> {
 /// `ssh ... remote-server-proxy`) to finish cleanup on the remote
 /// side. Sending `-O exit` bypasses that wait.
 ///
-/// **Only safe to call once the user's shell has already exited** --
-/// this tears down the interactive ssh outright. In practice it is
-/// invoked from the `ExitShell` teardown path on the client.
+/// **Only safe to call on Warp-owned masters, once the user's shell has
+/// already exited** -- this tears down the master outright. When the
+/// wrapper attached to an external master the user already had running
+/// (see `IsLegacySSHSession::Yes { external_master, .. }`), this must
+/// not be called; the session state carries
+/// [`ControlPath::UserOwned`](crate::transport::ControlPath::UserOwned)
+/// in that case so the teardown path skips it. In practice it is invoked
+/// from the `ExitShell` teardown path on the client.
 ///
 /// Fire-and-forget. Errors are logged but not propagated: at teardown
 /// time there is nothing useful to do with them.
