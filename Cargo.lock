@@ -12032,7 +12032,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d#c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=b30fdd06379a3d073b398eabd106abed5b443aae#b30fdd06379a3d073b398eabd106abed5b443aae"
 dependencies = [
  "byte-unit",
  "serde",
@@ -15327,6 +15327,7 @@ dependencies = [
  "tauri-winrt-notification",
  "thiserror 2.0.17",
  "tini",
+ "url",
  "urlencoding",
  "vec1",
  "version-compare",

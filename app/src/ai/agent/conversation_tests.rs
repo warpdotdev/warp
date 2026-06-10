@@ -649,3 +649,59 @@ fn fork_artifacts_adds_file_artifacts_to_conversation() {
         })
     );
 }
+
+#[test]
+fn waiting_for_events_display_label_is_waiting() {
+    assert_eq!(
+        format!("{}", ConversationStatus::WaitingForEvents),
+        "Waiting"
+    );
+}
+
+/// `is_done` returns true only for `Success | Error | Cancelled`;
+/// `WaitingForEvents` and `Blocked` are not done because the run can still
+/// resume on its own.
+#[test]
+fn is_done_only_includes_success_error_cancelled() {
+    assert!(ConversationStatus::Success.is_done());
+    assert!(ConversationStatus::Error.is_done());
+    assert!(ConversationStatus::Cancelled.is_done());
+
+    assert!(!ConversationStatus::InProgress.is_done());
+    assert!(!ConversationStatus::Blocked {
+        blocked_action: "approve".to_string()
+    }
+    .is_done());
+    assert!(!ConversationStatus::WaitingForEvents.is_done());
+}
+
+/// `is_waiting_for_events` is true only for the new variant.
+#[test]
+fn is_waiting_for_events_returns_true_only_for_waiting_for_events_variant() {
+    assert!(ConversationStatus::WaitingForEvents.is_waiting_for_events());
+
+    assert!(!ConversationStatus::InProgress.is_waiting_for_events());
+    assert!(!ConversationStatus::Success.is_waiting_for_events());
+    assert!(!ConversationStatus::Error.is_waiting_for_events());
+    assert!(!ConversationStatus::Cancelled.is_waiting_for_events());
+    assert!(!ConversationStatus::Blocked {
+        blocked_action: "approve".to_string()
+    }
+    .is_waiting_for_events());
+}
+
+/// A conversation that was yielded via `wait_for_events` at shutdown
+/// restores as whatever `derive_status_from_root_task` returns (Success
+/// for a cleanly-streamed last exchange). The unresolved tool call stays
+/// in the transcript as an orphan; the next outbound request triggers
+/// the server's existing supersede mechanism to synthesize the matching
+/// `Cancel`. The waiting state itself is not durable across restart.
+#[test]
+fn restored_conversation_does_not_re_enter_waiting_for_events() {
+    let conversation_data: AgentConversationData =
+        serde_json::from_str(r#"{"server_conversation_token":null}"#).unwrap();
+
+    let conversation = restored_conversation(Some(conversation_data));
+
+    assert_eq!(conversation.status(), &ConversationStatus::Success);
+}

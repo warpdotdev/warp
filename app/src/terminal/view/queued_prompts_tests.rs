@@ -19,6 +19,8 @@ use super::TerminalView;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{ImageContext, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::{
     AutofireAction, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
     PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin,
@@ -33,6 +35,10 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
+}
+
+fn command_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new_command(text.to_owned(), QueuedQueryOrigin::AutoQueueToggle)
 }
 
 fn image_attachment(file_name: &str) -> PendingAttachment {
@@ -729,7 +735,12 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
 
         let action = drain_one(&model, &mut app, conv);
         match action {
-            Some(AutofireAction::PopFromEditMode { text, .. }) => assert_eq!(text, "first"),
+            Some(AutofireAction::PopFromEditMode {
+                text, is_command, ..
+            }) => {
+                assert_eq!(text, "first");
+                assert!(!is_command);
+            }
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
         // Edit mode is cleared after pop.
@@ -737,6 +748,137 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
             assert_eq!(m.editing_row(conv), None);
             assert_eq!(m.queue(conv).len(), 1);
             assert_eq!(m.queue(conv)[0].text(), "second");
+        });
+    });
+}
+
+#[test]
+fn complete_drain_of_edited_command_restores_text_in_shell_mode() {
+    // A command row being edited when the agent finishes cleanly is popped into the input in
+    // shell mode, so the restored text stays a command rather than being submitted as a prompt.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        // Entering agent view puts the input in agent (AI) mode, so the drain must actively
+        // switch it to shell mode for the restored command.
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            })
+        });
+        terminal.read(&app, |view, ctx| {
+            assert!(view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            let id = model.append(conversation_id, command_query("echo 1"), ctx);
+            model.enter_edit_mode(conversation_id, id, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "echo 1");
+            assert!(!view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn error_drain_of_command_restores_text_in_shell_mode() {
+    // On a non-clean finish, the head command is popped into the empty input in shell mode, so a
+    // restored command stays a command.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        // The cancel restore path only fires for the conversation the user is viewing; entering
+        // agent view makes `conversation_id` active and puts the input in agent (AI) mode.
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            })
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, command_query("echo 1"), ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.drain_queued_prompts(conversation_id, FinishReason::Cancelled, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "echo 1");
+            assert!(!view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+/// Verifies failed command auto-fire keeps the row queued when the input has a draft.
+#[test]
+fn complete_drain_keeps_command_row_when_dispatch_fails_with_draft() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, command_query("echo 1"), ctx)
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content("draft in progress", ctx);
+            });
+            view.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "draft in progress"
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].id(), query_id);
+            assert_eq!(queue[0].text(), "echo 1");
+            assert!(queue[0].is_command());
         });
     });
 }
@@ -1017,10 +1159,10 @@ fn drain_is_isolated_per_conversation() {
 }
 
 #[test]
-fn send_now_action_emits_event_and_leaves_row_for_host_to_fire() {
-    // Clicking "send now" emits a SendNow event identifying the row, but leaves the row in the
-    // queue so the host can read its attachments by id when it fires; the host removes the fired
-    // row afterward. The locked initial cloud-mode row is rejected by the model (covered by
+fn send_now_action_emits_row_kind_and_leaves_rows_for_host_to_fire() {
+    // Clicking "send now" emits a SendNow event identifying the row and whether it is a command,
+    // but leaves the row in the queue so the host can dispatch it and remove it afterward. The
+    // locked initial cloud-mode row is rejected by the model (covered by
     // `initial_cloud_mode_head_rejects_user_mutations_and_autofire`) and has its button disabled
     // in the panel, so it needs no separate panel test.
     App::test((), |mut app| async move {
@@ -1053,13 +1195,19 @@ fn send_now_action_emits_event_and_leaves_row_for_host_to_fire() {
             })
         });
 
-        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
-            model.append(conversation_id, user_query("send me now"), ctx)
-        });
+        let (prompt_id, command_id) =
+            QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+                let prompt_id = model.append(conversation_id, user_query("send me now"), ctx);
+                let command_id = model.append(conversation_id, command_query("echo 1"), ctx);
+                (prompt_id, command_id)
+            });
 
-        let send_now_events = Rc::new(RefCell::new(
-            Vec::<(AIConversationId, QueuedQueryId, String)>::new(),
-        ));
+        let send_now_events = Rc::new(RefCell::new(Vec::<(
+            AIConversationId,
+            QueuedQueryId,
+            String,
+            bool,
+        )>::new()));
         let send_now_events_for_subscription = send_now_events.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&panel, move |_, event: &QueuedPromptsPanelEvent, _| {
@@ -1067,28 +1215,34 @@ fn send_now_action_emits_event_and_leaves_row_for_host_to_fire() {
                     conversation_id,
                     query_id,
                     text,
+                    is_command,
                 } = event
                 {
                     send_now_events_for_subscription.borrow_mut().push((
                         *conversation_id,
                         *query_id,
                         text.clone(),
+                        *is_command,
                     ));
                 }
             });
         });
 
         panel.update(&mut app, |panel, ctx| {
-            panel.handle_action(&QueuedPromptsPanelAction::SendNow(query_id), ctx);
+            panel.handle_action(&QueuedPromptsPanelAction::SendNow(prompt_id), ctx);
+            panel.handle_action(&QueuedPromptsPanelAction::SendNow(command_id), ctx);
         });
 
         assert_eq!(
             send_now_events.borrow().as_slice(),
-            [(conversation_id, query_id, "send me now".to_owned())]
+            [
+                (conversation_id, prompt_id, "send me now".to_owned(), false),
+                (conversation_id, command_id, "echo 1".to_owned(), true)
+            ]
         );
-        // The panel leaves the row in place; the host removes it after firing.
+        // The panel leaves each row in place; the host removes it after firing.
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
-            assert_eq!(model.queue(conversation_id).len(), 1);
+            assert_eq!(model.queue(conversation_id).len(), 2);
         });
     });
 }

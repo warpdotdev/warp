@@ -1457,6 +1457,22 @@ impl TryFrom<InsertReviewCommentsResult> for api::request::input::tool_call_resu
     }
 }
 
+impl TryFrom<WaitForEventsResult> for api::request::input::tool_call_result::Result {
+    type Error = ConvertToAPITypeError;
+
+    /// Completed → wire form; Cancelled → drop (mirrors RunAgents).
+    fn try_from(result: WaitForEventsResult) -> Result<Self, Self::Error> {
+        match result {
+            WaitForEventsResult::Completed => Ok(
+                api::request::input::tool_call_result::Result::WaitForEvents(
+                    api::WaitForEventsResult {},
+                ),
+            ),
+            WaitForEventsResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "convert_tests.rs"]
 mod tests;

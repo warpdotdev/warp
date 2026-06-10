@@ -1424,22 +1424,25 @@ impl AgentDriver {
         foreground: &ModelSpawner<Self>,
         global_skill_repos: &[GithubRepo],
     ) -> Result<(), AgentDriverError> {
-        for repo in global_skill_repos {
-            let repo = repo.clone();
-            let repo_for_log = repo.clone();
-            let clone_future = foreground
-                .spawn(move |me, ctx| {
-                    let working_dir = me.working_dir.clone();
-                    me.terminal_driver.update(ctx, |_, ctx| {
-                        let spawner = ctx.spawner();
-                        async move { environment::clone_repo(&repo, &working_dir, &spawner).await }
-                    })
-                })
-                .await?;
+        if global_skill_repos.is_empty() {
+            return Ok(());
+        }
 
-            if let Err(err) = clone_future.await {
-                log::warn!("Failed to clone global-skill repo {repo_for_log}: {err}");
-            }
+        let global_skill_repos = global_skill_repos.to_vec();
+        let clone_future = foreground
+            .spawn(move |me, ctx| {
+                let working_dir = me.working_dir.clone();
+                me.terminal_driver.update(ctx, |_, ctx| {
+                    let spawner = ctx.spawner();
+                    async move {
+                        environment::clone_repos(&global_skill_repos, &working_dir, &spawner).await
+                    }
+                })
+            })
+            .await?;
+
+        if let Err(err) = clone_future.await {
+            log::warn!("Failed to clone one or more global-skill repos: {err}");
         }
 
         Ok(())
@@ -2781,12 +2784,20 @@ impl AgentDriver {
                     };
 
                     if conversation.status().is_in_progress() {
-                        // Conversation resumed or a new one started; cancel any pending idle timeout.
+                        // Conversation resumed or a new one started; cancel any
+                        // pending idle timeout.
                         log::info!(
                             "Ambient agent idle lifecycle: event=idle_timeout_cancel_requested task_id={:?} terminal_view_id={terminal_id:?} trigger=conversation_in_progress",
                             me.task_id
                         );
                         run_exit.cancel_idle_timeout();
+                        return;
+                    }
+
+                    // wait_for_events keeps the run alive via the
+                    // action_model's running_actions; the executor owns
+                    // the watchdog. Don't resolve run_exit.
+                    if conversation.status().is_waiting_for_events() {
                         return;
                     }
 

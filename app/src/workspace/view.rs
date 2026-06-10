@@ -3771,6 +3771,8 @@ impl Workspace {
                                     color: group_snapshot.color,
                                     collapsed: group_snapshot.collapsed,
                                     draggable_state: Default::default(),
+                                    // TODO(johnturcoo) persist tab/group pinned state.
+                                    pinned: false,
                                 },
                             )
                         })
@@ -11762,7 +11764,7 @@ impl Workspace {
     pub fn restore_closed_tab(
         &mut self,
         tab_index: usize,
-        tab_data: TabData,
+        mut tab_data: TabData,
         ctx: &mut ViewContext<Self>,
     ) {
         // When restoring a closed tab, we have to reattach its panes so that they know they're
@@ -11771,10 +11773,36 @@ impl Workspace {
             pane_group.reattach_panes(ctx);
         });
 
-        self.tabs.insert(tab_index, tab_data);
+        // If the tab belonged to a group, try to re-join it by appending after
+        // the group's current last member. If the group no longer exists (it was
+        // pruned when the tab was closed), drop the membership and fall back to
+        // the original index instead.
+        let insert_index = if let Some(group_id) = tab_data.group_id {
+            if self.tab_groups.contains_key(&group_id) {
+                // Group still exists — append after its current last member.
+                group_member_indices(&self.tabs, group_id)
+                    .last()
+                    .map(|i| i + 1)
+                    .unwrap_or(self.tabs.len())
+            } else {
+                // Group was pruned — drop membership.
+                tab_data.group_id = None;
+                tab_index
+            }
+        } else {
+            tab_index
+        };
+
+        self.tabs.insert(insert_index, tab_data);
         self.tab_mru_order
-            .push(self.tabs[tab_index].pane_group.id());
-        self.activate_tab(tab_index, ctx);
+            .push(self.tabs[insert_index].pane_group.id());
+
+        // Expand the group so the restored tab is immediately visible.
+        if let Some(group_id) = self.tabs[insert_index].group_id {
+            self.expand_tab_group(group_id, ctx);
+        }
+
+        self.activate_tab(insert_index, ctx);
 
         ctx.notify();
     }
@@ -12641,6 +12669,10 @@ impl Workspace {
         }
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let is_local_conversation = history_model
+            .as_ref(ctx)
+            .get_conversation_metadata(&conversation_id)
+            .is_some_and(|m| m.has_local_data);
         let future = history_model
             .as_ref(ctx)
             .load_conversation_data(conversation_id, ctx);
@@ -12674,6 +12706,7 @@ impl Workspace {
                     conversation,
                     FeatureFlag::AgentView.is_enabled(),
                     RestoreConversationEntryBehavior::PreserveAgentViewState,
+                    is_local_conversation,
                     move |terminal_view, ctx| {
                         terminal_view.enter_agent_view_for_conversation(
                             None,
@@ -19022,14 +19055,19 @@ impl Workspace {
             }
         }
 
-        let container = Container::new(row.finish())
-            .with_border(
-                Border::all(1.)
-                    // Left border only on the first slot to avoid double borders.
-                    .with_sides(false, is_first_in_bar, false, true)
-                    .with_border_fill(internal_colors::fg_overlay_1(theme)),
-            )
-            .finish();
+        // Additional padding on expanded groups,
+        // allowing tabs to be dropped into the last position of the group.
+        const EXPANDED_GROUP_TRAILING_PADDING: f32 = 8.;
+        let mut container = Container::new(row.finish()).with_border(
+            Border::all(1.)
+                // Left border only on the first slot to avoid double borders.
+                .with_sides(false, is_first_in_bar, false, true)
+                .with_border_fill(internal_colors::fg_overlay_1(theme)),
+        );
+        if !is_collapsed {
+            container = container.with_padding_right(EXPANDED_GROUP_TRAILING_PADDING);
+        }
+        let container = container.finish();
 
         let group_id = group.id;
         let group_draggable_state = group.draggable_state.clone();
@@ -26757,6 +26795,33 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         const DETACH_SENSITIVITY: f32 = 10.0;
+        // `current_index` was captured by the tab's `Draggable` closure at
+        // render time. Mid-drag mutations (swaps, hops over collapsed
+        // blocks, membership changes) reorder `self.tabs`, and mouse events
+        // that arrive before the next repaint still carry the pre-mutation
+        // index — which can point at an innocent bystander. E.g. after the
+        // dragged tab hops over a collapsed block, the stale index lands on
+        // a member of that block and the membership logic below would rip
+        // it out of its group. The dragged tab is the one whose
+        // `DraggableState` reports an active drag, so trust that identity
+        // over the captured index.
+        //
+        // TODO(johnturcoo): determine the right shape for a long-term solution.
+        let current_index = if self
+            .tabs
+            .get(current_index)
+            .is_some_and(|tab| tab.draggable_state.is_dragging())
+        {
+            current_index
+        } else {
+            self.tabs
+                .iter()
+                .position(|tab| tab.draggable_state.is_dragging())
+                .unwrap_or(current_index)
+        };
+        if current_index >= self.tabs.len() {
+            return;
+        }
         // Only detach when the drag leaves every tab-bar presentation on its
         // perpendicular axis. Windows with vertical tabs still render the
         // horizontal bar, so checking only the horizontal rect would make

@@ -2104,8 +2104,10 @@ impl AIConversation {
         self.write_updated_conversation_state(ctx);
 
         // Don't mark the conversation as Cancelled if we're just cancelling to send a follow-up
-        // on the same conversation. The conversation will be immediately set back to InProgress.
-        if !reason.is_follow_up_for_same_conversation() {
+        // on the same conversation (it will be immediately set back to InProgress), or if the
+        // user manually took over the long-running command (the conversation remains in progress
+        // and will resume once the command finishes or control is handed back).
+        if !reason.should_preserve_in_progress_status() {
             self.update_status(ConversationStatus::Cancelled, terminal_view_id, ctx);
         }
         Ok(())
@@ -4189,6 +4191,10 @@ pub enum ConversationStatus {
 
     /// The last turn of the agent resulted in an action whose execution is blocked by the user.
     Blocked { blocked_action: String },
+
+    /// Agent yielded via wait_for_events and is listening for inbound
+    /// input. Quiescent but not terminal.
+    WaitingForEvents,
 }
 
 impl std::fmt::Display for ConversationStatus {
@@ -4199,6 +4205,7 @@ impl std::fmt::Display for ConversationStatus {
             ConversationStatus::Error => write!(f, "Error"),
             ConversationStatus::Cancelled => write!(f, "Cancelled"),
             ConversationStatus::Blocked { .. } => write!(f, "Blocked"),
+            ConversationStatus::WaitingForEvents => write!(f, "Waiting"),
         }
     }
 }
@@ -4211,6 +4218,7 @@ impl ConversationStatus {
             ConversationStatus::Blocked { .. } => yellow_stop_icon(appearance),
             ConversationStatus::Error => failed_icon(appearance),
             ConversationStatus::Cancelled => gray_stop_icon(appearance),
+            ConversationStatus::WaitingForEvents => in_progress_icon(appearance),
         }
     }
 
@@ -4249,6 +4257,13 @@ impl ConversationStatus {
                     StatusColorStyle::Cloud => theme.ansi_bg_yellow(),
                 },
             ),
+            ConversationStatus::WaitingForEvents => (
+                Icon::ClockLoader,
+                match color_style {
+                    StatusColorStyle::Standard => theme.ansi_fg_magenta(),
+                    StatusColorStyle::Cloud => theme.ansi_bg_magenta(),
+                },
+            ),
         }
     }
 
@@ -4264,11 +4279,18 @@ impl ConversationStatus {
         matches!(self, ConversationStatus::Cancelled)
     }
 
+    /// True iff the run is finished and cannot resume on its own.
     pub fn is_done(&self) -> bool {
         matches!(
             self,
             ConversationStatus::Success | ConversationStatus::Error | ConversationStatus::Cancelled
         )
+    }
+
+    /// True iff the agent has yielded via `wait_for_events` and is listening
+    /// for inbound input.
+    pub fn is_waiting_for_events(&self) -> bool {
+        matches!(self, ConversationStatus::WaitingForEvents)
     }
 
     pub fn is_error(&self) -> bool {

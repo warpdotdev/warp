@@ -280,10 +280,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         if [ "$WARP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "Preexec"
           warp_send_hook_kv_pair "command" "$BASH_COMMAND"
+          warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
           local truncated_command=$(warp_escape_json "$BASH_COMMAND")
-          warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$truncated_command\"}}"
+          warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$truncated_command\", \"session_id\": $WARP_SESSION_ID}}"
         fi
         warp_maybe_send_reset_grid_osc
 
@@ -438,9 +439,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           warp_send_hook_via_kv_pairs_start "CommandFinished"
           warp_send_hook_kv_pair "exit_code" "$exit_code"
           warp_send_hook_kv_pair "next_block_id" "precmd-$WARP_SESSION_ID-$((block_id++))"
+          warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
-          warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$((block_id++))\"}}"
+          warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$((block_id++))\", \"session_id\": $WARP_SESSION_ID}}"
         fi
 
         warp_maybe_send_reset_grid_osc
@@ -574,37 +576,56 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
               escaped_conda_env=$(warp_escape_json "$CONDA_DEFAULT_ENV")
           fi
 
-          # Get Node.js version if node is available and we're in a Node.js project
-          if command -v node > /dev/null 2>&1 && [ "$WARP_IN_MSYS2" = false ]; then
+          # Get the Node.js version, but only when the Node.js Version chip is enabled.
+          # Warp sets WARP_PROMPT_NODE_VERSION_ENABLED to "0" when the chip is not in the
+          # prompt (defaulting to enabled when unset), so we avoid spawning `node` on
+          # every prompt when the chip is not shown.
+          if [[ "$WARP_PROMPT_NODE_VERSION_ENABLED" != "0" ]] && command -v node > /dev/null 2>&1 && [ "$WARP_IN_MSYS2" = false ]; then
               # Check for package.json in current directory and parent directories
               local current_dir="$PWD"
               local found_package_json=false
               local package_json_dir=""
-              while [[ "$current_dir" != "/" ]]; do
+              while [[ -n "$current_dir" ]]; do
                   if [[ -f "$current_dir/package.json" ]]; then
                       found_package_json=true
                       package_json_dir="$current_dir"
                       break
                   fi
-                  current_dir=$(dirname "$current_dir")
+                  [[ "$current_dir" == "/" ]] && break
+                  # Strip the last path segment without spawning `dirname`.
+                  current_dir="${current_dir%/*}"
+                  [[ -z "$current_dir" ]] && current_dir="/"
               done
               
               # Only show node version if package.json is within a git repository
               if [[ "$found_package_json" = true ]]; then
                   local git_dir="$package_json_dir"
                   local in_git_repo=false
-                  while [[ "$git_dir" != "/" ]]; do
+                  while [[ -n "$git_dir" ]]; do
                       if [[ -d "$git_dir/.git" ]]; then
                           in_git_repo=true
                           break
                       fi
-                      git_dir=$(dirname "$git_dir")
+                      [[ "$git_dir" == "/" ]] && break
+                      git_dir="${git_dir%/*}"
+                      [[ -z "$git_dir" ]] && git_dir="/"
                   done
                   
                   if [[ "$in_git_repo" = true ]]; then
-                      local node_version=$(node --version 2>/dev/null)
-                      if [[ -n "$node_version" ]]; then
-                          escaped_node_version=$(warp_escape_json "$node_version")
+                      # Cache the resolved version keyed on PWD + PATH so we only spawn
+                      # `node --version` when the directory or PATH changes (PATH changes
+                      # on `nvm use`). The cache vars are global (no `local`) so they
+                      # persist across precmd invocations.
+                      local node_cache_key="$PWD:$PATH"
+                      if [[ "$node_cache_key" == "$_WARP_NODE_VERSION_CACHE_KEY" ]]; then
+                          escaped_node_version="$_WARP_NODE_VERSION_CACHE_VALUE"
+                      else
+                          local node_version=$(node --version 2>/dev/null)
+                          if [[ -n "$node_version" ]]; then
+                              escaped_node_version=$(warp_escape_json "$node_version")
+                          fi
+                          _WARP_NODE_VERSION_CACHE_KEY="$node_cache_key"
+                          _WARP_NODE_VERSION_CACHE_VALUE="$escaped_node_version"
                       fi
                   fi
               fi
@@ -761,10 +782,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         if [ "$WARP_IN_MSYS2" = true ]; then
             warp_send_hook_via_kv_pairs_start "InputBuffer"
             warp_send_hook_kv_pair "buffer" "$READLINE_LINE"
+            warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
             warp_send_hook_via_kv_pairs_end
         else
             local escaped_input="$(warp_escape_json "$READLINE_LINE")"
-            warp_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\" } }"
+            warp_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\", \"session_id\": $WARP_SESSION_ID } }"
         fi
         # This prevents bash from re-printing typeahead after we've removed it.
         READLINE_LINE=""
@@ -888,9 +910,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     function clear() {
         if [ "$WARP_IN_MSYS2" = true ]; then
             warp_send_hook_via_kv_pairs_start "Clear"
+            warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
             warp_send_hook_via_kv_pairs_end
         else
-            warp_send_json_message "{\"hook\": \"Clear\", \"value\": {}}"
+            warp_send_json_message "{\"hook\": \"Clear\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
         fi
     }
 
@@ -899,9 +922,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       if [ "$WARP_IN_MSYS2" = true ]; then
         warp_send_hook_via_kv_pairs_start "FinishUpdate"
         warp_send_hook_kv_pair "update_id" "$update_id"
+        warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
         warp_send_hook_via_kv_pairs_end
       else
-        warp_send_json_message "{ \"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\"} }"
+        warp_send_json_message "{ \"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\", \"session_id\": $WARP_SESSION_ID} }"
       fi
     }
 
@@ -972,11 +996,17 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         function warp_ssh_helper() {
             init_shell_bash=$(init_shell_hook "bash")
             init_shell_zsh=$(init_shell_hook "zsh")
+            local remote_session_id=$(command -p od -An -N8 -tu8 /dev/urandom 2>/dev/null | command -p tr -d ' \n')
+            if [[ -z "$remote_session_id" || "$remote_session_id" == "0" ]]; then
+                # If we cannot generate a non-zero random token, run plain SSH instead.
+                command ssh "${@:1}"
+                return
+            fi
 
             # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
             # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
             # and use printf to convert back to plaintext
-            local zsh_env_script=$(printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID="$(command -p date +%s)$RANDOM"; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; WARP_HONOR_PS1='$WARP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
+            local zsh_env_script=$(printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; WARP_HONOR_PS1='$WARP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
 
             # Keep remote commands up-to-date with shell.rs & bash.sh.
             # Note that in this command, we're passing a string to the remote shell. Any variable expansions need to be
@@ -997,7 +1027,7 @@ test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSI
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
 test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VERSION='$WARP_CLI_AGENT_PROTOCOL_VERSION'
 
-hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$WARP_SESSION_ID'\", \"remote_shell\": \"%s\"}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
+hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$WARP_SESSION_ID'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"'}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
 printf '$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR%s$OSC_END' "'$hook'"
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
@@ -1032,7 +1062,7 @@ case "'${SHELL##*/}'" in
       command -p stty raw
       HISTCONTROL=ignorespace
       HISTIGNORE=" *"
-      WARP_SESSION_ID="$(command -p date +%s)$RANDOM"
+      WARP_SESSION_ID='$remote_session_id'
       WARP_HONOR_PS1="'$WARP_HONOR_PS1'"
       _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)
       _user=$(command -v whoami >/dev/null 2>&1 && command whoami 2>/dev/null || echo $USER)
@@ -1063,7 +1093,7 @@ esac
 
         function ssh() {
             if is_interactive_ssh_session "$@"; then
-                warp_send_json_message "{\"hook\": \"PreInteractiveSSHSession\", \"value\": {}}"
+                warp_send_json_message "{\"hook\": \"PreInteractiveSSHSession\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
 
                 # If the SSH wrapper is not enabled for this session, don't use it.
                 if [ "$WARP_USE_SSH_WRAPPER" = "1" ]; then

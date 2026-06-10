@@ -235,6 +235,9 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
 
     if params.orchestration_enabled {
         supported_tools.extend([api::ToolType::RunAgents, api::ToolType::SendMessageToAgent]);
+        // Declare client-handled wait_for_events so the server doesn't
+        // fall back to the legacy server-handled form.
+        supported_tools.push(api::ToolType::WaitForEvents);
     }
 
     if FeatureFlag::AskUserQuestion.is_enabled() && params.ask_user_question_enabled {

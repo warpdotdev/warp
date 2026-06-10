@@ -15,12 +15,14 @@ use warpui::App;
 
 use super::*;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+use crate::ai::blocklist::QueuedQueryModel;
 // Bring the `TerminalManager` trait into scope (named under a different alias
 // since the local `TerminalManager` struct shadows it) so the trait method
 // `on_view_detached` is callable on the struct.
 use crate::terminal::TerminalManager as _;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspace::ToastStack;
 
 /// Stub UUID used for the orchestrator's `AmbientAgentTaskId`; opaque to
 /// the manager.
@@ -99,6 +101,37 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
     (manager, parent)
 }
 
+#[test]
+fn command_execution_request_failed_clears_queued_command_in_flight() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| ToastStack);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.id();
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, _ctx| {
+            model.arm_command_in_flight(conversation_id);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            TerminalManager::handle_command_execution_request_failed(
+                view,
+                &CommandExecutionFailureReason::StaleBuffer,
+                ctx,
+            );
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _ctx| {
+            assert!(!model.has_command_in_flight(conversation_id));
+        });
+    });
+}
 #[test]
 fn on_view_detached_closed_clears_orchestration_viewer_model_slot() {
     // Regression: closing a viewer pane must drop the OVM and release its

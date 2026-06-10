@@ -6,7 +6,7 @@ use warpui::{EntityId, UpdateView, ViewContext};
 
 use super::{group_member_indices, Workspace};
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::tab::MOVE_TO_GROUP_LABEL;
+use crate::tab::{TabData, MOVE_TO_GROUP_LABEL};
 use crate::workspace::action::{TabContextMenuAnchor, WorkspaceAction};
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::util::PaneViewLocator;
@@ -517,4 +517,10 @@ impl Workspace {
             })
             .collect()
     }
+}
+
+/// Index where the unpinned region begins (count of leading pinned tabs).
+#[allow(dead_code)]
+pub(crate) fn pinned_boundary_index(tabs: &[TabData]) -> usize {
+    tabs.iter().take_while(|tab| tab.pinned).count()
 }

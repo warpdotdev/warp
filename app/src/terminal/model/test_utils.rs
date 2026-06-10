@@ -302,6 +302,7 @@ impl TerminalModel {
         self.process_bytes(input.as_bytes());
         self.preexec(PreexecValue {
             command: std::str::from_utf8(input.as_bytes()).unwrap().to_owned(),
+            session_id: None,
         });
     }
 
@@ -311,6 +312,7 @@ impl TerminalModel {
         self.command_finished(CommandFinishedValue {
             exit_code: ExitCode::from(0),
             next_block_id: BlockId::new(),
+            session_id: None,
         });
         self.precmd(PrecmdValue {
             pwd: None,

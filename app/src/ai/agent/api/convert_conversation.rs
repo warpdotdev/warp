@@ -1645,15 +1645,14 @@ pub(crate) fn convert_tool_call_result_to_input(
                 context,
             })
         }
-        // Deprecated/unused result types or absent result. WaitForEvents is a
-        // server-side orchestration tool the local client never executes.
+        // Deprecated/unused result types or absent result.
         Some(ToolCallResultType::SuggestCreatePlan(..))
         | Some(ToolCallResultType::SuggestPlan(..))
-        | Some(ToolCallResultType::WaitForEvents(..))
         | None => {
             log::warn!("No result present for tool call ID: {tool_call_id}");
             None
         }
+        Some(ToolCallResultType::WaitForEvents(_)) => None,
     }
 }
 
@@ -1765,9 +1764,6 @@ fn create_cancelled_result_for_tool_call(
             return None;
         }
         ToolType::Subagent(_) => return None,
-        // WaitForEvents is a server-side orchestration tool with no local
-        // result representation.
-        ToolType::WaitForEvents(_) => return None,
         ToolType::StartAgent(_) => {
             AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
                 version: StartAgentVersion::V1,
@@ -1789,6 +1785,9 @@ fn create_cancelled_result_for_tool_call(
         }
         // These tools are deprecated.
         ToolType::SuggestCreatePlan(_) | ToolType::SuggestPlan(_) => return None,
+        ToolType::WaitForEvents(_) => {
+            return None;
+        }
     };
 
     Some(AIAgentInput::ActionResult {

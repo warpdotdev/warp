@@ -567,7 +567,9 @@ impl<T: EventLoopSender> PtyController<T> {
                     ai_metadata,
                     ..
                 } => model.start_command_execution_for_shared_session(participant_id, ai_metadata),
-                CommandExecutionSource::User => model.start_command_execution(),
+                CommandExecutionSource::User | CommandExecutionSource::QueuedCommand => {
+                    model.start_command_execution()
+                }
                 CommandExecutionSource::EnvVarCollection { metadata } => {
                     model.start_command_execution_from_env_var_collection(metadata)
                 }

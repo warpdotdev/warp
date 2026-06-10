@@ -532,8 +532,8 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
         | Tool::InitProject(_)
         | Tool::Server(_)
         | Tool::Subagent(_)
-        | Tool::WaitForEvents(_)
-        | Tool::TransferShellCommandControlToUser(_) => {}
+        | Tool::TransferShellCommandControlToUser(_)
+        | Tool::WaitForEvents(_) => {}
     }
 }
 
@@ -600,6 +600,7 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
             }
             None => {}
         },
+        ToolCallResultType::WaitForEvents(_) => {}
         ToolCallResultType::RunShellCommand(r) => {
             if let Some(res) = &r.result {
                 use api::run_shell_command_result::Result;
@@ -1101,8 +1102,7 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
         | ToolCallResultType::InitProject(_)
         | ToolCallResultType::TransferShellCommandControlToUser(_)
         | ToolCallResultType::SuggestCreatePlan(_)
-        | ToolCallResultType::SuggestPlan(_)
-        | ToolCallResultType::WaitForEvents(_) => {
+        | ToolCallResultType::SuggestPlan(_) => {
             out.push_str("status: completed\n");
         }
     }

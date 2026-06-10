@@ -3094,6 +3094,68 @@ fn test_fork_conversation_preserves_task_ids_when_requested() {
     });
 }
 
+/// Set up settings and the global resource handles required for the
+/// `WaitingForEvents` status tests.
+fn setup_app_for_history_model_tests(app: &mut App) {
+    initialize_settings_for_tests(app);
+    let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(8);
+    let mut global_resource_handles = GlobalResourceHandles::mock(app);
+    global_resource_handles.model_event_sender = Some(sender);
+    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+}
+
+/// A newly started conversation in a terminal view that previously held a
+/// `WaitingForEvents` conversation does not inherit the waiting state.
+/// Each fresh `start_new_conversation` begins in the default
+/// in-progress-ready state.
+#[test]
+fn test_new_conversation_does_not_inherit_waiting_for_events() {
+    use crate::ai::agent::conversation::ConversationStatus;
+
+    App::test((), |mut app| async move {
+        setup_app_for_history_model_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+
+        // First conversation enters the waiting state via the normal
+        // status-update path used by `WaitForEventsExecutor::execute`.
+        let first_id = history_model.update(&mut app, |model, ctx| {
+            let id = model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                id,
+                ConversationStatus::WaitingForEvents,
+                ctx,
+            );
+            id
+        });
+        history_model.read(&app, |model, _| {
+            let first = model.conversation(&first_id).expect("first should exist");
+            assert!(matches!(
+                first.status(),
+                ConversationStatus::WaitingForEvents
+            ));
+        });
+
+        // Starting a new conversation in the same terminal view must not
+        // copy the waiting state forward.
+        let second_id = history_model.update(&mut app, |model, ctx| {
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        assert_ne!(
+            first_id, second_id,
+            "a fresh conversation should have a distinct id",
+        );
+        history_model.read(&app, |model, _| {
+            let second = model.conversation(&second_id).expect("second should exist");
+            assert!(
+                !matches!(second.status(), ConversationStatus::WaitingForEvents),
+                "a newly started conversation must not start in WaitingForEvents",
+            );
+        });
+    });
+}
+
 #[test]
 fn test_fork_conversation_title_override_replaces_prefix() {
     use crate::ai::agent::conversation::AIConversation;

@@ -210,7 +210,7 @@ use crate::code::editor_management::CodeSource;
 use crate::code_review::diff_state::DiffMode;
 use crate::completer::SessionContext;
 use crate::context_chips::display::{PromptDisplay, PromptDisplayEvent};
-use crate::context_chips::display_chip::DisplayChipConfig;
+use crate::context_chips::display_chip::{DisplayChipConfig, PromptChipShellCommand};
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::spacing;
 use crate::editor::{
@@ -299,6 +299,7 @@ use crate::terminal::input::suggestions_mode_model::{
 use crate::terminal::input::terminal_message_bar::TerminalInputMessageBar;
 use crate::terminal::input::user_query::{UserQueryMenuEvent, UserQueryMenuView};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::shell_quote_arg;
 use crate::terminal::package_installers::command_at_cursor_has_common_package_installer_prefix;
 use crate::terminal::prompt_render_helper::should_render_ps1_prompt;
 use crate::terminal::universal_developer_input::AtContextMenuDisabledReason;
@@ -881,10 +882,16 @@ pub enum CommandExecutionSource {
         /// in a shared session. This is used to associate the resulting command block
         /// with the original agent command.
         ai_metadata: Option<AgentInteractionMetadata>,
+        /// True when the command was dispatched by a queued command row rather than the current
+        /// editor buffer, so input draft state should be preserved.
+        preserve_input: bool,
     },
 
     /// A normal command execution request.
     User,
+    /// A command dispatched by the queued-prompts panel. It should execute like a user command but
+    /// must not treat the current editor contents as the submitted command.
+    QueuedCommand,
 
     EnvVarCollection {
         metadata: BlocklistEnvVarMetadata,
@@ -904,6 +911,44 @@ impl CommandExecutionSource {
                     ..
                 }
         )
+    }
+
+    pub fn should_preserve_input(&self) -> bool {
+        matches!(
+            self,
+            CommandExecutionSource::QueuedCommand
+                | CommandExecutionSource::SharedSession {
+                    preserve_input: true,
+                    ..
+                }
+        )
+    }
+}
+
+fn render_prompt_chip_shell_command(
+    command: &PromptChipShellCommand,
+    shell_type: ShellType,
+) -> String {
+    match command {
+        PromptChipShellCommand::GitCheckout { branch_name } => {
+            format!("git checkout {}", shell_quote_arg(branch_name, shell_type))
+        }
+        PromptChipShellCommand::GitCreateAndCheckoutBranch { branch_name } => {
+            format!(
+                "git checkout -b {} --",
+                shell_quote_arg(branch_name, shell_type)
+            )
+        }
+        PromptChipShellCommand::ChangeDirectory { dir_name } => {
+            format!("cd {}", shell_quote_arg(dir_name, shell_type))
+        }
+        PromptChipShellCommand::NvmUse { version } => {
+            format!("nvm use {}", shell_quote_arg(version, shell_type))
+        }
+        PromptChipShellCommand::NvmInstallLatestNode => "nvm install node".to_string(),
+        PromptChipShellCommand::Echo { message } => {
+            format!("echo {}", shell_quote_arg(message, shell_type))
+        }
     }
 }
 
@@ -3717,13 +3762,22 @@ impl Input {
                 conversation_id,
                 query_id,
                 text,
+                is_command,
             } => {
-                self.submit_queued_prompt_for_active_pane(
-                    text.clone(),
-                    *conversation_id,
-                    *query_id,
-                    ctx,
-                );
+                let dispatched = if *is_command {
+                    self.execute_queued_command(text, *conversation_id, ctx)
+                } else {
+                    self.submit_queued_prompt_for_active_pane(
+                        text.clone(),
+                        *conversation_id,
+                        *query_id,
+                        ctx,
+                    );
+                    true
+                };
+                if !dispatched {
+                    return;
+                }
                 QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                     model.remove_fired_row(*conversation_id, *query_id, ctx);
                 });
@@ -5838,9 +5892,17 @@ impl Input {
                 });
             }
             PromptDisplayEvent::TryExecuteCommand(command) => {
+                let Some(shell_type) = self
+                    .active_session(ctx)
+                    .map(|session| session.shell().shell_type())
+                else {
+                    log::warn!("Tried to execute prompt chip command without an active session");
+                    return;
+                };
+                let command = render_prompt_chip_shell_command(command, shell_type);
                 // Snapshot the current input so we can restore it after the command completes.
                 let current_input = self.buffer_text(ctx);
-                if self.try_execute_command_from_source(command, CommandExecutionSource::User, ctx)
+                if self.try_execute_command_from_source(&command, CommandExecutionSource::User, ctx)
                 {
                     self.cancel_active_conversation(ctx, CancellationReason::UserCommandExecuted);
                     if !current_input.is_empty() {
@@ -6833,6 +6895,7 @@ impl Input {
         &mut self,
         command: &str,
         participant_id: ParticipantId,
+        preserve_input: bool,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         // Cancel any active agent conversation when the sharer executes a command on behalf of the viewer
@@ -6861,6 +6924,7 @@ impl Input {
                 participant_id,
                 block_id,
                 ai_metadata: None,
+                preserve_input,
             },
             ctx,
         )
@@ -6900,6 +6964,15 @@ impl Input {
     }
 
     pub fn try_execute_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) -> bool {
+        self.try_execute_command_with_options(command, false, ctx)
+    }
+
+    fn try_execute_command_with_options(
+        &mut self,
+        command: &str,
+        preserve_input: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
         let shared_session_status = self.model.lock().shared_session_status().clone();
         if shared_session_status.is_sharer_or_viewer() {
             // If this is a viewer who isn't also an executor, they should not
@@ -6910,7 +6983,7 @@ impl Input {
                 // caller of this API is the `enter` handler.
                 log::warn!("Viewer tried to execute a command as a reader");
                 return false;
-            } else if shared_session_status.is_executor() {
+            } else if shared_session_status.is_executor() && !preserve_input {
                 let original_buffer = self.freeze_input_in_loading_state(ctx);
 
                 if let Some(shared_session_input_state) = self.shared_session_input_state.as_mut() {
@@ -6930,11 +7003,44 @@ impl Input {
             self.try_execute_command_on_behalf_of_shared_session_participant(
                 command,
                 participant_id,
+                preserve_input,
+                ctx,
+            )
+        } else if preserve_input {
+            self.try_execute_command_from_source(
+                command,
+                CommandExecutionSource::QueuedCommand,
                 ctx,
             )
         } else {
             self.try_execute_command_from_source(command, CommandExecutionSource::User, ctx)
         }
+    }
+
+    /// Executes a command drained or sent immediately from the queued-prompts panel and keeps the
+    /// remaining queue paused until the command's terminal block finishes.
+    pub(crate) fn execute_queued_command(
+        &mut self,
+        command: &str,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let started = self.try_execute_command_with_options(command, true, ctx);
+        if started {
+            QueuedQueryModel::handle(ctx).update(ctx, |model, _| {
+                model.arm_command_in_flight(conversation_id);
+            });
+        }
+        started
+    }
+
+    fn has_queued_command_in_flight(&self, ctx: &AppContext) -> bool {
+        QueuedQueryModel::as_ref(ctx)
+            .command_in_flight_for_terminal_view(
+                self.terminal_view_id,
+                BlocklistAIHistoryModel::as_ref(ctx),
+            )
+            .is_some()
     }
 
     /// Executes the given command if the terminal session is in a valid state to accept and
@@ -13587,7 +13693,10 @@ impl Input {
             return false;
         }
 
-        if !self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
+        // A shell-mode submission queues as a command; an AI-mode submission queues as a prompt.
+        // Command queueing is gated on the V2 surface.
+        let is_command = !self.ai_input_model.as_ref(ctx).is_ai_input_enabled();
+        if is_command && !FeatureFlag::QueuedPromptsV2.is_enabled() {
             return false;
         }
 
@@ -13611,13 +13720,16 @@ impl Input {
             return false;
         }
 
-        let should_queue = BlocklistAIHistoryModel::as_ref(ctx)
+        let conversation_in_progress = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|c| {
                 !c.is_empty() && (c.status().is_in_progress() || c.status().is_blocked())
             });
-
-        if !should_queue {
+        // While a drained queued command is running the agent is idle, but the queue must keep
+        // accepting rows so FIFO order is preserved (PRODUCT §14).
+        let command_in_flight =
+            QueuedQueryModel::as_ref(ctx).has_command_in_flight(conversation_id);
+        if !conversation_in_progress && !command_in_flight {
             return false;
         }
 
@@ -13626,10 +13738,12 @@ impl Input {
             return false;
         }
 
-        // If the input is itself a /queue command, unwrap the argument so we
-        // queue "fix the tests" directly instead of "/queue fix the tests"
-        // (which would double-hop through the /queue handler on re-submission).
-        let prompt = if let SlashCommandEntryState::SlashCommand(ref detected) = self
+        // If an AI-mode input is itself a /queue command, unwrap the argument so we queue
+        // "fix the tests" directly instead of "/queue fix the tests" (which would double-hop
+        // through the /queue handler on re-submission). A shell command never matches /queue.
+        let prompt = if is_command {
+            prompt
+        } else if let SlashCommandEntryState::SlashCommand(ref detected) = self
             .slash_command_model
             .as_ref(ctx)
             .detect_command(&prompt, ctx)
@@ -13654,20 +13768,22 @@ impl Input {
         self.editor.update(ctx, |editor, ctx| {
             editor.clear_buffer(ctx);
         });
-        let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
-            context_model.take_pending_attachments(ctx)
-        });
 
+        // Commands carry no attachments; only prompts consume the pending attachments.
+        let query = if is_command {
+            QueuedQuery::new_command(prompt, QueuedQueryOrigin::AutoQueueToggle)
+        } else {
+            let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                context_model.take_pending_attachments(ctx)
+            });
+            QueuedQuery::new_with_attachments(
+                prompt,
+                QueuedQueryOrigin::AutoQueueToggle,
+                attachments,
+            )
+        };
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-            model.append(
-                conversation_id,
-                QueuedQuery::new_with_attachments(
-                    prompt,
-                    QueuedQueryOrigin::AutoQueueToggle,
-                    attachments,
-                ),
-                ctx,
-            );
+            model.append(conversation_id, query, ctx);
         });
 
         true
@@ -14539,8 +14655,9 @@ impl Input {
                     ctx,
                 );
             // Only clear the input buffer for user-executed commands, not agent-executed ones.
-            let should_clear_buffer =
-                !user_block.was_part_of_agent_interaction && !cloud_setup_pre_first_exchange;
+            let should_clear_buffer = !user_block.was_part_of_agent_interaction
+                && !cloud_setup_pre_first_exchange
+                && !self.has_queued_command_in_flight(ctx);
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
             let input_contents_before_prompt_chip_command =
                 self.input_contents_before_prompt_chip_command.take();

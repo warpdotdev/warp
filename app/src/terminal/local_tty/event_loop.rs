@@ -246,11 +246,17 @@ where
             };
 
             // Process the bytes read into the buffer.
+            let mut terminal_response_sequences = Vec::new();
             state.parser.parse_bytes(
                 terminal.deref_mut(),
                 &buf[..bytes_in_buffer],
-                &mut self.pty.writer(),
+                &mut terminal_response_sequences,
             );
+            if !terminal_response_sequences.is_empty() {
+                state
+                    .write_list
+                    .push_back(Cow::Owned(terminal_response_sequences));
+            }
 
             bytes_processed += bytes_in_buffer;
             bytes_in_buffer = 0;
@@ -370,10 +376,16 @@ where
 
                     // If there were no events but `poll` returned, that means we hit the timeout.
                     if events.is_empty() {
-                        state
-                            .parser
-                            .finish_sync_output(&mut *self.terminal.lock(), &mut self.pty.writer());
-                        continue;
+                        let mut terminal_response_sequences = Vec::new();
+                        state.parser.finish_sync_output(
+                            &mut *self.terminal.lock(),
+                            &mut terminal_response_sequences,
+                        );
+                        if !terminal_response_sequences.is_empty() {
+                            state
+                                .write_list
+                                .push_back(Cow::Owned(terminal_response_sequences));
+                        }
                     }
 
                     for event in events.iter() {

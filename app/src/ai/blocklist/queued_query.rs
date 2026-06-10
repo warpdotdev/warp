@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
@@ -36,15 +36,24 @@ pub enum QueuedQueryOrigin {
     ForkAndCompactSlashCommand,
 }
 
-/// A single queued prompt.
+/// Whether a queued row is an agent prompt or a shell command. Attachments live inside the
+/// `Prompt` variant so a `Command` structurally cannot carry any.
+#[derive(Debug, Clone)]
+enum QueuedQueryKind {
+    /// An agent prompt, with any image/file attachments captured from the input when it was
+    /// queued. The attachments fire with the prompt and are dropped when the row is removed.
+    Prompt { attachments: Vec<PendingAttachment> },
+    /// A shell command run in the terminal (or via the shared session for cloud panes).
+    Command,
+}
+
+/// A single queued row: an agent prompt or a shell command.
 #[derive(Debug, Clone)]
 pub struct QueuedQuery {
     id: QueuedQueryId,
     text: String,
     origin: QueuedQueryOrigin,
-    /// Image/file attachments captured from the input when this prompt was queued. They are
-    /// sent with the prompt when it fires and dropped automatically when the row is removed.
-    attachments: Vec<PendingAttachment>,
+    kind: QueuedQueryKind,
 }
 
 impl QueuedQuery {
@@ -61,7 +70,17 @@ impl QueuedQuery {
             id: QueuedQueryId::new(),
             text,
             origin,
-            attachments,
+            kind: QueuedQueryKind::Prompt { attachments },
+        }
+    }
+
+    /// Builds a queued shell command. Commands never carry attachments.
+    pub fn new_command(text: String, origin: QueuedQueryOrigin) -> Self {
+        Self {
+            id: QueuedQueryId::new(),
+            text,
+            origin,
+            kind: QueuedQueryKind::Command,
         }
     }
 
@@ -77,8 +96,16 @@ impl QueuedQuery {
         self.origin
     }
 
+    /// Returns true if this row is a shell command rather than an agent prompt.
+    pub fn is_command(&self) -> bool {
+        matches!(self.kind, QueuedQueryKind::Command)
+    }
+
     pub fn attachments(&self) -> &[PendingAttachment] {
-        &self.attachments
+        match &self.kind {
+            QueuedQueryKind::Prompt { attachments } => attachments,
+            QueuedQueryKind::Command => &[],
+        }
     }
 
     /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
@@ -101,11 +128,20 @@ pub enum AutofireAction {
         text: String,
     },
     /// The head row was in edit mode. The caller restores `text` (the row's last committed text)
-    /// and `attachments` to the input box, then removes the row.
+    /// and `attachments` to the input box, then removes the row. `is_command` distinguishes a
+    /// shell command (no attachments; restored in shell mode) from an agent prompt, so the
+    /// restored row keeps its kind instead of being re-submitted as the wrong type.
     PopFromEditMode {
         query_id: QueuedQueryId,
         text: String,
         attachments: Vec<PendingAttachment>,
+        is_command: bool,
+    },
+    /// Execute this row as a shell command (its kind is `Command`). The caller runs the command,
+    /// removes the row, and waits for the command to finish before draining the next row.
+    ExecuteCommand {
+        query_id: QueuedQueryId,
+        command: String,
     },
 }
 
@@ -121,6 +157,10 @@ struct ConversationQueueState {
     /// `default_mode`; `Some` means the user has toggled this conversation
     /// at least once.
     queue_next_prompt_override: Option<bool>,
+    /// True while a drained shell command from this queue is running. Set when the command is
+    /// dispatched and cleared when it finishes; keeps the queue accepting new rows while the
+    /// agent is idle and gates the next drain until the command completes.
+    command_in_flight: bool,
 }
 
 /// App-wide singleton owning the queued prompts and auto-queue toggle for every conversation,
@@ -263,6 +303,45 @@ impl QueuedQueryModel {
             .is_some_and(|state| !state.queue.is_empty())
     }
 
+    /// Marks that a dispatched queued command is running for `conversation_id`. While set, the
+    /// queue keeps accepting new rows (the agent is idle) and the next drain waits for the
+    /// command to finish.
+    pub fn arm_command_in_flight(&mut self, conversation_id: AIConversationId) {
+        self.queues
+            .entry(conversation_id)
+            .or_default()
+            .command_in_flight = true;
+    }
+
+    /// Clears the in-flight-command marker for `conversation_id`.
+    pub fn clear_command_in_flight(&mut self, conversation_id: AIConversationId) {
+        if let Some(state) = self.queues.get_mut(&conversation_id) {
+            state.command_in_flight = false;
+        }
+    }
+
+    /// Returns true while a dispatched queued command is running for `conversation_id`.
+    pub fn has_command_in_flight(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .is_some_and(|state| state.command_in_flight)
+    }
+
+    /// Returns the conversation owned by `terminal_view_id` that currently has a queued command in
+    /// flight, if any.
+    pub fn command_in_flight_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        history_model: &BlocklistAIHistoryModel,
+    ) -> Option<AIConversationId> {
+        history_model
+            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .find_map(|conversation| {
+                self.has_command_in_flight(conversation.id())
+                    .then_some(conversation.id())
+            })
+    }
+
     /// Returns the row currently in edit mode for `conversation_id`, if any.
     pub fn editing_row(&self, conversation_id: AIConversationId) -> Option<QueuedQueryId> {
         self.queues
@@ -363,7 +442,13 @@ impl QueuedQueryModel {
             AutofireAction::PopFromEditMode {
                 query_id: first.id,
                 text: first.text.clone(),
-                attachments: first.attachments.clone(),
+                attachments: first.attachments().to_vec(),
+                is_command: first.is_command(),
+            }
+        } else if first.is_command() {
+            AutofireAction::ExecuteCommand {
+                query_id: first.id,
+                command: first.text.clone(),
             }
         } else {
             AutofireAction::Submit {

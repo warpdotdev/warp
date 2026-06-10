@@ -878,6 +878,11 @@ pub enum FeatureFlag {
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 
+    /// Gates the Pinned Tabs feature, which lets users pin individual tabs
+    /// and whole tab groups so they stay at the front of the tab list and
+    /// are protected from reordering.
+    PinnedTabs,
+
     /// Gates the `/grok` slash command and the xAI (Grok) subscription OAuth
     /// proof-of-concept flow, which lets users connect a Grok subscription
     /// instead of pasting an API key.
@@ -947,7 +952,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
@@ -959,6 +963,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
     FeatureFlag::DragTabsToWindows,
+    FeatureFlag::GroupedTabs,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -1065,6 +1070,7 @@ impl FeatureFlag {
             GitOperationsInCodeReview => Some(
                 "Enables commit, push, and create-PR actions directly from the code review panel.",
             ),
+            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             _ => None,
         }
     }
