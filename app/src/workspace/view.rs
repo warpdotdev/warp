@@ -157,7 +157,9 @@ use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
     WorkspaceMouseStates, WorkspaceState,
 };
-use super::{ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, util};
+use super::{
+    nav_stack, util, ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry,
+};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
@@ -3157,6 +3159,10 @@ impl Workspace {
             &SessionSettings::handle(ctx),
             Self::handle_session_settings_event,
         );
+        if FeatureFlag::NavigationStack.is_enabled() {
+            let navigation_stack = nav_stack::NavigationStack::handle(ctx);
+            ctx.observe(&navigation_stack, |_, _, ctx| ctx.notify());
+        }
 
         ctx.subscribe_to_model(&WindowSettings::handle(ctx), |me, _handle, event, ctx| {
             me.handle_window_settings_changed_event(event, ctx);
@@ -3756,8 +3762,9 @@ impl Workspace {
             }
             TabSettingsChangedEvent::ShowIndicatorsButton { .. }
             | TabSettingsChangedEvent::NewTabPlacement { .. }
-            | TabSettingsChangedEvent::TabCloseButtonPosition { .. }
-            | TabSettingsChangedEvent::PreserveActiveTabColor { .. } => {
+            | TabSettingsChangedEvent::TabCloseButtonPosition { .. } => ctx.notify(),
+            TabSettingsChangedEvent::ShowNavigationButtons { .. } => ctx.notify(),
+            TabSettingsChangedEvent::PreserveActiveTabColor { .. } => {
                 self.sync_window_button_visibility(ctx);
                 ctx.notify();
             }
@@ -3905,6 +3912,11 @@ impl Workspace {
                 window_snapshot,
                 block_lists,
             } => {
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    nav_stack::NavigationStack::handle(ctx)
+                        .update(ctx, |stack, _| stack.set_navigating(true));
+                }
+
                 let active_tab_index = window_snapshot.active_tab_index;
                 let restored_left_panel_open = window_snapshot.left_panel_open;
 
@@ -3975,11 +3987,13 @@ impl Workspace {
 
                 if self.tab_count() == 0 {
                     if self.should_trigger_get_started_onboarding(ctx) {
+                        if FeatureFlag::NavigationStack.is_enabled() {
+                            nav_stack::NavigationStack::handle(ctx)
+                                .update(ctx, |stack, _| stack.set_navigating(false));
+                        }
                         self.trigger_get_started_onboarding(ctx);
                         return;
                     }
-                    // If we still haven't created any tabs after attempting to restore, create a new tab
-                    // with sensible defaults.
                     self.add_new_session_tab_with_default_mode(
                         NewSessionSource::Window,
                         None,  /* previous_active_window */
@@ -3993,6 +4007,12 @@ impl Workspace {
                 }
 
                 self.activate_tab_internal(active_tab_index, ctx);
+
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    nav_stack::NavigationStack::handle(ctx)
+                        .update(ctx, |stack, _| stack.set_navigating(false));
+                }
+
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::FromTemplate { window_template } => {
@@ -5296,9 +5316,13 @@ impl Workspace {
     /// view's state. It's not meant to be invoked directly by an action.
     pub fn activate_tab_internal(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if index < self.tab_count() {
-            // If the command palette is open when the tab is switched using a keybinding,
-            // we want to close the palette so that we don't get into a state where the palette
-            // is open but doesn't have focus.
+            if index != self.active_tab_index {
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| stack.flush());
+                }
+                self.record_navigation_entry(ctx);
+            }
+
             if self.is_palette_open() {
                 self.close_palette(false, None, ctx);
             }
@@ -6478,6 +6502,19 @@ impl Workspace {
             #[cfg(not(target_family = "wasm"))]
             RightPanelEvent::OpenLspLogs { log_path } => {
                 self.open_lsp_logs(&log_path, ctx);
+            }
+            RightPanelEvent::UserScrolled {
+                scroll_index,
+                scroll_offset_px,
+            } => {
+                self.handle_code_review_user_scrolled(scroll_index, scroll_offset_px, ctx);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            RightPanelEvent::LspNavigated {
+                scroll_index,
+                scroll_offset_px,
+            } => {
+                self.handle_code_review_lsp_navigated(scroll_index, scroll_offset_px, ctx);
             }
         }
         #[cfg(not(feature = "local_fs"))]
@@ -11867,6 +11904,443 @@ impl Workspace {
         true
     }
 
+    fn build_navigation_entry(&self, ctx: &ViewContext<Self>) -> nav_stack::NavigationEntry {
+        let window_id = ctx.window_id();
+        let tab_index = self.active_tab_index;
+        let pane_group = self.active_tab_pane_group();
+        let focused_pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+        let scroll_snapshot = pane_group
+            .as_ref(ctx)
+            .pane_content(focused_pane_id)
+            .and_then(|content| content.scroll_snapshot(ctx));
+
+        nav_stack::NavigationEntry {
+            window_id,
+            tab_index,
+            pane_id: focused_pane_id,
+            scroll_snapshot,
+        }
+    }
+
+    fn build_current_navigation_entry_for_stack_navigation(
+        &self,
+        ctx: &ViewContext<Self>,
+    ) -> nav_stack::NavigationEntry {
+        let mut entry = self.build_navigation_entry(ctx);
+        let pane_group = self.active_tab_pane_group();
+
+        if pane_group.as_ref(ctx).right_panel_open {
+            if let Some(code_review_view) = self
+                .right_panel_view
+                .as_ref(ctx)
+                .get_active_code_review_view(ctx)
+            {
+                let (scroll_index, scroll_offset_px) =
+                    code_review_view.as_ref(ctx).scroll_snapshot();
+                entry.scroll_snapshot = Some(nav_stack::ScrollSnapshot::CodeReview {
+                    scroll_index,
+                    scroll_offset_px,
+                });
+            }
+        }
+
+        entry
+    }
+
+    pub(crate) fn record_navigation_entry(&self, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::NavigationStack.is_enabled() {
+            return;
+        }
+        let nav_stack = nav_stack::NavigationStack::handle(ctx);
+        if nav_stack.as_ref(ctx).is_navigating() {
+            return;
+        }
+        let entry = self.build_navigation_entry(ctx);
+        nav_stack.update(ctx, |stack, _| {
+            stack.push(entry);
+        });
+    }
+
+    fn record_navigation_entry_for_pane(
+        &self,
+        pane_group: &ViewHandle<PaneGroup>,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::NavigationStack.is_enabled() {
+            return;
+        }
+        let nav_stack = nav_stack::NavigationStack::handle(ctx);
+        if nav_stack.as_ref(ctx).is_navigating() {
+            return;
+        }
+        let scroll_snapshot = pane_group
+            .as_ref(ctx)
+            .pane_content(pane_id)
+            .and_then(|content| content.scroll_snapshot(ctx));
+        let entry = nav_stack::NavigationEntry {
+            window_id: ctx.window_id(),
+            tab_index: self.active_tab_index,
+            pane_id,
+            scroll_snapshot,
+        };
+        nav_stack.update(ctx, |stack, _| {
+            stack.push(entry);
+        });
+    }
+
+    fn handle_pane_user_scrolled(
+        &mut self,
+        pane_id: PaneId,
+        pre_scroll_snapshot: nav_stack::ScrollSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::NavigationStack.is_enabled() {
+            return;
+        }
+        let window_id = ctx.window_id();
+        let tab_index = self.active_tab_index;
+        let entry = nav_stack::NavigationEntry {
+            window_id,
+            tab_index,
+            pane_id,
+            scroll_snapshot: Some(pre_scroll_snapshot),
+        };
+        let nav_stack_handle = nav_stack::NavigationStack::handle(ctx);
+        nav_stack_handle.update(ctx, |stack, model_ctx| {
+            stack.flush_if_expired();
+            stack.push_debounced(entry, model_ctx);
+        });
+    }
+
+    fn handle_code_review_user_scrolled(
+        &mut self,
+        scroll_index: usize,
+        scroll_offset_px: warpui::units::Pixels,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::NavigationStack.is_enabled() {
+            return;
+        }
+        let pane_group = self.active_tab_pane_group().clone();
+        let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+        let entry = nav_stack::NavigationEntry {
+            window_id: ctx.window_id(),
+            tab_index: self.active_tab_index,
+            pane_id,
+            scroll_snapshot: Some(nav_stack::ScrollSnapshot::CodeReview {
+                scroll_index,
+                scroll_offset_px,
+            }),
+        };
+        let nav_stack_handle = nav_stack::NavigationStack::handle(ctx);
+        nav_stack_handle.update(ctx, |stack, model_ctx| {
+            stack.flush_if_expired();
+            stack.push_debounced(entry, model_ctx);
+        });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_code_review_lsp_navigated(
+        &mut self,
+        scroll_index: usize,
+        scroll_offset_px: warpui::units::Pixels,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::NavigationStack.is_enabled() {
+            return;
+        }
+        let pane_group = self.active_tab_pane_group().clone();
+        let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+        let nav_stack_handle = nav_stack::NavigationStack::handle(ctx);
+        nav_stack_handle.update(ctx, |stack, _| stack.flush());
+        let entry = nav_stack::NavigationEntry {
+            window_id: ctx.window_id(),
+            tab_index: self.active_tab_index,
+            pane_id,
+            scroll_snapshot: Some(nav_stack::ScrollSnapshot::CodeReview {
+                scroll_index,
+                scroll_offset_px,
+            }),
+        };
+        nav_stack_handle.update(ctx, |stack, _| {
+            stack.push(entry);
+        });
+    }
+
+    fn navigation_workspace_for_window(
+        &self,
+        window_id: WindowId,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<Workspace>> {
+        let registry = WorkspaceRegistry::handle(ctx);
+        registry
+            .as_ref(ctx)
+            .all_workspaces(ctx)
+            .into_iter()
+            .find(|(candidate_window_id, _)| *candidate_window_id == window_id)
+            .map(|(_, workspace)| workspace)
+    }
+
+    fn navigation_entry_can_restore(
+        &self,
+        entry: &nav_stack::NavigationEntry,
+        ctx: &ViewContext<Self>,
+    ) -> bool {
+        if entry.window_id == ctx.window_id() {
+            return self.navigation_entry_can_restore_local(entry, ctx);
+        }
+
+        if let Some(workspace) = self.navigation_workspace_for_window(entry.window_id, ctx) {
+            return workspace.read(ctx, |workspace, ctx| {
+                workspace.navigation_entry_can_restore_local(entry, ctx)
+            });
+        }
+
+        UndoCloseStack::handle(ctx)
+            .as_ref(ctx)
+            .has_closed_window(entry.window_id)
+    }
+
+    fn navigation_entry_can_restore_local(
+        &self,
+        entry: &nav_stack::NavigationEntry,
+        ctx: &AppContext,
+    ) -> bool {
+        if let Some(tab) = self.tabs.get(entry.tab_index) {
+            return Self::navigation_entry_can_restore_in_pane_group(&tab.pane_group, entry, ctx);
+        }
+
+        UndoCloseStack::handle(ctx)
+            .as_ref(ctx)
+            .has_closed_tab(self.window_id, entry.tab_index)
+    }
+
+    fn navigation_entry_can_restore_in_pane_group(
+        pane_group: &ViewHandle<PaneGroup>,
+        entry: &nav_stack::NavigationEntry,
+        ctx: &AppContext,
+    ) -> bool {
+        let pane_group_ref = pane_group.as_ref(ctx);
+        if pane_group_ref.is_pane_hidden_for_close(entry.pane_id)
+            || pane_group_ref.has_pane_id(entry.pane_id)
+        {
+            return true;
+        }
+
+        matches!(
+            entry.scroll_snapshot,
+            Some(nav_stack::ScrollSnapshot::CodeDiff { view_id, .. })
+                if ctx.view_with_id::<CodeDiffView>(pane_group.window_id(ctx), view_id).is_some()
+        )
+    }
+
+    fn navigate_back(&mut self, ctx: &mut ViewContext<Self>) {
+        nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| stack.flush());
+        self.navigate_stack_history(true, ctx);
+    }
+
+    fn navigate_forward(&mut self, ctx: &mut ViewContext<Self>) {
+        nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| stack.flush());
+        self.navigate_stack_history(false, ctx);
+    }
+    fn clear_navigation_stack(&mut self, ctx: &mut ViewContext<Self>) {
+        nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| stack.clear());
+        ctx.notify();
+    }
+
+    fn navigate_stack_history(&mut self, go_back: bool, ctx: &mut ViewContext<Self>) {
+        let current = self.build_current_navigation_entry_for_stack_navigation(ctx);
+        let nav_handle = nav_stack::NavigationStack::handle(ctx);
+        loop {
+            let next_entry = nav_handle.update(ctx, |stack, _| {
+                if go_back {
+                    stack.peek_back().cloned()
+                } else {
+                    stack.peek_forward().cloned()
+                }
+            });
+            let Some(next_entry) = next_entry else {
+                return;
+            };
+
+            if self.navigation_entry_can_restore(&next_entry, ctx) {
+                let entry = nav_handle.update(ctx, |stack, _| {
+                    if go_back {
+                        stack.go_back(current.clone())
+                    } else {
+                        stack.go_forward(current.clone())
+                    }
+                });
+                if let Some(entry) = entry {
+                    self.restore_navigation_entry(entry, ctx);
+                }
+                return;
+            }
+
+            nav_handle.update(ctx, |stack, _| {
+                if go_back {
+                    stack.discard_back();
+                } else {
+                    stack.discard_forward();
+                }
+            });
+        }
+    }
+
+    fn restore_navigation_entry(
+        &mut self,
+        entry: nav_stack::NavigationEntry,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let nav_handle = nav_stack::NavigationStack::handle(ctx);
+        nav_handle.update(ctx, |stack, _| stack.set_navigating(true));
+
+        let current_window = ctx.window_id();
+        if entry.window_id != current_window {
+            let target_window = entry.window_id;
+            let mut target_workspace = self.navigation_workspace_for_window(target_window, ctx);
+            if target_workspace.is_none() {
+                let closed_window = UndoCloseStack::handle(ctx)
+                    .update(ctx, |stack, _| stack.take_closed_window(target_window));
+                if let Some(closed_window) = closed_window {
+                    ctx.reopen_closed_window(closed_window);
+                    target_workspace = self.navigation_workspace_for_window(target_window, ctx);
+                }
+            }
+
+            if let Some(ws) = target_workspace {
+                ctx.windows().show_window_and_focus_app(target_window);
+                ws.update(ctx, |workspace, ctx| {
+                    workspace.restore_navigation_entry_local(entry, ctx);
+                });
+            }
+            nav_handle.update(ctx, |stack, _| stack.set_navigating(false));
+            return;
+        }
+
+        self.restore_navigation_entry_local(entry, ctx);
+        nav_handle.update(ctx, |stack, _| stack.set_navigating(false));
+    }
+
+    fn restore_navigation_entry_local(
+        &mut self,
+        entry: nav_stack::NavigationEntry,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if entry.tab_index >= self.tab_count() {
+            let window_id = ctx.window_id();
+            let tab_data = UndoCloseStack::handle(ctx).update(ctx, |stack, _| {
+                stack.take_closed_tab(window_id, entry.tab_index)
+            });
+            let Some(tab_data) = tab_data else {
+                return;
+            };
+            self.restore_closed_tab(entry.tab_index, tab_data, ctx);
+        }
+
+        if entry.tab_index != self.active_tab_index {
+            self.activate_tab_internal(entry.tab_index, ctx);
+        }
+
+        let pane_group = self.active_tab_pane_group().clone();
+        if !self.restore_navigation_pane_target(&pane_group, &entry, ctx) {
+            return;
+        }
+
+        self.restore_navigation_scroll(&pane_group, &entry, ctx);
+        pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.focus(ctx);
+        });
+        ctx.notify();
+    }
+
+    fn restore_navigation_pane_target(
+        &mut self,
+        pane_group: &ViewHandle<PaneGroup>,
+        entry: &nav_stack::NavigationEntry,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if pane_group
+            .as_ref(ctx)
+            .is_pane_hidden_for_close(entry.pane_id)
+        {
+            return pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.restore_closed_pane(entry.pane_id, ctx)
+            });
+        }
+
+        if pane_group.as_ref(ctx).has_pane_id(entry.pane_id) {
+            pane_group.update(ctx, |pane_group, ctx| {
+                pane_group.focus_pane_by_id(entry.pane_id, ctx);
+            });
+            return true;
+        }
+
+        if let Some(nav_stack::ScrollSnapshot::CodeDiff { view_id, .. }) = entry.scroll_snapshot {
+            if let Some(code_diff_view) = ctx.view_with_id::<CodeDiffView>(ctx.window_id(), view_id)
+            {
+                self.open_code_diff(code_diff_view, ctx);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn restore_navigation_scroll(
+        &mut self,
+        pane_group: &ViewHandle<PaneGroup>,
+        entry: &nav_stack::NavigationEntry,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(snapshot) = &entry.scroll_snapshot else {
+            return;
+        };
+
+        match snapshot {
+            nav_stack::ScrollSnapshot::CodeDiff {
+                view_id,
+                selected_tab,
+                editor_scroll_snapshot,
+            } => {
+                if let Some(code_diff_view) =
+                    ctx.view_with_id::<CodeDiffView>(ctx.window_id(), *view_id)
+                {
+                    code_diff_view.update(ctx, |view, ctx| {
+                        view.restore_selected_editor_scroll(
+                            *selected_tab,
+                            *editor_scroll_snapshot,
+                            ctx,
+                        );
+                    });
+                }
+            }
+            nav_stack::ScrollSnapshot::CodeReview {
+                scroll_index,
+                scroll_offset_px,
+            } => {
+                if !pane_group.as_ref(ctx).right_panel_open {
+                    self.toggle_right_panel(pane_group, ctx);
+                }
+                self.right_panel_view.update(ctx, |right_panel, ctx| {
+                    if let Some(code_review_view) = right_panel.get_active_code_review_view(ctx) {
+                        code_review_view.update(ctx, |crv, ctx| {
+                            crv.restore_scroll_position(*scroll_index, *scroll_offset_px, ctx);
+                        });
+                    }
+                });
+            }
+            _ => {
+                pane_group.update(ctx, |pane_group, ctx| {
+                    if let Some(content) = pane_group.pane_content(entry.pane_id) {
+                        content.restore_scroll(snapshot, ctx);
+                    }
+                });
+            }
+        }
+    }
+
     fn remove_tab(
         &mut self,
         index: usize,
@@ -11935,9 +12409,15 @@ impl Workspace {
         // live pane already moved back.
         if add_to_undo_stack && !re_adopted {
             let handle = ctx.handle();
+            let window_id = ctx.window_id();
             UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
                 log::info!("storing data for closed tab");
-                stack.handle_tab_closed(handle, index, tab_data, ctx);
+                stack.handle_tab_closed(handle, window_id, index, tab_data, ctx);
+            });
+        } else {
+            let window_id = ctx.window_id();
+            nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
+                stack.retain(|entry| entry.window_id != window_id || entry.tab_index != index);
             });
         }
 
@@ -16336,8 +16816,35 @@ impl Workspace {
             pane_group::Event::ViewInWarpDrive(id) => {
                 self.view_in_and_focus_warp_drive(*id, ctx);
             }
-            // If focused pane contains an object, then set selected state in WD to that object
-            pane_group::Event::PaneFocused => {
+            pane_group::Event::PaneUserScrolled {
+                pane_id,
+                pre_scroll_snapshot,
+            } => {
+                self.handle_pane_user_scrolled(*pane_id, pre_scroll_snapshot.clone(), ctx);
+            }
+            pane_group::Event::PaneLspNavigated {
+                pane_id,
+                pre_scroll_snapshot,
+            } => {
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    let nav_stack_handle = nav_stack::NavigationStack::handle(ctx);
+                    nav_stack_handle.update(ctx, |stack, _| stack.flush());
+                    let entry = nav_stack::NavigationEntry {
+                        window_id: ctx.window_id(),
+                        tab_index: self.active_tab_index,
+                        pane_id: *pane_id,
+                        scroll_snapshot: Some(pre_scroll_snapshot.clone()),
+                    };
+                    nav_stack_handle.update(ctx, |stack, _| {
+                        stack.push(entry);
+                    });
+                }
+            }
+            pane_group::Event::PaneFocused { previous_pane_id } => {
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| stack.flush());
+                }
+                self.record_navigation_entry_for_pane(&pane_group, *previous_pane_id, ctx);
                 self.current_workspace_state.close_all_modals();
 
                 // Re-evaluate which region is focused and update pane dimming accordingly.
@@ -18855,6 +19362,8 @@ impl Workspace {
                     && current.stage == ApplicationStage::Active;
                 let platform_window_is_active =
                     ctx.windows().active_window() == Some(self.window_id);
+                let this_window_lost_focus = previous.active_window == Some(self.window_id)
+                    && current.active_window != Some(self.window_id);
 
                 // Notify focus listeners when this window is active after either a window focus
                 // change or app reactivation while the active window stayed the same.
@@ -18877,6 +19386,13 @@ impl Workspace {
                     );
                 }
 
+                if this_window_lost_focus {
+                    if FeatureFlag::NavigationStack.is_enabled() {
+                        nav_stack::NavigationStack::handle(ctx)
+                            .update(ctx, |stack, _| stack.flush());
+                    }
+                    self.record_navigation_entry(ctx);
+                }
                 // Re-render if fullscreen state for active window has changed.
                 if current.is_active_window_fullscreen != previous.is_active_window_fullscreen {
                     ctx.notify();
@@ -21003,6 +21519,62 @@ impl Workspace {
             if ContextFlag::CreateNewSession.is_enabled() {
                 tab_bar.add_child(self.render_new_session_button(ctx));
             }
+        }
+        if FeatureFlag::NavigationStack.is_enabled()
+            && *TabSettings::as_ref(ctx).show_navigation_buttons
+        {
+            let nav_stack = nav_stack::NavigationStack::as_ref(ctx);
+            tab_bar.add_child(
+                Container::new(
+                    SavePosition::new(
+                        Align::new(
+                            self.render_tab_bar_icon_button(
+                                appearance,
+                                icons::Icon::ChevronLeft,
+                                &self.mouse_states.nav_back_button,
+                                WorkspaceAction::NavigateBack,
+                                "Navigate back".to_string(),
+                                keybinding_name_to_display_string("workspace:navigate_back", ctx),
+                                false,
+                                !nav_stack.can_go_back(),
+                            )
+                            .finish(),
+                        )
+                        .finish(),
+                        "workspace:navigate_back_button",
+                    )
+                    .finish(),
+                )
+                .with_margin_right(2.)
+                .finish(),
+            );
+            tab_bar.add_child(
+                Container::new(
+                    SavePosition::new(
+                        Align::new(
+                            self.render_tab_bar_icon_button(
+                                appearance,
+                                icons::Icon::ChevronRight,
+                                &self.mouse_states.nav_forward_button,
+                                WorkspaceAction::NavigateForward,
+                                "Navigate forward".to_string(),
+                                keybinding_name_to_display_string(
+                                    "workspace:navigate_forward",
+                                    ctx,
+                                ),
+                                false,
+                                !nav_stack.can_go_forward(),
+                            )
+                            .finish(),
+                        )
+                        .finish(),
+                        "workspace:navigate_forward_button",
+                    )
+                    .finish(),
+                )
+                .with_margin_right(TAB_BAR_ICON_PADDING)
+                .finish(),
+            );
         }
 
         // Trailing spacer fills only the leftover width. When groups are collapsed
@@ -26173,6 +26745,21 @@ impl TypedActionView for Workspace {
                         view.update_image_at(*index, image.clone(), ctx);
                     });
                     ctx.notify();
+                }
+            }
+            NavigateBack => {
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    self.navigate_back(ctx);
+                }
+            }
+            NavigateForward => {
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    self.navigate_forward(ctx);
+                }
+            }
+            ClearNavigationStack => {
+                if FeatureFlag::NavigationStack.is_enabled() {
+                    self.clear_navigation_stack(ctx);
                 }
             }
             SyncTrafficLights => {

@@ -43,6 +43,10 @@ impl ScrollState {
         self.position
     }
 
+    pub fn set_position(&mut self, position: ScrollPosition) {
+        self.position = position;
+    }
+
     /// Possibly updates the scroll position, returning whether it was actually changed.
     pub fn update(
         &mut self,

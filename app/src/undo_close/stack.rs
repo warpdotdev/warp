@@ -14,7 +14,7 @@ use crate::pane_group::{PaneGroup, PaneId};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::telemetry::{TelemetryEvent, UndoCloseItemType};
 use crate::tab::TabData;
-use crate::workspace::Workspace;
+use crate::workspace::{self, Workspace};
 
 /// A unique identifier for an item in the undo close stack.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -50,6 +50,8 @@ impl std::ops::Drop for ExpiryData {
 pub(super) struct PaneData {
     /// The pane ID - content is retrieved from the pane group during restoration
     pane_id: PaneId,
+    /// The window that contained this pane when it was closed
+    window_id: WindowId,
     /// Reference to the pane group that contained this pane
     pane_group: WeakViewHandle<PaneGroup>,
 }
@@ -58,6 +60,7 @@ pub(super) struct PaneData {
 pub enum ClosedItem {
     Window(Box<ClosedWindowData>),
     Tab {
+        window_id: WindowId,
         workspace: WeakViewHandle<Workspace>,
         tab_index: usize,
         data: TabData,
@@ -74,6 +77,9 @@ impl ClosedItem {
         match self {
             ClosedItem::Window(data) => {
                 let ClosedWindowData { window_id, .. } = *data;
+                workspace::nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
+                    stack.retain(|entry| entry.window_id != window_id);
+                });
                 ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
                     model.remove_focused_state_for_window(window_id, ctx);
                 });
@@ -91,7 +97,17 @@ impl ClosedItem {
                     });
                 }
             }
-            ClosedItem::Tab { data, .. } => {
+            ClosedItem::Tab {
+                window_id,
+                tab_index,
+                data,
+                ..
+            } => {
+                workspace::nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
+                    stack.retain(|entry| {
+                        entry.window_id != window_id || entry.tab_index != tab_index
+                    });
+                });
                 // Mark conversations from all terminal panes in the tab
                 Self::mark_conversations_historical_for_pane_group(
                     &data.pane_group,
@@ -101,6 +117,11 @@ impl ClosedItem {
                 Self::clean_up_pane_group(&data.pane_group, ctx);
             }
             ClosedItem::Pane { data } => {
+                workspace::nav_stack::NavigationStack::handle(ctx).update(ctx, |stack, _| {
+                    stack.retain(|entry| {
+                        entry.window_id != data.window_id || entry.pane_id != data.pane_id
+                    });
+                });
                 ctx.emit(UndoCloseStackEvent::DiscardPane(data.pane_id));
             }
         }
@@ -216,12 +237,14 @@ impl UndoCloseStack {
     pub fn handle_tab_closed(
         &mut self,
         workspace: WeakViewHandle<Workspace>,
+        window_id: WindowId,
         tab_index: usize,
         data: TabData,
         ctx: &mut ModelContext<Self>,
     ) {
         self.push_item(
             ClosedItem::Tab {
+                window_id,
                 workspace,
                 tab_index,
                 data,
@@ -234,15 +257,67 @@ impl UndoCloseStack {
     pub fn handle_pane_closed_by_id(
         &mut self,
         pane_group: WeakViewHandle<PaneGroup>,
+        window_id: WindowId,
         pane_id: PaneId,
         ctx: &mut ModelContext<Self>,
     ) {
         let pane_data = PaneData {
             pane_id,
+            window_id,
             pane_group,
         };
 
         self.push_item(ClosedItem::Pane { data: pane_data }, ctx);
+    }
+
+    pub fn has_closed_window(&self, window_id: WindowId) -> bool {
+        self.stack.iter().any(
+            |undo_data| matches!(&undo_data.closed_item, ClosedItem::Window(data) if data.window_id == window_id),
+        )
+    }
+
+    pub fn has_closed_tab(&self, window_id: WindowId, tab_index: usize) -> bool {
+        self.stack.iter().any(|undo_data| {
+            matches!(
+                &undo_data.closed_item,
+                ClosedItem::Tab {
+                    window_id: candidate_window_id,
+                    tab_index: candidate_tab_index,
+                    ..
+                } if *candidate_window_id == window_id && *candidate_tab_index == tab_index
+            )
+        })
+    }
+
+    pub fn take_closed_window(&mut self, window_id: WindowId) -> Option<ClosedWindowData> {
+        let pos = self.stack.iter().rposition(
+            |undo_data| matches!(&undo_data.closed_item, ClosedItem::Window(data) if data.window_id == window_id),
+        )?;
+        let undo_data = self.stack.remove(pos);
+        undo_data.expiry_data.task_handle.abort();
+        let ClosedItem::Window(data) = undo_data.closed_item else {
+            return None;
+        };
+        Some(*data)
+    }
+
+    pub fn take_closed_tab(&mut self, window_id: WindowId, tab_index: usize) -> Option<TabData> {
+        let pos = self.stack.iter().rposition(|undo_data| {
+            matches!(
+                &undo_data.closed_item,
+                ClosedItem::Tab {
+                    window_id: candidate_window_id,
+                    tab_index: candidate_tab_index,
+                    ..
+                } if *candidate_window_id == window_id && *candidate_tab_index == tab_index
+            )
+        })?;
+        let undo_data = self.stack.remove(pos);
+        undo_data.expiry_data.task_handle.abort();
+        let ClosedItem::Tab { data, .. } = undo_data.closed_item else {
+            return None;
+        };
+        Some(data)
     }
 
     /// Undoes the last close action in the stack, if possible.
@@ -274,6 +349,7 @@ impl UndoCloseStack {
                 ctx.dispatch_global_action("workspace:save_app", &());
             }
             ClosedItem::Tab {
+                window_id: _,
                 workspace,
                 tab_index,
                 data,

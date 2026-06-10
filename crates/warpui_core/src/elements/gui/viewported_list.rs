@@ -14,7 +14,9 @@ use pathfinder_geometry::vector::{Vector2F, vec2f};
 use sum_tree::SumTree;
 
 use super::new_scrollable::{NewScrollableElement, ScrollableAxis};
-use super::{AppContext, Axis, Element, ScrollData, ScrollableElement, SizeConstraint};
+use super::{
+    AppContext, Axis, Element, EventContext, ScrollData, ScrollableElement, SizeConstraint,
+};
 use crate::ClipBounds;
 use crate::units::{IntoPixels, Pixels};
 
@@ -120,6 +122,9 @@ impl<T> ListState<T> {
     pub fn get_viewport_height(&self) -> Pixels {
         self.0.borrow().viewport_height
     }
+    pub fn set_on_scroll(&self, callback: impl Fn(ScrollOffset, &mut EventContext) + 'static) {
+        self.0.borrow_mut().on_scroll = Some(Rc::new(callback));
+    }
 
     /// Sets the persistent scroll context used by explicit height invalidation
     /// during layout. Call this when scrolling settles so the adjustment
@@ -190,17 +195,26 @@ impl<T: 'static> List<T> {
     }
 
     fn scroll_vertically(&mut self, delta: Pixels, ctx: &mut super::EventContext) {
-        let mut list_state = self.list_state.0.borrow_mut();
+        let (scroll_offset, callback) = {
+            let mut list_state = self.list_state.0.borrow_mut();
 
-        let viewport_height = self.size.y().into_pixels();
-        let scroll_max = (list_state.approximate_height() - viewport_height).max(Pixels::zero());
-        let current_scroll_top = list_state.scroll_top_pixels();
-        let new_scroll_top = (current_scroll_top - delta)
-            .max(Pixels::zero())
-            .min(scroll_max);
+            let viewport_height = self.size.y().into_pixels();
+            let scroll_max =
+                (list_state.approximate_height() - viewport_height).max(Pixels::zero());
+            let current_scroll_top = list_state.scroll_top_pixels();
+            let new_scroll_top = (current_scroll_top - delta)
+                .max(Pixels::zero())
+                .min(scroll_max);
 
-        list_state.scroll_top = list_state.absolute_pixels_to_scroll_offset(new_scroll_top);
-        list_state.broadcast_scroll_event();
+            list_state.scroll_top = list_state.absolute_pixels_to_scroll_offset(new_scroll_top);
+            list_state.broadcast_scroll_event();
+
+            (list_state.scroll_top, list_state.on_scroll.clone())
+        };
+
+        if let Some(callback) = &callback {
+            callback(scroll_offset, ctx);
+        }
 
         ctx.notify();
     }
@@ -536,6 +550,7 @@ impl<'a> sum_tree::Dimension<'a, LayoutSummary> for Count {
         self.0 += summary.count;
     }
 }
+type ScrollCallback = dyn Fn(ScrollOffset, &mut EventContext);
 
 struct ListStateInner<T> {
     content: SumTree<ListItem>,
@@ -547,6 +562,7 @@ struct ListStateInner<T> {
     last_measured_index: usize,
     render_fn: Arc<ListItemRenderFn>,
     viewport_height: Pixels,
+    on_scroll: Option<Rc<ScrollCallback>>,
     /// Optional scroll preservation callback.
     scroll_preservation: Option<ScrollPreservation<T>>,
     /// Persistently stored scroll context, updated by the consumer (e.g. code
@@ -567,6 +583,7 @@ impl ListStateInner<()> {
             last_measured_index: 0,
             render_fn,
             viewport_height: Pixels::zero(),
+            on_scroll: None,
             scroll_preservation: None,
             current_scroll_context: None,
             scroll_tx: None,
@@ -586,6 +603,7 @@ impl<T> ListStateInner<T> {
             last_measured_index: 0,
             render_fn,
             viewport_height: Pixels::zero(),
+            on_scroll: None,
             scroll_preservation: Some(ScrollPreservation {
                 adjustment_fn: Box::new(adjustment_fn),
             }),

@@ -341,6 +341,10 @@ pub enum CodeReviewAction {
     OpenCommentComposerFromHeader,
     ShowFindBar,
     FocusView,
+    ListScrolled {
+        scroll_index: usize,
+        scroll_offset_px: Pixels,
+    },
     InitProjectForCurrentDirectory,
     OpenRepository,
     OpenCommitDialog,
@@ -454,6 +458,15 @@ pub enum CodeReviewViewEvent {
     #[cfg(not(target_family = "wasm"))]
     OpenLspLogs {
         log_path: PathBuf,
+    },
+    UserScrolled {
+        scroll_index: usize,
+        scroll_offset_px: Pixels,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    LspNavigated {
+        scroll_index: usize,
+        scroll_offset_px: Pixels,
     },
 }
 
@@ -1199,6 +1212,13 @@ impl CodeReviewView {
         });
 
         let list_state = Self::create_list_state(ctx);
+
+        list_state.set_on_scroll(|offset, ctx| {
+            ctx.dispatch_typed_action(CodeReviewAction::ListScrolled {
+                scroll_index: offset.list_item_index(),
+                scroll_offset_px: offset.offset_from_start(),
+            });
+        });
 
         let window_id = ctx.window_id();
         let view_id = ctx.view_id();
@@ -2536,6 +2556,12 @@ impl CodeReviewView {
         // Create a new list state for this update
         self.viewported_list_state = Self::create_list_state(ctx);
 
+        self.viewported_list_state.set_on_scroll(|offset, ctx| {
+            ctx.dispatch_typed_action(CodeReviewAction::ListScrolled {
+                scroll_index: offset.list_item_index(),
+                scroll_offset_px: offset.offset_from_start(),
+            });
+        });
         let file_states_vec = self.build_view_state_for_file_diffs(&diff_data.files, ctx);
         let is_local = self.repo_is_local();
         let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
@@ -3302,8 +3328,13 @@ impl CodeReviewView {
                 column,
                 source_server_id,
             } => {
-                // Register the external file so it can use LSP features.
-                // The manager will skip registration if the path is under an existing workspace.
+                let scroll_index = self.viewported_list_state.get_scroll_index();
+                let scroll_offset_px = self.viewported_list_state.get_scroll_offset();
+                ctx.emit(CodeReviewViewEvent::LspNavigated {
+                    scroll_index,
+                    scroll_offset_px,
+                });
+
                 let lsp_manager = lsp::LspManagerModel::handle(ctx);
                 lsp_manager.update(ctx, |mgr, _| {
                     mgr.maybe_register_external_file(path, *source_server_id);
@@ -5816,6 +5847,25 @@ impl CodeReviewView {
         !self.get_unsaved_file_paths(ctx).is_empty()
     }
 
+    pub fn scroll_snapshot(&self) -> (usize, Pixels) {
+        (
+            self.viewported_list_state.get_scroll_index(),
+            self.viewported_list_state.get_scroll_offset(),
+        )
+    }
+
+    /// Restores the scroll position of the viewported list.
+    pub fn restore_scroll_position(
+        &self,
+        scroll_index: usize,
+        scroll_offset_px: Pixels,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.viewported_list_state
+            .scroll_to_with_offset(scroll_index, scroll_offset_px);
+        ctx.notify();
+    }
+
     /// Insert diff set as context in the terminal input (either all files or a specific file)
     #[cfg(feature = "local_fs")]
     fn insert_diff_as_context(&mut self, scope: DiffSetScope, ctx: &mut ViewContext<Self>) {
@@ -7502,6 +7552,15 @@ impl TypedActionView for CodeReviewView {
             CodeReviewAction::ShowFindBar => self.show_find_bar(ctx),
             CodeReviewAction::FocusView => {
                 ctx.focus_self();
+            }
+            CodeReviewAction::ListScrolled {
+                scroll_index,
+                scroll_offset_px,
+            } => {
+                ctx.emit(CodeReviewViewEvent::UserScrolled {
+                    scroll_index: *scroll_index,
+                    scroll_offset_px: *scroll_offset_px,
+                });
             }
             CodeReviewAction::OpenRepository => {
                 if let Some(terminal_view) = self.focused_terminal(ctx) {

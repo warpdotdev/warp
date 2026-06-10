@@ -250,6 +250,9 @@ pub enum NotebookEvent {
     EditWorkflow(SyncId),
     ViewInWarpDrive(WarpDriveItemId),
     Pane(PaneEvent),
+    UserScrolled {
+        pre_scroll_snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+    },
     MoveToSpace {
         cloud_object_type_and_id: CloudObjectTypeAndId,
         new_space: Space,
@@ -532,6 +535,17 @@ impl NotebookView {
         &mut self.context_menu
     }
 
+    pub fn editor_render_state(
+        &self,
+        ctx: &AppContext,
+    ) -> warpui::ModelHandle<warp_editor::render::model::RenderState> {
+        self.input
+            .as_ref(ctx)
+            .model()
+            .as_ref(ctx)
+            .render_state()
+            .clone()
+    }
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn input_editor(&self) -> ViewHandle<RichTextEditorView> {
         self.input.clone()
@@ -998,6 +1012,13 @@ impl NotebookView {
             EditorViewEvent::OpenFile { .. } => {
                 // We don't support opening files from the notebook view.
                 // File paths rely on a Session to be present, and this is only set from the AI document view today.
+            }
+            EditorViewEvent::UserScrolled {
+                pre_scroll_snapshot,
+            } => {
+                ctx.emit(NotebookEvent::UserScrolled {
+                    pre_scroll_snapshot: *pre_scroll_snapshot,
+                });
             }
             EditorViewEvent::CmdEnter
             | EditorViewEvent::EscapePressed

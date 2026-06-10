@@ -17,6 +17,7 @@ pub mod image_cache;
 pub mod integration;
 pub mod keymap;
 pub mod modals;
+pub mod navigation;
 pub mod notification;
 pub mod platform;
 pub mod prelude;

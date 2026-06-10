@@ -298,7 +298,10 @@ impl SingleAxisConfig {
         }
 
         match self {
-            Self::Manual { child, .. } => child.scroll(delta, axis, ctx),
+            Self::Manual { child, .. } => {
+                eprintln!("[NAV-DEBUG] SingleAxisConfig::Manual scroll_to called, delta={delta:?}, axis={axis:?}");
+                child.scroll(delta, axis, ctx);
+            }
             Self::Clipped { handle, child } => {
                 let child_size = child.size().expect("Size should exist");
                 scroll_clipped_scrollable_handle_with_delta(

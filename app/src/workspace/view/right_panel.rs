@@ -419,6 +419,15 @@ pub enum RightPanelEvent {
     OpenLspLogs {
         log_path: PathBuf,
     },
+    UserScrolled {
+        scroll_index: usize,
+        scroll_offset_px: warpui::units::Pixels,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    LspNavigated {
+        scroll_index: usize,
+        scroll_offset_px: warpui::units::Pixels,
+    },
 }
 
 pub struct RightPanelView {
@@ -1188,7 +1197,10 @@ impl RightPanelView {
         }
     }
 
-    fn get_active_code_review_view(&self, ctx: &AppContext) -> Option<ViewHandle<CodeReviewView>> {
+    pub(crate) fn get_active_code_review_view(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<CodeReviewView>> {
         let state = self.code_review_state.as_ref()?;
         let selected_repo_path = state.selected_repo_path.as_ref()?;
         let active_pane_group = self.active_pane_group.as_ref()?;
@@ -1299,6 +1311,25 @@ impl RightPanelView {
                 CodeReviewViewEvent::OpenLspLogs { log_path } => {
                     ctx.emit(RightPanelEvent::OpenLspLogs {
                         log_path: log_path.clone(),
+                    });
+                }
+                CodeReviewViewEvent::UserScrolled {
+                    scroll_index,
+                    scroll_offset_px,
+                } => {
+                    ctx.emit(RightPanelEvent::UserScrolled {
+                        scroll_index: *scroll_index,
+                        scroll_offset_px: *scroll_offset_px,
+                    });
+                }
+                #[cfg(not(target_family = "wasm"))]
+                CodeReviewViewEvent::LspNavigated {
+                    scroll_index,
+                    scroll_offset_px,
+                } => {
+                    ctx.emit(RightPanelEvent::LspNavigated {
+                        scroll_index: *scroll_index,
+                        scroll_offset_px: *scroll_offset_px,
                     });
                 }
                 _ => {}

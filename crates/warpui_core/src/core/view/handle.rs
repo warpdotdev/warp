@@ -80,7 +80,7 @@ impl<T: Entity> ViewHandle<T> {
     // TODO: This is the same as the `is_self_or_child_focused` function in ViewContext.
     // Moving forward we should figure out a better interface to check whether a specific
     // view is focused or not.
-    pub fn is_self_or_child_focused(&self, app: &mut AppContext) -> bool {
+    pub fn is_self_or_child_focused(&self, app: &AppContext) -> bool {
         let window_id = self.window_id(app);
         app.check_view_or_child_focused(window_id, &self.view_id)
     }
