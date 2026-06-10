@@ -903,7 +903,6 @@ pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::R
 /// Features enabled only for the WarpLocal developer build.
 pub const LOCAL_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::LocalClaudeCodexChildHarnesses,
-    FeatureFlag::PinnedTabs,
 ];
 
 /// Features enabled for the development team.  The expectation is that, over
