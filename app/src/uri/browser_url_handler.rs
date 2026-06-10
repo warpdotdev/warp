@@ -11,7 +11,7 @@ pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {
         new_url = get_base_app_url()
     }
 
-    if let Some(unwrapped_url) = new_url {
+    if let Some(unwrapped_url) = new_url.and_then(safe_browser_navigation_url) {
         let window = gloo::utils::window();
         if force_redirect {
             let _ = window.location().set_href(unwrapped_url.as_str());
@@ -35,6 +35,16 @@ pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {
         }
     } else {
         log::error!("Failed to get new url to update browser with");
+    }
+}
+
+fn safe_browser_navigation_url(url: Url) -> Option<Url> {
+    match url.scheme() {
+        "http" | "https" => Some(url),
+        _ => {
+            log::warn!("Skipping browser URL update for invalid or unsafe URL");
+            None
+        }
     }
 }
 

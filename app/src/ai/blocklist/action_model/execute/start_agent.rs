@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use futures::future::BoxFuture;
 use futures::FutureExt;
+use shell_words::split as split_shell_words;
 use warp_cli::agent::Harness;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -31,6 +32,57 @@ fn invalid_local_child_harness_error(harness_type: &str) -> String {
         "Local child harness type is missing.".to_string()
     } else {
         format!("Unsupported local child harness '{harness_name}'.")
+    }
+}
+
+/// Handles local child launch requests produced by older agents, where the
+/// prompt encoded the target CLI command and `execution_mode.harness_type` was
+/// still unset. Normalizing here keeps those requests routed through the Codex
+/// local harness path instead of launching them as Oz child prompts.
+fn parse_legacy_local_child_harness_command(command: &str) -> Option<(String, String)> {
+    let args = split_shell_words(command.trim()).ok()?;
+    match args.as_slice() {
+        [binary, flag, child_prompt]
+            if binary == "codex"
+                && flag == "--dangerously-bypass-approvals-and-sandbox"
+                && !child_prompt.trim().is_empty() =>
+        {
+            Some(("codex".to_string(), child_prompt.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_legacy_local_child_harness_command(
+    prompt: String,
+    execution_mode: StartAgentExecutionMode,
+) -> (String, StartAgentExecutionMode) {
+    match execution_mode {
+        StartAgentExecutionMode::Local {
+            harness_type: None,
+            model_id,
+        } => {
+            if let Some((harness_type, child_prompt)) =
+                parse_legacy_local_child_harness_command(&prompt)
+            {
+                (
+                    child_prompt,
+                    StartAgentExecutionMode::Local {
+                        harness_type: Some(harness_type),
+                        model_id,
+                    },
+                )
+            } else {
+                (
+                    prompt,
+                    StartAgentExecutionMode::Local {
+                        harness_type: None,
+                        model_id,
+                    },
+                )
+            }
+        }
+        execution_mode => (prompt, execution_mode),
     }
 }
 
@@ -274,7 +326,9 @@ impl StartAgentExecutor {
         let prompt = prompt.clone();
         let version = *version;
         let parent_conversation_id = input.conversation_id;
-        let (execution_mode, parent_run_id) = match execution_mode.clone() {
+        let (prompt, execution_mode) =
+            normalize_legacy_local_child_harness_command(prompt, execution_mode.clone());
+        let (execution_mode, parent_run_id) = match execution_mode {
             StartAgentExecutionMode::Local {
                 harness_type: None,
                 model_id,
@@ -468,6 +522,8 @@ impl StartAgentExecutor {
         parent_run_id: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> async_channel::Receiver<StartAgentOutcome> {
+        let (prompt, execution_mode) =
+            normalize_legacy_local_child_harness_command(prompt, execution_mode);
         let (sender, receiver) = async_channel::bounded(1);
         let request_id = self.next_request_id();
         self.pending.insert(

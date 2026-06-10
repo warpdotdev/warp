@@ -113,6 +113,7 @@ pub enum Event {
     /// Users "Tag an agent in" when they ask the agent to take over a long running command
     /// that was started outside of a conversation (and they tag the agent out when they take control back).
     AgentTaggedInChanged {
+        block_id: BlockId,
         is_tagged_in: bool,
     },
     Handler(HandlerEvent),
@@ -487,8 +488,14 @@ impl Debug for Event {
             Event::PromptUpdated => write!(f, "PromptUpdated"),
             Event::HonorPS1OutOfSync => write!(f, "HonorPS1OutOfSync"),
             Event::Typeahead => write!(f, "Typeahead"),
-            Event::AgentTaggedInChanged { is_tagged_in } => {
-                write!(f, "AgentTaggedInChanged(is_tagged_in: {is_tagged_in})")
+            Event::AgentTaggedInChanged {
+                block_id,
+                is_tagged_in,
+            } => {
+                write!(
+                    f,
+                    "AgentTaggedInChanged(block_id: {block_id:?}, is_tagged_in: {is_tagged_in})"
+                )
             }
             Event::Handler(handler_event) => write!(f, "Handler({handler_event:?}))"),
             Event::RemoteServerReady { session_id } => {

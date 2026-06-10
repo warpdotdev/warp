@@ -10,9 +10,9 @@ module.exports = async ({ github, context }) => {
   const canClose = mode === 'full';
 
   const DAY_MS = 24 * 60 * 60 * 1000;
-  const REMINDER_DAYS = [7, 14, 26];
-  const FINAL_WARNING_DAY = 26;
-  const CLOSE_DAY = 30;
+  const REMINDER_DAYS = [7, 10];
+  const FINAL_WARNING_DAY = 10;
+  const CLOSE_DAY = 14;
   const EXTERNAL_LABEL = 'external-contributor';
   const EXEMPT_LABEL = 'no-autoclose';
   const BOT_LOGIN = 'github-actions[bot]';

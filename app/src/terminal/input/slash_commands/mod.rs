@@ -1103,15 +1103,24 @@ impl Input {
                     });
 
                 if should_queue {
+                    let attachments = self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.take_pending_attachments(ctx)
+                    });
                     QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                         model.append(
                             conversation_id,
-                            QueuedQuery::new(prompt, QueuedQueryOrigin::QueueSlashCommand),
+                            QueuedQuery::new_with_attachments(
+                                prompt,
+                                QueuedQueryOrigin::QueueSlashCommand,
+                                attachments,
+                            ),
                             ctx,
                         );
                     });
                 } else {
-                    self.submit_queued_prompt(prompt, ctx);
+                    // Not in progress: submit immediately as a regular (non-queued) user query so
+                    // the live staging is sent and reset, rather than treated as a queued-row fire.
+                    self.submit_user_query_now(prompt, ctx);
                 }
             }
             open_repo if command.name == commands::OPEN_REPO.name => {
@@ -1229,9 +1238,7 @@ impl Input {
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
-                self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
-                )
+                self.execute_skill_command(reference, user_query, None, None, ctx)
             }
             SlashCommandEntryState::None
             | SlashCommandEntryState::Composing { .. }
@@ -1330,9 +1337,7 @@ impl Input {
             SlashCommandEntryState::SkillCommand(detected_skill) => {
                 let reference = detected_skill.reference.clone();
                 let user_query = detected_skill.argument.clone();
-                self.execute_skill_command(
-                    reference, user_query, /*is_queued_prompt*/ false, ctx,
-                )
+                self.execute_skill_command(reference, user_query, None, None, ctx)
             }
             SlashCommandEntryState::None
             | SlashCommandEntryState::Composing { .. }

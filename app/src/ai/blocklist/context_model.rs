@@ -496,13 +496,6 @@ impl BlocklistAIContextModel {
             if let Some(selected_text) = &self.pending_context_selected_text {
                 context.push(AIAgentContext::SelectedText(selected_text.clone()));
             }
-
-            // Add images from pending attachments
-            for attachment in &self.pending_attachments {
-                if let PendingAttachment::Image(image) = attachment {
-                    context.push(AIAgentContext::Image(image.clone()));
-                }
-            }
         }
 
         context
@@ -1036,6 +1029,23 @@ impl BlocklistAIContextModel {
             });
         }
         self.pending_attachments.clear();
+    }
+
+    /// Drains all pending attachments, returning them, and emits the same update event as
+    /// [`Self::clear_pending_attachments`] so the input's attachment chips disappear. Used to
+    /// move staged attachments onto a queued prompt row at enqueue time.
+    pub fn take_pending_attachments(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Vec<PendingAttachment> {
+        if !self.pending_attachments.is_empty() {
+            ctx.emit(BlocklistAIContextEvent::UpdatedPendingContext {
+                previous_block_ids: self.pending_context_block_ids.clone(),
+                requires_block_resync: false,
+                requires_text_resync: false,
+            });
+        }
+        std::mem::take(&mut self.pending_attachments)
     }
 }
 

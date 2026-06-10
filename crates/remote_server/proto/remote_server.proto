@@ -43,6 +43,12 @@ message HostScopedRequest {
     GetBranches get_branches = 12;
     ResyncCodebase resync_codebase = 13;
     UploadHandoffSnapshot upload_handoff_snapshot = 14;
+    GitCommitChainRequest git_commit_chain = 15;
+    GitPushRequest git_push = 16;
+    GitCreatePrRequest git_create_pr = 17;
+    GitGetPrInfoRequest git_get_pr_info = 18;
+    GitGenerateCommitMessageRequest git_generate_commit_message = 19;
+    GitGetCommittedBranchFilesRequest git_get_committed_branch_files = 20;
   }
 }
 
@@ -106,6 +112,12 @@ message ServerMessage {
     GetFragmentMetadataFromHashResponse get_fragment_metadata_from_hash_response = 24;
     GetBranchesResponse get_branches_response = 25;
     UploadHandoffSnapshotResponse upload_handoff_snapshot_response = 26;
+    GitCommitChainResponse git_commit_chain_response = 27;
+    GitPushResponse git_push_response = 28;
+    GitCreatePrResponse git_create_pr_response = 29;
+    GitGetPrInfoResponse git_get_pr_info_response = 30;
+    GitGenerateCommitMessageResponse git_generate_commit_message_response = 31;
+    GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 32;
   }
 }
 
@@ -624,4 +636,3 @@ message ResolveConflictSuccess {}
 message BufferConflictDetected {
   string path = 1;
 }
-

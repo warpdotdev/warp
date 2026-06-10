@@ -2975,7 +2975,10 @@ impl BlockList {
 
         if block.did_execute {
             let command = self.active_block_mut().command_to_string();
-            self.preexec(PreexecValue { command });
+            self.preexec(PreexecValue {
+                command,
+                session_id: None,
+            });
         }
 
         if block.did_execute || block.is_background {

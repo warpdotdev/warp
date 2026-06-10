@@ -183,7 +183,13 @@ impl Sessions {
                 | RemoteServerManagerEvent::DiffStateSnapshotReceived { .. }
                 | RemoteServerManagerEvent::DiffStateMetadataUpdateReceived { .. }
                 | RemoteServerManagerEvent::DiffStateFileDeltaReceived { .. }
-                | RemoteServerManagerEvent::GetBranchesResponse { .. } => {}
+                | RemoteServerManagerEvent::GetBranchesResponse { .. }
+                | RemoteServerManagerEvent::CommitChainResponse { .. }
+                | RemoteServerManagerEvent::GitPushResponse { .. }
+                | RemoteServerManagerEvent::CreatePrResponse { .. }
+                | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
+                | RemoteServerManagerEvent::GetPrInfoResponse { .. }
+                | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
                     client,
@@ -1396,9 +1402,11 @@ impl Session {
             .as_deref()
             .map(|path| HashMap::from_iter([("PATH".to_string(), path.to_string())]));
 
+        let escaped_history_file =
+            shell_escape_single_quotes(history_file, self.info.shell.shell_type());
         let output_in_bytes = self
             .execute_command(
-                format!("cat {history_file}").as_str(),
+                format!("cat '{escaped_history_file}'").as_str(),
                 None,
                 env_vars,
                 ExecuteCommandOptions::default(),

@@ -17,11 +17,13 @@ use super::queued_prompts_panel::{
 };
 use super::TerminalView;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::UserQueryMode;
+use crate::ai::agent::{ImageContext, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::{
     AutofireAction, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-    QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
+    PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin,
 };
 use crate::features::FeatureFlag;
 use crate::server::server_api::ai::SpawnAgentRequest;
@@ -33,6 +35,47 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
+}
+
+fn command_query(text: &str) -> QueuedQuery {
+    QueuedQuery::new_command(text.to_owned(), QueuedQueryOrigin::AutoQueueToggle)
+}
+
+fn image_attachment(file_name: &str) -> PendingAttachment {
+    PendingAttachment::Image(ImageContext {
+        data: String::new(),
+        mime_type: "image/png".to_owned(),
+        file_name: file_name.to_owned(),
+        is_figma: false,
+    })
+}
+
+fn query_with_attachments(text: &str, attachments: Vec<PendingAttachment>) -> QueuedQuery {
+    QueuedQuery::new_with_attachments(
+        text.to_owned(),
+        QueuedQueryOrigin::QueueSlashCommand,
+        attachments,
+    )
+}
+
+/// Mirrors `TerminalView::drain_queued_prompts`' Complete path at the model level: peek the head
+/// row's action, then remove the fired row (both `AutofireAction` variants carry the row id).
+fn drain_one(
+    model: &warpui::ModelHandle<QueuedQueryModel>,
+    app: &mut App,
+    conv: AIConversationId,
+) -> Option<AutofireAction> {
+    model.update(app, |m, ctx| {
+        let action = m.peek_autofire(conv);
+        if let Some(
+            AutofireAction::Submit { query_id, .. }
+            | AutofireAction::PopFromEditMode { query_id, .. },
+        ) = &action
+        {
+            m.remove_fired_row(conv, *query_id, ctx);
+        }
+        action
+    })
 }
 
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
@@ -147,9 +190,9 @@ fn complete_drain_pops_head_and_returns_submit_action() {
             m.append(conv, user_query("second"), ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = drain_one(&model, &mut app, conv);
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "first"),
             other => panic!("expected Submit, got {other:?}"),
         }
         model.read(&app, |m, _| {
@@ -690,9 +733,14 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
             m.enter_edit_mode(conv, id_a, ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = drain_one(&model, &mut app, conv);
         match action {
-            Some(AutofireAction::PopFromEditMode { text }) => assert_eq!(text, "first"),
+            Some(AutofireAction::PopFromEditMode {
+                text, is_command, ..
+            }) => {
+                assert_eq!(text, "first");
+                assert!(!is_command);
+            }
             other => panic!("expected PopFromEditMode, got {other:?}"),
         }
         // Edit mode is cleared after pop.
@@ -700,6 +748,137 @@ fn complete_drain_with_first_row_in_edit_mode_returns_pop_from_edit_mode() {
             assert_eq!(m.editing_row(conv), None);
             assert_eq!(m.queue(conv).len(), 1);
             assert_eq!(m.queue(conv)[0].text(), "second");
+        });
+    });
+}
+
+#[test]
+fn complete_drain_of_edited_command_restores_text_in_shell_mode() {
+    // A command row being edited when the agent finishes cleanly is popped into the input in
+    // shell mode, so the restored text stays a command rather than being submitted as a prompt.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        // Entering agent view puts the input in agent (AI) mode, so the drain must actively
+        // switch it to shell mode for the restored command.
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            })
+        });
+        terminal.read(&app, |view, ctx| {
+            assert!(view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            let id = model.append(conversation_id, command_query("echo 1"), ctx);
+            model.enter_edit_mode(conversation_id, id, ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "echo 1");
+            assert!(!view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+#[test]
+fn error_drain_of_command_restores_text_in_shell_mode() {
+    // On a non-clean finish, the head command is popped into the empty input in shell mode, so a
+    // restored command stays a command.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        // The cancel restore path only fires for the conversation the user is viewing; entering
+        // agent view makes `conversation_id` active and puts the input in agent (AI) mode.
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter agent view")
+            })
+        });
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, command_query("echo 1"), ctx);
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.drain_queued_prompts(conversation_id, FinishReason::Cancelled, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input().as_ref(ctx).buffer_text(ctx), "echo 1");
+            assert!(!view.ai_input_model.as_ref(ctx).is_ai_input_enabled());
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+/// Verifies failed command auto-fire keeps the row queued when the input has a draft.
+#[test]
+fn complete_drain_keeps_command_row_when_dispatch_fails_with_draft() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, command_query("echo 1"), ctx)
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.input().update(ctx, |input, ctx| {
+                input.replace_buffer_content("draft in progress", ctx);
+            });
+            view.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                view.input().as_ref(ctx).buffer_text(ctx),
+                "draft in progress"
+            );
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].id(), query_id);
+            assert_eq!(queue[0].text(), "echo 1");
+            assert!(queue[0].is_command());
         });
     });
 }
@@ -719,7 +898,7 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
         if !(simulated_input_is_non_empty
             && model.read(&app, |m, _| m.first_row_is_in_edit_mode(conv)))
         {
-            model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+            drain_one(&model, &mut app, conv);
         }
 
         model.read(&app, |m, _| {
@@ -734,7 +913,7 @@ fn complete_drain_with_non_empty_input_preserves_edited_head_row() {
 #[test]
 fn complete_drain_with_empty_queue_returns_none() {
     with_singleton(|mut app, model, conv| {
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = drain_one(&model, &mut app, conv);
         assert!(action.is_none());
     });
 }
@@ -937,21 +1116,21 @@ fn complete_drain_after_error_drain_continues_with_next_row() {
         );
 
         // Complete: pop "second".
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = drain_one(&model, &mut app, conv);
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "second"),
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "second"),
             other => panic!("expected Submit(\"second\"), got {other:?}"),
         }
 
         // Complete again: pop "third".
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = drain_one(&model, &mut app, conv);
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "third"),
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "third"),
             other => panic!("expected Submit(\"third\"), got {other:?}"),
         }
 
         // Queue is now empty; the next drain returns None.
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv, ctx));
+        let action = drain_one(&model, &mut app, conv);
         assert!(action.is_none());
     });
 }
@@ -966,9 +1145,9 @@ fn drain_is_isolated_per_conversation() {
             m.append(conv_b, user_query("b-first"), ctx);
         });
 
-        let action = model.update(&mut app, |m, ctx| m.pop_for_autofire(conv_a, ctx));
+        let action = drain_one(&model, &mut app, conv_a);
         match action {
-            Some(AutofireAction::Submit { text }) => assert_eq!(text, "a-first"),
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "a-first"),
             other => panic!("expected Submit(\"a-first\"), got {other:?}"),
         }
         model.read(&app, |m, _| {
@@ -980,9 +1159,10 @@ fn drain_is_isolated_per_conversation() {
 }
 
 #[test]
-fn send_now_action_removes_row_and_emits_send_now_event() {
-    // Clicking "send now" on a queued row removes exactly that row and asks the host to submit its
-    // text immediately. The locked initial cloud-mode row is rejected by the model (covered by
+fn send_now_action_emits_row_kind_and_leaves_rows_for_host_to_fire() {
+    // Clicking "send now" emits a SendNow event identifying the row and whether it is a command,
+    // but leaves the row in the queue so the host can dispatch it and remove it afterward. The
+    // locked initial cloud-mode row is rejected by the model (covered by
     // `initial_cloud_mode_head_rejects_user_mutations_and_autofire`) and has its button disabled
     // in the panel, so it needs no separate panel test.
     App::test((), |mut app| async move {
@@ -1015,29 +1195,54 @@ fn send_now_action_removes_row_and_emits_send_now_event() {
             })
         });
 
-        let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
-            model.append(conversation_id, user_query("send me now"), ctx)
-        });
+        let (prompt_id, command_id) =
+            QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+                let prompt_id = model.append(conversation_id, user_query("send me now"), ctx);
+                let command_id = model.append(conversation_id, command_query("echo 1"), ctx);
+                (prompt_id, command_id)
+            });
 
-        let send_now_events = Rc::new(RefCell::new(Vec::<String>::new()));
+        let send_now_events = Rc::new(RefCell::new(Vec::<(
+            AIConversationId,
+            QueuedQueryId,
+            String,
+            bool,
+        )>::new()));
         let send_now_events_for_subscription = send_now_events.clone();
         app.update(|ctx| {
             ctx.subscribe_to_view(&panel, move |_, event: &QueuedPromptsPanelEvent, _| {
-                if let QueuedPromptsPanelEvent::SendNow { text } = event {
-                    send_now_events_for_subscription
-                        .borrow_mut()
-                        .push(text.clone());
+                if let QueuedPromptsPanelEvent::SendNow {
+                    conversation_id,
+                    query_id,
+                    text,
+                    is_command,
+                } = event
+                {
+                    send_now_events_for_subscription.borrow_mut().push((
+                        *conversation_id,
+                        *query_id,
+                        text.clone(),
+                        *is_command,
+                    ));
                 }
             });
         });
 
         panel.update(&mut app, |panel, ctx| {
-            panel.handle_action(&QueuedPromptsPanelAction::SendNow(query_id), ctx);
+            panel.handle_action(&QueuedPromptsPanelAction::SendNow(prompt_id), ctx);
+            panel.handle_action(&QueuedPromptsPanelAction::SendNow(command_id), ctx);
         });
 
-        assert_eq!(send_now_events.borrow().as_slice(), ["send me now"]);
+        assert_eq!(
+            send_now_events.borrow().as_slice(),
+            [
+                (conversation_id, prompt_id, "send me now".to_owned(), false),
+                (conversation_id, command_id, "echo 1".to_owned(), true)
+            ]
+        );
+        // The panel leaves each row in place; the host removes it after firing.
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
-            assert!(model.queue(conversation_id).is_empty());
+            assert_eq!(model.queue(conversation_id).len(), 2);
         });
     });
 }
@@ -1110,6 +1315,54 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
             assert_eq!(
                 panel.send_now_button_disabled_for_test(followup_id, ctx),
                 Some(false)
+            );
+        });
+    });
+}
+
+#[test]
+fn multi_cycle_queue_keeps_each_rows_attachments_independent() {
+    // attach -> queue -> attach -> queue: each row owns its own attachments, and draining one
+    // never disturbs the other's.
+    with_singleton(|mut app, model, conv| {
+        let first_id = model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                query_with_attachments("first", vec![image_attachment("first.png")]),
+                ctx,
+            )
+        });
+        let second_id = model.update(&mut app, |m, ctx| {
+            m.append(
+                conv,
+                query_with_attachments("second", vec![image_attachment("second.png")]),
+                ctx,
+            )
+        });
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.attachments_for(conv, first_id)[0].file_name(),
+                "first.png"
+            );
+            assert_eq!(
+                m.attachments_for(conv, second_id)[0].file_name(),
+                "second.png"
+            );
+        });
+
+        // Drain the first row; the second row's attachments are untouched.
+        let action = drain_one(&model, &mut app, conv);
+        match action {
+            Some(AutofireAction::Submit { text, .. }) => assert_eq!(text, "first"),
+            other => panic!("expected Submit, got {other:?}"),
+        }
+        model.read(&app, |m, _| {
+            assert!(m.attachments_for(conv, first_id).is_empty());
+            assert_eq!(m.attachments_for(conv, second_id).len(), 1);
+            assert_eq!(
+                m.attachments_for(conv, second_id)[0].file_name(),
+                "second.png"
             );
         });
     });

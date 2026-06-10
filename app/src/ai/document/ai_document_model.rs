@@ -14,9 +14,9 @@ use itertools::Itertools;
 use uuid::Uuid;
 use warp_editor::model::RichTextEditorModel;
 use warp_editor::render::model::RichTextStyles;
+use warp_multi_agent_api as maa_api;
 use warpui::color::ColorU;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
-use {anyhow, warp_multi_agent_api as maa_api};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentActionId;

@@ -2127,32 +2127,105 @@ impl AgentDriver {
             .await?;
 
         // Install plugins before running the harness command.
-        let plugin_manager: Option<Box<dyn CliAgentPluginManager>> =
-            plugin_manager_for(harness.cli_agent());
-        if let Some(manager) = plugin_manager {
-            let plugin_result = if manager.needs_update() {
-                manager.update().await
-            } else if !manager.is_installed() {
-                manager.install().await
-            } else {
-                Ok(())
-            };
-            if let Err(e) = plugin_result {
-                log::warn!("Plugin installation/update failed (continuing): {e}");
+        Self::setup_harness_plugins(harness).await?;
+
+        Ok(exit_rx)
+    }
+
+    async fn setup_harness_plugins(
+        harness: &dyn ThirdPartyHarness,
+    ) -> Result<(), AgentDriverError> {
+        let harness_name = harness.cli_agent().command_prefix();
+        let requires_platform_plugin = harness.requires_verified_platform_plugin();
+        let Some(manager) = plugin_manager_for(harness.cli_agent()) else {
+            if requires_platform_plugin {
+                return Err(Self::required_platform_plugin_error(
+                    harness_name,
+                    "Required platform plugin manager is unavailable",
+                ));
             }
-            let platform_plugin_result = if manager.platform_plugin_needs_update() {
-                manager.update_platform_plugin().await
-            } else if !manager.is_platform_plugin_installed() {
-                manager.install_platform_plugin().await
-            } else {
-                Ok(())
-            };
-            if let Err(e) = platform_plugin_result {
+            return Ok(());
+        };
+
+        Self::setup_notification_plugin(manager.as_ref()).await;
+        Self::setup_platform_plugin(harness_name, manager.as_ref(), requires_platform_plugin).await
+    }
+
+    async fn setup_notification_plugin(manager: &dyn CliAgentPluginManager) {
+        if !manager.can_auto_install() {
+            return;
+        }
+        if manager.needs_update() {
+            if let Err(e) = manager.update().await {
+                log::warn!("Plugin update failed (continuing): {e}");
+            }
+        } else if !manager.is_installed() {
+            if let Err(e) = manager.install().await {
+                log::warn!("Plugin installation failed (continuing): {e}");
+            }
+        }
+    }
+
+    async fn setup_platform_plugin(
+        harness_name: &str,
+        manager: &dyn CliAgentPluginManager,
+        required: bool,
+    ) -> Result<(), AgentDriverError> {
+        if manager.platform_plugin_needs_update() {
+            if let Err(e) = manager.update_platform_plugin().await {
+                if required {
+                    return Err(Self::required_platform_plugin_error(
+                        harness_name,
+                        format!("Required platform plugin update failed: {e}"),
+                    ));
+                }
+                log::warn!("Platform plugin update failed (continuing): {e}");
+            }
+        } else if !manager.is_platform_plugin_installed() {
+            if let Err(e) = manager.install_platform_plugin().await {
+                if required {
+                    return Err(Self::required_platform_plugin_error(
+                        harness_name,
+                        format!("Required platform plugin installation failed: {e}"),
+                    ));
+                }
                 log::warn!("Platform plugin installation failed (continuing): {e}");
             }
         }
 
-        Ok(exit_rx)
+        if required {
+            Self::verify_required_platform_plugin(harness_name, manager)?;
+        }
+        Ok(())
+    }
+
+    fn verify_required_platform_plugin(
+        harness_name: &str,
+        manager: &dyn CliAgentPluginManager,
+    ) -> Result<(), AgentDriverError> {
+        if !manager.is_platform_plugin_installed() {
+            return Err(Self::required_platform_plugin_error(
+                harness_name,
+                "Required platform plugin is not installed",
+            ));
+        }
+        if manager.platform_plugin_needs_update() {
+            return Err(Self::required_platform_plugin_error(
+                harness_name,
+                "Required platform plugin is below the minimum supported version",
+            ));
+        }
+        Ok(())
+    }
+
+    fn required_platform_plugin_error(
+        harness: &str,
+        reason: impl Into<String>,
+    ) -> AgentDriverError {
+        AgentDriverError::HarnessSetupFailed {
+            harness: harness.to_owned(),
+            reason: reason.into(),
+        }
     }
 
     /// Configure a third-party harness for execution. This will set `self.harness` and

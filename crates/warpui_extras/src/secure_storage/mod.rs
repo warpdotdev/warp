@@ -93,6 +93,14 @@ pub fn register_with_dir(
 pub trait SecureStorage {
     /// Writes a value at the given key.
     fn write_value(&self, key: &str, value: &str) -> Result<(), Error>;
+    /// Writes a value while requiring any file fallback to be owner-only.
+    ///
+    /// Platforms without a file fallback use their normal secure-storage write
+    /// path. Callers should opt into this only when they require the stronger
+    /// fallback behavior because it may create or change fallback permissions.
+    fn write_value_with_owner_only_fallback(&self, key: &str, value: &str) -> Result<(), Error> {
+        self.write_value(key, value)
+    }
 
     /// Reads the value stored at the given key.
     fn read_value(&self, key: &str) -> Result<String, Error>;

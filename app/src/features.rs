@@ -447,6 +447,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TabConfigs,
         #[cfg(feature = "grouped_tabs")]
         FeatureFlag::GroupedTabs,
+        #[cfg(feature = "warp_control_cli")]
+        FeatureFlag::WarpControlCli,
         #[cfg(feature = "agent_harness")]
         FeatureFlag::AgentHarness,
         #[cfg(feature = "oz_handoff")]

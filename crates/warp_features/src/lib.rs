@@ -794,6 +794,9 @@ pub enum FeatureFlag {
     /// Enables tab configs — user-definable TOML templates for launching custom tab layouts.
     TabConfigs,
 
+    /// Enables Warp local control through the standalone warpctrl CLI.
+    WarpControlCli,
+
     /// When enabled, free-tier users are blocked from AI features (no-AI experiment arm).
     FreeUserNoAi,
 
@@ -892,6 +895,8 @@ static FEATURES_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Features used in debugging.
 pub const DEBUG_FLAGS: &[FeatureFlag] = &[FeatureFlag::DebugMode, FeatureFlag::RuntimeFeatureFlags];
+/// Features enabled only for the WarpLocal developer build.
+pub const LOCAL_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
 
 /// Features enabled for the development team.  The expectation is that, over
 /// time, these will move on to PREVIEW_FLAGS before being launched.
@@ -937,11 +942,9 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
-    FeatureFlag::GroupedTabs,
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
-    FeatureFlag::OwnerOrchestrationAncestorStreamer,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -949,6 +952,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
 pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     #[cfg(target_os = "macos")]
     FeatureFlag::DragTabsToWindows,
+    FeatureFlag::GroupedTabs,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
@@ -991,7 +995,9 @@ impl FeatureFlag {
         // Allow calling this in integration tests because we sometimes use it in the app
         // during flows that integration tests cover.
         if cfg!(test) && cfg!(not(feature = "integration_tests")) {
-            panic!("Tried to globally enable {self:?} in a test. Use FeatureFlag::{self:?}.override_enabled instead");
+            panic!(
+                "Tried to globally enable {self:?} in a test. Use FeatureFlag::{self:?}.override_enabled instead"
+            );
         }
         FLAG_STATES[self as usize].store(enabled, Ordering::Relaxed);
     }
@@ -1034,15 +1040,26 @@ impl FeatureFlag {
             BlocklistMarkdownImages => {
                 Some("Enables rendering markdown images inline in AI block list responses.")
             }
-            CloudEnvironments => Some("Enables creating and managing Warp Environments via the CLI."),
-            CreateEnvironmentSlashCommand => Some("Enables the /create environment slash command for setting up Warp Environments with custom configurations."),
+            CloudEnvironments => {
+                Some("Enables creating and managing Warp Environments via the CLI.")
+            }
+            CreateEnvironmentSlashCommand => Some(
+                "Enables the /create environment slash command for setting up Warp Environments with custom configurations.",
+            ),
             GlobalSearch => Some("Enables global search in the left panel"),
             BlocklistMarkdownTableRendering => {
                 Some("Enables rendering markdown tables inline in AI block list responses.")
             }
-            MarkdownTables => Some("Enables rendering and interaction support for markdown tables in notebooks."),
-            SettingsFile => Some("Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values."),
-            GitOperationsInCodeReview => Some("Enables commit, push, and create-PR actions directly from the code review panel."),
+            MarkdownTables => {
+                Some("Enables rendering and interaction support for markdown tables in notebooks.")
+            }
+            SettingsFile => Some(
+                "Enables configuring Warp via a user-editable `settings.toml` file, with hot reload and error reporting for invalid values.",
+            ),
+            GitOperationsInCodeReview => Some(
+                "Enables commit, push, and create-PR actions directly from the code review panel.",
+            ),
+            GroupedTabs => Some("Enables organizing tabs into named, collapsible groups."),
             _ => None,
         }
     }
