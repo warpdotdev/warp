@@ -2136,11 +2136,9 @@ impl AIConversation {
 
     /// Marks the in-flight request's exchanges as finished with `error`.
     ///
-    /// `recovery_pending` indicates an automatic recovery (conversation resume) has been
-    /// scheduled for this failure: the conversation moves to the non-terminal
-    /// `TransientError` status instead of `Error`, so consumers (run-state sync, the
-    /// headless driver) don't treat the conversation as dead while the recovery is in
-    /// flight.
+    /// `recovery_pending` moves the conversation to the non-terminal `TransientError`
+    /// status instead of `Error`, so consumers don't treat it as dead while an
+    /// automatic recovery is in flight.
     pub fn mark_request_completed_with_error(
         &mut self,
         stream_id: &ResponseStreamId,
@@ -4201,10 +4199,9 @@ pub enum ConversationStatus {
     /// The last turn of the agent completed with error.
     Error,
 
-    /// The last turn of the agent failed transiently and an automatic recovery (an
-    /// in-request retry waiting for connectivity, or a conversation resume) is pending.
-    /// Non-terminal: the conversation is expected to return to `InProgress` when the
-    /// recovery request sends, or fall to `Error` if recovery is exhausted.
+    /// The last turn failed transiently and an automatic recovery (retry or resume)
+    /// is pending. Non-terminal: returns to `InProgress` when the recovery request
+    /// sends, or falls to `Error` if recovery is exhausted.
     TransientError,
 
     /// The last turn of the agent was cancelled by the user.

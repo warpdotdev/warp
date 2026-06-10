@@ -1708,9 +1708,8 @@ impl BlocklistAIHistoryModel {
         });
     }
 
-    /// Marks the stream's exchanges as finished with `error`. `recovery_pending`
-    /// moves the conversation to the non-terminal `TransientError` status (an
-    /// automatic resume has been scheduled) instead of `Error`.
+    /// Marks the stream's exchanges as finished with `error`. `recovery_pending` moves
+    /// the conversation to the non-terminal `TransientError` status instead of `Error`.
     pub fn mark_response_stream_completed_with_error(
         &mut self,
         error: RenderableAIError,

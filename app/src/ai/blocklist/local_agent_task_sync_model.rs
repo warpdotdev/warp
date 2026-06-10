@@ -317,9 +317,8 @@ fn map_conversation_status(
     match conversation.status() {
         ConversationStatus::InProgress => (AgentTaskState::InProgress, None),
         ConversationStatus::Success => (AgentTaskState::Succeeded, None),
-        // An automatic recovery (retry or resume) is pending: keep the run
-        // IN_PROGRESS so it is not terminated out from under the recovery attempt
-        // (terminal task states tear down cloud executions).
+        // An automatic recovery is pending: keep the run IN_PROGRESS so the cloud
+        // execution isn't torn down out from under it.
         ConversationStatus::TransientError => (
             AgentTaskState::InProgress,
             Some(TaskStatusUpdate::message(
@@ -357,11 +356,9 @@ fn map_conversation_status(
     }
 }
 
-/// Maps a conversation-level error to a terminal task update. Recoveries in
-/// flight are represented by the non-terminal `ConversationStatus::TransientError`
-/// (handled in `map_conversation_status`), so an `Error` status here is always
-/// terminal — the `will_attempt_resume` rendering hint on the error is
-/// deliberately ignored.
+/// Maps a conversation-level error to a terminal task update. In-flight recoveries
+/// surface as `TransientError`, so an `Error` status is always terminal here — the
+/// `will_attempt_resume` rendering hint is deliberately ignored.
 pub(crate) fn task_update_for_conversation_error(
     error: Option<&RenderableAIError>,
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {

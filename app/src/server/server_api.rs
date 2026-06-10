@@ -185,11 +185,9 @@ pub enum AIApiError {
         source: anyhow::Error,
     },
 
-    /// The response stream ended before a logical completion was received.
-    ///
-    /// The server contract guarantees a stream-finished event is always sent, but the
-    /// transport can truncate the response between chunks, which surfaces as a clean EOF
-    /// rather than a transport error. Synthesized client-side when that happens.
+    /// Synthesized client-side when a response stream ends without a stream-finished
+    /// event: the server always sends one, but the transport can truncate the response
+    /// between chunks, surfacing as a clean EOF.
     #[error("Response stream ended unexpectedly before completion.")]
     StreamTruncated,
 }
@@ -334,14 +332,12 @@ impl AIApiError {
         }
     }
 
-    /// Returns whether this error represents a transient network or server failure where a
-    /// fresh request is likely to succeed once connectivity or the service recovers.
+    /// Returns whether this is a transient network/server failure where a fresh
+    /// request is likely to succeed once connectivity or the service recovers.
     ///
-    /// This gates automatic conversation resumes and is intentionally narrower than
-    /// [`Self::is_retryable`], which also treats application-level failures (e.g. quota
-    /// limits or load shedding) as retryable for the in-request retry path. Auto-resuming
-    /// on those would issue a request that fails identically (out of credits) or add load
-    /// the server just asked us to shed (overloaded).
+    /// Gates automatic conversation resumes; intentionally narrower than
+    /// [`Self::is_retryable`]: auto-resuming on application-level failures (quota,
+    /// overload) would fail identically or add load the server just shed.
     pub fn is_transient_failure(&self) -> bool {
         fn is_transient_status(status: http::StatusCode) -> bool {
             status.is_server_error()

@@ -76,9 +76,7 @@ pub enum AmbientConversationStatus {
 pub fn conversation_output_status_from_conversation(
     conversation: &AIConversation,
 ) -> Option<AmbientConversationStatus> {
-    // A transient failure with recovery pending is not a terminal outcome: the
-    // conversation is expected to return to InProgress (or fall to Error if the
-    // recovery is exhausted).
+    // A pending recovery is not a terminal outcome.
     if conversation.status().is_transient_error() {
         return None;
     }
@@ -88,9 +86,8 @@ pub fn conversation_output_status_from_conversation(
         });
     }
     if let ConversationStatus::Error = conversation.status() {
-        // Prefer the structured error recorded on the last exchange when available: it
-        // carries rendering hints (e.g. `will_attempt_resume`/`waiting_for_network`)
-        // and the precise error variant, which the string-only `status_error_message`
+        // Prefer the structured error on the last exchange: it carries the precise
+        // error variant and rendering hints that the string-only `status_error_message`
         // cannot.
         if let Some(AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Error { error, .. },

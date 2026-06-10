@@ -2306,9 +2306,8 @@ impl BlocklistAIController {
             handle.abort();
         }
 
-        // Passive background requests (auto code diffs, passive suggestion triggers) never
-        // auto-resume: a resume would issue a fresh turn on a conversation the user never
-        // sees. Enforce this here so every entry point is covered.
+        // Passive background requests never auto-resume: a resume would issue a fresh
+        // turn on a conversation the user never sees.
         let is_passive_request = request_input
             .all_inputs()
             .any(|input| input.is_passive_request());
@@ -2558,10 +2557,8 @@ impl BlocklistAIController {
             .in_flight_response_streams
             .try_cancel_streams_for_conversation(conversation_id, reason, ctx)
         {
-            // A parked auto-resume was aborted above. With no active stream (and
-            // possibly no pending actions) nothing else will move the conversation out
-            // of the non-terminal TransientError status, so surface the cancellation
-            // directly.
+            // A parked auto-resume was aborted above; nothing else will move the
+            // conversation out of TransientError, so surface the cancellation directly.
             if !reason.should_preserve_in_progress_status() {
                 let history_model = BlocklistAIHistoryModel::handle(ctx);
                 let is_recovering = history_model
@@ -2791,8 +2788,7 @@ impl BlocklistAIController {
                     return;
                 };
                 // Mirror the parked-retry state on the conversation: TransientError while
-                // the retry waits for connectivity, back to InProgress when it fires. No
-                // exchange is finished here — the request is still logically in flight.
+                // waiting for connectivity, back to InProgress when the retry fires.
                 let status = if *waiting {
                     ConversationStatus::TransientError
                 } else {
@@ -2883,10 +2879,8 @@ impl BlocklistAIController {
                         self.set_input_mode_for_cancellation(ctx);
                     }
                 } else if is_any_exchange_unfinished {
-                    // Defensive: truncated streams are detected inside `ResponseStream`
-                    // (which synthesizes a `StreamTruncated` error event and drives
-                    // retry/resume recovery), so an unfinished exchange here means an
-                    // unexpected completion path. Surface a terminal error.
+                    // Defensive: truncated streams are detected inside `ResponseStream`,
+                    // so an unfinished exchange here means an unexpected completion path.
                     log::warn!(
                         "Response stream completed with an unfinished exchange and no error event."
                     );

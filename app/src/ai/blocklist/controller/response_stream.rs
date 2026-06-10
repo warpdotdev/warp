@@ -35,12 +35,9 @@ enum RecoveryAction {
 
 /// Decides how to recover from a failed response-stream attempt.
 ///
-/// The split: before any client actions have been received, the original request can
-/// be re-sent verbatim (retry) — and an offline client parks the retry until
-/// connectivity returns rather than failing. Once actions have streamed (and possibly
-/// executed), re-sending is unsafe, so recovery uses a fresh `ResumeConversation`
-/// request instead. Pre-action budget exhaustion while online is terminal: the
-/// request has already been retried `MAX_RETRIES` times.
+/// Before any client actions have been received, the request can be re-sent verbatim
+/// (immediately, or once connectivity returns). After actions have streamed,
+/// re-sending is unsafe, so recovery uses a fresh `ResumeConversation` request.
 fn recovery_action(
     has_received_client_actions: bool,
     is_retryable: bool,
@@ -113,9 +110,8 @@ pub struct ResponseStream {
     /// `can_attempt_resume_on_error` is true.
     should_resume_conversation_after_stream_finished: bool,
 
-    /// Whether a `StreamFinished` event was received for the current request. The
-    /// server always sends one before ending the response, so a stream that completes
-    /// without it was truncated in transit and is recovered like a transport error.
+    /// Whether a `StreamFinished` event was received for the current request. A
+    /// stream that completes without one was truncated in transit.
     stream_finished_received: bool,
 
     /// Whether a terminal error event has already been emitted for the current
@@ -123,8 +119,7 @@ pub struct ResponseStream {
     error_event_emitted: bool,
 
     /// Whether a retry is parked waiting for connectivity. While set, completion of
-    /// the failed attempt's underlying stream is ignored — the request is logically
-    /// still active. Cleared when the deferred retry fires (or via cancellation).
+    /// the failed attempt's underlying stream is ignored.
     deferred_retry_pending: bool,
 
     /// Unique, internal id for the current request.
@@ -366,10 +361,7 @@ impl ResponseStream {
                         return;
                     }
                     RecoveryAction::Resume => {
-                        // Unlike an in-request retry (which re-sends the same request and is
-                        // unsafe once actions have executed), a resume sends a fresh
-                        // ResumeConversation request and is safe at any point. The resume
-                        // spawn itself waits for connectivity.
+                        // The resume spawn itself waits for connectivity.
                         self.should_resume_conversation_after_stream_finished = true;
                     }
                     RecoveryAction::Fail => {}
@@ -393,10 +385,9 @@ impl ResponseStream {
             return;
         }
 
-        // The server always sends a StreamFinished event before ending the response. A
-        // stream that completes without one (and without a transport error) was
-        // truncated in transit — e.g. a connection cut between chunks surfaces as a
-        // clean EOF. Synthesize the failure and recover like any transient error.
+        // The server always sends a StreamFinished event before ending the response,
+        // but a transport cut between chunks surfaces as a clean EOF. Synthesize the
+        // failure and recover like any transient error.
         if !self.stream_finished_received && !self.error_event_emitted {
             log::warn!(
                 "generate_multi_agent_output stream ended without emitting StreamFinished event."
@@ -454,8 +445,7 @@ impl ResponseStream {
     }
 
     /// Reports a non-retried request failure to crash reporting with classification
-    /// tags. Shared by the error-event path and the synthesized stream-truncation
-    /// path so both failure shapes are visible with the same tags.
+    /// tags.
     #[cfg_attr(not(feature = "crash_reporting"), expect(unused_variables))]
     fn report_request_failure(&self, error: &Arc<AIApiError>, is_online: bool) {
         #[cfg(feature = "crash_reporting")]
@@ -491,9 +481,8 @@ impl ResponseStream {
         }
     }
 
-    /// Parks a retry until connectivity returns. The controller mirrors the parked
-    /// state on the conversation (`TransientError`) via the `WaitingForNetwork` event;
-    /// cancellation invalidates the parked retry through `current_request_id`.
+    /// Parks a retry until connectivity returns; cancellation invalidates the parked
+    /// retry through `current_request_id`.
     fn defer_retry_until_online(&mut self, ctx: &mut ModelContext<Self>) {
         self.deferred_retry_pending = true;
         ctx.emit(ResponseStreamEvent::WaitingForNetwork { waiting: true });
@@ -546,10 +535,9 @@ pub struct StreamCancellation {
 #[derive(Debug, Clone)]
 pub enum ResponseStreamEvent {
     ReceivedEvent(Consumable<api::Event>),
-    /// A transient failure occurred while offline and the retry is parked until
-    /// connectivity returns (`waiting: true`), or the parked retry has just fired
-    /// (`waiting: false`). The controller mirrors this on the conversation status
-    /// (`TransientError` ↔ `InProgress`).
+    /// A retry is parked until connectivity returns (`waiting: true`) or has just
+    /// fired (`waiting: false`). The controller mirrors this on the conversation
+    /// status (`TransientError` ↔ `InProgress`).
     WaitingForNetwork {
         waiting: bool,
     },
