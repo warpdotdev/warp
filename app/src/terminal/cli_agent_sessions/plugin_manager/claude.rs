@@ -194,7 +194,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
         .await?;
         self.run_logged(&["plugin", "install", PLATFORM_PLUGIN_KEY], &mut log)
             .await?;
-        
+
         let still_outdated = claude_home_dir()
             .ok()
             .and_then(|dir| installed_platform_plugin_version(&dir))
