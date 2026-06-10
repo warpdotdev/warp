@@ -1,2 +1,1 @@
 fonttools==4.61.0
-google-cloud-storage>=2.0.0
