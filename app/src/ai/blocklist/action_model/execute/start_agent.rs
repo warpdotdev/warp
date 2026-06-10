@@ -577,7 +577,14 @@ fn start_agent_error_message_for_status(
                 blocked_action.to_string()
             })
         }
-        ConversationStatus::InProgress | ConversationStatus::Success => None,
+        // `WaitingForEvents` is treated like `InProgress`/`Success` here:
+        // a child that's actively waiting for events has, by definition,
+        // already initialized successfully and is not an error case.
+        // The agent run is still in flight, so we don't surface an error
+        // message for the start path.
+        ConversationStatus::InProgress
+        | ConversationStatus::Success
+        | ConversationStatus::WaitingForEvents => None,
     }
 }
 

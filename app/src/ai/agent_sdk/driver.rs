@@ -2781,12 +2781,20 @@ impl AgentDriver {
                     };
 
                     if conversation.status().is_in_progress() {
-                        // Conversation resumed or a new one started; cancel any pending idle timeout.
+                        // Conversation resumed or a new one started; cancel any
+                        // pending idle timeout.
                         log::info!(
                             "Ambient agent idle lifecycle: event=idle_timeout_cancel_requested task_id={:?} terminal_view_id={terminal_id:?} trigger=conversation_in_progress",
                             me.task_id
                         );
                         run_exit.cancel_idle_timeout();
+                        return;
+                    }
+
+                    // wait_for_events keeps the run alive via the
+                    // action_model's running_actions; the executor owns
+                    // the watchdog. Don't resolve run_exit.
+                    if conversation.status().is_waiting_for_events() {
                         return;
                     }
 

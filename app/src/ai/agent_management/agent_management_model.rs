@@ -385,6 +385,12 @@ impl AgentNotificationsModel {
                     ctx,
                 );
             }
+            // Yielded conversations are still active; mirror the
+            // InProgress arm and clear any stale notification for this
+            // origin.
+            ConversationStatus::WaitingForEvents => {
+                self.remove_notification_by_source(origin, ctx);
+            }
         }
     }
 
@@ -471,13 +477,20 @@ pub enum AgentManagementEvent {
 impl ConversationStatus {
     /// Returns true if the updating the conversation with this status should trigger some
     /// notification to the user.
+    ///
+    /// Exhaustive match so a new `ConversationStatus` variant forces a
+    /// deliberate decision about whether it should fire a notification.
     pub fn should_trigger_notification(&self) -> bool {
-        matches!(
-            self,
+        match self {
             ConversationStatus::Success
-                | ConversationStatus::Blocked { .. }
-                | ConversationStatus::Error
-        )
+            | ConversationStatus::Blocked { .. }
+            | ConversationStatus::Error => true,
+            // Streaming hasn't reached a notable state; a yielded wait is
+            // still active; user-cancellations are self-evident.
+            ConversationStatus::InProgress
+            | ConversationStatus::WaitingForEvents
+            | ConversationStatus::Cancelled => false,
+        }
     }
 }
 

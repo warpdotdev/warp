@@ -102,6 +102,7 @@ pub async fn generate_multi_agent_output(
             supports_research_agent: params.research_agent_enabled,
             supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
             custom_model_providers: params.custom_model_providers,
+            supports_background_computer_use: false,
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
@@ -233,6 +234,9 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
 
     if params.orchestration_enabled {
         supported_tools.extend([api::ToolType::RunAgents, api::ToolType::SendMessageToAgent]);
+        // Declare client-handled wait_for_events so the server doesn't
+        // fall back to the legacy server-handled form.
+        supported_tools.push(api::ToolType::WaitForEvents);
     }
 
     if FeatureFlag::AskUserQuestion.is_enabled() && params.ask_user_question_enabled {
