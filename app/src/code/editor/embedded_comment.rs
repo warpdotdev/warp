@@ -282,7 +282,7 @@ impl RenderableBlock for RenderableHostedComment {
         self.child.dispatch_event(event, ctx, app)
     }
 
-    fn is_embedded_comment(&self) -> bool {
+    fn is_view_zone(&self) -> bool {
         true
     }
 }
@@ -321,7 +321,7 @@ impl RenderableBlock for RenderableEmbeddedCommentSpace {
         false
     }
 
-    fn is_embedded_comment(&self) -> bool {
+    fn is_view_zone(&self) -> bool {
         true
     }
 }

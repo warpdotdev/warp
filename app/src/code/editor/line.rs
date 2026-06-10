@@ -87,7 +87,7 @@ impl EditorLineLocation {
                 RenderLineLocation::Current(line_number + LineCount::from(1))
             }
             // For removed lines the comment block uses the same `Temporary` slot as the
-            // removed-line block itself (no +1 offset). `reset_comment_blocks` inserts comment
+            // removed-line block itself (no +1 offset). `reset_view_zones` inserts comment
             // blocks *after* the matching `TemporaryBlock` at this slot, so the comment renders
             // below its removed line despite sharing the same `RenderLineLocation`.
             EditorLineLocation::Removed {

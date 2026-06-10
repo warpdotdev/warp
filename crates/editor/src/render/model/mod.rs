@@ -681,29 +681,30 @@ impl RenderLineLocation {
     }
 }
 
-/// An inline comment block to host on a per-view [`RenderState`]. The child element is supplied by
-/// the app via a [`LaidOutEmbeddedItem`] (the same cross-crate boundary used by markdown embeds),
-/// keeping `warp_editor` independent of app-crate views.
+/// A region of app-supplied UI hosted on a per-view [`RenderState`] that reserves vertical space
+/// at its anchor line (for example, an inline code-review comment card). The child element is
+/// supplied by the app via a [`LaidOutEmbeddedItem`] (the same cross-crate boundary used by
+/// markdown embeds), keeping `warp_editor` independent of app-crate views.
 #[derive(Clone, Debug)]
-pub struct CommentBlock {
-    /// The render line the comment is anchored below.
+pub struct ViewZone {
+    /// The render line the zone is anchored below.
     pub location: RenderLineLocation,
-    /// The app-supplied, already laid-out child. Its height determines the reserved block height.
+    /// The app-supplied, already laid-out child. Its height determines the reserved zone height.
     pub item: Arc<dyn LaidOutEmbeddedItem>,
 }
 
-impl CommentBlock {
+impl ViewZone {
     pub fn new(location: RenderLineLocation, item: Arc<dyn LaidOutEmbeddedItem>) -> Self {
         Self { location, item }
     }
 }
 
-/// Content-space position of an inline comment block.
+/// Content-space position of a view zone.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CommentBlockPosition {
-    /// Content-space Y offset of the block's top (does not subtract scroll).
+pub struct ViewZonePosition {
+    /// Content-space Y offset of the zone's top (does not subtract scroll).
     pub start_y_offset: Pixels,
-    /// The reserved height of the block (equal to the hosted element's laid-out height).
+    /// The reserved height of the zone (equal to the hosted element's laid-out height).
     pub content_height: Pixels,
 }
 
@@ -815,17 +816,17 @@ pub enum BlockItem {
         paragraph: Paragraph,
     },
     Embedded(Arc<dyn LaidOutEmbeddedItem>),
-    /// A per-view inline comment block. It hosts an app-supplied child element (via
-    /// [`LaidOutEmbeddedItem::element`]) and reserves vertical space equal to that element's
-    /// laid-out height, while contributing no buffer characters or lines (like a
-    /// [`BlockItem::TemporaryBlock`]).
+    /// A per-view zone of app-supplied UI (for example, an inline code-review comment card). It
+    /// hosts a child element (via [`LaidOutEmbeddedItem::element`]) and reserves vertical space
+    /// equal to that element's laid-out height, while contributing no buffer characters or lines
+    /// (like a [`BlockItem::TemporaryBlock`]).
     ///
     /// It is intentionally a DISTINCT variant from [`BlockItem::TemporaryBlock`] so that
     /// `reset_temporary_block` (run on every diff refresh) never removes it, and so it can only
     /// ever live on a per-view [`RenderState`] — never on the shared buffer.
-    EmbeddedComment {
-        /// The full anchor of this comment. Carrying the location on the block (rather than
-        /// inferring it from tree position) lets `comment_block_position` match a comment by its
+    ViewZone {
+        /// The full anchor of this zone. Carrying the location on the block (rather than
+        /// inferring it from tree position) lets `view_zone_position` match a zone by its
         /// exact [`RenderLineLocation`] — including the `Temporary` removed-line slot index — even
         /// after `reset_temporary_block` rebuilds the surrounding removed-line blocks.
         location: RenderLineLocation,
@@ -2440,16 +2441,16 @@ impl RenderState {
                 ctx.emit(RenderEvent::LayoutUpdated);
                 ctx.notify();
             }
-            LayoutAction::SetCommentBlocks(blocks) => {
+            LayoutAction::SetViewZones(blocks) => {
                 // Comment blocks are supplied already laid out by the app, so they don't require
                 // text layout. When laying out lazily, defer the reconcile to element-layout time
                 // for consistency with temporary blocks; otherwise apply it immediately.
                 if self.lazy_layout {
                     self.pending_edits
                         .lock()
-                        .push(PendingLayout::CommentBlocks(blocks));
+                        .push(PendingLayout::ViewZones(blocks));
                 } else {
-                    self.apply_comment_blocks(blocks);
+                    self.apply_view_zones(blocks);
                     self.update_content_sizing();
                 }
 
@@ -2568,8 +2569,8 @@ impl RenderState {
                     PendingLayout::TemporaryBlocks(blocks) => {
                         self.layout_temporary_blocks(blocks, app);
                     }
-                    PendingLayout::CommentBlocks(blocks) => {
-                        self.apply_comment_blocks(blocks);
+                    PendingLayout::ViewZones(blocks) => {
+                        self.apply_view_zones(blocks);
                     }
                 };
             }
@@ -2623,25 +2624,25 @@ impl RenderState {
         self.submit_layout_action(LayoutAction::LayoutTemporaryBlock(temporary_blocks));
     }
 
-    /// Reconcile the per-view set of inline comment blocks. `blocks` is the complete desired set:
-    /// existing comment blocks not present here are removed, and the supplied blocks are inserted
-    /// at their anchor lines. This is independent of [`Self::add_temporary_blocks`] — comment
-    /// blocks and diff removed-line temporary blocks coexist and never clobber each other.
-    pub fn set_comment_blocks(&mut self, blocks: Vec<CommentBlock>) {
-        self.submit_layout_action(LayoutAction::SetCommentBlocks(blocks));
+    /// Reconcile the per-view set of view zones. `zones` is the complete desired set: existing
+    /// zones not present here are removed, and the supplied zones are inserted at their anchor
+    /// lines. This is independent of [`Self::add_temporary_blocks`] — view zones and diff
+    /// removed-line temporary blocks coexist and never clobber each other.
+    pub fn set_view_zones(&mut self, zones: Vec<ViewZone>) {
+        self.submit_layout_action(LayoutAction::SetViewZones(zones));
     }
 
-    /// Remove all inline comment blocks from this view, leaving temporary blocks untouched.
-    pub fn clear_comment_blocks(&mut self) {
-        self.set_comment_blocks(Vec::new());
+    /// Remove all view zones from this view, leaving temporary blocks untouched.
+    pub fn clear_view_zones(&mut self) {
+        self.set_view_zones(Vec::new());
     }
 
-    /// Find the first inline comment block at `location` and map it through `f`. A comment is
-    /// matched by the FULL `RenderLineLocation` it carries, not by its line alone. Because the
-    /// anchor (including a `Temporary` removed-line slot index) travels on the block itself, two
-    /// comments sharing an `at_line` resolve unambiguously and the match holds even after
-    /// `reset_temporary_block` rebuilds the surrounding removed-line blocks.
-    fn with_comment_block_at<T>(
+    /// Find the first view zone at `location` and map it through `f`. A zone is matched by the
+    /// FULL `RenderLineLocation` it carries, not by its line alone. Because the anchor (including
+    /// a `Temporary` removed-line slot index) travels on the zone itself, two zones sharing an
+    /// `at_line` resolve unambiguously and the match holds even after `reset_temporary_block`
+    /// rebuilds the surrounding removed-line blocks.
+    fn with_view_zone_at<T>(
         &self,
         location: RenderLineLocation,
         f: impl FnOnce(Pixels, &BlockItem) -> T,
@@ -2650,7 +2651,7 @@ impl RenderState {
         let mut cursor = content.cursor::<LineCount, LayoutSummary>();
         cursor.descend_to_first_item(&content, |_| true);
         while let Some(positioned) = cursor.positioned_item() {
-            if let BlockItem::EmbeddedComment {
+            if let BlockItem::ViewZone {
                 location: block_location,
                 ..
             } = positioned.item
@@ -2663,42 +2664,39 @@ impl RenderState {
         None
     }
 
-    /// Content-space position and reserved height of the inline comment block anchored at
-    /// `location`, if one is present. `start_y_offset` is in content space (not viewport space)
-    /// and `content_height` is the hosted element's laid-out height.
-    pub fn comment_block_position(
-        &self,
-        location: RenderLineLocation,
-    ) -> Option<CommentBlockPosition> {
-        self.with_comment_block_at(location, |start_y_offset, item| CommentBlockPosition {
+    /// Content-space position and reserved height of the view zone anchored at `location`, if
+    /// one is present. `start_y_offset` is in content space (not viewport space) and
+    /// `content_height` is the hosted element's laid-out height.
+    pub fn view_zone_position(&self, location: RenderLineLocation) -> Option<ViewZonePosition> {
+        self.with_view_zone_at(location, |start_y_offset, item| ViewZonePosition {
             start_y_offset,
             content_height: item.content_height(),
         })
     }
 
-    /// The app-supplied hosted item of the inline comment block anchored at `location`, or `None`
-    /// if no comment block is anchored there. Lets a host resolve the block's rendered content (for
-    /// example its body text) by downcasting the returned [`LaidOutEmbeddedItem`].
-    pub fn comment_block_item(
+    /// The app-supplied hosted item of the view zone anchored at `location`, or `None` if no
+    /// zone is anchored there. Lets a host resolve the zone's rendered content (for example a
+    /// comment card's body text) by downcasting the returned [`LaidOutEmbeddedItem`].
+    pub fn view_zone_item(
         &self,
         location: RenderLineLocation,
     ) -> Option<Arc<dyn LaidOutEmbeddedItem>> {
-        self.with_comment_block_at(location, |_, item| match item {
-            BlockItem::EmbeddedComment { item, .. } => item.clone(),
-            // `with_comment_block_at` only calls `f` for `EmbeddedComment` items.
+        self.with_view_zone_at(location, |_, item| match item {
+            BlockItem::ViewZone { item, .. } => item.clone(),
+            // `with_view_zone_at` only calls `f` for `ViewZone` items.
             _ => unreachable!(),
         })
     }
 
-    /// Number of inline comment blocks ([`BlockItem::EmbeddedComment`]) currently in this view's
-    /// content tree, across all anchor lines. Diff removed-line temporary blocks are not counted.
-    pub fn comment_block_count(&self) -> usize {
+    /// Number of view zones ([`BlockItem::ViewZone`]) currently in this view's content tree,
+    /// across all anchor lines. Diff removed-line temporary blocks are not counted.
+    pub fn view_zone_count(&self) -> usize {
         let content = self.content.borrow();
         let mut cursor = content.cursor::<LineCount, LayoutSummary>();
         cursor.descend_to_first_item(&content, |_| true);
         let mut count = 0;
         while let Some(positioned) = cursor.positioned_item() {
-            if matches!(positioned.item, BlockItem::EmbeddedComment { .. }) {
+            if matches!(positioned.item, BlockItem::ViewZone { .. }) {
                 count += 1;
             }
             cursor.next();
@@ -2706,19 +2704,19 @@ impl RenderState {
         count
     }
 
-    /// Group comment blocks by their full anchor [`RenderLineLocation`] and reconcile them into the
+    /// Group view zones by their full anchor [`RenderLineLocation`] and reconcile them into the
     /// content tree. `Current` anchors are keyed by line; `Temporary` anchors are keyed by both the
-    /// `at_line` and the removed-line slot index, so two comments sharing an `at_line` but targeting
+    /// `at_line` and the removed-line slot index, so two zones sharing an `at_line` but targeting
     /// different removed-line slots do not collide.
-    fn apply_comment_blocks(&self, blocks: Vec<CommentBlock>) {
+    fn apply_view_zones(&self, zones: Vec<ViewZone>) {
         let mut current: HashMap<LineCount, Vec<BlockItem>> = HashMap::new();
         let mut temporary: HashMap<(LineCount, usize), Vec<BlockItem>> = HashMap::new();
-        for block in blocks {
-            let item = BlockItem::EmbeddedComment {
-                location: block.location,
-                item: block.item,
+        for zone in zones {
+            let item = BlockItem::ViewZone {
+                location: zone.location,
+                item: zone.item,
             };
-            match block.location {
+            match zone.location {
                 RenderLineLocation::Current(line) => {
                     current.entry(line).or_default().push(item);
                 }
@@ -2733,19 +2731,19 @@ impl RenderState {
                 }
             }
         }
-        self.reset_comment_blocks(current, temporary);
+        self.reset_view_zones(current, temporary);
     }
 
-    /// Replace all [`BlockItem::EmbeddedComment`]s in the content tree with a new set, keyed by the
-    /// full [`RenderLineLocation`] each block is anchored to. Every other block (including diff
+    /// Replace all [`BlockItem::ViewZone`]s in the content tree with a new set, keyed by the
+    /// full [`RenderLineLocation`] each zone is anchored to. Every other block (including diff
     /// removed-line [`BlockItem::TemporaryBlock`]s) is preserved exactly.
     ///
-    /// A `Current(line)` comment is inserted after every block on that line (so it follows any
-    /// removed-line blocks). A `Temporary { at_line, index_from_at_line: k }` comment is inserted
+    /// A `Current(line)` zone is inserted after every block on that line (so it follows any
+    /// removed-line blocks). A `Temporary { at_line, index_from_at_line: k }` zone is inserted
     /// immediately after the `k`-th removed-line [`BlockItem::TemporaryBlock`] on `at_line`, placing
-    /// it at exactly that removed-line slot. Skipping prior comment blocks while counting temporary
-    /// blocks keeps removed-line slot indices stable regardless of how many comments are anchored.
-    fn reset_comment_blocks(
+    /// it at exactly that removed-line slot. Skipping prior view zones while counting temporary
+    /// blocks keeps removed-line slot indices stable regardless of how many zones are anchored.
+    fn reset_view_zones(
         &self,
         mut current: HashMap<LineCount, Vec<BlockItem>>,
         mut temporary: HashMap<(LineCount, usize), Vec<BlockItem>>,
@@ -2755,7 +2753,7 @@ impl RenderState {
             let content = self.content.borrow();
             let mut cursor = content.cursor::<LineCount, CharOffset>();
 
-            // Comments anchored before the first line of content.
+            // Zones anchored before the first line of content.
             if let Some(items) = current.remove(&LineCount::zero()) {
                 for item in items {
                     new_tree.push(item);
@@ -2766,13 +2764,13 @@ impl RenderState {
             let mut last_temp_line: Option<LineCount> = None;
             let mut temp_index: usize = 0;
             while let Some(item) = cursor.item() {
-                if !matches!(item, BlockItem::EmbeddedComment { .. }) {
+                if !matches!(item, BlockItem::ViewZone { .. }) {
                     new_tree.push(item.clone());
                 }
 
                 let line_at_end = cursor.end_seek_position();
 
-                // A removed-line block defines a `Temporary` slot. Append any comment anchored to
+                // A removed-line block defines a `Temporary` slot. Append any zone anchored to
                 // that exact (at_line, index) slot, then advance the slot index for this line.
                 if matches!(item, BlockItem::TemporaryBlock { .. }) {
                     temp_index = if last_temp_line == Some(line_at_end) {
@@ -2792,7 +2790,7 @@ impl RenderState {
 
                 // Once every (possibly zero-line) item on `line_at_end` has been pushed — detected
                 // when the next item begins a later line, or the tree ends — append that line's
-                // `Current` comment blocks. This keeps them after any temporary blocks on the line.
+                // `Current` view zones. This keeps them after any temporary blocks on the line.
                 let line_complete = match cursor.item() {
                     None => true,
                     Some(_) => cursor.end_seek_position() > line_at_end,
@@ -2806,7 +2804,7 @@ impl RenderState {
         }
         if !current.is_empty() || !temporary.is_empty() {
             log::debug!(
-                "reset_comment_blocks: {} current and {} temporary comment blocks had no matching \
+                "reset_view_zones: {} current and {} temporary view zones had no matching \
                  anchor line and were dropped",
                 current.len(),
                 temporary.len(),
@@ -2920,7 +2918,7 @@ impl RenderState {
                 // Do not remove the temporary or comment blocks within the replaced range.
                 if matches!(
                     item,
-                    BlockItem::TemporaryBlock { .. } | BlockItem::EmbeddedComment { .. }
+                    BlockItem::TemporaryBlock { .. } | BlockItem::ViewZone { .. }
                 ) {
                     new_tree.push(item.clone());
                 }
@@ -2958,7 +2956,7 @@ impl RenderState {
                         // Do not remove the temporary or comment blocks within the replaced range.
                         if matches!(
                             item,
-                            BlockItem::TemporaryBlock { .. } | BlockItem::EmbeddedComment { .. }
+                            BlockItem::TemporaryBlock { .. } | BlockItem::ViewZone { .. }
                         ) || (cursor.end() > effective_end
                             && matches!(item, BlockItem::Hidden(_)))
                         {
@@ -3563,7 +3561,7 @@ enum PendingLayout {
         hidden_ranges: Option<RangeSet<CharOffset>>,
     },
     TemporaryBlocks(Vec<TemporaryBlock>),
-    CommentBlocks(Vec<CommentBlock>),
+    ViewZones(Vec<ViewZone>),
 }
 
 struct PendingSelectionUpdate {
@@ -3587,9 +3585,9 @@ enum LayoutAction {
         buffer_version: BufferVersion,
     },
     LayoutTemporaryBlock(Vec<TemporaryBlock>),
-    /// Reconcile the set of per-view inline comment blocks. The supplied vector is the complete
-    /// desired set: any existing comment blocks not present here are removed.
-    SetCommentBlocks(Vec<CommentBlock>),
+    /// Reconcile the set of per-view view zones. The supplied vector is the complete desired
+    /// set: any existing view zones not present here are removed.
+    SetViewZones(Vec<ViewZone>),
     /// Autoscroll, to the specified range if `Some` or to the cursor location if `None`.
     Autoscroll {
         mode: AutoScrollMode,
@@ -3749,7 +3747,7 @@ impl BlockItem {
             BlockItem::Image { config, .. } => config.height.as_f32(),
             BlockItem::Table(laid_out_table) => laid_out_table.height().as_f32(),
             BlockItem::Embedded(embedded_item)
-            | BlockItem::EmbeddedComment {
+            | BlockItem::ViewZone {
                 item: embedded_item,
                 ..
             } => embedded_item.height().as_f32(),
@@ -3777,7 +3775,7 @@ impl BlockItem {
             BlockItem::Image { config, .. } => config.spacing,
             BlockItem::Table(laid_out_table) => laid_out_table.spacing(),
             BlockItem::Embedded(embedded_item)
-            | BlockItem::EmbeddedComment {
+            | BlockItem::ViewZone {
                 item: embedded_item,
                 ..
             } => embedded_item.spacing(),
@@ -3814,7 +3812,7 @@ impl BlockItem {
                 height
             }
             BlockItem::Embedded(embedded_item)
-            | BlockItem::EmbeddedComment {
+            | BlockItem::ViewZone {
                 item: embedded_item,
                 ..
             } => embedded_item.height(),
@@ -3841,7 +3839,7 @@ impl BlockItem {
             } => paragraph_block.width(),
             BlockItem::MermaidDiagram { config, .. } => config.width,
             BlockItem::TrailingNewLine(cursor) => cursor.width,
-            BlockItem::Embedded(object) | BlockItem::EmbeddedComment { item: object, .. } => {
+            BlockItem::Embedded(object) | BlockItem::ViewZone { item: object, .. } => {
                 object.size().x().into_pixels()
             }
             BlockItem::HorizontalRule(rule) => rule.width,
@@ -3871,9 +3869,7 @@ impl BlockItem {
             BlockItem::RunnableCodeBlock {
                 paragraph_block, ..
             } => paragraph_block.content_length(),
-            BlockItem::TemporaryBlock { .. } | BlockItem::EmbeddedComment { .. } => {
-                CharOffset::zero()
-            }
+            BlockItem::TemporaryBlock { .. } | BlockItem::ViewZone { .. } => CharOffset::zero(),
             BlockItem::MermaidDiagram { content_length, .. } => *content_length,
             BlockItem::TrailingNewLine(_)
             | BlockItem::Embedded(_)
@@ -3895,7 +3891,7 @@ impl BlockItem {
             BlockItem::RunnableCodeBlock {
                 paragraph_block, ..
             } => paragraph_block.lines(),
-            BlockItem::TemporaryBlock { .. } | BlockItem::EmbeddedComment { .. } => LineCount(0),
+            BlockItem::TemporaryBlock { .. } | BlockItem::ViewZone { .. } => LineCount(0),
             BlockItem::MermaidDiagram { .. } => LineCount(1),
             BlockItem::TrailingNewLine(_)
             | BlockItem::Embedded(_)
@@ -3922,7 +3918,7 @@ impl BlockItem {
             BlockItem::MermaidDiagram { .. } => false,
             // Embeds, images, tables, and horizontal rules are never empty.
             BlockItem::Embedded(_)
-            | BlockItem::EmbeddedComment { .. }
+            | BlockItem::ViewZone { .. }
             | BlockItem::HorizontalRule(_)
             | BlockItem::Image { .. }
             | BlockItem::Table(_)
@@ -3982,7 +3978,7 @@ impl Positioned<'_, BlockItem> {
             BlockItem::MermaidDiagram { .. } => self.start_char_offset,
             BlockItem::TrailingNewLine(_)
             | BlockItem::Embedded(_)
-            | BlockItem::EmbeddedComment { .. }
+            | BlockItem::ViewZone { .. }
             | BlockItem::HorizontalRule(_)
             | BlockItem::Image { .. }
             | BlockItem::TemporaryBlock { .. }
@@ -4048,7 +4044,7 @@ impl Positioned<'_, BlockItem> {
             }
             BlockItem::TrailingNewLine(_)
             | BlockItem::Embedded(_)
-            | BlockItem::EmbeddedComment { .. }
+            | BlockItem::ViewZone { .. }
             | BlockItem::HorizontalRule(_)
             | BlockItem::Image { .. }
             | BlockItem::TemporaryBlock { .. }
@@ -4133,7 +4129,7 @@ impl Positioned<'_, BlockItem> {
                 Some(RectF::new(origin, embedded_item.size()))
             }
             BlockItem::TemporaryBlock { .. }
-            | BlockItem::EmbeddedComment { .. }
+            | BlockItem::ViewZone { .. }
             | BlockItem::Hidden { .. } => None,
         }
     }
@@ -4193,7 +4189,7 @@ impl Positioned<'_, BlockItem> {
                 RectF::new(origin, embedded_item.first_line_bound())
             }
             BlockItem::TemporaryBlock { .. }
-            | BlockItem::EmbeddedComment { .. }
+            | BlockItem::ViewZone { .. }
             | BlockItem::Hidden { .. } => return None,
         };
 

@@ -281,7 +281,7 @@ pub trait RenderableBlock {
         false
     }
 
-    fn is_embedded_comment(&self) -> bool {
+    fn is_view_zone(&self) -> bool {
         false
     }
 
@@ -906,7 +906,7 @@ impl<V: EditorView> RichTextElement<V> {
                     BlockItem::Table { .. } => RenderableTable::new(item).finish(),
                     BlockItem::TrailingNewLine(_) => Empty::new(item).finish(),
                     BlockItem::Hidden { .. } => RenderableHiddenSection::new(item, ctx).finish(),
-                    BlockItem::Embedded(embed) | BlockItem::EmbeddedComment { item: embed, .. } => {
+                    BlockItem::Embedded(embed) | BlockItem::ViewZone { item: embed, .. } => {
                         let start_offset = item.block_offset;
                         let child_model = parent.embedded_item_at(start_offset, ctx);
                         embed.element(model, item, child_model, ctx)
