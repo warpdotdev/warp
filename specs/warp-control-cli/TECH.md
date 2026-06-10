@@ -170,8 +170,7 @@ When enabled:
 - Settings > Scripting page is rendered.
 - All local-control infrastructure starts when Scripting is enabled (the default).
 - `resources/bundled/skills/warpctrl/SKILL.md` teaches the built-in agent and users how to discover and invoke the allowlisted CLI surface.
-- `resources/bundled/skills/warp-tour/SKILL.md` uses Ask User Question and runtime surface availability to provide a split-pane-first guided product tour.
-- The skill manager maps both `warpctrl` and `warp-tour` to `FeatureFlag::WarpControlCli` through `BundledSkillActivation`. Both skill listing and direct bundled-skill reads enforce the activation state.
+- The skill manager maps `warpctrl` to `FeatureFlag::WarpControlCli` through `BundledSkillActivation`. Both skill listing and direct bundled-skill reads enforce the activation state.
 ### 11. First slice: discovery + `tab.create`
 The first implementation slice proves the end-to-end architecture:
 - Shared protocol types and error envelopes.
@@ -235,7 +234,7 @@ sequenceDiagram
 - **Excluded families:** The Block, Auth, Drive, and History families are entirely absent. Requesting any of them returns `not_allowlisted`.
 - **Unsupported platforms:** Windows fails closed with no fallback.
 - **Action count:** Tests verify the catalog contains exactly 84 uniformly authorized actions.
-- **Bundled skill gate:** Tests verify the `warpctrl` and `warp-tour` bundled skills are discoverable and readable only while `FeatureFlag::WarpControlCli` is enabled, without affecting unrelated bundled skills.
+- **Bundled skill gate:** Tests verify the `warpctrl` bundled skill is discoverable and readable only while `FeatureFlag::WarpControlCli` is enabled, without affecting unrelated bundled skills.
 ## Risks and mitigations
 - **Same-user residual risk:** The broker authenticates the OS user, not the calling application. Any process running as the same user can request credentials. Mitigated by: protected enablement, short expiry, exact-action grants, app-side revalidation, normal Warp close warnings for close actions.
 - **Browser-to-localhost:** Mitigated by: no permissive CORS, Origin header rejection, Host header validation, credential requirement.

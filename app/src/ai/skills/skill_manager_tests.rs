@@ -683,19 +683,6 @@ fn feature_gated_bundled_skill_is_listed_only_when_enabled() {
                 BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
             );
             manager.add_bundled_skill_for_testing(
-                "warp-tour",
-                ParsedSkill {
-                    name: "warp-tour".to_owned(),
-                    description: "Tour Warp".to_owned(),
-                    path: LocalOrRemotePath::Local("/bundled/skills/warp-tour/SKILL.md".into()),
-                    content: "# warp-tour".to_owned(),
-                    line_range: None,
-                    provider: SkillProvider::Warp,
-                    scope: SkillScope::Bundled,
-                },
-                BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
-            );
-            manager.add_bundled_skill_for_testing(
                 "always",
                 ParsedSkill {
                     name: "always".to_owned(),
@@ -718,7 +705,6 @@ fn feature_gated_bundled_skill_is_listed_only_when_enabled() {
                 .collect::<HashSet<_>>()
         });
         assert!(!disabled_names.contains("warpctrl"));
-        assert!(!disabled_names.contains("warp-tour"));
         assert!(disabled_names.contains("always"));
 
         drop(warp_control_cli);
@@ -731,7 +717,6 @@ fn feature_gated_bundled_skill_is_listed_only_when_enabled() {
                 .collect::<HashSet<_>>()
         });
         assert!(enabled_names.contains("warpctrl"));
-        assert!(enabled_names.contains("warp-tour"));
         assert!(enabled_names.contains("always"));
         drop(warp_control_cli_enabled);
         drop(bundled_skills_guard);
@@ -743,7 +728,7 @@ fn warp_control_bundled_skill_activations_track_warp_control_feature() {
     App::test((), |app| async move {
         let settings = app.add_singleton_model(AISettings::new_with_defaults);
         let warp_control_cli = FeatureFlag::WarpControlCli.override_enabled(false);
-        let activations = ["warpctrl", "warp-tour"]
+        let activations = ["warpctrl"]
             .map(|skill_id| activation_for_bundled_skill(skill_id, Path::new("/resources")));
         for activation in &activations {
             assert!(!settings.read(&app, |_, ctx| activation.is_enabled(ctx)));
@@ -759,8 +744,8 @@ fn warp_control_bundled_skill_activations_track_warp_control_feature() {
 }
 
 #[test]
-fn warp_tour_direct_read_respects_warp_control_feature() {
-    let reference = SkillReference::BundledSkillId("warp-tour".to_owned());
+fn warp_control_direct_read_respects_warp_control_feature() {
+    let reference = SkillReference::BundledSkillId("warpctrl".to_owned());
 
     App::test((), |mut app| async move {
         app.add_singleton_model(DirectoryWatcher::new);
@@ -774,12 +759,12 @@ fn warp_tour_direct_read_respects_warp_control_feature() {
 
         handle.update(&mut app, |manager, _| {
             manager.add_bundled_skill_for_testing(
-                "warp-tour",
+                "warpctrl",
                 ParsedSkill {
-                    name: "warp-tour".to_owned(),
-                    description: "Tour Warp".to_owned(),
-                    path: LocalOrRemotePath::Local("/bundled/skills/warp-tour/SKILL.md".into()),
-                    content: "# warp-tour".to_owned(),
+                    name: "warpctrl".to_owned(),
+                    description: "Control Warp".to_owned(),
+                    path: LocalOrRemotePath::Local("/bundled/skills/warpctrl/SKILL.md".into()),
+                    content: "# warpctrl".to_owned(),
                     line_range: None,
                     provider: SkillProvider::Warp,
                     scope: SkillScope::Bundled,

@@ -48,7 +48,6 @@ Warp has rich interactive actions reachable through UI, keybindings, menus, and 
 ## Bundled agent skill
 When Warp Control and bundled skills are enabled, Warp exposes a built-in `warpctrl` skill to the Warp agent. The skill tells the agent when to use Warp Control for actions that affect Warp itself, teaches a discovery-first targeting workflow, and documents the same manual commands available to users.
 The skill is unavailable when the `WarpControlCli` feature flag is disabled. Disabled skills are omitted from agent skill discovery and cannot be read through a stale direct skill reference.
-Warp also exposes a built-in `warp-tour` skill under the same feature gate. It uses Ask User Question to drive an interactive product tour, queries `surface.list` to hide unavailable destinations, prefers a reusable split pane so the main agent conversation remains visible, restores temporary theme state, and cleans up only targets it created.
 ## Scripting setting
 Warp adds a new top-level Settings pane page named **Scripting**. The page contains a single toggle for local control:
 - **Enabled** (default): same-user processes may request exact-action credentials from the broker and send control requests to the loopback listener.
