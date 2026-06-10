@@ -35,6 +35,7 @@ use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
+#[cfg(any(feature = "local_fs", test))]
 use crate::util::git::{PrInfo, RepositoryInfo};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -1007,6 +1008,7 @@ impl BlocklistAIContextModel {
         None
     }
 
+    #[cfg(any(feature = "local_fs", test))]
     fn repository_context_from_repository_info(repository_info: &RepositoryInfo) -> AIAgentContext {
         AIAgentContext::Repository {
             name: repository_info.name.clone(),
@@ -1025,6 +1027,7 @@ impl BlocklistAIContextModel {
         None
     }
 
+    #[cfg(any(feature = "local_fs", test))]
     fn pull_request_context_from_pr_info(pr_info: &PrInfo) -> Option<AIAgentContext> {
         Some(AIAgentContext::PullRequest {
             number: i32::try_from(pr_info.number).ok()?,
