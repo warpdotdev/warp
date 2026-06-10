@@ -257,6 +257,9 @@ fn extract_captured_path(output: &str) -> Option<&str> {
     Some(&after_start[..end])
 }
 
+/// Captures the PATH environment variable from an interactive login shell.
+/// This uses setsid() to start a new session (fully detaching from the terminal)
+/// and stdin(null) to prevent interactive prompts from blocking.
 #[cfg(feature = "local_tty")]
 async fn capture_interactive_shell_env(
     shell_type: ShellType,
