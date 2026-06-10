@@ -17,7 +17,6 @@ use futures::FutureExt;
 use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
-use warpui::r#async::FutureExt as WarpFutureExt;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
@@ -31,14 +30,15 @@ use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
-use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentModelEvent};
+use crate::ai::document::plan_publication::{
+    prepare_plan_publications, wait_for_plan_publications,
+};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
 /// rather than hanging the "Spawning agents" UI indefinitely.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
-const PLAN_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Snapshot of an in-flight dispatch, carried through
 /// [`RunAgentsExecutorEvent::SpawningStarted`].
@@ -187,61 +187,28 @@ impl RunAgentsExecutor {
             snapshot,
         });
 
-        if pending_plan_publications.is_empty() {
-            self.dispatch_children_for_prepared_request(
-                action_id,
-                request,
-                parent_conversation_id,
-                sender,
-                ctx,
-            );
-        } else {
-            let action_id_for_wait = action_id.clone();
-            ctx.spawn(
-                async move {
-                    // Wait briefly for each plan to become server-backed without blocking
-                    // launch on a failed or slow publication.
-                    futures::future::join_all(pending_plan_publications.into_iter().map(
-                        |pending| async move {
-                            match pending
-                                .save_wait
-                                .recv()
-                                .with_timeout(PLAN_PUBLICATION_TIMEOUT)
-                                .await
-                            {
-                                Ok(Ok(())) => {}
-                                Ok(Err(_)) => {
-                                    log::error!(
-                                        "Stopped waiting for plan document {} before it became server-backed.",
-                                        pending.document_id
-                                    );
-                                }
-                                Err(_) => {
-                                    log::error!(
-                                        "Timed out waiting for plan document {} to become server-backed before child-agent launch.",
-                                        pending.document_id
-                                    );
-                                }
-                            }
-                        },
-                    ))
-                    .await;
-                    request
-                },
-                move |me, request, ctx| {
-                    if !me.is_pending(&action_id_for_wait) {
-                        return;
-                    }
-                    me.dispatch_children_for_prepared_request(
-                        action_id_for_wait.clone(),
-                        request,
-                        parent_conversation_id,
-                        sender,
-                        ctx,
-                    )
-                },
-            );
-        }
+        let action_id_for_wait = action_id.clone();
+        ctx.spawn(
+            async move {
+                // Wait briefly for each plan to become server-backed without blocking
+                // launch on a failed or slow publication. Resolves immediately when
+                // there is nothing to wait on.
+                wait_for_plan_publications(pending_plan_publications).await;
+                request
+            },
+            move |me, request, ctx| {
+                if !me.is_pending(&action_id_for_wait) {
+                    return;
+                }
+                me.dispatch_children_for_prepared_request(
+                    action_id_for_wait.clone(),
+                    request,
+                    parent_conversation_id,
+                    sender,
+                    ctx,
+                )
+            },
+        );
 
         receiver
     }
@@ -476,56 +443,6 @@ mod tests;
 enum ChildSlot {
     Failed(String),
     Pending(async_channel::Receiver<StartAgentOutcome>),
-}
-
-struct PendingPlanPublication {
-    document_id: AIDocumentId,
-    save_wait: async_channel::Receiver<()>,
-}
-
-/// Publishes parent-owned plans and prepares waits for plans still being created.
-fn prepare_plan_publications(
-    parent_conversation_id: AIConversationId,
-    ctx: &mut ModelContext<RunAgentsExecutor>,
-) -> Vec<PendingPlanPublication> {
-    let document_model = AIDocumentModel::handle(ctx);
-    let awaiting_server_backing = document_model.update(ctx, |model, ctx| {
-        model.publish_documents_for_conversation(parent_conversation_id, ctx)
-    });
-
-    awaiting_server_backing
-        .into_iter()
-        .filter_map(|document_id| {
-            let (save_tx, save_rx) = async_channel::bounded(1);
-            ctx.subscribe_to_model(&document_model, move |_, event, ctx| {
-                let AIDocumentModelEvent::DocumentSaveStatusUpdated(saved_document_id) = event
-                else {
-                    return;
-                };
-                if *saved_document_id != document_id {
-                    return;
-                }
-                if AIDocumentModel::as_ref(ctx)
-                    .get_document_save_status(&document_id)
-                    .is_saved()
-                {
-                    let _ = save_tx.try_send(());
-                }
-            });
-            if document_model
-                .as_ref(ctx)
-                .get_document_save_status(&document_id)
-                .is_saved()
-            {
-                None
-            } else {
-                Some(PendingPlanPublication {
-                    document_id,
-                    save_wait: save_rx,
-                })
-            }
-        })
-        .collect()
 }
 
 fn approved_orchestration_config_can_autoexecute(
