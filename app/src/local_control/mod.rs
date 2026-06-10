@@ -86,13 +86,17 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 pub use bridge::LocalControlBridge;
+#[cfg(any(unix, test))]
 use chrono::Duration;
-use permissions::{ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version};
+use permissions::ensure_feature_enabled;
+#[cfg(any(unix, test))]
+use permissions::{ensure_action_allowed, ensure_protocol_version};
 #[cfg(unix)]
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use warp_core::channel::ChannelState;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
+#[cfg(any(unix, test))]
 const MAX_ACTIVE_CREDENTIALS: usize = 128;
 
 /// App-owned authority shared by one instance's broker and HTTP listener.
