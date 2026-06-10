@@ -40,6 +40,7 @@ use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 use crate::workspace::WorkspaceAction;
 
 /// Creates a test task with specified creator UID and updated_at time
@@ -205,6 +206,7 @@ fn test_title_update_refreshes_shadowing_task_title() {
     App::test((), |mut app| async move {
         let _interactive_management_guard =
             FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
+        initialize_history_persistence_for_tests(&mut app);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(|_| ActiveAgentViewsModel::new());
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));

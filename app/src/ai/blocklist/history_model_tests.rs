@@ -183,7 +183,7 @@ fn persisted_agent_conversation_from_update_event(event: ModelEvent) -> AgentCon
 #[test]
 fn begin_conversation_rename_updates_title_and_cached_metadata() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let conversation_id = AIConversationId::new();
@@ -248,7 +248,7 @@ fn begin_conversation_rename_updates_title_and_cached_metadata() {
 #[test]
 fn begin_conversation_rename_rejects_conversation_without_server_token() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let conversation_id = AIConversationId::new();
@@ -304,7 +304,7 @@ fn begin_conversation_rename_rejects_conversation_without_server_token() {
 #[test]
 fn begin_conversation_rename_rejects_optimistic_root_task() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 
@@ -343,7 +343,7 @@ fn begin_conversation_rename_rejects_optimistic_root_task() {
 #[test]
 fn complete_conversation_rename_applies_normalized_title_and_clears_in_flight_state() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let conversation_id = AIConversationId::new();
@@ -412,7 +412,7 @@ fn complete_conversation_rename_applies_normalized_title_and_clears_in_flight_st
 #[test]
 fn fail_conversation_rename_reverts_title_and_cached_metadata() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let conversation_id = AIConversationId::new();
@@ -477,7 +477,7 @@ fn fail_conversation_rename_reverts_title_and_cached_metadata() {
 #[test]
 fn begin_conversation_rename_rejects_second_rename_while_in_flight() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
+        initialize_history_persistence_for_tests(&mut app);
         let terminal_view_id = EntityId::new();
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let conversation_id = AIConversationId::new();
