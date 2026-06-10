@@ -150,10 +150,13 @@ async fn prepare_environment_impl(
                             tags.cloud_agent = true
                         ))
                         .await?;
+                        if let Some(receiver) = receiver {
+                            codebase_context_receivers.push(receiver);
+                        }
                     }
-                    Ok::<(), PrepareEnvironmentError>(())
-                },
-            )
+                }
+                Ok::<(), PrepareEnvironmentError>(())
+            })
             .await?;
 
         if should_index_codebase {
