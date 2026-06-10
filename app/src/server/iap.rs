@@ -385,6 +385,12 @@ impl SingletonEntity for IapManager {}
 /// How long to wait for `auth print-identity-token` command to respond before killing it.
 const GCLOUD_TIMEOUT: Duration = Duration::from_secs(30);
 
+// gcloud ships as `gcloud.cmd` on Windows
+#[cfg(windows)]
+const GCLOUD_PROGRAM: &str = "gcloud.cmd";
+#[cfg(not(windows))]
+const GCLOUD_PROGRAM: &str = "gcloud";
+
 fn fetch_iap_token(
     audiences: &str,
     service_account_email: &str,
@@ -399,9 +405,9 @@ fn fetch_iap_token(
         service_account_email,
         "--include-email",
     ];
-    let cmd_display = format!("gcloud {}", args.join(" "));
+    let cmd_display = format!("{GCLOUD_PROGRAM} {}", args.join(" "));
 
-    let mut cmd = command::blocking::Command::new("gcloud");
+    let mut cmd = command::blocking::Command::new(GCLOUD_PROGRAM);
     cmd
         // Prevent gcloud from waiting for interactive input (fail fast instead of hanging)
         .stdin(std::process::Stdio::null())
