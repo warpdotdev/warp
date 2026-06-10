@@ -277,14 +277,14 @@ impl IapManager {
                         let expires_at = cached.expires_at;
                         state.set_loaded(cached);
                         manager.consecutive_failures = 0;
-                        log::info!("IAP token refreshed");
+                        log::info!("Warp Staging IAP token refreshed");
                         ctx.emit(IapManagerEvent::StateChanged);
                         ctx.notify();
                         manager.schedule_next_refresh(expires_at, ctx);
                     }
                     Err(err) => {
                         let message = format!("{err:#}");
-                        log::warn!("IAP token fetch failed: {message}");
+                        log::warn!("Warp Staging IAP token fetch failed: {message}");
                         let is_first_failure_of_streak = manager.consecutive_failures == 0;
                         state.set_failed(message.clone());
                         if is_first_failure_of_streak {
