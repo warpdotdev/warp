@@ -42,7 +42,7 @@ pub struct GitStatusMetadata {
 /// strong handle to a sub-model is dropped, the models are torn down automatically.
 pub struct GitStatusUpdateModel {
     #[cfg(feature = "local_fs")]
-    repos: HashMap<PathBuf, WeakModelHandle<GitRepoStatusModel>>,
+    git_repo_status_models: HashMap<PathBuf, WeakModelHandle<GitRepoStatusModel>>,
     #[cfg(feature = "local_fs")]
     github_repo_models: HashMap<PathBuf, WeakModelHandle<GitHubRepoModel>>,
 }
@@ -63,7 +63,7 @@ impl GitStatusUpdateModel {
 impl GitStatusUpdateModel {
     pub fn new() -> Self {
         Self {
-            repos: HashMap::new(),
+            git_repo_status_models: HashMap::new(),
             github_repo_models: HashMap::new(),
         }
     }
@@ -84,7 +84,7 @@ impl GitStatusUpdateModel {
         let repo_path_buf = repo_path.to_path_buf();
 
         // Check the cache for an existing live model.
-        if let Some(weak) = self.repos.get(&repo_path_buf) {
+        if let Some(weak) = self.git_repo_status_models.get(&repo_path_buf) {
             if let Some(handle) = weak.upgrade(ctx) {
                 return Ok(handle);
             }
@@ -103,7 +103,8 @@ impl GitStatusUpdateModel {
         let handle = ctx
             .add_model(|ctx| GitRepoStatusModel::new(repo_path_buf.clone(), repository_model, ctx));
 
-        self.repos.insert(repo_path_buf, handle.downgrade());
+        self.git_repo_status_models
+            .insert(repo_path_buf, handle.downgrade());
         Ok(handle)
     }
 

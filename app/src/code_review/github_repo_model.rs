@@ -1,33 +1,22 @@
-#[cfg(feature = "local_fs")]
 use std::path::PathBuf;
-#[cfg(feature = "local_fs")]
 use std::time::Duration;
 
-#[cfg(feature = "local_fs")]
 use settings::Setting as _;
-use warpui::Entity;
-#[cfg(feature = "local_fs")]
-use warpui::{r#async::SpawnedFutureHandle, ModelContext, ModelHandle, SingletonEntity};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-#[cfg(feature = "local_fs")]
 use super::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
-#[cfg(feature = "local_fs")]
 use crate::report_if_error;
-#[cfg(all(feature = "local_fs", feature = "local_tty"))]
+#[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
-#[cfg(feature = "local_fs")]
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
-#[cfg(feature = "local_fs")]
 use crate::util::git::{
     get_pr_for_branch, get_repository_info, is_gh_auth_error, is_gh_missing_error, PrInfo,
     RepositoryInfo,
 };
 
-#[cfg(feature = "local_fs")]
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(feature = "local_fs")]
 const GITHUB_INFO_PERIODIC_REFRESH: Duration = Duration::from_secs(60);
-#[cfg(feature = "local_fs")]
 const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Per-repository model that owns the GitHub-sourced metadata lifecycle for a
 /// single repo — the values fetched through the (relatively expensive) `gh`
@@ -54,7 +43,6 @@ const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 /// in-flight `gh` fetch is aborted. The sibling [`GitRepoStatusModel`] is
 /// retained via a strong handle, so creating a `GitHubRepoModel` keeps git
 /// status alive for as long as GitHub info is needed.
-#[cfg(feature = "local_fs")]
 pub struct GitHubRepoModel {
     repo_path: PathBuf,
     /// Strong handle to the sibling git-status model. Keeps it alive so we
@@ -81,7 +69,6 @@ pub struct GitHubRepoModel {
     periodic_refresh_handle: Option<SpawnedFutureHandle>,
 }
 
-#[cfg(feature = "local_fs")]
 #[derive(Debug)]
 pub enum GitHubRepoEvent {
     /// Emitted when `pr_info` changes value (fetch result differs from
@@ -91,12 +78,10 @@ pub enum GitHubRepoEvent {
     RepositoryInfoChanged,
 }
 
-#[cfg(feature = "local_fs")]
 impl Entity for GitHubRepoModel {
     type Event = GitHubRepoEvent;
 }
 
-#[cfg(feature = "local_fs")]
 impl GitHubRepoModel {
     /// Create a new per-repo GitHub-info model.
     ///
@@ -355,7 +340,7 @@ impl GitHubRepoModel {
     }
 }
 
-#[cfg(all(test, feature = "local_fs"))]
+#[cfg(test)]
 impl GitHubRepoModel {
     /// Inert constructor: no branch-tracking subscription, timers, or `gh`
     /// fetch, so tests stay deterministic and never spawn a real subprocess.
@@ -393,11 +378,10 @@ impl GitHubRepoModel {
     }
 }
 
-#[cfg(all(test, feature = "local_fs"))]
+#[cfg(test)]
 #[path = "github_repo_model_tests.rs"]
 mod tests;
 
-#[cfg(feature = "local_fs")]
 impl Drop for GitHubRepoModel {
     fn drop(&mut self) {
         if let Some(h) = self.refreshing_pr_info_abort_handle.take() {
@@ -409,37 +393,5 @@ impl Drop for GitHubRepoModel {
         if let Some(h) = self.periodic_refresh_handle.take() {
             h.abort();
         }
-    }
-}
-
-// ── Non-local_fs stub ───────────────────────────────────────────────────────
-//
-// Mirrors the pattern from `git_status_update.rs` so callers that only have
-// the `local_fs` cfg-guard can refer to the type by name without further
-// cfg-gating. The non-`local_fs` build never instantiates this model.
-
-#[cfg(not(feature = "local_fs"))]
-use crate::util::git::{PrInfo, RepositoryInfo};
-
-#[cfg(not(feature = "local_fs"))]
-pub struct GitHubRepoModel;
-
-#[cfg(not(feature = "local_fs"))]
-#[derive(Debug)]
-pub enum GitHubRepoEvent {}
-
-#[cfg(not(feature = "local_fs"))]
-impl Entity for GitHubRepoModel {
-    type Event = GitHubRepoEvent;
-}
-
-#[cfg(not(feature = "local_fs"))]
-impl GitHubRepoModel {
-    pub fn pr_info(&self) -> Option<&PrInfo> {
-        None
-    }
-
-    pub fn repository_info(&self) -> Option<&RepositoryInfo> {
-        None
     }
 }
