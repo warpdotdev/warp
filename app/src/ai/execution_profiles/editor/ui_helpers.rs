@@ -447,9 +447,15 @@ pub fn render_permissions_section(
     app: &warpui::AppContext,
 ) -> Box<dyn Element> {
     let ai_settings = AISettings::as_ref(app);
-    let mut column = Flex::column().with_children([
-        render_separator(appearance),
-        render_section_label("PERMISSIONS", appearance),
+    let mut column = Flex::column()
+        .with_child(render_separator(appearance))
+        .with_child(render_section_label("PERMISSIONS", appearance));
+
+    if FeatureFlag::FullControlPermissionPreset.is_enabled() {
+        column.add_child(render_full_control_section(appearance, view));
+    }
+
+    column.add_children([
         render_permission_row(
             appearance,
             Icon::Code2,
@@ -625,6 +631,41 @@ pub fn render_permissions_section(
     Container::new(column.finish())
         .with_margin_bottom(24.)
         .finish()
+}
+
+/// Renders the one-click "Grant full control" button and its description at
+/// the top of the permissions section. The button opens a confirmation dialog
+/// before bulk-applying the most permissive settings to every per-action
+/// permission.
+fn render_full_control_section(
+    appearance: &Appearance,
+    view: &ExecutionProfileEditorView,
+) -> Box<dyn Element> {
+    let description = Text::new(
+        "Grant the Agent full control to act without asking for approval — it will apply code diffs, read files, run commands, and call MCP servers, and this profile's command and MCP denylists will be cleared. You can still adjust individual permissions below.".to_string(),
+        appearance.ui_font_family(),
+        11.,
+    )
+    .with_color(
+        appearance
+            .theme()
+            .sub_text_color(appearance.theme().surface_1())
+            .into(),
+    )
+    .finish();
+
+    Container::new(
+        Flex::column()
+            .with_child(
+                Container::new(ChildView::new(&view.full_control_button).finish())
+                    .with_margin_bottom(6.)
+                    .finish(),
+            )
+            .with_child(description)
+            .finish(),
+    )
+    .with_margin_bottom(16.)
+    .finish()
 }
 
 fn create_section_header(

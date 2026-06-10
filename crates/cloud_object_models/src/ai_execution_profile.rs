@@ -449,6 +449,52 @@ impl AIExecutionProfile {
         }
     }
 
+    /// Bulk-applies the most permissive "full control" settings to every
+    /// per-action permission, clearing the command and MCP denylists so the
+    /// agent never pauses for approval. This is analogous to Claude Code's
+    /// `--dangerously-skip-permissions`.
+    ///
+    /// `include_computer_use` controls whether computer use is also granted.
+    /// Callers should pass the current computer-use availability (e.g. the
+    /// computer-use feature flag) so we don't silently enable a capability the
+    /// user can't see or configure in the UI.
+    pub fn apply_full_control(&mut self, include_computer_use: bool) {
+        self.apply_code_diffs = ActionPermission::AlwaysAllow;
+        self.read_files = ActionPermission::AlwaysAllow;
+        self.execute_commands = ActionPermission::AlwaysAllow;
+        self.write_to_pty = WriteToPtyPermission::AlwaysAllow;
+        self.mcp_permissions = ActionPermission::AlwaysAllow;
+        self.ask_user_question = AskUserQuestionPermission::Never;
+        self.run_agents = RunAgentsPermission::AlwaysAllow;
+        if include_computer_use {
+            self.computer_use = ComputerUsePermission::AlwaysAllow;
+        }
+        self.web_search_enabled = true;
+        // Clearing the denylists ensures the agent truly never asks for
+        // approval. Org-enforced denylist entries are merged in separately at
+        // permission-resolution time, so org policy is unaffected.
+        self.command_denylist.clear();
+        self.mcp_denylist.clear();
+    }
+
+    /// Returns `true` if this profile already grants the agent full control
+    /// (every per-action permission is at its most permissive value and the
+    /// denylists are empty). `include_computer_use` mirrors the same parameter
+    /// on [`Self::apply_full_control`].
+    pub fn has_full_control(&self, include_computer_use: bool) -> bool {
+        self.apply_code_diffs.is_always_allow()
+            && self.read_files.is_always_allow()
+            && self.execute_commands.is_always_allow()
+            && self.write_to_pty.is_always_allow()
+            && self.mcp_permissions.is_always_allow()
+            && matches!(self.ask_user_question, AskUserQuestionPermission::Never)
+            && self.run_agents.is_always_allow()
+            && (!include_computer_use || self.computer_use.is_always_allow())
+            && self.web_search_enabled
+            && self.command_denylist.is_empty()
+            && self.mcp_denylist.is_empty()
+    }
+
     /// This creates a CLI-specific profile that will never ask the user for permission,
     /// since we cannot do so in a non-interactive setting.
     pub fn create_default_cli_profile(
@@ -517,3 +563,82 @@ pub type CloudAIExecutionProfile =
 pub type CloudAIExecutionProfileModel = GenericStringModel<AIExecutionProfile, JsonSerializer>;
 pub type ServerAIExecutionProfile =
     GenericServerObject<GenericStringObjectId, CloudAIExecutionProfileModel>;
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn restrictive_profile() -> AIExecutionProfile {
+        AIExecutionProfile {
+            apply_code_diffs: ActionPermission::AgentDecides,
+            read_files: ActionPermission::AlwaysAsk,
+            execute_commands: ActionPermission::AlwaysAsk,
+            write_to_pty: WriteToPtyPermission::AlwaysAsk,
+            mcp_permissions: ActionPermission::AlwaysAsk,
+            ask_user_question: AskUserQuestionPermission::AlwaysAsk,
+            run_agents: RunAgentsPermission::AlwaysAsk,
+            computer_use: ComputerUsePermission::Never,
+            web_search_enabled: false,
+            command_denylist: vec![AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap()],
+            mcp_denylist: vec![uuid::Uuid::new_v4()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_full_control_makes_all_permissions_permissive() {
+        let mut profile = restrictive_profile();
+        profile.apply_full_control(true);
+
+        assert_eq!(profile.apply_code_diffs, ActionPermission::AlwaysAllow);
+        assert_eq!(profile.read_files, ActionPermission::AlwaysAllow);
+        assert_eq!(profile.execute_commands, ActionPermission::AlwaysAllow);
+        assert_eq!(profile.write_to_pty, WriteToPtyPermission::AlwaysAllow);
+        assert_eq!(profile.mcp_permissions, ActionPermission::AlwaysAllow);
+        assert_eq!(profile.ask_user_question, AskUserQuestionPermission::Never);
+        assert_eq!(profile.run_agents, RunAgentsPermission::AlwaysAllow);
+        assert_eq!(profile.computer_use, ComputerUsePermission::AlwaysAllow);
+        assert!(profile.web_search_enabled);
+        assert!(profile.command_denylist.is_empty());
+        assert!(profile.mcp_denylist.is_empty());
+        assert!(profile.has_full_control(true));
+    }
+
+    #[test]
+    fn apply_full_control_leaves_computer_use_when_not_included() {
+        let mut profile = restrictive_profile();
+        profile.apply_full_control(false);
+
+        // Computer use is untouched when not included, but everything else is
+        // permissive, so full control still holds for the not-included variant.
+        assert_eq!(profile.computer_use, ComputerUsePermission::Never);
+        assert!(profile.has_full_control(false));
+        assert!(!profile.has_full_control(true));
+    }
+
+    #[test]
+    fn has_full_control_is_false_for_default_profile() {
+        let profile = AIExecutionProfile::default();
+        assert!(!profile.has_full_control(false));
+        assert!(!profile.has_full_control(true));
+    }
+
+    #[test]
+    fn has_full_control_requires_empty_denylists() {
+        let mut profile = restrictive_profile();
+        profile.apply_full_control(true);
+        assert!(profile.has_full_control(true));
+
+        // Re-adding a denylist entry should flip the predicate back to false.
+        profile.command_denylist =
+            vec![AgentModeCommandExecutionPredicate::new_regex("rm .*").unwrap()];
+        assert!(!profile.has_full_control(true));
+
+        // Directory allowlist entries are unrelated to full control.
+        profile.command_denylist.clear();
+        profile.directory_allowlist = vec![PathBuf::from("/tmp")];
+        assert!(profile.has_full_control(true));
+    }
+}

@@ -2,13 +2,16 @@ use std::path::{Path, PathBuf};
 
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use itertools::Itertools;
+use pathfinder_geometry::vector::vec2f;
 use regex::Regex;
 use thousands::Separable;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CrossAxisAlignment, Expanded, Flex, Highlight, MouseStateHandle, ParentElement,
-    PartialClickableElement, ScrollbarWidth, Text,
+    Align, Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex, Highlight, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, PartialClickableElement,
+    ScrollbarWidth, Stack, Text,
 };
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -20,6 +23,9 @@ use warpui::{
 };
 
 use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::execution_profiles::editor::grant_full_control_confirmation_dialog::{
+    GrantFullControlConfirmationDialog, GrantFullControlConfirmationDialogEvent,
+};
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
@@ -138,6 +144,8 @@ struct TooltipMouseStateHandles {
 pub mod manager;
 pub use manager::*;
 
+mod grant_full_control_confirmation_dialog;
+
 pub const HEADER_TEXT: &str = "Profile Editor";
 
 #[derive(Debug, Clone)]
@@ -227,6 +235,8 @@ pub enum ExecutionProfileEditorViewAction {
         id: uuid::Uuid,
     },
     DeleteProfile,
+    /// Opens the confirmation dialog for granting the agent full control.
+    GrantFullControl,
     SetPlanAutoSync {
         enabled: bool,
     },
@@ -270,6 +280,8 @@ pub struct ExecutionProfileEditorView {
     mcp_denylist_mouse_state_handles: Vec<MouseStateHandle>,
     profile_name_editor: ViewHandle<EditorView>,
     delete_button: ViewHandle<ActionButton>,
+    full_control_button: ViewHandle<ActionButton>,
+    full_control_confirmation_dialog: ViewHandle<GrantFullControlConfirmationDialog>,
     tooltip_mouse_state_handles: TooltipMouseStateHandles,
     plan_auto_sync_switch: SwitchStateHandle,
     web_search_switch: SwitchStateHandle,
@@ -642,6 +654,17 @@ impl ExecutionProfileEditorView {
                 })
         });
 
+        let full_control_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Grant full control", DangerSecondaryTheme)
+                .with_icon(Icon::AlertTriangle)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(ExecutionProfileEditorViewAction::GrantFullControl);
+                })
+        });
+
+        let full_control_confirmation_dialog =
+            ctx.add_typed_action_view(GrantFullControlConfirmationDialog::new);
+
         let mut view = Self {
             profile_id,
             pane_configuration,
@@ -680,6 +703,8 @@ impl ExecutionProfileEditorView {
             mcp_denylist_mouse_state_handles,
             profile_name_editor,
             delete_button,
+            full_control_button,
+            full_control_confirmation_dialog,
             tooltip_mouse_state_handles: Default::default(),
             plan_auto_sync_switch: Default::default(),
             web_search_switch: Default::default(),
@@ -691,6 +716,13 @@ impl ExecutionProfileEditorView {
                 view.save_profile_name_if_valid(ctx);
             }
         });
+
+        ctx.subscribe_to_view(
+            &view.full_control_confirmation_dialog,
+            |view, _, event, ctx| {
+                view.handle_full_control_confirmation_event(event, ctx);
+            },
+        );
 
         ctx.subscribe_to_view(&view.context_window_editor, |view, _, event, ctx| {
             view.handle_context_window_editor_event(event, ctx);
@@ -931,6 +963,12 @@ impl ExecutionProfileEditorView {
         let run_agents_disabled = !ai_settings.is_run_agents_permissions_editable(ctx);
         let mcp_disabled = !ai_settings.is_mcp_permission_editable(ctx);
 
+        // The "Grant full control" button is disabled when AI is off or the
+        // profile already grants full control (nothing left to apply).
+        let include_computer_use = FeatureFlag::LocalComputerUse.is_enabled();
+        let full_control_disabled = !ai_settings.is_any_ai_enabled(ctx)
+            || current_permissions.has_full_control(include_computer_use);
+
         Self::refresh_filterable_model_dropdown(
             &self.base_model_dropdown,
             current_permissions.base_model.clone(),
@@ -1028,7 +1066,34 @@ impl ExecutionProfileEditorView {
         );
 
         Self::update_profile_name_editor(&self.profile_name_editor, &current_permissions, ctx);
+        self.full_control_button.update(ctx, |button, ctx| {
+            button.set_disabled(full_control_disabled, ctx);
+        });
         self.sync_context_window_editor(ctx, false);
+    }
+
+    fn handle_full_control_confirmation_event(
+        &mut self,
+        event: &GrantFullControlConfirmationDialogEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            GrantFullControlConfirmationDialogEvent::Cancel => {
+                self.full_control_confirmation_dialog
+                    .update(ctx, |dialog, ctx| dialog.hide(ctx));
+                ctx.notify();
+            }
+            GrantFullControlConfirmationDialogEvent::Confirm => {
+                let include_computer_use = FeatureFlag::LocalComputerUse.is_enabled();
+                let profile_id = self.profile_id;
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    profiles_model.grant_full_control(profile_id, include_computer_use, ctx);
+                });
+                self.full_control_confirmation_dialog
+                    .update(ctx, |dialog, ctx| dialog.hide(ctx));
+                ctx.notify();
+            }
+        }
     }
 
     fn refresh_execution_profile_dropdown_menu(
@@ -1533,7 +1598,7 @@ impl View for ExecutionProfileEditorView {
             .with_uniform_padding(16.)
             .finish();
 
-        ClippedScrollable::vertical(
+        let scrollable = ClippedScrollable::vertical(
             self.clipped_scroll_state.clone(),
             Align::new(content).top_center().finish(),
             ScrollbarWidth::Auto,
@@ -1541,7 +1606,22 @@ impl View for ExecutionProfileEditorView {
             appearance.theme().active_ui_detail().into(),
             warpui::elements::Fill::None,
         )
-        .finish()
+        .finish();
+
+        // Overlay the "Grant full control" confirmation dialog centered over
+        // the editor. The dialog renders nothing when it isn't visible.
+        let mut stack = Stack::new();
+        stack.add_child(scrollable);
+        stack.add_positioned_overlay_child(
+            ChildView::new(&self.full_control_confirmation_dialog).finish(),
+            OffsetPositioning::offset_from_parent(
+                vec2f(0., 0.),
+                ParentOffsetBounds::WindowByPosition,
+                ParentAnchor::Center,
+                ChildAnchor::Center,
+            ),
+        );
+        stack.finish()
     }
 }
 
@@ -1737,6 +1817,11 @@ impl TypedActionView for ExecutionProfileEditorView {
                     profiles_model.delete_profile(self.profile_id, ctx);
                 });
                 ctx.emit(ExecutionProfileEditorViewEvent::Pane(PaneEvent::Close));
+            }
+            ExecutionProfileEditorViewAction::GrantFullControl => {
+                self.full_control_confirmation_dialog
+                    .update(ctx, |dialog, ctx| dialog.show(ctx));
+                ctx.notify();
             }
             ExecutionProfileEditorViewAction::SetPlanAutoSync { enabled } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {

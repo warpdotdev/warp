@@ -5,7 +5,8 @@ use warpui::{App, SingletonEntity};
 
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
-    AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
+    AIExecutionProfile, ActionPermission, AskUserQuestionPermission, CloudAIExecutionProfileModel,
+    RunAgentsPermission, WriteToPtyPermission,
 };
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::user::TEST_USER_UID;
@@ -369,6 +370,44 @@ fn filters_non_owned_non_default_profile_from_list() {
                 "Default",
                 "surviving profile should be the user's default, not the attacker's"
             );
+        });
+    })
+}
+
+/// `grant_full_control` should flip every per-action permission on the default
+/// profile to its most permissive value and clear the denylists in a single
+/// edit.
+#[test]
+fn grant_full_control_makes_default_profile_permissive() {
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_logged_out_for_test());
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+
+        let default_profile_id = profile_model.read(&app, |model, _ctx| model.default_profile_id());
+
+        // Precondition: a fresh default profile is restrictive.
+        profile_model.read(&app, |model, ctx| {
+            assert!(!model.default_profile(ctx).data().has_full_control(false));
+        });
+
+        profile_model.update(&mut app, |model, ctx| {
+            model.grant_full_control(default_profile_id, false, ctx);
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            let data = model.default_profile(ctx).data().clone();
+            assert_eq!(data.apply_code_diffs, ActionPermission::AlwaysAllow);
+            assert_eq!(data.read_files, ActionPermission::AlwaysAllow);
+            assert_eq!(data.execute_commands, ActionPermission::AlwaysAllow);
+            assert_eq!(data.write_to_pty, WriteToPtyPermission::AlwaysAllow);
+            assert_eq!(data.mcp_permissions, ActionPermission::AlwaysAllow);
+            assert_eq!(data.ask_user_question, AskUserQuestionPermission::Never);
+            assert_eq!(data.run_agents, RunAgentsPermission::AlwaysAllow);
+            assert!(data.command_denylist.is_empty());
+            assert!(data.mcp_denylist.is_empty());
+            assert!(data.has_full_control(false));
         });
     })
 }

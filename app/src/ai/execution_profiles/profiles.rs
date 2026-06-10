@@ -921,6 +921,39 @@ impl AIExecutionProfilesModel {
         );
     }
 
+    /// Bulk-applies the most permissive "full control" settings to every
+    /// per-action permission on the profile (analogous to Claude Code's
+    /// `--dangerously-skip-permissions`). See
+    /// [`AIExecutionProfile::apply_full_control`].
+    pub fn grant_full_control(
+        &mut self,
+        profile_id: ClientProfileId,
+        include_computer_use: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let changed = self.edit_profile_internal(
+            profile_id,
+            |profile| {
+                if profile.has_full_control(include_computer_use) {
+                    return false;
+                }
+                profile.apply_full_control(include_computer_use);
+                true
+            },
+            ctx,
+        );
+
+        if changed {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::AIExecutionProfileSettingUpdated {
+                    setting_type: "grant_full_control".to_string(),
+                    setting_value: format!("include_computer_use={include_computer_use}"),
+                },
+                ctx
+            );
+        }
+    }
+
     pub fn set_autosync_plans_to_warp_drive(
         &mut self,
         profile_id: ClientProfileId,
