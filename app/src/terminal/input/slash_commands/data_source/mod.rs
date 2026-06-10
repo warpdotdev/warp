@@ -59,7 +59,6 @@ struct ActiveCommandsContext {
     active_conversation_is_cloud_oz: bool,
     has_default_host: bool,
     is_cli_agent_input: bool,
-    is_byo_api_key_enabled: bool,
 }
 
 pub struct SlashCommandDataSource {
@@ -313,7 +312,6 @@ impl SlashCommandDataSource {
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
             has_default_host,
             is_cli_agent_input,
-            is_byo_api_key_enabled: UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx),
         }
     }
 
@@ -342,11 +340,6 @@ impl SlashCommandDataSource {
         }
         // /host is only useful when a default self-hosted host is configured.
         if command.name == commands::HOST.name && !context.has_default_host {
-            return false;
-        }
-        // /grok connects a user-provided Grok subscription, which is BYO auth,
-        // so it follows the same BYO API key policy gate as pasted provider keys.
-        if command.name == commands::GROK.name && !context.is_byo_api_key_enabled {
             return false;
         }
         // When CLI agent input is open, restrict to the explicit allowlist.

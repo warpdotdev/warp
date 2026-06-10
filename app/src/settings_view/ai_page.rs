@@ -2113,8 +2113,13 @@ impl AISettingsPageView {
     fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
         use ::ai::grok_subscription::oauth;
 
-        use crate::view_components::DismissibleToast;
+        use crate::view_components::{DismissibleToast, ToastLink};
+        use crate::workspace::WorkspaceAction;
         use crate::ToastStack;
+
+        /// Object id shared by the connect-flow toasts so the completion toast
+        /// (success or error) automatically replaces the in-progress one.
+        const CONNECT_TOAST_OBJECT_ID: &str = "grok_oauth_connect_toast";
 
         // Starting the attempt binds the loopback callback server before the
         // browser opens, so a bind failure surfaces immediately, without a
@@ -2134,14 +2139,25 @@ impl AISettingsPageView {
         };
 
         // Open xAI's consent screen in the user's default browser.
-        ctx.open_url(&attempt.authorize_url());
+        let authorize_url = attempt.authorize_url();
+        ctx.open_url(&authorize_url);
 
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            // Persistent rather than ephemeral so the copy-URL fallback stays
+            // available when the browser fails to open. It can't linger
+            // forever: the completion toast below replaces it (shared object
+            // id), and the OAuth attempt itself times out when the callback
+            // never arrives.
             let toast = DismissibleToast::default(
                 "Opening your browser to connect your SuperGrok subscription…".to_string(),
+            )
+            .with_object_id(CONNECT_TOAST_OBJECT_ID.to_string())
+            .with_link(
+                ToastLink::new("Copy URL".to_string())
+                    .with_onclick_action(WorkspaceAction::CopyTextToClipboard(authorize_url)),
             );
-            toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+            toast_stack.add_persistent_toast(toast, window_id, ctx);
         });
 
         ctx.spawn(async move { attempt.finish().await }, |_, result, ctx| {
@@ -2162,7 +2178,11 @@ impl AISettingsPageView {
                 }
             };
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                toast_stack.add_ephemeral_toast(
+                    toast.with_object_id(CONNECT_TOAST_OBJECT_ID.to_string()),
+                    window_id,
+                    ctx,
+                );
             });
             ctx.notify();
         });

@@ -37,15 +37,6 @@ pub const ADD_MCP: StaticCommand = StaticCommand {
     argument: None,
 };
 
-pub const GROK: StaticCommand = StaticCommand {
-    name: "/grok",
-    description: "Connect your Grok (xAI) subscription via OAuth",
-    icon_path: "bundled/svg/stars-01.svg",
-    availability: Availability::LOCAL,
-    auto_enter_ai_mode: false,
-    argument: None,
-};
-
 pub const PR_COMMENTS: StaticCommand = StaticCommand {
     name: "/pr-comments",
     description: "Pull GitHub PR review comments",
@@ -678,10 +669,6 @@ fn all_commands() -> Vec<StaticCommand> {
 
     if FeatureFlag::QueueSlashCommand.is_enabled() {
         commands.push(QUEUE.clone());
-    }
-
-    if FeatureFlag::GrokOauth.is_enabled() && !cfg!(target_family = "wasm") {
-        commands.push(GROK);
     }
 
     if !cfg!(target_family = "wasm") {
