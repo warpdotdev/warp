@@ -914,6 +914,27 @@ pub trait RichTextEditorModel: CoreEditorModel {
         self.validate(ctx);
     }
 
+    /// Reset the buffer from the JSON contents of a `.ipynb` (Jupyter) notebook.
+    /// The notebook is converted directly into formatted text rather than
+    /// re-parsed through Markdown (see [`Buffer::from_ipynb`]).
+    fn reset_with_ipynb(&mut self, ipynb: &str, ctx: &mut ModelContext<Self::T>) {
+        let state = InitialBufferState::ipynb(ipynb);
+
+        self.update_content(
+            |mut content, ctx| {
+                content.buffer().reset_undo_stack();
+                content.apply_edit(
+                    BufferEditAction::ReplaceWith(state),
+                    EditOrigin::SystemEdit,
+                    self.buffer_selection_model().clone(),
+                    ctx,
+                );
+            },
+            ctx,
+        );
+        self.validate(ctx);
+    }
+
     fn update_to_new_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self::T>) {
         use markdown_parser::{compute_formatted_text_delta, parse_markdown};
 
