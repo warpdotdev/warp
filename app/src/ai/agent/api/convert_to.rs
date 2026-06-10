@@ -452,6 +452,11 @@ fn convert_input_to_user_input(
         AIAgentInput::FetchReviewComments { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::CreateEnvironment { .. } => Err(ConvertToAPITypeError::Ignore),
         AIAgentInput::InvokeSkill { .. } => Err(ConvertToAPITypeError::Ignore),
+        AIAgentInput::ConversationHandoff => Ok(
+            api::request::input::user_inputs::user_input::Input::ConversationHandoff(
+                api::request::input::user_inputs::ConversationHandoff {},
+            ),
+        ),
         invalid_input => Err(anyhow!(
             "Cannot convert non user query or action result input into API UserInput: {invalid_input:?}"
         ).into()),

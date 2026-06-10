@@ -45,7 +45,8 @@ pub mod text {
             }
             // These input types should not occur in a SDK-run agent.
             AIAgentInput::ResumeConversation { .. }
-            | AIAgentInput::TriggerPassiveSuggestion { .. } => Ok(()),
+            | AIAgentInput::TriggerPassiveSuggestion { .. }
+            | AIAgentInput::ConversationHandoff => Ok(()),
             AIAgentInput::ActionResult { result, .. } => match &result.result {
                 AIAgentActionResultType::RequestCommandOutput(result) => match result {
                     RequestCommandOutputResult::Completed {
@@ -792,7 +793,8 @@ pub mod json {
                 | AIAgentInput::OrchestrationConfigUpdate { .. } => None,
                 // These input types should not occur in a SDK-run agent.
                 AIAgentInput::ResumeConversation { .. }
-                | AIAgentInput::TriggerPassiveSuggestion { .. } => None,
+                | AIAgentInput::TriggerPassiveSuggestion { .. }
+                | AIAgentInput::ConversationHandoff => None,
                 AIAgentInput::ActionResult { result, .. } => {
                     Self::from_action_result(&result.result)
                 }

@@ -103,10 +103,11 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     redact_secrets(&mut diff.diff_content);
                 }
             }
-            // No user-provided text to redact in inter-agent relay inputs.
+            // No user-provided text to redact in inter-agent relay inputs or the handoff marker.
             AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => {}
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::ConversationHandoff => {}
             AIAgentInput::ActionResult { result, context } => {
                 redact_context(Arc::make_mut(context));
                 match &mut result.result {

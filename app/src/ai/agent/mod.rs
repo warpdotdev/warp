@@ -2629,6 +2629,11 @@ pub enum AIAgentInput {
         config: OrchestrationConfig,
         status: OrchestrationConfigStatus,
     },
+
+    /// Marker accompanying the first local user query after a cloud conversation
+    /// is continued locally. Signals the server to unwind any inherited CLI
+    /// subagent stack back to PRIMARY before routing the query.
+    ConversationHandoff,
 }
 
 /// Data for a single message received by an agent from another agent.
@@ -2723,6 +2728,7 @@ impl Display for AIAgentInput {
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
             Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
+            Self::ConversationHandoff => write!(f, "ConversationHandoff"),
         }
     }
 }
@@ -2781,7 +2787,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::ConversationHandoff => None,
         }
     }
 
@@ -2879,7 +2886,8 @@ impl AIAgentInput {
             Self::SummarizeConversation { context, .. } => Some(context),
             Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::ConversationHandoff => None,
         }
     }
 
@@ -2911,7 +2919,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::ConversationHandoff => None,
         }
     }
 

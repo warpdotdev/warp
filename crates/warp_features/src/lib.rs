@@ -877,6 +877,12 @@ pub enum FeatureFlag {
 
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
+
+    /// Gates emitting a `ConversationHandoff` marker on the first local request
+    /// after a cloud conversation is continued locally, signalling the server to
+    /// unwind any inherited CLI subagent stack back to PRIMARY. Off until the
+    /// server understands the new input variant.
+    ExplicitConversationHandoff,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -945,6 +951,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::ExplicitConversationHandoff,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

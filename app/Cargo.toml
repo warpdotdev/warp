@@ -998,6 +998,7 @@ codex_plugin = []
 cloud_mode_setup_v2 = ["cloud_mode"]
 cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
+explicit_conversation_handoff = []
 git_credential_refresh = []
 
 [package.metadata.bundle.bin.warp-oss]
