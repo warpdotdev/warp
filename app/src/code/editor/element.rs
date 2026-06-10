@@ -441,7 +441,7 @@ fn extend_decoration_end_for_inline_comment(
     model: &RenderState,
 ) {
     let Some(position) =
-        model.comment_block_position(line.clone().into_inline_comment_render_line_location())
+        model.view_zone_position(line.clone().into_inline_comment_render_line_location())
     else {
         return;
     };
@@ -858,13 +858,13 @@ impl<V: EditorView> EditorWrapper<V> {
 
                 continue;
             }
-            if block.is_embedded_comment() {
+            if block.is_view_zone() {
                 let height = block.viewport_item().content_size.y();
                 let embedded_comment_location = model
                     .content()
                     .block_at_height(block.viewport_item().height())
                     .and_then(|positioned| match positioned.item {
-                        BlockItem::EmbeddedComment { location, .. } => Some(*location),
+                        BlockItem::ViewZone { location, .. } => Some(*location),
                         _ => None,
                     });
                 let is_removed_comment = matches!(

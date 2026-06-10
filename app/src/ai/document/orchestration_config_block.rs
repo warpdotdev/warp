@@ -1,13 +1,15 @@
-//! Inline config block rendered on plan cards when the conversation has
-//! an active `OrchestrationConfigSnapshot`. Shows a "Use orchestration"
-//! toggle, Cloud/Local picker, and run-wide config dropdowns.
+//! Orchestration config card shown when the conversation has an active
+//! `OrchestrationConfigSnapshot`. Shows a "Use orchestration" toggle,
+//! Cloud/Local picker, and run-wide config dropdowns. The card is hosted
+//! inside the plan editor as a view zone so it scrolls with plan content.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use ai::agent::action::RunAgentsExecutionMode;
 use ai::agent::orchestration_config::OrchestrationConfigStatus;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_cli::agent::Harness;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::WarpTheme;
@@ -139,6 +141,13 @@ pub enum OrchestrationConfigBlockAction {
     CreateNewAuthSecretRequested,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrchestrationConfigBlockEvent {
+    /// The card's rendered height may have changed; the hosting view zone
+    /// should re-reconcile its reserved space.
+    LayoutChanged,
+}
+
 impl OrchestrationControlAction for OrchestrationConfigBlockAction {
     fn execution_mode_toggled(is_remote: bool) -> Self {
         Self::ExecutionModeToggled { is_remote }
@@ -176,6 +185,7 @@ pub struct OrchestrationConfigBlockView {
     pickers_initialized: bool,
     toggle_mouse_state: MouseStateHandle,
     details_mouse_state: MouseStateHandle,
+    card_mouse_state: MouseStateHandle,
     /// UI-only per-harness model memory so switching harnesses preserves
     /// the user's previous model selection for each harness.
     saved_model_per_harness: HashMap<String, String>,
@@ -186,6 +196,9 @@ pub struct OrchestrationConfigBlockView {
     /// One-shot guard: cancelling the auto-popped modal must not re-pop.
     /// Reset on harness / execution-mode change.
     has_auto_opened_create_modal: bool,
+    /// The card's most recently measured rendered size, written back by the
+    /// hosting view zone after each layout pass.
+    laid_out_size: Cell<Option<Vector2F>>,
     /// Required before any auto-pop fires. The plan card is
     /// reconstructed on session restore with `is_approved=true`; gating
     /// on explicit interaction (toggle approval, change harness, switch
@@ -277,7 +290,7 @@ impl OrchestrationConfigBlockView {
                         );
                         oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
                     }
-                    ctx.notify();
+                    me.notify_layout_changed(ctx);
                 }
                 HarnessAvailabilityEvent::Changed
                 | HarnessAvailabilityEvent::AuthSecretsLoaded
@@ -291,7 +304,7 @@ impl OrchestrationConfigBlockView {
                         oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
                     }
                     me.maybe_auto_open_create_modal(ctx);
-                    ctx.notify();
+                    me.notify_layout_changed(ctx);
                 }
                 HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
@@ -315,7 +328,7 @@ impl OrchestrationConfigBlockView {
                     if me.pickers_initialized {
                         oc::repopulate_all_pickers(&mut me.edit_state, &me.pickers, ctx);
                     }
-                    ctx.notify();
+                    me.notify_layout_changed(ctx);
                 }
             },
         );
@@ -330,9 +343,11 @@ impl OrchestrationConfigBlockView {
             pickers_initialized: false,
             toggle_mouse_state: MouseStateHandle::default(),
             details_mouse_state: MouseStateHandle::default(),
+            card_mouse_state: MouseStateHandle::default(),
             saved_model_per_harness: HashMap::new(),
             suppress_refresh: false,
             has_auto_opened_create_modal: false,
+            laid_out_size: Cell::new(None),
             user_has_interacted: false,
         };
         if view.is_approved {
@@ -401,6 +416,23 @@ impl OrchestrationConfigBlockView {
             self.details_expanded = true;
         }
         ctx.dispatch_typed_action(&WorkspaceAction::OpenCreateAuthSecretModal { harness });
+        self.notify_layout_changed(ctx);
+    }
+
+    /// Records the card's measured rendered size from the hosting view zone.
+    pub fn set_laid_out_size(&self, size: Vector2F) {
+        self.laid_out_size.set(Some(size));
+    }
+
+    /// The card's most recently measured rendered size, if it has been laid out.
+    pub fn laid_out_size(&self) -> Option<Vector2F> {
+        self.laid_out_size.get()
+    }
+
+    /// Emits [`OrchestrationConfigBlockEvent::LayoutChanged`] so the hosting
+    /// view zone re-reconciles its reserved space, then notifies.
+    fn notify_layout_changed(&self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(OrchestrationConfigBlockEvent::LayoutChanged);
         ctx.notify();
     }
 
@@ -417,7 +449,7 @@ impl OrchestrationConfigBlockView {
                 if self.pickers_initialized {
                     oc::repopulate_all_pickers(&mut self.edit_state, &self.pickers, ctx);
                 }
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
         }
     }
@@ -570,7 +602,7 @@ impl OrchestrationConfigBlockView {
             oc::populate_environment_picker(environment_picker, &environment_id, ctx);
         }
         self.apply_field_change(ctx);
-        ctx.notify();
+        self.notify_layout_changed(ctx);
     }
 
     fn apply_field_change(&mut self, ctx: &mut ViewContext<Self>) {
@@ -590,7 +622,7 @@ impl OrchestrationConfigBlockView {
 }
 
 impl Entity for OrchestrationConfigBlockView {
-    type Event = ();
+    type Event = OrchestrationConfigBlockEvent;
 }
 
 impl View for OrchestrationConfigBlockView {
@@ -756,6 +788,12 @@ impl View for OrchestrationConfigBlockView {
             .with_background(warp_core::ui::theme::color::internal_colors::accent_overlay_1(theme))
             .with_border(warpui::elements::Border::all(1.).with_border_fill(theme.accent()))
             .finish();
+        // Consume background clicks: the card is hosted as a view zone inside
+        // the plan editor, where unhandled clicks would fall through to text
+        // hit-testing and move the editor cursor.
+        let card = Hoverable::new(self.card_mouse_state.clone(), move |_| card)
+            .on_click(|_, _, _| {})
+            .finish();
 
         let mut stack = Stack::new().with_child(card);
         if self.create_environment_modal.as_ref(app).is_visible() {
@@ -795,14 +833,14 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     self.user_has_interacted = true;
                     self.maybe_auto_open_create_modal(ctx);
                 }
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::ToggleDetails => {
                 self.details_expanded = !self.details_expanded;
                 if self.details_expanded && !self.pickers_initialized {
                     self.ensure_pickers(ctx);
                 }
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::ExecutionModeToggled { is_remote } => {
                 let conversation_id = self.conversation_id;
@@ -823,12 +861,12 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 self.user_has_interacted = true;
                 self.has_auto_opened_create_modal = false;
                 self.maybe_auto_open_create_modal(ctx);
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::ModelChanged { model_id } => {
                 self.edit_state.model_id = model_id.clone();
                 self.apply_field_change(ctx);
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::HarnessChanged { harness_type } => {
                 let conversation_id = self.conversation_id;
@@ -850,13 +888,13 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 self.user_has_interacted = true;
                 self.has_auto_opened_create_modal = false;
                 self.maybe_auto_open_create_modal(ctx);
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::EnvironmentChanged { environment_id } => {
                 self.edit_state.set_environment_id(environment_id.clone());
                 oc::persist_environment_selection(environment_id, ctx);
                 self.apply_field_change(ctx);
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::CreateEnvironmentRequested => {
                 self.open_create_environment_modal(ctx);
@@ -865,7 +903,7 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 self.edit_state.set_worker_host(worker_host.clone());
                 oc::persist_host_selection(worker_host, ctx);
                 self.apply_field_change(ctx);
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::AuthSecretChanged { auth_secret_name } => {
                 // No `apply_field_change`: secrets are user-scoped and
@@ -876,7 +914,7 @@ impl TypedActionView for OrchestrationConfigBlockView {
                     auth_secret_name.clone(),
                     ctx,
                 );
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
             OrchestrationConfigBlockAction::CreateNewAuthSecretRequested => {
                 oc::apply_create_new_auth_secret_requested(&mut self.edit_state, ctx);
@@ -887,7 +925,7 @@ impl TypedActionView for OrchestrationConfigBlockView {
                         harness,
                     });
                 }
-                ctx.notify();
+                self.notify_layout_changed(ctx);
             }
         }
     }

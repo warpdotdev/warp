@@ -30,6 +30,7 @@ use warp_editor::content::text::{
 use warp_editor::model::{BufferUpdateWrapper, CoreEditorModel, RichTextEditorModel};
 use warp_editor::render::model::{
     AutoScrollMode, BlockItem, RenderEvent, RenderState, RichTextStyles, StyleUpdateAction,
+    ViewZone,
 };
 use warp_editor::search::Searcher;
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
@@ -240,6 +241,12 @@ impl NotebooksEditorModel {
 
     pub fn markdown_table_count(&self, ctx: &impl ModelAsRef) -> usize {
         self.render_state.as_ref(ctx).markdown_table_count()
+    }
+
+    /// Reconciles the complete set of view zones on this editor's render state.
+    pub fn set_view_zones(&mut self, zones: Vec<ViewZone>, ctx: &mut ModelContext<Self>) {
+        self.render_state
+            .update(ctx, |render_state, _| render_state.set_view_zones(zones));
     }
 
     pub fn set_interaction_state(

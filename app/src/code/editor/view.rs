@@ -29,8 +29,8 @@ use warp_editor::render::element::{
     DisplayOptions, DisplayStateHandle, RichTextElement, VerticalExpansionBehavior,
 };
 use warp_editor::render::model::{
-    AutoScrollMode, BlockSpacing, CommentBlock, Decoration, ExpansionType, LineCount,
-    ParagraphStyles, RichTextStyles, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES,
+    AutoScrollMode, BlockSpacing, Decoration, ExpansionType, LineCount, ParagraphStyles,
+    RichTextStyles, ViewZone, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES,
 };
 use warp_editor::search::{SearchEvent, Searcher, MATCH_FILL, SELECTED_MATCH_FILL};
 use warp_util::content_version::ContentVersion;
@@ -1165,7 +1165,7 @@ impl CodeEditorView {
             return;
         }
 
-        let mut blocks: Vec<CommentBlock> = Vec::new();
+        let mut blocks: Vec<ViewZone> = Vec::new();
 
         // One stable inline view per reconciled saved comment. The view itself switches between
         // saved/editing modes, so it is never replaced by the singleton composer in embedded mode.
@@ -1180,7 +1180,7 @@ impl CodeEditorView {
                 self.window_id,
                 size,
             ));
-            blocks.push(CommentBlock::new(
+            blocks.push(ViewZone::new(
                 line.into_inline_comment_render_line_location(),
                 item,
             ));
@@ -1849,7 +1849,7 @@ impl CodeEditorView {
             .as_ref(ctx)
             .render_state()
             .as_ref(ctx)
-            .comment_block_position(render_location)
+            .view_zone_position(render_location)
             .map(|position| (position.start_y_offset, position.content_height))
     }
 

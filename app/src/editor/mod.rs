@@ -2,6 +2,7 @@ pub mod accept_autosuggestion_keybinding_view;
 pub mod autosuggestion_ignore_view;
 mod soft_wrap;
 mod view;
+pub(crate) mod view_zone;
 
 use std::cmp;
 use std::ops::Range;

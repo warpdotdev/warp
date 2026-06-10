@@ -11,7 +11,7 @@ use warpui_core::color::ColorU;
 use warpui_core::elements::ListIndentLevel;
 use warpui_core::fonts::FamilyId;
 use warpui_core::geometry::rect::RectF;
-use warpui_core::geometry::vector::vec2f;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::text_layout::TextFrame;
 use warpui_core::units::{IntoPixels, Pixels};
 
@@ -28,7 +28,8 @@ use crate::content::text::{
 };
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
-    Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+    Height, LayoutSummary, LineCount, PARAGRAPH_MIN_HEIGHT, RenderLineLocation, RenderedSelection,
+    SoftWrapPoint, TEXT_SPACING, ViewZone,
 };
 
 #[test]
@@ -1421,4 +1422,117 @@ fn test_link_at_offset_uses_cached_cell_links() {
     );
     assert_eq!(table.link_at_offset(CharOffset::from(0)), None);
     assert_eq!(table.link_at_offset(CharOffset::from(3)), None);
+}
+
+/// Stub zone item with a fixed size; `element` is never called in render-model tests.
+#[derive(Debug)]
+struct TestZoneItem {
+    size: Vector2F,
+}
+
+impl super::LaidOutEmbeddedItem for TestZoneItem {
+    fn height(&self) -> Pixels {
+        Pixels::new(self.size.y())
+    }
+
+    fn size(&self) -> Vector2F {
+        self.size
+    }
+
+    fn first_line_bound(&self) -> Vector2F {
+        self.size
+    }
+
+    fn element(
+        &self,
+        _state: &RenderState,
+        _viewport_item: super::viewport::ViewportItem,
+        _model: Option<&dyn crate::editor::EmbeddedItemModel>,
+        _ctx: &warpui_core::AppContext,
+    ) -> Box<dyn crate::render::element::RenderableBlock> {
+        unimplemented!("render-model tests never build zone elements")
+    }
+
+    fn spacing(&self) -> super::BlockSpacing {
+        super::BlockSpacing::default()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[test]
+fn view_zone_at_line_zero_reserves_space_before_first_line() {
+    let mut model = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    content.push(laid_out_paragraph("First\n", &TEST_STYLES, 200.0));
+    content.push(laid_out_paragraph("Second\n", &TEST_STYLES, 200.0));
+    model.set_content(content);
+    let base_height = model.height();
+
+    let top_zone_location = RenderLineLocation::Current(LineCount::zero());
+    let mid_zone_location = RenderLineLocation::Current(LineCount(1));
+    model.apply_view_zones(vec![
+        ViewZone::new(
+            top_zone_location,
+            Arc::new(TestZoneItem {
+                size: vec2f(200., 40.),
+            }),
+        ),
+        ViewZone::new(
+            mid_zone_location,
+            Arc::new(TestZoneItem {
+                size: vec2f(200., 24.),
+            }),
+        ),
+    ]);
+
+    assert_eq!(model.view_zone_count(), 2);
+    // Zones contribute height but no characters or lines. The extra character
+    // and line account for the trailing newline marker `set_content` appends.
+    assert_eq!(model.height(), base_height + (64.).into_pixels());
+    {
+        let content = model.content.borrow();
+        assert_eq!(content.extent::<CharOffset>(), CharOffset::from(14));
+        assert_eq!(content.extent::<LineCount>(), LineCount(3));
+        // The line-zero zone is the very first item in the tree.
+        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+        cursor.descend_to_first_item(&content, |_| true);
+        assert!(matches!(
+            cursor.item(),
+            Some(BlockItem::ViewZone { location, .. }) if *location == top_zone_location
+        ));
+    }
+
+    // The line-zero zone starts at the top of the content; the mid zone starts
+    // below the zone plus the first paragraph.
+    let top_position = model
+        .view_zone_position(top_zone_location)
+        .expect("line-zero zone should be present");
+    assert_eq!(top_position.start_y_offset, Pixels::zero());
+    assert_eq!(top_position.content_height, (40.).into_pixels());
+    let first_paragraph_height = PARAGRAPH_MIN_HEIGHT;
+    let mid_position = model
+        .view_zone_position(mid_zone_location)
+        .expect("mid zone should be present");
+    assert_eq!(
+        mid_position.start_y_offset,
+        (40.).into_pixels() + first_paragraph_height
+    );
+
+    // Reconciling with an empty set removes all zones and restores the height.
+    model.apply_view_zones(Vec::new());
+    assert_eq!(model.view_zone_count(), 0);
+    assert_eq!(model.height(), base_height);
+    {
+        let content = model.content.borrow();
+        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
+        cursor.descend_to_first_item(&content, |_| true);
+        assert!(matches!(cursor.item(), Some(BlockItem::Paragraph(_))));
+    }
 }

@@ -2,10 +2,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::ui::icons;
 use warp_core::ui::icons::ICON_DIMENSIONS;
 use warp_core::ui::theme::Fill as ThemeFill;
+use warp_editor::render::model::{
+    LineCount, RenderEvent, RenderLineLocation, RenderState, ViewZone,
+};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable,
@@ -27,7 +30,12 @@ use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentInstance, AIDocumentModel, AIDocumentModelEvent, AIDocumentSaveStatus,
     AIDocumentUpdateSource, AIDocumentUserEditStatus, AIDocumentVersion,
 };
-use crate::ai::document::orchestration_config_block::OrchestrationConfigBlockView;
+use crate::ai::document::orchestration_config_block::{
+    OrchestrationConfigBlockEvent, OrchestrationConfigBlockView,
+};
+use crate::ai::document::orchestration_config_zone::{
+    orchestration_config_zone_size, LaidOutOrchestrationConfig,
+};
 use crate::appearance::Appearance;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::sharing::ShareableObject;
@@ -135,6 +143,23 @@ impl From<PaneEvent> for AIDocumentEvent {
 
 pub const DEFAULT_PLANNING_DOCUMENT_TITLE: &str = "Planning document";
 
+/// State for hosting the orchestration config card as a view zone on the plan
+/// editor (see `crate::ai::document::orchestration_config_zone`).
+#[derive(Default)]
+struct OrchestrationZone {
+    /// The card view. `None` until the conversation has an orchestration
+    /// config for this plan.
+    block: Option<ViewHandle<OrchestrationConfigBlockView>>,
+    /// The size last reserved for the zone. Compared against the desired size
+    /// so the zone is re-reconciled only when it changes.
+    reserved_size: Option<Vector2F>,
+    /// The plan editor render state currently subscribed to for post-layout
+    /// zone re-reconciliation. Each document version owns its own editor
+    /// model, so the render state is replaced (and the old subscription
+    /// dropped) whenever the viewed version changes via `set_editor_model`.
+    render_state: Option<ModelHandle<RenderState>>,
+}
+
 /// Entry for the version history dropdown menu.
 struct VersionMenuEntry {
     version: AIDocumentVersion,
@@ -160,7 +185,7 @@ pub struct AIDocumentView {
     synced_status_mouse_state: MouseStateHandle,
     view_position_id: String,
     version_button: ViewHandle<ActionButton>,
-    orchestration_config_block: Option<ViewHandle<OrchestrationConfigBlockView>>,
+    orchestration_zone: OrchestrationZone,
 }
 
 impl AIDocumentView {
@@ -288,15 +313,14 @@ impl AIDocumentView {
                             // Lazily create the config block view if the
                             // plan sidebar opened before the orchestration
                             // config arrived.
-                            let was_freshly_created = if me.orchestration_config_block.is_none() {
+                            let was_freshly_created = if me.orchestration_zone.block.is_none() {
                                 let conv_id = *cid;
                                 // TODO: introduce DocumentId / PlanId newtypes to make this
                                 // conversion type-safe.
                                 let plan_id = document_id.to_string();
-                                me.orchestration_config_block =
-                                    Some(ctx.add_typed_action_view(move |ctx| {
-                                        OrchestrationConfigBlockView::new(conv_id, plan_id, ctx)
-                                    }));
+                                me.orchestration_zone.block = Some(
+                                    Self::new_orchestration_config_block(conv_id, plan_id, ctx),
+                                );
                                 true
                             } else {
                                 false
@@ -304,12 +328,13 @@ impl AIDocumentView {
                             // Arm auto-pop for live agent dispatches but
                             // not for restore-hydrated events.
                             if was_freshly_created && !*from_restore {
-                                if let Some(block) = &me.orchestration_config_block {
+                                if let Some(block) = &me.orchestration_zone.block {
                                     block.update(ctx, |block, ctx| {
                                         block.arm_for_fresh_dispatch(ctx);
                                     });
                                 }
                             }
+                            me.sync_orchestration_view_zone(ctx);
                             ctx.notify();
                         }
                     }
@@ -445,12 +470,12 @@ impl AIDocumentView {
                 })
         });
         let doc_id_for_block = document_id;
-        let orchestration_config_block = has_orchestration_config.map(|conv_id| {
-            let plan_id = doc_id_for_block.to_string();
-            ctx.add_typed_action_view(move |ctx| {
-                OrchestrationConfigBlockView::new(conv_id, plan_id, ctx)
-            })
-        });
+        let orchestration_zone = OrchestrationZone {
+            block: has_orchestration_config.map(|conv_id| {
+                Self::new_orchestration_config_block(conv_id, doc_id_for_block.to_string(), ctx)
+            }),
+            ..Default::default()
+        };
 
         let mut me = Self {
             document_id,
@@ -469,12 +494,112 @@ impl AIDocumentView {
             synced_status_mouse_state: MouseStateHandle::default(),
             view_position_id,
             version_button,
-            orchestration_config_block,
+            orchestration_zone,
         };
         // Force update the editor view based on the initial document version
         me.refresh(ctx);
 
+        // `refresh` early-returns when the document is missing; ensure the
+        // initial editor is wired for the orchestration view zone regardless.
+        me.observe_editor_render_state(ctx);
+        me.sync_orchestration_view_zone(ctx);
+
         me
+    }
+
+    /// Creates the orchestration config card view and wires its layout-change
+    /// events to view-zone re-reconciliation.
+    fn new_orchestration_config_block(
+        conversation_id: AIConversationId,
+        plan_id: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<OrchestrationConfigBlockView> {
+        let block = ctx.add_typed_action_view(move |ctx| {
+            OrchestrationConfigBlockView::new(conversation_id, plan_id, ctx)
+        });
+        ctx.subscribe_to_view(&block, |me, _, event, ctx| match event {
+            OrchestrationConfigBlockEvent::LayoutChanged => {
+                me.maybe_resync_orchestration_view_zone(ctx);
+                ctx.notify();
+            }
+        });
+        block
+    }
+
+    /// Subscribes to the current editor model's render state so the zone's
+    /// reserved size follows post-layout measurements and width changes.
+    /// Each document version owns its own editor model, so this re-runs (and
+    /// swaps the subscription) whenever the viewed version changes.
+    fn observe_editor_render_state(&mut self, ctx: &mut ViewContext<Self>) {
+        let render_state = self
+            .editor
+            .as_ref(ctx)
+            .model()
+            .as_ref(ctx)
+            .render_state()
+            .clone();
+        if self
+            .orchestration_zone
+            .render_state
+            .as_ref()
+            .is_some_and(|observed| observed.id() == render_state.id())
+        {
+            return;
+        }
+        if let Some(previous) = self.orchestration_zone.render_state.take() {
+            ctx.unsubscribe_to_model(&previous);
+        }
+        ctx.subscribe_to_model(&render_state, |me, _, event, ctx| {
+            if let RenderEvent::ViewportUpdated(_) = event {
+                me.maybe_resync_orchestration_view_zone(ctx);
+            }
+        });
+        self.orchestration_zone.render_state = Some(render_state);
+    }
+
+    /// The size the orchestration view zone should currently reserve, or
+    /// `None` when there is no orchestration config card.
+    fn desired_orchestration_zone_size(&self, ctx: &AppContext) -> Option<Vector2F> {
+        let block = self.orchestration_zone.block.as_ref()?;
+        let viewport_width = self
+            .editor
+            .as_ref(ctx)
+            .model()
+            .as_ref(ctx)
+            .render_state()
+            .as_ref(ctx)
+            .viewport()
+            .width();
+        Some(orchestration_config_zone_size(block, viewport_width, ctx))
+    }
+
+    /// Reconciles the orchestration config view zone on the plan editor.
+    fn sync_orchestration_view_zone(&mut self, ctx: &mut ViewContext<Self>) {
+        let desired = self.desired_orchestration_zone_size(ctx);
+        let window_id = ctx.window_id();
+        let zones = match (&self.orchestration_zone.block, desired) {
+            (Some(block), Some(size)) => vec![ViewZone::new(
+                // Anchored before the first content line so the card sits at
+                // the top of the plan and scrolls away with it.
+                RenderLineLocation::Current(LineCount::zero()),
+                Arc::new(LaidOutOrchestrationConfig::new(block.id(), window_id, size)),
+            )],
+            _ => Vec::new(),
+        };
+        self.orchestration_zone.reserved_size = desired;
+        self.editor.update(ctx, |editor, ctx| {
+            editor
+                .model()
+                .update(ctx, |model, ctx| model.set_view_zones(zones, ctx));
+        });
+    }
+
+    /// Re-reconciles the zone only when its desired size changed (e.g. after a
+    /// layout pass measured a new card height, or the editor width changed).
+    fn maybe_resync_orchestration_view_zone(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.desired_orchestration_zone_size(ctx) != self.orchestration_zone.reserved_size {
+            self.sync_orchestration_view_zone(ctx);
+        }
     }
 
     pub fn pane_configuration(&self) -> &ModelHandle<PaneConfiguration> {
@@ -863,6 +988,8 @@ impl AIDocumentView {
         // Ensure model is bound to the window for rendering/events
         let window_id = ctx.window_id();
         self.bind_window(window_id, ctx);
+        self.observe_editor_render_state(ctx);
+        self.sync_orchestration_view_zone(ctx);
 
         ctx.notify();
     }
@@ -1066,33 +1193,9 @@ impl View for AIDocumentView {
         "AIDocumentView"
     }
 
-    fn render(&self, app: &AppContext) -> Box<dyn warpui::Element> {
-        let has_orchestration_config = AIDocumentModel::as_ref(app)
-            .get_conversation_id_for_document_id(&self.document_id)
-            .and_then(|cid| {
-                let plan_id_str = self.document_id.to_string();
-                BlocklistAIHistoryModel::as_ref(app)
-                    .conversation(&cid)
-                    .and_then(|conv| conv.orchestration_config_for_plan(&plan_id_str).map(|_| ()))
-            })
-            .is_some();
-
+    fn render(&self, _app: &AppContext) -> Box<dyn warpui::Element> {
         let mut content_column =
             Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-
-        // Orchestration config block — shown above the editor when the
-        // conversation has an active OrchestrationConfigSnapshot.
-        if has_orchestration_config {
-            if let Some(config_block) = &self.orchestration_config_block {
-                content_column.add_child(
-                    Container::new(ChildView::new(config_block).finish())
-                        .with_horizontal_padding(16.)
-                        .with_padding_bottom(12.)
-                        .with_padding_top(8.)
-                        .finish(),
-                );
-            }
-        }
 
         let editor = Container::new(ChildView::new(&self.editor).finish())
             .with_padding_left(8.)

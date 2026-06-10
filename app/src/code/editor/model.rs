@@ -47,9 +47,9 @@ use warp_editor::editor::TextDecoration;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
 use warp_editor::render::model::{
-    AutoScrollMode, BlockItem, CommentBlock, Decoration, LineCount, LineDecoration, RenderEvent,
+    AutoScrollMode, BlockItem, Decoration, LineCount, LineDecoration, RenderEvent,
     RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction,
-    UpdateDecorationAfterLayout, WidthSetting,
+    UpdateDecorationAfterLayout, ViewZone, WidthSetting,
 };
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
 use warp_util::standardized_path::StandardizedPath;
@@ -842,7 +842,7 @@ impl CodeEditorModel {
                 | BlockItem::OrderedList { .. }
                 | BlockItem::Header { .. }
                 | BlockItem::Embedded(_)
-                | BlockItem::EmbeddedComment { .. }
+                | BlockItem::ViewZone { .. }
                 | BlockItem::HorizontalRule(_)
                 | BlockItem::Image { .. }
                 | BlockItem::Table(_)
@@ -3856,12 +3856,11 @@ impl CodeEditorModel {
     /// shared buffer), so it cannot leak into other views of the same file.
     pub fn set_inline_comment_blocks(
         &mut self,
-        blocks: Vec<CommentBlock>,
+        blocks: Vec<ViewZone>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.render_state.update(ctx, |render_state, _| {
-            render_state.set_comment_blocks(blocks)
-        });
+        self.render_state
+            .update(ctx, |render_state, _| render_state.set_view_zones(blocks));
     }
 }
 
