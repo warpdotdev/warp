@@ -6,8 +6,6 @@ use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessA
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionType, DocumentContext, ReadDocumentsRequest, ReadDocumentsResult,
 };
-use crate::ai::blocklist::orchestration_topology::conversation_participates_in_orchestration;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel};
 
 pub struct ReadDocumentsExecutor;
@@ -43,28 +41,29 @@ impl ReadDocumentsExecutor {
             return ActionExecution::<ReadDocumentsResult>::InvalidAction;
         };
 
-        let (mut documents, mut missing_documents) = read_documents(document_ids, ctx);
-        // Orchestrated children may reference plans owned by their parent conversation, so their
-        // local document model can legitimately be missing a requested plan.
-        let participates_in_orchestration = conversation_participates_in_orchestration(
-            BlocklistAIHistoryModel::as_ref(ctx),
-            conversation_id,
-        );
-        if !missing_documents.is_empty() && participates_in_orchestration {
-            AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
-                for document_id in &missing_documents {
-                    if let Err(error) = model.hydrate_saved_plan_from_warp_drive(
-                        *document_id,
-                        conversation_id,
-                        ctx,
-                    ) {
+        // A requested plan may live in Warp Drive without being loaded into this conversation's
+        // document model (e.g. orchestration children reading parent plans, or plan IDs
+        // copy-pasted from another conversation), so fall back to hydrating it on a miss.
+        let mut documents = Vec::with_capacity(document_ids.len());
+        let mut missing_documents = Vec::new();
+        for id in document_ids {
+            let mut document = try_read_document(id, ctx);
+            if document.is_none() {
+                AIDocumentModel::handle(ctx).update(ctx, |model, ctx| {
+                    if let Err(error) =
+                        model.hydrate_saved_plan_from_warp_drive(*id, conversation_id, ctx)
+                    {
                         log::warn!(
-                            "Failed to hydrate requested plan document {document_id} from Warp Drive: {error}"
+                            "Failed to hydrate requested plan document {id} from Warp Drive: {error}"
                         );
                     }
-                }
-            });
-            (documents, missing_documents) = read_documents(document_ids, ctx);
+                });
+                document = try_read_document(id, ctx);
+            }
+            match document {
+                Some(document) => documents.push(document),
+                None => missing_documents.push(*id),
+            }
         }
 
         if !missing_documents.is_empty() {
@@ -94,31 +93,17 @@ impl Entity for ReadDocumentsExecutor {
     type Event = ();
 }
 
-/// Reads requested documents and returns the IDs that are not loaded locally.
-fn read_documents(
-    document_ids: &[AIDocumentId],
-    ctx: &AppContext,
-) -> (Vec<DocumentContext>, Vec<AIDocumentId>) {
+/// Reads one document, returning `None` if it is not loaded locally.
+fn try_read_document(id: &AIDocumentId, ctx: &AppContext) -> Option<DocumentContext> {
     let model = AIDocumentModel::as_ref(ctx);
-    let mut documents = Vec::with_capacity(document_ids.len());
-    let mut missing_documents = Vec::new();
-    for id in document_ids {
-        let Some(content) = model.get_document_content(id, ctx) else {
-            missing_documents.push(*id);
-            continue;
-        };
-        let Some(current_document) = model.get_current_document(id) else {
-            missing_documents.push(*id);
-            continue;
-        };
-        documents.push(DocumentContext {
-            document_id: *id,
-            content,
-            line_ranges: vec![],
-            document_version: current_document.version,
-        });
-    }
-    (documents, missing_documents)
+    let content = model.get_document_content(id, ctx)?;
+    let version = model.get_current_document(id)?.version;
+    Some(DocumentContext {
+        document_id: *id,
+        content,
+        line_ranges: vec![],
+        document_version: version,
+    })
 }
 
 #[cfg(test)]
