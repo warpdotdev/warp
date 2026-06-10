@@ -131,18 +131,30 @@ fn aws_credentials_state_for_error(err: LoadAwsCredentialsError) -> AwsCredentia
 /// # Arguments
 /// * `profile` - AWS profile name. If empty, uses the default AWS SDK behavior
 ///   (checks AWS_PROFILE env var, then uses "default").
+/// * `region_override` - Explicit region to use. If empty, the region is resolved
+///   from the AWS SDK default provider chain (AWS_REGION env var, ~/.aws/config, etc.).
 pub async fn load_aws_credentials_from_sdk(
     profile: &str,
+    region_override: &str,
 ) -> Result<AwsCredentials, LoadAwsCredentialsError> {
-    let region_provider = aws_config::meta::region::RegionProviderChain::default_provider();
-    let loader =
-        aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region_provider);
+    let loader = if region_override.trim().is_empty() {
+        let region_provider = aws_config::meta::region::RegionProviderChain::default_provider();
+        aws_config::defaults(aws_config::BehaviorVersion::latest()).region(region_provider)
+    } else {
+        aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(aws_config::Region::new(region_override.trim().to_string()))
+    };
     let loader = if profile.trim().is_empty() {
         loader // Let AWS SDK use its default behavior
     } else {
         loader.profile_name(profile)
     };
     let config = loader.load().await;
+
+    let resolved_region = config
+        .region()
+        .map(|r| r.as_ref().to_string())
+        .unwrap_or_default();
 
     let provider = config
         .credentials_provider()
@@ -164,6 +176,7 @@ pub async fn load_aws_credentials_from_sdk(
         creds.secret_access_key().to_string(),
         creds.session_token().map(|s| s.to_string()),
         creds.expiry(),
+        resolved_region,
     ))
 }
 
@@ -225,6 +238,7 @@ impl AwsCredentialRefresher for ApiKeyManager {
             if matches!(
                 event,
                 AISettingsChangedEvent::AwsBedrockProfile { .. }
+                    | AISettingsChangedEvent::AwsBedrockRegion { .. }
                     | AISettingsChangedEvent::AwsBedrockAuthRefreshCommand { .. }
                     | AISettingsChangedEvent::AwsBedrockCredentialsEnabled { .. }
             ) {
@@ -267,13 +281,14 @@ fn refresh_aws_credentials_local_chain(
     }
 
     let profile = (*AISettings::as_ref(ctx).aws_bedrock_profile).clone();
+    let region = (*AISettings::as_ref(ctx).aws_bedrock_region).clone();
 
     manager.set_aws_credentials_state(AwsCredentialsState::Refreshing, ctx);
 
     let (tx, rx) = channel();
     // credential fetch from aws cli's disk cache
     let _ = ctx.spawn(
-        async move { load_aws_credentials_from_sdk(&profile).await },
+        async move { load_aws_credentials_from_sdk(&profile, &region).await },
         move |manager, result, ctx| {
             let (new_state, tx_result) = match result {
                 Ok(credentials) => (
@@ -375,6 +390,7 @@ fn refresh_aws_credentials_oidc(
                 credentials.secret_access_key().to_string(),
                 Some(credentials.session_token().to_string()),
                 SystemTime::try_from(*credentials.expiration()).ok(),
+                region.clone(),
             ))
         },
         move |manager, result, ctx| {
