@@ -19,6 +19,7 @@ fn initialize_app_for_ai_document_tests(app: &mut App) {
     initialize_settings_for_tests(app);
     app.add_singleton_model(|_| Appearance::mock());
     app.add_singleton_model(|_| CloudModel::new(None, Vec::new(), None));
+    app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
 }
 fn add_server_backed_plan_notebook(app: &mut App, document_id: AIDocumentId) -> SyncId {
     let sync_id = SyncId::ServerId(123.into());

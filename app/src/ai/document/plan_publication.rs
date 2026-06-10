@@ -5,8 +5,6 @@
 //! proceeding with work that requires the plans to be server-backed.
 use std::time::Duration;
 
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use warpui::r#async::FutureExt as WarpFutureExt;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
@@ -71,9 +69,7 @@ pub(in crate::ai) fn prepare_plan_publications<E: Entity>(
 
 /// Waits (best-effort, bounded per plan) for each pending publication to
 /// become server-backed. Resolves immediately when `pending` is empty.
-pub(in crate::ai) fn wait_for_plan_publications(
-    pending: Vec<PendingPlanPublication>,
-) -> BoxFuture<'static, ()> {
+pub(in crate::ai) async fn wait_for_plan_publications(pending: Vec<PendingPlanPublication>) {
     futures::future::join_all(pending.into_iter().map(|pending| async move {
         match pending
             .save_wait
@@ -96,6 +92,5 @@ pub(in crate::ai) fn wait_for_plan_publications(
             }
         }
     }))
-    .map(|_| ())
-    .boxed()
+    .await;
 }
