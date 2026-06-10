@@ -308,7 +308,6 @@ fn sanitize_language(raw: &str) -> String {
 struct Notebook {
     #[serde(default)]
     nbformat: Option<i64>,
-    #[serde(default)]
     cells: Vec<Cell>,
     #[serde(default)]
     metadata: Metadata,
