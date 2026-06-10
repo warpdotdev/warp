@@ -24,6 +24,7 @@ fn grok_tokens(access_token: &str, expires_in: Option<u64>) -> GrokTokens {
         access_token: access_token.into(),
         refresh_token: Some("refresh".into()),
         expires_at: expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
+        connected_at: None,
     }
 }
 
@@ -359,8 +360,7 @@ fn api_keys_for_request_none_for_custom_endpoints_only() {
 fn grok_valid_access_token_present_without_expiry() {
     let t = GrokTokens {
         access_token: "tok".into(),
-        refresh_token: None,
-        expires_at: None,
+        ..Default::default()
     };
     assert_eq!(t.valid_access_token(), Some("tok"));
 }
@@ -369,8 +369,7 @@ fn grok_valid_access_token_present_without_expiry() {
 fn grok_valid_access_token_blank_is_none() {
     let t = GrokTokens {
         access_token: "   ".into(),
-        refresh_token: None,
-        expires_at: None,
+        ..Default::default()
     };
     assert_eq!(t.valid_access_token(), None);
 }

@@ -99,6 +99,13 @@ pub struct GrokTokens {
     /// Absolute time at which `access_token` expires, if the provider told us.
     #[serde(default)]
     pub expires_at: Option<SystemTime>,
+    /// When the user originally connected the subscription (i.e. when the
+    /// browser OAuth flow completed). Carried over across token refreshes so
+    /// it keeps reflecting the initial connection, not the latest refresh;
+    /// surfaced in the settings UI as "Connected on ...". `None` for tokens
+    /// stored before this field existed.
+    #[serde(default)]
+    pub connected_at: Option<SystemTime>,
 }
 
 impl GrokTokens {

@@ -31,12 +31,15 @@ use crate::api_keys::{ApiKeyManager, GrokTokens};
 const REFRESH_LEAD_TIME: Duration = Duration::from_secs(5 * 60);
 
 /// Builds [`GrokTokens`] from a token-endpoint [`TokenResponse`], computing the
-/// absolute `expires_at` from the relative `expires_in` and carrying over the
-/// previous refresh token when xAI doesn't return a new one (refresh-token
-/// rotation is optional in OAuth 2.0).
+/// absolute `expires_at` from the relative `expires_in`. Values not present in
+/// the response are carried over from `previous`: the refresh token when xAI
+/// doesn't return a new one (refresh-token rotation is optional in OAuth 2.0),
+/// and `connected_at` so it keeps reflecting the initial connection time
+/// (initialized to now when there are no previous tokens, i.e. a fresh
+/// connect).
 pub fn grok_tokens_from_response(
     response: TokenResponse,
-    previous_refresh_token: Option<String>,
+    previous: Option<&GrokTokens>,
 ) -> GrokTokens {
     let expires_at = response
         .expires_in
@@ -44,8 +47,13 @@ pub fn grok_tokens_from_response(
         .and_then(|secs| SystemTime::now().checked_add(Duration::from_secs(secs)));
     GrokTokens {
         access_token: response.access_token,
-        refresh_token: response.refresh_token.or(previous_refresh_token),
+        refresh_token: response
+            .refresh_token
+            .or_else(|| previous.and_then(|tokens| tokens.refresh_token.clone())),
         expires_at,
+        connected_at: previous
+            .and_then(|tokens| tokens.connected_at)
+            .or_else(|| Some(SystemTime::now())),
     }
 }
 
@@ -79,14 +87,13 @@ impl ApiKeyManager {
 }
 
 /// Stores the tokens from `response` (carrying over the previous refresh token
-/// when absent) and schedules the next proactive refresh.
+/// and connection time when absent) and schedules the next proactive refresh.
 fn apply_grok_tokens(
     manager: &mut ApiKeyManager,
     response: TokenResponse,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let previous_refresh_token = manager.grok_tokens().and_then(|t| t.refresh_token.clone());
-    let tokens = grok_tokens_from_response(response, previous_refresh_token);
+    let tokens = grok_tokens_from_response(response, manager.grok_tokens());
     manager.set_grok_tokens(Some(tokens), ctx);
     schedule_grok_token_refresh(manager, ctx);
 }
