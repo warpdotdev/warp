@@ -24,10 +24,20 @@ download_appimage() {
   VERSION="$2"
   DOWNLOAD_URL_BASE="$3"
 
-  APPIMAGE_PATH="$LOCAL_BIN/$BINARY_NAME-$VERSION-$(uname -m).AppImage"
+  ARCH="$(uname -m)"
+  APPIMAGE_PATH="$LOCAL_BIN/$BINARY_NAME-$VERSION-$ARCH.AppImage"
 
   if [ ! -x "$APPIMAGE_PATH" ]; then
-    APPIMAGE_RELEASE_URL="$DOWNLOAD_URL_BASE/$BINARY_NAME-$(uname -m).AppImage"
+    # Remove previously downloaded versions of this binary so they don't
+    # accumulate in ~/.local/bin every time the version is bumped.
+    for OLD_APPIMAGE in "$LOCAL_BIN/$BINARY_NAME"-*-"$ARCH.AppImage"; do
+      if [ -e "$OLD_APPIMAGE" ] && [ "$OLD_APPIMAGE" != "$APPIMAGE_PATH" ]; then
+        echo "🗑️  Removing old download $OLD_APPIMAGE..."
+        rm -f "$OLD_APPIMAGE"
+      fi
+    done
+
+    APPIMAGE_RELEASE_URL="$DOWNLOAD_URL_BASE/$BINARY_NAME-$ARCH.AppImage"
     echo "⬇️  Downloading $APPIMAGE_RELEASE_URL..."
     curl -fL "$APPIMAGE_RELEASE_URL" --output "$APPIMAGE_PATH"
     chmod +x "$APPIMAGE_PATH"
