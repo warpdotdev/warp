@@ -1,4 +1,6 @@
+pub mod agent_judge;
 pub mod llm_generate;
+pub mod rubrics;
 
 use anyhow::Result;
 use llm_generate::LLMGenerateRequest;
