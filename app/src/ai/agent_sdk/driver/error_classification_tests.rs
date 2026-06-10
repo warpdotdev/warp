@@ -73,6 +73,19 @@ fn mcp_server_not_found_is_failed_with_env_setup() {
 }
 
 #[test]
+fn mcp_startup_failed_is_failed_with_env_setup_and_details() {
+    let (state, update) = classify_driver_error(&AgentDriverError::MCPStartupFailed {
+        details: "failed to start: devin".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    assert!(update.message.contains("failed to start: devin"));
+}
+
+#[test]
 fn environment_setup_failed_is_failed() {
     assert_state_and_code(
         AgentDriverError::EnvironmentSetupFailed("bad repo".into()),

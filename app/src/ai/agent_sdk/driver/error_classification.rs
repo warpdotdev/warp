@@ -100,10 +100,12 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::MCPStartupFailed => (
+        AgentDriverError::MCPStartupFailed { details } => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
-                "One or more MCP servers failed to start. Check that your MCP server configuration is valid and the server process is runnable.",
+                format!(
+                    "One or more MCP servers failed to start ({details}). Check that your MCP server configuration is valid and the server process is runnable."
+                ),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
