@@ -524,9 +524,3 @@ impl Workspace {
 pub(crate) fn pinned_boundary_index(tabs: &[TabData]) -> usize {
     tabs.iter().take_while(|tab| tab.pinned).count()
 }
-
-/// Returns `false` for out-of-bounds indices.
-#[allow(dead_code)]
-pub(crate) fn is_index_pinned(tabs: &[TabData], index: usize) -> bool {
-    tabs.get(index).is_some_and(|tab| tab.pinned)
-}
