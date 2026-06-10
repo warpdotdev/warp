@@ -1,7 +1,9 @@
 use std::mem::ManuallyDrop;
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::platform::app::{AppCallbackDispatcher, ApproveTerminateResult, TerminationResult};
+use crate::platform::app::{
+    AppCallbackDispatcher, ApproveTerminateResult, TerminationRequestSource, TerminationResult,
+};
 use crate::platform::{self, TerminationMode};
 use crate::{AppContext, WindowId};
 
@@ -46,7 +48,7 @@ pub(super) fn run(
                 let should_terminate = match termination_mode {
                     TerminationMode::Cancellable => {
                         matches!(
-                            callbacks.should_terminate_app(),
+                            callbacks.should_terminate_app(TerminationRequestSource::User),
                             ApproveTerminateResult::Terminate
                         )
                     }

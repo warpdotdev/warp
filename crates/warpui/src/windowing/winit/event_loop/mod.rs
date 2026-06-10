@@ -31,7 +31,9 @@ use crate::actions::StandardAction;
 use crate::event::ModifiersState;
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 use crate::notification::RequestPermissionsOutcome;
-use crate::platform::app::{AppCallbackDispatcher, ApproveTerminateResult};
+use crate::platform::app::{
+    AppCallbackDispatcher, ApproveTerminateResult, TerminationRequestSource,
+};
 use crate::platform::{self, NotificationInfo, OperatingSystem, TerminationMode, WindowContext};
 use crate::r#async::Timer;
 use crate::rendering::wgpu::renderer;
@@ -1504,7 +1506,11 @@ impl EventLoop {
             return ApproveTerminateResult::Terminate;
         }
 
-        let approve_terminate_result = self.callbacks.should_terminate_app();
+        // Winit doesn't tell us why termination was requested, so assume the
+        // user asked (system-initiated shutdown detection is macOS-only for now).
+        let approve_terminate_result = self
+            .callbacks
+            .should_terminate_app(TerminationRequestSource::User);
         if let ApproveTerminateResult::Terminate = approve_terminate_result {}
         approve_terminate_result
     }
