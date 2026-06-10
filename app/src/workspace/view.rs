@@ -21342,6 +21342,63 @@ impl Workspace {
             }
         }
 
+        if FeatureFlag::NavigationStack.is_enabled()
+            && *TabSettings::as_ref(ctx).show_navigation_buttons
+        {
+            let nav_stack = nav_stack::NavigationStack::as_ref(ctx);
+            tab_bar.add_child(
+                Container::new(
+                    SavePosition::new(
+                        Align::new(
+                            self.render_tab_bar_icon_button(
+                                appearance,
+                                icons::Icon::ChevronLeft,
+                                &self.mouse_states.nav_back_button,
+                                WorkspaceAction::NavigateBack,
+                                "Navigate back".to_string(),
+                                keybinding_name_to_display_string("workspace:navigate_back", ctx),
+                                false,
+                                !nav_stack.can_go_back(),
+                            )
+                            .finish(),
+                        )
+                        .finish(),
+                        "workspace:navigate_back_button",
+                    )
+                    .finish(),
+                )
+                .with_margin_right(2.)
+                .finish(),
+            );
+            tab_bar.add_child(
+                Container::new(
+                    SavePosition::new(
+                        Align::new(
+                            self.render_tab_bar_icon_button(
+                                appearance,
+                                icons::Icon::ChevronRight,
+                                &self.mouse_states.nav_forward_button,
+                                WorkspaceAction::NavigateForward,
+                                "Navigate forward".to_string(),
+                                keybinding_name_to_display_string(
+                                    "workspace:navigate_forward",
+                                    ctx,
+                                ),
+                                false,
+                                !nav_stack.can_go_forward(),
+                            )
+                            .finish(),
+                        )
+                        .finish(),
+                        "workspace:navigate_forward_button",
+                    )
+                    .finish(),
+                )
+                .with_margin_right(TAB_BAR_ICON_PADDING)
+                .finish(),
+            );
+        }
+
         if vertical_tabs_active {
             let mut right_controls = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -21519,62 +21576,6 @@ impl Workspace {
             if ContextFlag::CreateNewSession.is_enabled() {
                 tab_bar.add_child(self.render_new_session_button(ctx));
             }
-        }
-        if FeatureFlag::NavigationStack.is_enabled()
-            && *TabSettings::as_ref(ctx).show_navigation_buttons
-        {
-            let nav_stack = nav_stack::NavigationStack::as_ref(ctx);
-            tab_bar.add_child(
-                Container::new(
-                    SavePosition::new(
-                        Align::new(
-                            self.render_tab_bar_icon_button(
-                                appearance,
-                                icons::Icon::ChevronLeft,
-                                &self.mouse_states.nav_back_button,
-                                WorkspaceAction::NavigateBack,
-                                "Navigate back".to_string(),
-                                keybinding_name_to_display_string("workspace:navigate_back", ctx),
-                                false,
-                                !nav_stack.can_go_back(),
-                            )
-                            .finish(),
-                        )
-                        .finish(),
-                        "workspace:navigate_back_button",
-                    )
-                    .finish(),
-                )
-                .with_margin_right(2.)
-                .finish(),
-            );
-            tab_bar.add_child(
-                Container::new(
-                    SavePosition::new(
-                        Align::new(
-                            self.render_tab_bar_icon_button(
-                                appearance,
-                                icons::Icon::ChevronRight,
-                                &self.mouse_states.nav_forward_button,
-                                WorkspaceAction::NavigateForward,
-                                "Navigate forward".to_string(),
-                                keybinding_name_to_display_string(
-                                    "workspace:navigate_forward",
-                                    ctx,
-                                ),
-                                false,
-                                !nav_stack.can_go_forward(),
-                            )
-                            .finish(),
-                        )
-                        .finish(),
-                        "workspace:navigate_forward_button",
-                    )
-                    .finish(),
-                )
-                .with_margin_right(TAB_BAR_ICON_PADDING)
-                .finish(),
-            );
         }
 
         // Trailing spacer fills only the leftover width. When groups are collapsed
