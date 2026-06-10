@@ -35,8 +35,8 @@ use crate::ai::blocklist::agent_view::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, PendingAttachment, QueuedQuery,
-    QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
+    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryModel,
+    QueuedQueryOrigin, SlashCommandRequest,
 };
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -975,13 +975,12 @@ impl Input {
                     ForkedConversationDestination::SplitPane
                 };
 
-                // Collect any pending attachments so they travel with the initial prompt
-                // into the forked pane.
-                let initial_attachments: Vec<PendingAttachment> = self
-                    .ai_context_model
-                    .as_ref(ctx)
-                    .pending_attachments()
-                    .to_vec();
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the forked pane and no longer linger on the original input.
+                let initial_attachments =
+                    self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.take_pending_attachments(ctx)
+                    });
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
@@ -1030,13 +1029,13 @@ impl Input {
                     ctx
                 );
 
-                // Collect any pending attachments so they travel with the initial prompt
-                // into the continued local pane.
-                let initial_attachments: Vec<PendingAttachment> = self
-                    .ai_context_model
-                    .as_ref(ctx)
-                    .pending_attachments()
-                    .to_vec();
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the continued local pane and no longer linger on the
+                // original input.
+                let initial_attachments =
+                    self.ai_context_model.update(ctx, |context_model, ctx| {
+                        context_model.take_pending_attachments(ctx)
+                    });
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
