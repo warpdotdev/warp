@@ -1645,6 +1645,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                 context,
             })
         }
+        // Server-handled orchestration result with no client-side action.
+        Some(ToolCallResultType::WaitForEvents(_)) => None,
         // Deprecated/unused result types or absent result.
         Some(ToolCallResultType::SuggestCreatePlan(..))
         | Some(ToolCallResultType::SuggestPlan(..))
@@ -1782,6 +1784,8 @@ fn create_cancelled_result_for_tool_call(
         ToolType::RunAgents(_) => {
             AIAgentActionResultType::RunAgents(ai::agent::action_result::RunAgentsResult::Cancelled)
         }
+        // Server-handled orchestration tool with no client-side action result.
+        ToolType::WaitForEvents(_) => return None,
         // These tools are deprecated.
         ToolType::SuggestCreatePlan(_) | ToolType::SuggestPlan(_) => return None,
     };

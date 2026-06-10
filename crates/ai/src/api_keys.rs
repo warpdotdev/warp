@@ -342,6 +342,9 @@ impl ApiKeyManager {
                 open_router,
                 allow_use_of_warp_credits: false,
                 aws_credentials,
+                // GCP Vertex/Gemini Enterprise credentials are not yet supported
+                // on the client.
+                google_cloud_credentials: None,
             })
         }
     }

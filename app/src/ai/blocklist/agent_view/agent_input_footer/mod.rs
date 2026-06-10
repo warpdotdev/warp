@@ -53,10 +53,11 @@ pub(crate) use self::environment_selector::{
 use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
-use crate::ai::blocklist::usage::icon_for_context_window_usage;
+use crate::ai::blocklist::usage::{icon_for_context_window_usage, LongContextWarningState};
 use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::auth::{AuthManager, AuthStateProvider};
@@ -126,6 +127,7 @@ const FAST_FORWARD_LOCKED_TOOLTIP: &str =
 
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
+const OPENAI_LONG_CONTEXT_PRICING_WARNING_TOOLTIP: &str = "OpenAI long-context pricing in effect";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
 
@@ -202,6 +204,7 @@ pub struct AgentInputFooter {
     start_remote_control_button: ViewHandle<ActionButton>,
     stop_remote_control_button: ViewHandle<ActionButton>,
     context_window_button: ViewHandle<ActionButton>,
+    long_context_warning_state: LongContextWarningState,
     model_selector: ViewHandle<ProfileModelSelector>,
     ftu_callout_close_button: ViewHandle<ActionButton>,
     environment_selector: Option<ViewHandle<EnvironmentSelector>>,
@@ -325,6 +328,7 @@ impl AgentInputFooter {
                 .tooltip_message();
             mic_button.update(ctx, |button, ctx| {
                 button.set_tooltip(Some(tooltip), ctx);
+                button.set_tooltip_sublabel(None::<String>, ctx);
             });
 
             ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
@@ -709,6 +713,26 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
         });
+        ctx.subscribe_to_model(
+            &LLMPreferences::handle(ctx),
+            |me, preferences, event, ctx| {
+                let LLMPreferencesEvent::UpdatedActiveAgentModeLLM = event else {
+                    return;
+                };
+                let (effective_model_id, effective_model_provider) = {
+                    let active_base_model = preferences
+                        .as_ref(ctx)
+                        .get_active_base_model(ctx, Some(me.terminal_view_id));
+                    (
+                        active_base_model.id.clone(),
+                        active_base_model.provider.clone(),
+                    )
+                };
+                me.long_context_warning_state
+                    .update_effective_model(effective_model_id, effective_model_provider);
+                me.update_context_window_button(ctx);
+            },
+        );
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
             if matches!(
                 event,
@@ -782,12 +806,30 @@ impl AgentInputFooter {
                     | BlocklistAIHistoryEvent::SetActiveConversation { .. }
                     | BlocklistAIHistoryEvent::ClearedActiveConversation { .. }
                     | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
-                    | BlocklistAIHistoryEvent::RemoveConversation { .. }
-                    | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
+                    | BlocklistAIHistoryEvent::RemoveConversation { .. } => {
+                        me.sync_long_context_warning_from_conversation(ctx);
                         me.sync_fast_forward_button(ctx);
                         me.update_context_window_button(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
+                    }
+                    BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
+                        me.sync_fast_forward_button(ctx);
+                        me.update_context_window_button(ctx);
+                        me.model_selector.update(ctx, |_, ctx| ctx.notify());
+                        ctx.notify();
+                    }
+                    BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                        conversation_id,
+                    } => {
+                        let active_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                            .active_conversation(me.terminal_view_id)
+                            .map(|conversation| conversation.id());
+                        if active_conversation_id == Some(*conversation_id) {
+                            me.sync_long_context_warning_from_conversation(ctx);
+                            me.update_context_window_button(ctx);
+                            ctx.notify();
+                        }
                     }
                     BlocklistAIHistoryEvent::UpdatedTodoList { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
@@ -830,6 +872,17 @@ impl AgentInputFooter {
             None
         };
 
+        let (effective_model_id, effective_model_provider) = {
+            let active_base_model =
+                LLMPreferences::as_ref(ctx).get_active_base_model(ctx, Some(terminal_view_id));
+            (
+                active_base_model.id.clone(),
+                active_base_model.provider.clone(),
+            )
+        };
+        let long_context_used = BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(terminal_view_id)
+            .is_some_and(|conversation| conversation.long_context_used());
         let mut me = Self {
             terminal_view_id,
             ambient_agent_view_model,
@@ -849,6 +902,11 @@ impl AgentInputFooter {
             plugin_operation_in_progress: false,
             plugin_chip_ready: false,
             context_window_button,
+            long_context_warning_state: LongContextWarningState::new(
+                effective_model_id,
+                effective_model_provider,
+                long_context_used,
+            ),
             model_selector: profile_model_selector_full,
             environment_selector,
             handoff_environment_selector,
@@ -1008,6 +1066,14 @@ impl AgentInputFooter {
                 chip.update_session_context(session_context.clone(), chip_ctx);
             });
         }
+    }
+
+    fn sync_long_context_warning_from_conversation(&mut self, app: &AppContext) {
+        let long_context_used = BlocklistAIHistoryModel::as_ref(app)
+            .active_conversation(self.terminal_view_id)
+            .is_some_and(|conversation| conversation.long_context_used());
+        self.long_context_warning_state
+            .sync_from_server(long_context_used);
     }
 
     fn has_active_cli_agent_input_session(&self, app: &AppContext) -> bool {
@@ -2014,12 +2080,23 @@ impl AgentInputFooter {
             BlocklistAIHistoryModel::as_ref(ctx).active_conversation(self.terminal_view_id)
         {
             let usage = conversation.context_window_usage();
-            let icon = icon_for_context_window_usage(usage);
+            let show_long_context_warning = self.long_context_warning_state.is_visible();
+            let icon = icon_for_context_window_usage(usage, show_long_context_warning);
             let remaining_pct = ((1.0 - usage) * 100.0).round() as i32;
-            let tooltip = format!("{remaining_pct}% context remaining");
+            let tooltip = if show_long_context_warning {
+                format!(
+                    "{remaining_pct}% context remaining\n{OPENAI_LONG_CONTEXT_PRICING_WARNING_TOOLTIP}"
+                )
+            } else {
+                format!("{remaining_pct}% context remaining")
+            };
 
             self.context_window_button.update(ctx, |button, ctx| {
                 button.set_icon(Some(icon), ctx);
+                button.set_icon_ansi_color(
+                    show_long_context_warning.then_some(AnsiColorIdentifier::Yellow),
+                    ctx,
+                );
                 button.set_tooltip(Some(tooltip), ctx);
             });
         }

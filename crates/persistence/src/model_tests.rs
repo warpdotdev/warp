@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use warp_multi_agent_api as api;
 
-use super::{AgentConversation, AgentConversationData, ModelTokenUsage};
+use super::{AgentConversation, AgentConversationData, ConversationUsageMetadata, ModelTokenUsage};
 
 fn parentless_task(id: &str, message_count: usize) -> api::Task {
     api::Task {
@@ -311,4 +311,25 @@ fn model_token_usage_replay_skips_non_custom_endpoint_entries() {
         ..Default::default()
     };
     assert!(warp_only.to_proto_custom_endpoint_usage().is_none());
+}
+
+#[test]
+fn conversation_usage_metadata_roundtrips_long_context_used() {
+    let metadata = ConversationUsageMetadata {
+        long_context_used: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&metadata).expect("serialize");
+    let roundtripped: ConversationUsageMetadata = serde_json::from_str(&json).expect("deserialize");
+    assert!(roundtripped.long_context_used);
+}
+
+#[test]
+fn conversation_usage_metadata_legacy_rows_default_long_context_used_to_false() {
+    // Rows persisted before this field landed omit it entirely;
+    // `#[serde(default)]` must accept them as `false`.
+    let legacy_json = r#"{"was_summarized":false,"context_window_usage":0.5,"credits_spent":0.0}"#;
+    let metadata: ConversationUsageMetadata =
+        serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
+    assert!(!metadata.long_context_used);
 }

@@ -989,6 +989,9 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
+                                // Background, per-window computer use is not yet
+                                // supported on the client; enumeration is empty.
+                                windows: Vec::new(),
                             },
                         )),
                     },
@@ -1033,6 +1036,10 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
+                                // Background, per-window computer use is not yet
+                                // supported on the client.
+                                captured_window: None,
+                                windows: Vec::new(),
                             },
                         )),
                     },

@@ -532,6 +532,7 @@ fn write_tool_call_args(out: &mut String, tool: &Tool) {
         | Tool::InitProject(_)
         | Tool::Server(_)
         | Tool::Subagent(_)
+        | Tool::WaitForEvents(_)
         | Tool::TransferShellCommandControlToUser(_) => {}
     }
 }
@@ -1099,6 +1100,7 @@ fn write_tool_call_result_content(out: &mut String, result: &ToolCallResultType)
         | ToolCallResultType::OpenCodeReview(_)
         | ToolCallResultType::InitProject(_)
         | ToolCallResultType::TransferShellCommandControlToUser(_)
+        | ToolCallResultType::WaitForEvents(_)
         | ToolCallResultType::SuggestCreatePlan(_)
         | ToolCallResultType::SuggestPlan(_) => {
             out.push_str("status: completed\n");
