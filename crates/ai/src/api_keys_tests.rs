@@ -10,6 +10,8 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
     ApiKeyManager {
         keys,
         grok_tokens,
+        #[cfg(not(target_family = "wasm"))]
+        grok_refresh_allowed: false,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         secure_storage_write_version: 0,
@@ -406,27 +408,18 @@ fn api_keys_for_request_includes_grok_token() {
 }
 
 #[test]
-fn api_keys_for_request_includes_grok_token_when_byo_disabled() {
+fn api_keys_for_request_omits_grok_token_when_byo_disabled() {
+    // The Grok subscription is user-provided auth, so it follows the BYO
+    // policy gate: with BYO disabled and no other credentials, returns None.
     let mgr = make_manager_with_grok(
         ApiKeys::default(),
         Some(grok_tokens("grok-abc", Some(3600))),
     );
-    let result = mgr.api_keys_for_request(false, false).unwrap();
-    assert_eq!(result.grok_oauth_access_token, "grok-abc");
-    assert!(result.openai.is_empty());
-    assert!(result.anthropic.is_empty());
+    assert!(mgr.api_keys_for_request(false, false).is_none());
 }
 
 #[test]
 fn api_keys_for_request_omits_expired_grok_token() {
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
     assert!(mgr.api_keys_for_request(true, false).is_none());
-}
-
-#[test]
-fn grok_tokens_serde_round_trip() {
-    let tokens = grok_tokens("grok-abc", Some(3600));
-    let json = serde_json::to_string(&tokens).unwrap();
-    let deser: GrokTokens = serde_json::from_str(&json).unwrap();
-    assert_eq!(tokens, deser);
 }

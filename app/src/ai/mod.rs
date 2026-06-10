@@ -52,10 +52,6 @@ pub mod execution_profiles;
 pub mod facts;
 pub(crate) mod generate_block_title;
 pub(crate) mod generate_code_review_content;
-#[cfg(not(target_family = "wasm"))]
-pub mod grok_oauth;
-#[cfg(not(target_family = "wasm"))]
-pub mod grok_subscription;
 pub(crate) mod loading;
 pub mod mcp;
 pub mod outline;

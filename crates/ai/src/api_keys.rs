@@ -88,10 +88,9 @@ impl ApiKeys {
 ///
 /// Persisted to secure storage under [`GROK_SECURE_STORAGE_KEY`], separate from
 /// the BYO [`ApiKeys`] blob because these are OAuth tokens with a refresh
-/// lifecycle rather than a user-pasted static key. The app layer owns refreshing
-/// them (see `grok_subscription::GrokTokenRefresher`); this crate is the storage
-/// and request-injection source of truth that
-/// [`ApiKeyManager::api_keys_for_request`] reads from.
+/// lifecycle rather than a user-pasted static key. `crate::grok_subscription`
+/// owns refreshing them; this module is the storage and request-injection
+/// source of truth that [`ApiKeyManager::api_keys_for_request`] reads from.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct GrokTokens {
     pub access_token: String,
@@ -152,9 +151,14 @@ pub enum AwsCredentialsRefreshStrategy {
 pub struct ApiKeyManager {
     keys: ApiKeys,
     /// OAuth tokens for a connected xAI/Grok subscription, if any. Persisted
-    /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`]; the app layer
-    /// keeps these fresh (see `grok_subscription::GrokTokenRefresher`).
+    /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`];
+    /// `crate::grok_subscription` keeps these fresh.
     grok_tokens: Option<GrokTokens>,
+    /// Whether background refresh of `grok_tokens` is currently allowed.
+    /// Mirrors the BYO API key policy, which lives in the app layer; wired in
+    /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) grok_refresh_allowed: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     secure_storage_write_version: u64,
@@ -168,6 +172,8 @@ impl ApiKeyManager {
         Self {
             keys,
             grok_tokens,
+            #[cfg(not(target_family = "wasm"))]
+            grok_refresh_allowed: false,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             secure_storage_write_version: 0,
@@ -392,15 +398,18 @@ impl ApiKeyManager {
             .flatten()
             .unwrap_or_default();
 
-        // The connected Grok subscription's OAuth access token is independent
-        // from the user-pasted BYO API-key setting above. Once the user has
-        // explicitly connected their Grok subscription via OAuth, send a valid
-        // token so the server can authenticate xAI requests with it.
-        let grok_oauth_access_token = self
-            .grok_tokens
-            .as_ref()
-            .and_then(GrokTokens::valid_access_token)
-            .map(str::to_owned)
+        // The connected Grok subscription's OAuth access token is user-provided
+        // auth, just like a pasted BYO API key, so it respects the same BYO
+        // policy gate: when BYO keys are disabled (e.g. by workspace policy),
+        // the token must not be sent.
+        let grok_oauth_access_token = include_byo_keys
+            .then(|| {
+                self.grok_tokens
+                    .as_ref()
+                    .and_then(GrokTokens::valid_access_token)
+                    .map(str::to_owned)
+            })
+            .flatten()
             .unwrap_or_default();
 
         // Also include credentials when running with OIDC-managed Bedrock inference, regardless
@@ -436,6 +445,9 @@ impl ApiKeyManager {
                 grok_oauth_access_token,
                 allow_use_of_warp_credits: false,
                 aws_credentials,
+                // GCP credentials (Gemini Enterprise Agent Platform) are not
+                // collected by the client yet.
+                google_cloud_credentials: None,
             })
         }
     }

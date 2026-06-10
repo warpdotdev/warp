@@ -363,14 +363,13 @@ impl Input {
     #[cfg(not(target_family = "wasm"))]
     fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
         use ai::api_keys::ApiKeyManager;
+        use ai::grok_subscription::oauth;
 
-        use crate::ai::grok_oauth;
-        use crate::ai::grok_subscription::GrokTokenRefresher;
-
-        // Bind the loopback callback server before opening the browser so a
-        // bind failure surfaces immediately, without a dangling browser tab.
-        let listener = match grok_oauth::bind_callback_listener() {
-            Ok(listener) => listener,
+        // Starting the attempt binds the loopback callback server before the
+        // browser opens, so a bind failure surfaces immediately, without a
+        // dangling browser tab.
+        let attempt = match oauth::OauthAttempt::start() {
+            Ok(attempt) => attempt,
             Err(err) => {
                 log::error!("Failed to start Grok OAuth callback server: {err:#}");
                 let window_id = ctx.window_id();
@@ -385,11 +384,8 @@ impl Input {
             }
         };
 
-        let pkce = grok_oauth::PkceParams::generate();
-        let auth_url = grok_oauth::authorize_url(&pkce);
-
         // Open xAI's consent screen in the user's default browser.
-        ctx.open_url(&auth_url);
+        ctx.open_url(&attempt.authorize_url());
 
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -403,21 +399,11 @@ impl Input {
         });
 
         ctx.spawn(
-            async move { grok_oauth::run_oauth_flow(listener, pkce).await },
+            async move { attempt.finish().await },
             |_input, result, ctx| {
                 let window_id = ctx.window_id();
                 let toast = match result {
                     Ok(tokens) => {
-                        // Log only non-sensitive metadata, never the token values themselves
-                        // (log the access token's length rather than the token itself).
-                        log::info!(
-                            "Grok OAuth succeeded (access_token_len={}, token_type={:?}, scope={:?}, expires_in={:?}, has_refresh_token={})",
-                            tokens.access_token.len(),
-                            tokens.token_type,
-                            tokens.scope,
-                            tokens.expires_in,
-                            tokens.refresh_token.is_some(),
-                        );
                         // Persist the tokens to secure storage and kick off the
                         // proactive refresh loop so subsequent requests can
                         // authenticate with the connected subscription.
@@ -1222,10 +1208,7 @@ impl Input {
                 return false;
             }
             #[cfg(not(target_family = "wasm"))]
-            grok if command.name == commands::GROK.name => {
-                if !FeatureFlag::GrokOauth.is_enabled() {
-                    return false;
-                }
+            grok if command.name == commands::GROK.name && FeatureFlag::GrokOauth.is_enabled() => {
                 self.start_grok_oauth(ctx);
             }
             _ => {

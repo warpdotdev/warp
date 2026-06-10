@@ -11,9 +11,9 @@
 //! This module owns only the network/protocol side: building the authorize
 //! URL, running the loopback callback server, and exchanging/refreshing tokens
 //! at xAI's token endpoint. Persistence of the resulting tokens, proactive
-//! refresh scheduling, and injection into the request live in
-//! [`crate::ai::grok_subscription`] (refresh orchestration) and
-//! `ai::api_keys::ApiKeyManager` (storage + request injection).
+//! refresh scheduling, and injection into the request live in the parent
+//! [`crate::grok_subscription`] module (refresh orchestration) and
+//! [`crate::api_keys::ApiKeyManager`] (storage + request injection).
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -29,17 +29,11 @@ use rand::RngCore as _;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-/// Public Grok-CLI OAuth client. xAI's auth server rejects loopback OAuth from
-/// non-allowlisted clients, so we reuse the `client_id` that xAI ships for the
-/// Grok-CLI desktop OAuth flow.
 const CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 const AUTHORIZE_URL: &str = "https://auth.x.ai/oauth2/authorize";
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 const SCOPE: &str = "openid profile email offline_access grok-cli:access api:access";
 
-/// xAI rejects redirect URIs that don't match what was registered for the
-/// Grok-CLI client. The host:port pair is part of that registration, so the
-/// loopback callback server must bind to this exact address.
 const REDIRECT_HOST: &str = "127.0.0.1";
 const REDIRECT_PORT: u16 = 56121;
 
@@ -59,19 +53,56 @@ fn redirect_uri() -> String {
     format!("http://{REDIRECT_HOST}:{REDIRECT_PORT}/callback")
 }
 
+/// One in-flight OAuth login attempt: the bound loopback callback listener
+/// plus the per-attempt PKCE/CSRF secrets, which never leave this module.
+///
+/// Construct with [`OauthAttempt::start`], open [`OauthAttempt::authorize_url`]
+/// in the browser, then await [`OauthAttempt::finish`] to obtain tokens. Tying
+/// the secrets to the attempt guarantees the same PKCE verifier and CSRF state
+/// are used for both the authorize URL and the code exchange.
+pub struct OauthAttempt {
+    listener: TcpListener,
+    pkce: PkceParams,
+}
+
+impl OauthAttempt {
+    /// Binds the loopback callback server and generates fresh per-attempt
+    /// secrets. Call this before opening the browser so a bind failure (e.g.
+    /// another login already in progress, or Grok-CLI holding the port)
+    /// surfaces before a browser tab opens.
+    pub fn start() -> anyhow::Result<Self> {
+        Ok(Self {
+            listener: bind_callback_listener()?,
+            pkce: PkceParams::generate(),
+        })
+    }
+
+    /// The authorization URL the user's browser should open to begin the flow.
+    pub fn authorize_url(&self) -> String {
+        authorize_url(&self.pkce)
+    }
+
+    /// Runs the rest of the browser-based PKCE flow: waits for the loopback
+    /// callback, validates the CSRF state, and exchanges the authorization
+    /// code for tokens. Consumes the attempt so its secrets can't be reused.
+    pub async fn finish(self) -> anyhow::Result<TokenResponse> {
+        run_oauth_flow(self.listener, self.pkce).await
+    }
+}
+
 /// The per-attempt secrets for one authorization request: the PKCE
 /// verifier/challenge pair and the CSRF `state` value.
-pub struct PkceParams {
+struct PkceParams {
     verifier: String,
     challenge: String,
     /// CSRF token echoed back on the redirect and validated against the
     /// response before the code is exchanged.
-    pub state: String,
+    state: String,
 }
 
 impl PkceParams {
     /// Generates a fresh PKCE verifier + S256 challenge and a random CSRF state.
-    pub fn generate() -> Self {
+    fn generate() -> Self {
         let verifier = random_url_safe_token();
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let state = random_url_safe_token();
@@ -94,7 +125,7 @@ fn random_url_safe_token() -> String {
 
 /// Builds the authorization URL the user's browser should open to begin the
 /// flow.
-pub fn authorize_url(pkce: &PkceParams) -> String {
+fn authorize_url(pkce: &PkceParams) -> String {
     let redirect = redirect_uri();
     // `plan=generic` opts the consent screen into xAI's generic OAuth plan tier
     // (required for loopback OAuth from non-allowlisted clients); `referrer`
@@ -116,18 +147,15 @@ pub fn authorize_url(pkce: &PkceParams) -> String {
 }
 
 /// The token endpoint's response. Fields beyond `access_token` are optional
-/// because xAI does not always return them.
+/// because xAI does not always return them. Other response fields (e.g.
+/// `token_type`, `scope`) are ignored since nothing consumes them.
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
     #[serde(default)]
     pub refresh_token: Option<String>,
     #[serde(default)]
-    pub token_type: Option<String>,
-    #[serde(default)]
     pub expires_in: Option<i64>,
-    #[serde(default)]
-    pub scope: Option<String>,
 }
 
 /// The authorization code and state captured from the loopback redirect.
@@ -136,10 +164,8 @@ struct CallbackData {
     state: String,
 }
 
-/// Binds the loopback callback server to the fixed redirect address. Call this
-/// before opening the browser so a bind failure (e.g. another login already in
-/// progress, or Grok-CLI holding the port) surfaces before a browser tab opens.
-pub fn bind_callback_listener() -> anyhow::Result<TcpListener> {
+/// Binds the loopback callback server to the fixed redirect address.
+fn bind_callback_listener() -> anyhow::Result<TcpListener> {
     let listener = TcpListener::bind((REDIRECT_HOST, REDIRECT_PORT)).with_context(|| {
         format!(
             "couldn't bind the Grok OAuth callback server to {REDIRECT_HOST}:{REDIRECT_PORT}. \
@@ -155,13 +181,7 @@ pub fn bind_callback_listener() -> anyhow::Result<TcpListener> {
 /// Runs the full browser-based PKCE flow: waits for the loopback callback on a
 /// dedicated thread, validates the CSRF state, and exchanges the authorization
 /// code for tokens.
-///
-/// `listener` must come from [`bind_callback_listener`] and `pkce` must be the
-/// same params used to build the authorize URL that was opened in the browser.
-pub async fn run_oauth_flow(
-    listener: TcpListener,
-    pkce: PkceParams,
-) -> anyhow::Result<TokenResponse> {
+async fn run_oauth_flow(listener: TcpListener, pkce: PkceParams) -> anyhow::Result<TokenResponse> {
     // The loopback accept loop is blocking, so run it on a dedicated OS thread
     // and bridge the result back through a runtime-agnostic async channel.
     let (tx, rx) = async_channel::bounded(1);
@@ -170,8 +190,9 @@ pub async fn run_oauth_flow(
         .spawn(move || {
             // `send_blocking` is disallowed (no wasm support); block this
             // dedicated thread on the async `send` instead.
-            let _ =
-                warpui::r#async::block_on(tx.send(wait_for_callback(&listener, CALLBACK_TIMEOUT)));
+            let _ = warpui_core::r#async::block_on(
+                tx.send(wait_for_callback(&listener, CALLBACK_TIMEOUT)),
+            );
         })
         .context("failed to spawn the Grok OAuth callback server thread")?;
 
@@ -397,5 +418,5 @@ const FAILURE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
 <h1>Authorization failed</h1><p>Something went wrong. Return to Warp and try again.</p></body></html>";
 
 #[cfg(test)]
-#[path = "grok_oauth_tests.rs"]
+#[path = "oauth_tests.rs"]
 mod tests;

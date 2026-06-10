@@ -179,8 +179,6 @@ use watcher::HomeDirectoryWatcher;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::grok_subscription::GrokTokenRefresher as _;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 pub mod workflows;
@@ -1338,11 +1336,22 @@ pub(crate) fn initialize_app(
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
         #[cfg(not(target_family = "wasm"))]
         manager.subscribe_to_settings_changes(ctx);
-        // Resume proactive refresh of any Grok subscription tokens restored from
-        // secure storage so requests keep authenticating with the connection.
+        // The Grok subscription refresher (`ai::grok_subscription`) has no
+        // visibility into workspace policy, so wire the BYO API key policy in
+        // here. The initial value resumes proactive refresh of any tokens
+        // restored from secure storage; TeamsChanged keeps the policy aligned
+        // as team data loads or the workspace changes.
         #[cfg(not(target_family = "wasm"))]
         if FeatureFlag::GrokOauth.is_enabled() {
-            manager.ensure_grok_token_fresh(ctx);
+            use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+                if matches!(event, UserWorkspacesEvent::TeamsChanged) {
+                    let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+                    manager.set_grok_refresh_allowed(allowed, ctx);
+                }
+            });
+            let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+            manager.set_grok_refresh_allowed(allowed, ctx);
         }
         manager
     });
