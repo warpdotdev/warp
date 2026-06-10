@@ -970,7 +970,9 @@ impl Task {
                     }
                 })
                 .collect();
-        output.get_mut().messages.extend(output_messages?);
+        let mut out = output.get_mut();
+        out.messages.extend(output_messages?);
+        out.revision += 1;
         Ok(())
     }
 }
@@ -1014,7 +1016,7 @@ impl AIAgentExchange {
                 .clone()
                 .to_client_output_message(conversion_params)?
             {
-                MaybeAIAgentOutputMessage::Message(m) => {
+            MaybeAIAgentOutputMessage::Message(m) => {
                     // Extract citations from the message and add to the output citations
                     output.extend_citations(m.citations.clone());
                     // Upsert behavior: update the message if it exists, otherwise add it to the end of the list.
@@ -1023,6 +1025,7 @@ impl AIAgentExchange {
                     } else {
                         output.messages.push(m);
                     }
+                    output.revision += 1;
                 }
                 MaybeAIAgentOutputMessage::NoClientRepresentation => {
                     log::warn!(

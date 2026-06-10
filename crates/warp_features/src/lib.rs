@@ -877,6 +877,11 @@ pub enum FeatureFlag {
 
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
+
+    /// When enabled, the SDK driver emits NDJSON output messages
+    /// incrementally as they stream in instead of buffering the
+    /// entire exchange before writing.
+    StreamingNdjsonOutput,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -945,6 +950,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::StreamingNdjsonOutput,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

@@ -4117,6 +4117,7 @@ impl AIAgentExchange {
                         telemetry_events: vec![],
                         model_info: None,
                         request_cost: None,
+                        revision: 0,
                     }));
                 }
                 Ok(())

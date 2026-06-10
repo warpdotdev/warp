@@ -417,6 +417,13 @@ pub struct AIAgentOutput {
 
     /// The number of requests that the request cost.
     pub request_cost: Option<RequestCost>,
+
+    /// Monotonically increasing counter bumped on every mutation to
+    /// `messages`. Used by the streaming NDJSON driver to detect
+    /// in-place message updates (e.g. `AppendToMessageContent`) that
+    /// do not change the message count.
+    #[derivative(PartialEq = "ignore")]
+    pub(crate) revision: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

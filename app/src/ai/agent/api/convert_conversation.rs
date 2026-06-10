@@ -1883,6 +1883,7 @@ fn create_exchange_from_messages(
             is_fallback: model.is_fallback,
         }),
         request_cost: None,
+        revision: 0,
     };
 
     // There is a special case where an exchange consists of only ActionResults with no outputs

@@ -1261,6 +1261,16 @@ pub mod json {
         Ok(())
     }
 
+    pub fn format_output_message<W: Write>(
+        message: &AIAgentOutputMessage,
+        w: &mut W,
+    ) -> io::Result<()> {
+        if let Some(json) = JsonMessage::from_output_message(message) {
+            write_message(&json, w)?;
+        }
+        Ok(())
+    }
+
     pub fn format_input<W: Write>(input: &AIAgentInput, w: &mut W) -> io::Result<()> {
         match JsonMessage::from_input(input) {
             Some(message) => write_message(&message, w),

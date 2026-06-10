@@ -3,6 +3,8 @@ mod app;
 mod autotracking;
 mod entity;
 mod model;
+mod tui_view;
+mod tui_window;
 mod view;
 mod window;
 
@@ -26,6 +28,8 @@ use futures_util::future::BoxFuture;
 pub use model::*;
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
+pub use tui_view::*;
+pub(in crate::core) use tui_window::*;
 pub use view::*;
 pub use window::*;
 
@@ -136,6 +140,8 @@ type ActionCallback =
 
 type TypedActionCallback =
     dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId);
+type TuiTypedActionCallback =
+    dyn FnMut(&mut dyn AnyTuiView, &dyn Any, &mut AppContext, WindowId, EntityId);
 
 type GlobalActionCallback =
     dyn FnMut(&dyn Any, &'static std::panic::Location<'static>, &mut AppContext);
@@ -387,6 +393,7 @@ pub trait Handle<T> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum EntityLocation {
     Model(EntityId),
+    TuiView(WindowId, EntityId),
     View(WindowId, EntityId),
 }
 

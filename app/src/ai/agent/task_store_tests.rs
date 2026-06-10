@@ -66,6 +66,7 @@ fn create_exchange_with_subagent_call(subtask_id: &TaskId) -> AIAgentExchange {
         telemetry_events: vec![],
         model_info: None,
         request_cost: None,
+        revision: 0,
     };
 
     AIAgentExchange {
