@@ -69,6 +69,37 @@ pub enum NotificationOrigin {
     Conversation(AIConversationId),
     /// CLI sessions are keyed by terminal view because we only track one session per pane.
     CLISession(EntityId),
+    /// The auto-handoff sleep discoverability prompt. A unit variant so at most one
+    /// such notification exists at a time, and so it never collides with the
+    /// interrupted conversation's own status notifications (keyed by `Conversation`).
+    AutoHandoffSleepPrompt,
+}
+
+/// Visual style for a notification action button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationActionStyle {
+    /// Accent-filled primary button.
+    Primary,
+    /// Outlined secondary button.
+    Secondary,
+}
+
+/// Identifies the effect of clicking a notification action button. Handled by
+/// `AgentNotificationsModel::handle_notification_action`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationActionKind {
+    /// Turns on `auto_handoff_on_sleep_enabled` and dismisses the prompt.
+    EnableAutoHandoffOnSleep,
+    /// Dismisses the current sleep prompt without suppressing future prompts.
+    DismissSleepPrompt,
+}
+
+/// An inline action button rendered at the bottom of a notification.
+#[derive(Debug, Clone)]
+pub struct NotificationAction {
+    pub label: String,
+    pub style: NotificationActionStyle,
+    pub kind: NotificationActionKind,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +121,9 @@ pub struct NotificationItem {
     /// When present, the notification renders in "rich" layout with a branch header row.
     /// When absent, it falls back to the "simple" layout.
     pub branch: Option<String>,
+    /// Inline action buttons rendered at the bottom of the notification (e.g. the
+    /// auto-handoff sleep prompt's Enable/Dismiss). Empty for ordinary notifications.
+    pub actions: Vec<NotificationAction>,
 }
 
 impl NotificationItem {
@@ -126,7 +160,14 @@ impl NotificationItem {
             terminal_view_id,
             artifacts,
             branch,
+            actions: Vec::new(),
         }
+    }
+
+    /// Attaches inline action buttons to this notification.
+    pub(crate) fn with_actions(mut self, actions: Vec<NotificationAction>) -> Self {
+        self.actions = actions;
+        self
     }
 }
 
@@ -147,6 +188,13 @@ impl NotificationItems {
     pub(crate) fn remove_by_origin(&mut self, key: NotificationOrigin) -> bool {
         let before = self.items.len();
         self.items.retain(|item| item.origin != key);
+        self.items.len() != before
+    }
+
+    /// Removes the notification with the given id, returning true if one was removed.
+    pub(crate) fn remove_by_id(&mut self, id: NotificationId) -> bool {
+        let before = self.items.len();
+        self.items.retain(|item| item.id != id);
         self.items.len() != before
     }
 

@@ -16,11 +16,16 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::keyboard_shortcut::KeyboardShortcut;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
+use crate::ai::agent_management::notifications::action_buttons::{
+    NotificationActionButtonsRow, NotificationActionButtonsRowEvent,
+};
 use crate::ai::agent_management::notifications::item_rendering::{
     create_notification_artifact_buttons_view, handle_notification_artifact_buttons_event,
     render_notification_item_content, NotificationRenderContext, OnExpandClick,
 };
-use crate::ai::agent_management::notifications::{NotificationId, NotificationItem};
+use crate::ai::agent_management::notifications::{
+    NotificationAction, NotificationId, NotificationItem,
+};
 use crate::ai::agent_management::{AgentManagementEvent, AgentNotificationsModel};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::appearance::Appearance;
@@ -40,6 +45,7 @@ struct NotificationToastItem {
     close_button_mouse_state: MouseStateHandle,
     close_button_hover_state: MouseStateHandle,
     artifact_buttons_view: Option<ViewHandle<ArtifactButtonsRow>>,
+    action_buttons_view: Option<ViewHandle<NotificationActionButtonsRow>>,
     message_expanded: bool,
 }
 
@@ -124,8 +130,9 @@ impl AgentNotificationToastStack {
             return;
         }
 
-        // Clone artifacts before releasing the immutable borrow on ctx.
+        // Clone artifacts and actions before releasing the immutable borrow on ctx.
         let artifacts = item.artifacts.clone();
+        let actions = item.actions.clone();
         let _ = notifications;
 
         // The notification model de-dupes by origin, so a new notification for the same
@@ -134,6 +141,7 @@ impl AgentNotificationToastStack {
 
         let artifact_buttons_view =
             Self::create_artifact_buttons_view_from_artifacts(&artifacts, ctx);
+        let action_buttons_view = Self::create_action_buttons_view(id, &actions, ctx);
 
         self.toasts.push(NotificationToastItem {
             notification_id: id,
@@ -142,6 +150,7 @@ impl AgentNotificationToastStack {
             close_button_mouse_state: MouseStateHandle::default(),
             close_button_hover_state: MouseStateHandle::default(),
             artifact_buttons_view,
+            action_buttons_view,
             message_expanded: false,
         });
         self.start_dismissal_timeout(id, ctx);
@@ -214,6 +223,38 @@ impl AgentNotificationToastStack {
         ctx: &mut ViewContext<Self>,
     ) {
         handle_notification_artifact_buttons_event(event, ctx);
+    }
+
+    fn create_action_buttons_view(
+        notification_id: NotificationId,
+        actions: &[NotificationAction],
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ViewHandle<NotificationActionButtonsRow>> {
+        if actions.is_empty() {
+            return None;
+        }
+        let actions = actions.to_vec();
+        let view = ctx.add_typed_action_view(move |ctx| {
+            NotificationActionButtonsRow::new(notification_id, &actions, ctx)
+        });
+        ctx.subscribe_to_view(&view, Self::handle_action_buttons_event);
+        Some(view)
+    }
+
+    fn handle_action_buttons_event(
+        &mut self,
+        _view: ViewHandle<NotificationActionButtonsRow>,
+        event: &NotificationActionButtonsRowEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let NotificationActionButtonsRowEvent::Clicked {
+            notification_id,
+            kind,
+        } = event;
+        AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.handle_notification_action(*notification_id, *kind, ctx);
+        });
+        self.dismiss_toast_by_id(notification_id, ctx);
     }
 
     fn start_dismissal_timeout(&mut self, id: NotificationId, ctx: &mut ViewContext<Self>) {
@@ -298,6 +339,7 @@ impl View for AgentNotificationToastStack {
                 entry.close_button_mouse_state.clone(),
                 entry.close_button_hover_state.clone(),
                 entry.artifact_buttons_view.as_ref(),
+                entry.action_buttons_view.as_ref(),
                 entry.message_expanded,
                 is_newest.then(|| keystroke.clone()).flatten(),
                 appearance,
@@ -362,6 +404,7 @@ fn render_toast(
     close_button_mouse_state: MouseStateHandle,
     close_button_hover_state: MouseStateHandle,
     artifact_buttons: Option<&ViewHandle<ArtifactButtonsRow>>,
+    action_buttons: Option<&ViewHandle<NotificationActionButtonsRow>>,
     message_expanded: bool,
     keystroke: Option<Keystroke>,
     appearance: &Appearance,
@@ -370,11 +413,18 @@ fn render_toast(
     let on_expand: OnExpandClick = Box::new(move |ctx: &mut warpui::EventContext| {
         ctx.dispatch_typed_action(AgentNotificationToastAction::ToggleMessageExpanded(id));
     });
-    let keybinding_hint = keystroke.map(|ks| render_keybinding_hint(ks, appearance));
+    // Suppress the "Open conversation" keybinding hint when the notification has
+    // its own action buttons (e.g. the sleep prompt's Enable/Dismiss).
+    let keybinding_hint = if item.actions.is_empty() {
+        keystroke.map(|ks| render_keybinding_hint(ks, appearance))
+    } else {
+        None
+    };
 
     let content = render_notification_item_content(
         item,
         artifact_buttons,
+        action_buttons,
         NotificationRenderContext::Toast,
         message_expanded,
         on_expand,

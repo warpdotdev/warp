@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WindowId};
@@ -7,9 +8,11 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHa
 use crate::ai::active_agent_views_model::{ActiveAgentViewsEvent, ActiveAgentViewsModel};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent_management::notifications::{
-    NotificationCategory, NotificationId, NotificationItem, NotificationItems, NotificationOrigin,
+    NotificationAction, NotificationActionKind, NotificationActionStyle, NotificationCategory,
+    NotificationId, NotificationItem, NotificationItems, NotificationOrigin,
     NotificationSourceAgent,
 };
+use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, ConversationStatusUpdate};
 use crate::server::telemetry::TelemetryEvent;
@@ -448,6 +451,80 @@ impl AgentNotificationsModel {
         let id = item.id;
         self.notifications.push(item);
         ctx.emit(AgentManagementEvent::NotificationAdded { id });
+    }
+
+    /// Creates the auto-handoff sleep discoverability prompt notification.
+    /// Called on wake when an in-progress local agent run was interrupted by
+    /// sleep while `auto_handoff_on_sleep_enabled` was off. The prompt carries
+    /// Enable/Dismiss action buttons handled by `handle_notification_action`.
+    pub(crate) fn add_auto_handoff_sleep_prompt(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let metadata = TerminalViewMetadata::lookup(terminal_view_id, ctx);
+        let item = NotificationItem::new(
+            "Turn on auto-handoff to move active local agents to Cloud Mode when your computer sleeps."
+                .to_owned(),
+            "Connection lost".to_owned(),
+            NotificationCategory::Error,
+            NotificationSourceAgent::Oz { is_ambient: false },
+            NotificationOrigin::AutoHandoffSleepPrompt,
+            // Force unread so the prompt surfaces as a toast on wake even if the
+            // source terminal happens to be visible.
+            false,
+            terminal_view_id,
+            vec![],
+            metadata.branch,
+        )
+        .with_actions(vec![
+            NotificationAction {
+                label: "Enable".to_owned(),
+                style: NotificationActionStyle::Primary,
+                kind: NotificationActionKind::EnableAutoHandoffOnSleep,
+            },
+            NotificationAction {
+                label: "Dismiss".to_owned(),
+                style: NotificationActionStyle::Secondary,
+                kind: NotificationActionKind::DismissSleepPrompt,
+            },
+        ]);
+
+        let id = item.id;
+        self.notifications.push(item);
+        send_telemetry_from_ctx!(CloudAgentTelemetryEvent::SleepPromptShown, ctx);
+        ctx.emit(AgentManagementEvent::NotificationAdded { id });
+    }
+
+    /// Handles a click on a notification action button (e.g. the sleep prompt's
+    /// Enable/Dismiss). Applies the action's side effect, then removes the
+    /// notification.
+    pub(crate) fn handle_notification_action(
+        &mut self,
+        id: NotificationId,
+        kind: NotificationActionKind,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match kind {
+            NotificationActionKind::EnableAutoHandoffOnSleep => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    crate::report_if_error!(settings
+                        .auto_handoff_on_sleep_enabled
+                        .set_value(true, ctx));
+                });
+                send_telemetry_from_ctx!(CloudAgentTelemetryEvent::SleepPromptEnabled, ctx);
+            }
+            NotificationActionKind::DismissSleepPrompt => {
+                // Dismiss only closes the current notification. It is intentionally
+                // not permanent: the prompt resurfaces on the next sleep
+                // interruption until the user enables auto-handoff-on-sleep.
+                send_telemetry_from_ctx!(CloudAgentTelemetryEvent::SleepPromptDismissed, ctx);
+            }
+        }
+
+        if self.notifications.remove_by_id(id) {
+            ctx.emit(AgentManagementEvent::NotificationUpdated);
+        }
     }
 }
 

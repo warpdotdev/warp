@@ -14,13 +14,16 @@ use warpui::platform::Cursor;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
+use crate::ai::agent_management::notifications::action_buttons::{
+    NotificationActionButtonsRow, NotificationActionButtonsRowEvent,
+};
 use crate::ai::agent_management::notifications::item::NotificationFilter;
 use crate::ai::agent_management::notifications::item_rendering::{
     create_notification_artifact_buttons_view, handle_notification_artifact_buttons_event,
     render_notification_item_content, NotificationRenderContext,
 };
 use crate::ai::agent_management::notifications::{
-    NotificationId, NotificationItem, NotificationItems,
+    NotificationAction, NotificationId, NotificationItem, NotificationItems,
 };
 use crate::ai::agent_management::{AgentManagementEvent, AgentNotificationsModel};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
@@ -46,6 +49,8 @@ pub struct NotificationMailboxView {
     filtered_ids: Vec<NotificationId>,
     /// Artifact button views for each filtered notification (parallel to `filtered_ids`).
     artifact_buttons_views: Vec<Option<ViewHandle<ArtifactButtonsRow>>>,
+    /// Inline action button views for each filtered notification (parallel to `filtered_ids`).
+    action_buttons_views: Vec<Option<ViewHandle<NotificationActionButtonsRow>>>,
     /// Index of the currently keyboard-selected notification item, if any.
     selected_index: Option<usize>,
 }
@@ -146,6 +151,7 @@ impl NotificationMailboxView {
             notification_mouse_states: Vec::new(),
             filtered_ids: Vec::new(),
             artifact_buttons_views: Vec::new(),
+            action_buttons_views: Vec::new(),
             selected_index: None,
         }
     }
@@ -203,11 +209,19 @@ impl NotificationMailboxView {
             .items_filtered(self.active_filter)
             .map(|item| item.artifacts.clone())
             .collect();
+        let action_data: Vec<_> = notifications
+            .items_filtered(self.active_filter)
+            .map(|item| (item.id, item.actions.clone()))
+            .collect();
         let _ = notifications;
 
         self.artifact_buttons_views = artifact_data
             .iter()
             .map(|artifacts| Self::create_artifact_buttons_view_from_artifacts(artifacts, ctx))
+            .collect();
+        self.action_buttons_views = action_data
+            .iter()
+            .map(|(id, actions)| Self::create_action_buttons_view(*id, actions, ctx))
             .collect();
 
         // Clamp selection to valid range after list contents change.
@@ -239,11 +253,16 @@ impl NotificationMailboxView {
             .artifact_buttons_views
             .get(index)
             .and_then(|v| v.as_ref());
+        let action_buttons = self
+            .action_buttons_views
+            .get(index)
+            .and_then(|v| v.as_ref());
         let is_selected = self.selected_index == Some(index);
         self.render_notification_item(
             item,
             mouse_state,
             artifact_buttons,
+            action_buttons,
             is_selected,
             Appearance::as_ref(app),
         )
@@ -265,6 +284,37 @@ impl NotificationMailboxView {
         ctx: &mut ViewContext<Self>,
     ) {
         handle_notification_artifact_buttons_event(event, ctx);
+    }
+
+    fn create_action_buttons_view(
+        notification_id: NotificationId,
+        actions: &[NotificationAction],
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<ViewHandle<NotificationActionButtonsRow>> {
+        if actions.is_empty() {
+            return None;
+        }
+        let actions = actions.to_vec();
+        let view = ctx.add_typed_action_view(move |ctx| {
+            NotificationActionButtonsRow::new(notification_id, &actions, ctx)
+        });
+        ctx.subscribe_to_view(&view, Self::handle_action_buttons_event);
+        Some(view)
+    }
+
+    fn handle_action_buttons_event(
+        &mut self,
+        _view: ViewHandle<NotificationActionButtonsRow>,
+        event: &NotificationActionButtonsRowEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let NotificationActionButtonsRowEvent::Clicked {
+            notification_id,
+            kind,
+        } = event;
+        AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.handle_notification_action(*notification_id, *kind, ctx);
+        });
     }
 }
 
@@ -576,6 +626,7 @@ impl NotificationMailboxView {
         item: &NotificationItem,
         mouse_state: MouseStateHandle,
         artifact_buttons: Option<&ViewHandle<ArtifactButtonsRow>>,
+        action_buttons: Option<&ViewHandle<NotificationActionButtonsRow>>,
         is_selected: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -585,6 +636,7 @@ impl NotificationMailboxView {
         let row = render_notification_item_content(
             item,
             artifact_buttons,
+            action_buttons,
             NotificationRenderContext::Mailbox,
             false,
             Box::new(|_| {}),
