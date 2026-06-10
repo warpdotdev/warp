@@ -3943,12 +3943,13 @@ impl TerminalView {
 
         let osc52_clipboard_blocked_banner = ctx.add_typed_action_view(|_| {
             Banner::<TerminalAction>::new_with_buttons(
-                BannerTextContent::plain_text(
+                BannerTextContent::plain_text(crate::menu_label(
+                    "terminal.osc52.banner_text",
                     "A terminal program tried to access your clipboard. This is disabled by default for security reasons.",
-                ),
+                )),
                 vec![
                     BannerTextButton::new(
-                        "Allow".to_string(),
+                        crate::menu_label("terminal.osc52.allow_button", "Allow").to_string(),
                         Rc::new(|event_ctx, _ctx, _position| {
                             event_ctx.dispatch_typed_action(BannerAction::<TerminalAction>::Action(
                                 TerminalAction::Osc52AllowBlockedClipboardOperation,
@@ -3956,7 +3957,8 @@ impl TerminalView {
                         }),
                     ),
                     BannerTextButton::new(
-                        "Don't show again".to_string(),
+                        crate::menu_label("terminal.osc52.dont_show_again", "Don't show again")
+                            .to_string(),
                         Rc::new(|event_ctx, _ctx, _position| {
                             event_ctx.dispatch_typed_action(
                                 BannerAction::<TerminalAction>::Dismiss(DismissalType::Permanent),
@@ -22091,16 +22093,23 @@ impl TerminalView {
             return;
         }
         let text = match blocked_type {
-            Osc52ClipboardBlockedType::Write => {
-                "A terminal program tried to write to your clipboard. This is disabled by default for security reasons, to protect against malicious software."
-            }
-            Osc52ClipboardBlockedType::Read => {
-                "A terminal program tried to read your clipboard. This is disabled by default for security reasons, to protect against malicious software."
-            }
+            Osc52ClipboardBlockedType::Write => crate::menu_label(
+                "terminal.osc52.write_blocked_text",
+                "A terminal program tried to write to your clipboard. This is disabled by default for security reasons, to protect against malicious software.",
+            ),
+            Osc52ClipboardBlockedType::Read => crate::menu_label(
+                "terminal.osc52.read_blocked_text",
+                "A terminal program tried to read your clipboard. This is disabled by default for security reasons, to protect against malicious software.",
+            ),
         };
         let button_label = match blocked_type {
-            Osc52ClipboardBlockedType::Write => "Allow clipboard writes",
-            Osc52ClipboardBlockedType::Read => "Allow clipboard reads and writes",
+            Osc52ClipboardBlockedType::Write => {
+                crate::menu_label("terminal.osc52.allow_writes", "Allow clipboard writes")
+            }
+            Osc52ClipboardBlockedType::Read => crate::menu_label(
+                "terminal.osc52.allow_reads_and_writes",
+                "Allow clipboard reads and writes",
+            ),
         };
         self.osc52_clipboard_blocked_banner
             .update(ctx, |banner, ctx| {
