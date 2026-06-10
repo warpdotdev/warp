@@ -721,6 +721,10 @@ impl TemplatableMCPServerManager {
             log::error!(
                 "No templatable MCP installation found for installation_uuid {installation_uuid}; cannot resolve template variables"
             );
+            self.server_error_messages.insert(
+                installation_uuid,
+                "MCP server installation could not be found".to_string(),
+            );
 
             self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
             return;
@@ -759,6 +763,10 @@ impl TemplatableMCPServerManager {
                     log::error!(
                         "Templatable MCP server template contains no servers: {template_uuid}",
                     );
+                    self.server_error_messages.insert(
+                        installation_uuid,
+                        "MCP server JSON configuration did not contain any servers".to_string(),
+                    );
                     self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
                     if mode.is_reconnect() {
                         self.notify_reconnect_waiters(
@@ -772,6 +780,10 @@ impl TemplatableMCPServerManager {
             Err(err) => {
                 log::error!(
                     "Failed to parse resolved MCP server JSON for '{template_uuid}': {err:#}",
+                );
+                self.server_error_messages.insert(
+                    installation_uuid,
+                    "MCP server JSON configuration could not be parsed".to_string(),
                 );
                 self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
                 if mode.is_reconnect() {
@@ -793,6 +805,10 @@ impl TemplatableMCPServerManager {
                 // without ever having had a successfully bootstrapped session, which
                 // should basically never happen.
                 log::warn!("Unknown PATH when trying to launch MCP command.");
+                self.server_error_messages.insert(
+                    installation_uuid,
+                    "PATH was unavailable when trying to launch the MCP command".to_string(),
+                );
 
                 self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
 
