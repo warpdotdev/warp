@@ -283,14 +283,6 @@ impl AgentNotificationsModel {
             return;
         }
 
-        // Mirror the mailbox path: a finished response shouldn't notify when a queued follow-up
-        // prompt will auto-send as soon as the conversation finishes.
-        if matches!(status, ConversationStatus::Success)
-            && QueuedQueryModel::as_ref(ctx).has_autofireable_prompt(*conversation_id)
-        {
-            return;
-        }
-
         if is_terminal_view_visible(*terminal_view_id, ctx) {
             return;
         }
