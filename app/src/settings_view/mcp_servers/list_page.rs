@@ -1812,6 +1812,12 @@ impl MCPServersListPageView {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn refresh_file_based_server_cards(&mut self, ctx: &mut ViewContext<Self>) {
         self.create_file_based_server_cards(ctx);
+        // Notify unconditionally so the parse-error banner re-renders even on
+        // ConfigParsed / ConfigRemoved events that don't create or clear any
+        // server cards (e.g. the first parse failure on a previously-empty
+        // config). Other call sites already notify via adjacent state changes,
+        // but the watcher path has no such side-effect.
+        ctx.notify();
     }
 
     fn toggle_server_running_file_based(
