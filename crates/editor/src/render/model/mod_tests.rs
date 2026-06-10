@@ -11,7 +11,7 @@ use warpui_core::color::ColorU;
 use warpui_core::elements::ListIndentLevel;
 use warpui_core::fonts::FamilyId;
 use warpui_core::geometry::rect::RectF;
-use warpui_core::geometry::vector::vec2f;
+use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::text_layout::TextFrame;
 use warpui_core::units::{IntoPixels, Pixels};
 

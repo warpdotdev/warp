@@ -49,7 +49,7 @@ use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
 use warp_editor::render::model::{
     AutoScrollMode, BlockItem, Decoration, LineCount, LineDecoration, RenderEvent,
     RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction,
-    UpdateDecorationAfterLayout, WidthSetting,
+    UpdateDecorationAfterLayout, ViewZone, WidthSetting,
 };
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
 use warp_util::standardized_path::StandardizedPath;
