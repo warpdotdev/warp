@@ -8028,7 +8028,7 @@ impl SettingsWidget for ApiKeysWidget {
         }
 
         // Entrypoint for connecting a SuperGrok (xAI) subscription via OAuth.
-        if FeatureFlag::GrokOauth.is_enabled() {
+        if FeatureFlag::SuperGrok.is_enabled() {
             column.add_child(
                 Container::new(self.render_grok_subscription_row(
                     appearance,

@@ -1341,7 +1341,7 @@ pub(crate) fn initialize_app(
         // restored from secure storage; TeamsChanged keeps the policy aligned
         // as team data loads or the workspace changes.
         #[cfg(not(target_family = "wasm"))]
-        if FeatureFlag::GrokOauth.is_enabled() {
+        if FeatureFlag::SuperGrok.is_enabled() {
             use crate::workspaces::user_workspaces::UserWorkspacesEvent;
             ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
                 if matches!(event, UserWorkspacesEvent::TeamsChanged) {

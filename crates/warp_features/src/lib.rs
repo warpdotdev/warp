@@ -883,10 +883,9 @@ pub enum FeatureFlag {
     /// are protected from reordering.
     PinnedTabs,
 
-    /// Gates the `/grok` slash command and the xAI (Grok) subscription OAuth
-    /// proof-of-concept flow, which lets users connect a Grok subscription
-    /// instead of pasting an API key.
-    GrokOauth,
+    /// Gates the SuperGrok feature, which lets users
+    /// connect a Grok subscription instead of pasting an API key.
+    SuperGrok,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -955,7 +954,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
-    FeatureFlag::GrokOauth,
+    FeatureFlag::SuperGrok,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
