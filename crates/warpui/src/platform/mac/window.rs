@@ -476,6 +476,8 @@ extern "C" {
     );
     fn open_url(urlString: &NSString);
     fn set_titlebar_height(window: &NSWindow, height: f64);
+    fn get_current_input_source_id() -> *mut NSString;
+    fn select_input_source(source_id: &NSString);
 }
 
 pub type FrameCaptureCallback = Box<dyn FnOnce(platform::CapturedFrame) + Send + 'static>;
@@ -740,6 +742,31 @@ impl Window {
         // SAFETY: `find_window_with_id` enumerates AppKit's window list.
         if let Some(native_window) = unsafe { Self::find_window_with_id(window_id) } {
             Self::send_close_ime_msg(&native_window);
+        }
+    }
+
+    /// Returns the current keyboard input source ID (e.g., "com.apple.keylayout.ABC"),
+    /// or `None` if it cannot be determined.
+    pub fn get_current_input_source_id() -> Option<String> {
+        // SAFETY: `get_current_input_source_id` is an FFI call into `keycode.m`
+        // that reads the active TIS input source.
+        unsafe {
+            let ptr = get_current_input_source_id();
+            if ptr.is_null() {
+                None
+            } else {
+                Some((*ptr).to_string())
+            }
+        }
+    }
+
+    /// Selects the keyboard input source with the given source ID.
+    /// The source ID is a string like "com.apple.keylayout.ABC".
+    pub fn select_input_source(source_id: &str) {
+        // SAFETY: `select_input_source` is an FFI call into `keycode.m`
+        // that selects the given TIS input source.
+        unsafe {
+            select_input_source(&NSString::from_str(source_id));
         }
     }
 

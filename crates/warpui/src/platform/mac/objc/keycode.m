@@ -158,6 +158,45 @@ NSString* keyCodeToChar(UInt16 keyCode, BOOL shifted) {
     }
 }
 
+// Returns the current keyboard input source ID (e.g., "com.apple.keylayout.ABC"),
+// or nil if not on the main thread or if the input source cannot be determined.
+// Carbon TIS APIs must be called from the main thread.
+NSString* get_current_input_source_id(void) {
+    if (![NSThread isMainThread]) return nil;
+    TISInputSourceRef source = TISCopyCurrentKeyboardInputSource();
+    if (!source) return nil;
+    CFStringRef source_id = TISGetInputSourceProperty(source, kTISPropertyInputSourceID);
+    CFStringRef result = source_id ? CFStringCreateCopy(kCFAllocatorDefault, source_id) : nil;
+    CFRelease(source);
+    return result ? (NSString*)CFBridgingRelease(result) : nil;
+}
+
+// Selects the keyboard input source with the given source ID.
+// No-ops silently if not on the main thread — Carbon TIS APIs require the main thread.
+void select_input_source(NSString* source_id) {
+    if (![NSThread isMainThread]) return;
+    if (!source_id) return;
+    CFStringRef keys[] = { kTISPropertyInputSourceID };
+    CFTypeRef values[] = { (__bridge CFStringRef)source_id };
+    CFDictionaryRef dict = CFDictionaryCreate(
+        kCFAllocatorDefault,
+        (const void**)keys,
+        (const void**)values,
+        1,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks
+    );
+    if (!dict) return;
+    CFArrayRef sources = TISCreateInputSourceList(dict, false);
+    CFRelease(dict);
+    if (!sources) return;
+    if (CFArrayGetCount(sources) > 0) {
+        TISInputSourceRef source = (TISInputSourceRef)CFArrayGetValueAtIndex(sources, 0);
+        TISSelectInputSource(source);
+    }
+    CFRelease(sources);
+}
+
 NSArray<NSNumber*>* charToKeyCodes(NSString* keyChar) {
     if (keycodeDict == nil) {
         keycodeDict = [[NSMutableDictionary alloc] init];

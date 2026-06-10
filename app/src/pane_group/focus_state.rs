@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+#[cfg(target_os = "macos")]
+use warpui::platform::mac::Window;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::pane::{PaneId, TerminalPaneId};
@@ -12,6 +16,9 @@ pub struct PaneGroupFocusState {
     active_session_id: Option<TerminalPaneId>,
     in_split_pane: bool,
     is_focused_pane_maximized: bool,
+    /// Per-pane keyboard input source IDs (macOS only).
+    /// Maps pane ID to the last known input source ID (e.g., "com.apple.keylayout.ABC").
+    pane_input_sources: HashMap<PaneId, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,11 +45,21 @@ impl PaneGroupFocusState {
         active_session_id: Option<TerminalPaneId>,
         in_split_pane: bool,
     ) -> Self {
+        // Initialize the map and store the current input source for the initial pane.
+        let mut pane_input_sources = HashMap::new();
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(source_id) = Window::get_current_input_source_id() {
+                pane_input_sources.insert(focused_pane_id, source_id);
+            }
+        }
+
         Self {
             focused_pane_id,
             active_session_id,
             in_split_pane,
             is_focused_pane_maximized: false,
+            pane_input_sources,
         }
     }
 
@@ -93,6 +110,11 @@ impl PaneGroupFocusState {
     pub(super) fn set_focused_pane(&mut self, pane_id: PaneId, ctx: &mut ModelContext<Self>) {
         let old_focused = self.focused_pane_id;
         if old_focused != pane_id {
+            // Save the current input source for the departing pane,
+            // then restore the input source for the incoming pane.
+            self.save_input_source_for_pane(old_focused);
+            self.restore_input_source_for_pane(pane_id);
+
             self.focused_pane_id = pane_id;
             // When focus changes, clear maximize state
             self.is_focused_pane_maximized = false;
@@ -101,6 +123,38 @@ impl PaneGroupFocusState {
                 new_focused: pane_id,
             });
         }
+    }
+
+    /// Saves the current system input source ID for the given pane.
+    /// On macOS, this is a no-op when called from a background thread
+    /// (Carbon TIS APIs require the main thread).
+    #[cfg(target_os = "macos")]
+    fn save_input_source_for_pane(&mut self, pane_id: PaneId) {
+        if let Some(source_id) = Window::get_current_input_source_id() {
+            self.pane_input_sources.insert(pane_id, source_id);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn save_input_source_for_pane(&mut self, _pane_id: PaneId) {
+        // No-op on non-macOS platforms
+    }
+
+    /// Restores the previously saved input source for the given pane.
+    /// If the pane has no saved input source (e.g., it's newly created),
+    /// inherits the current system input source.
+    /// On macOS, this is a no-op when called from a background thread
+    /// (Carbon TIS APIs require the main thread).
+    #[cfg(target_os = "macos")]
+    fn restore_input_source_for_pane(&mut self, pane_id: PaneId) {
+        if let Some(source_id) = self.pane_input_sources.get(&pane_id) {
+            Window::select_input_source(source_id);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn restore_input_source_for_pane(&mut self, _pane_id: PaneId) {
+        // No-op on non-macOS platforms
     }
 
     /// Sets the active terminal session and emits an ActiveSessionChanged event.
