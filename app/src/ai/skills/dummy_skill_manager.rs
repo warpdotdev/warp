@@ -1,4 +1,4 @@
-use ai::skills::{ParsedSkill, SkillProvider, SkillReference};
+use ai::skills::{ParsedSkill, SkillPathOrigin, SkillProvider, SkillReference};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
@@ -14,6 +14,15 @@ impl SkillManager {
     pub fn get_skills_for_working_directory(
         &self,
         _working_directory: Option<&LocalOrRemotePath>,
+        _ctx: &AppContext,
+    ) -> Vec<SkillDescriptor> {
+        vec![]
+    }
+
+    pub fn get_skills_for_working_directory_with_origin(
+        &self,
+        _working_directory: Option<&LocalOrRemotePath>,
+        _path_origin: &SkillPathOrigin,
         _ctx: &AppContext,
     ) -> Vec<SkillDescriptor> {
         vec![]
@@ -39,6 +48,14 @@ impl SkillManager {
     pub fn active_skill_by_reference(
         &self,
         _reference: &SkillReference,
+        _ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
+        None
+    }
+    pub fn active_skill_by_reference_with_origin(
+        &self,
+        _reference: &SkillReference,
+        _path_origin: &SkillPathOrigin,
         _ctx: &AppContext,
     ) -> Option<&ParsedSkill> {
         None

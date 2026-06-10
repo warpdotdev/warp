@@ -1,17 +1,22 @@
 use ai::agent::action_result::{AnyFileContent, FileContext};
+use ai::skills::{SkillPathOrigin, SkillReference};
 use futures::future::{BoxFuture, FutureExt};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::{AIAgentActionType, ReadSkillRequest, ReadSkillResult};
+use crate::ai::blocklist::SessionContext;
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
 use crate::send_telemetry_from_ctx;
+use crate::terminal::model::session::active_session::ActiveSession;
 
-pub struct ReadSkillExecutor;
+pub struct ReadSkillExecutor {
+    active_session: ModelHandle<ActiveSession>,
+}
 
 impl ReadSkillExecutor {
-    pub fn new() -> Self {
-        Self
+    pub fn new(active_session: ModelHandle<ActiveSession>) -> Self {
+        Self { active_session }
     }
 
     pub(super) fn should_autoexecute(
@@ -34,7 +39,16 @@ impl ReadSkillExecutor {
             return ActionExecution::<ReadSkillResult>::InvalidAction;
         };
 
-        match SkillManager::as_ref(ctx).active_skill_by_reference(skill_ref, ctx) {
+        // Resolve from the catalog selected by the active session's host, so
+        // remote sessions read the host-rendered bundled skill.
+        let path_origin =
+            SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin();
+
+        match SkillManager::as_ref(ctx).active_skill_by_reference_with_origin(
+            skill_ref,
+            &path_origin,
+            ctx,
+        ) {
             Some(skill) => {
                 send_telemetry_from_ctx!(
                     SkillTelemetryEvent::Read {
@@ -65,9 +79,14 @@ impl ReadSkillExecutor {
                     },
                     ctx
                 );
-                ActionExecution::Sync(
-                    ReadSkillResult::Error(format!("Skill not found: {:?}", skill_ref)).into(),
-                )
+                let error = if matches!(&path_origin, SkillPathOrigin::Unavailable)
+                    && matches!(skill_ref, SkillReference::BundledSkillId(_))
+                {
+                    "Bundled skills are not available on this remote session".to_string()
+                } else {
+                    format!("Skill not found: {skill_ref:?}")
+                };
+                ActionExecution::Sync(ReadSkillResult::Error(error).into())
             }
         }
     }

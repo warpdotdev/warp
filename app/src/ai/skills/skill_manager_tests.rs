@@ -641,7 +641,7 @@ fn get_skills_for_working_directory_respects_location() {
     };
     let same_host_skill = make_remote_skill(&same_host_id, "same-host-project");
     let other_host_skill = make_remote_skill(&other_host_id, "other-host-project");
-    let bundled_skill = ParsedSkill {
+    let local_bundled_skill = ParsedSkill {
         name: "bundled".to_string(),
         description: "bundled skill".to_string(),
         path: LocalOrRemotePath::Local("/bundled/skills/bundled/SKILL.md".into()),
@@ -650,6 +650,13 @@ fn get_skills_for_working_directory_respects_location() {
         provider: SkillProvider::Warp,
         scope: SkillScope::Bundled,
     };
+    let remote_bundled_skill = ParsedSkill {
+        path: LocalOrRemotePath::Remote(RemotePath::new(
+            same_host_id.clone(),
+            StandardizedPath::try_new("/bundled/skills/bundled/SKILL.md").unwrap(),
+        )),
+        ..local_bundled_skill.clone()
+    };
 
     let mut directory_skills = HashMap::new();
     let mut skills_by_path = HashMap::new();
@@ -657,7 +664,7 @@ fn get_skills_for_working_directory_respects_location() {
         (home_dir, local_home_skill),
         (local_project_dir.clone(), local_project_skill),
         (same_host_dir.clone(), same_host_skill),
-        (other_host_dir, other_host_skill),
+        (other_host_dir.clone(), other_host_skill),
     ] {
         directory_skills
             .entry(dir)
@@ -681,7 +688,13 @@ fn get_skills_for_working_directory_respects_location() {
             manager.skills_by_path = skills_by_path;
             manager.add_bundled_skill_for_testing(
                 "bundled",
-                bundled_skill,
+                local_bundled_skill,
+                BundledSkillActivation::Always,
+            );
+            manager.add_remote_bundled_skill_for_testing(
+                same_host_id,
+                "bundled",
+                remote_bundled_skill,
                 BundledSkillActivation::Always,
             );
         });
@@ -698,6 +711,15 @@ fn get_skills_for_working_directory_respects_location() {
         assert!(!remote_names.contains("local-home"));
         assert!(!remote_names.contains("local-project"));
         assert!(!remote_names.contains("other-host-project"));
+        let other_remote_skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory(Some(&other_host_dir), ctx)
+        });
+        let other_remote_names: HashSet<_> = other_remote_skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+        assert!(other_remote_names.contains("other-host-project"));
+        assert!(!other_remote_names.contains("bundled"));
 
         let disconnected_remote_skills = handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(None, ctx)
@@ -707,6 +729,17 @@ fn get_skills_for_working_directory_respects_location() {
             .map(|skill| skill.name.as_str())
             .collect();
         assert_eq!(disconnected_remote_names, HashSet::from(["bundled"]));
+        let unavailable_remote_skills = handle.read(&app, |manager, ctx| {
+            manager.get_skills_for_working_directory_with_origin(
+                None,
+                &SkillPathOrigin::Unavailable,
+                ctx,
+            )
+        });
+        assert!(
+            unavailable_remote_skills.is_empty(),
+            "Unavailable remote sessions must not fall back to client-global bundles"
+        );
 
         let local_skills = handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(Some(&local_project_dir), ctx)
