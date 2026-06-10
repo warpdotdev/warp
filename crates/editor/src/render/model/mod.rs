@@ -405,6 +405,11 @@ pub struct RenderState {
     show_final_trailing_newline_when_non_empty: bool,
     has_final_trailing_newline: Cell<bool>,
 
+    /// Whether the content tree currently contains any [`BlockItem::EmbeddedComment`] blocks.
+    /// Updated by `apply_comment_blocks` so that an empty incoming set can skip the full tree
+    /// rebuild when there are no existing comment blocks to remove.
+    has_comment_blocks: Cell<bool>,
+
     width_setting: WidthSetting,
 
     /// Channel for propagating updates from [`super::element::RichTextElement`] such as the
@@ -1791,6 +1796,7 @@ impl RenderState {
             styles,
             show_final_trailing_newline_when_non_empty: true,
             has_final_trailing_newline: Cell::new(true),
+            has_comment_blocks: Cell::new(false),
             viewport: ViewportState::new(viewport_width, viewport_height),
             selections: Default::default(),
             decorations: Default::default(),
@@ -2636,27 +2642,36 @@ impl RenderState {
         self.set_comment_blocks(Vec::new());
     }
 
-    /// Find the first inline comment block at `location` and map it through `f`. A comment is
-    /// matched by the FULL `RenderLineLocation` it carries, not by its line alone. Because the
-    /// anchor (including a `Temporary` removed-line slot index) travels on the block itself, two
-    /// comments sharing an `at_line` resolve unambiguously and the match holds even after
-    /// `reset_temporary_block` rebuilds the surrounding removed-line blocks.
+    /// Find the first inline comment block at `location` and map its hosted item through `f`. A
+    /// comment is matched by the FULL `RenderLineLocation` it carries, not by its line alone.
+    /// Because the anchor (including a `Temporary` removed-line slot index) travels on the block
+    /// itself, two comments sharing an `at_line` resolve unambiguously and the match holds even
+    /// after `reset_temporary_block` rebuilds the surrounding removed-line blocks.
+    ///
+    /// Comment blocks contribute zero lines, so every candidate sits exactly at the anchor's line
+    /// boundary: seek there (O(log n)) and scan only that boundary's run instead of walking the
+    /// whole tree. `SeekBias::Left` stops before the zero-extent items at the boundary; the scan
+    /// ends as soon as an item starts past the anchor line.
     fn with_comment_block_at<T>(
         &self,
         location: RenderLineLocation,
-        f: impl FnOnce(Pixels, &BlockItem) -> T,
+        f: impl FnOnce(Pixels, &Arc<dyn LaidOutEmbeddedItem>) -> T,
     ) -> Option<T> {
+        let target = location.line_count();
         let content = self.content.borrow();
         let mut cursor = content.cursor::<LineCount, LayoutSummary>();
-        cursor.descend_to_first_item(&content, |_| true);
+        cursor.seek_clamped(&target, SeekBias::Left);
         while let Some(positioned) = cursor.positioned_item() {
+            if positioned.start_line > target {
+                break;
+            }
             if let BlockItem::EmbeddedComment {
                 location: block_location,
-                ..
+                item,
             } = positioned.item
                 && *block_location == location
             {
-                return Some(f(positioned.start_y_offset, positioned.item));
+                return Some(f(positioned.start_y_offset, item));
             }
             cursor.next();
         }
@@ -2672,7 +2687,7 @@ impl RenderState {
     ) -> Option<CommentBlockPosition> {
         self.with_comment_block_at(location, |start_y_offset, item| CommentBlockPosition {
             start_y_offset,
-            content_height: item.content_height(),
+            content_height: item.height(),
         })
     }
 
@@ -2683,11 +2698,7 @@ impl RenderState {
         &self,
         location: RenderLineLocation,
     ) -> Option<Arc<dyn LaidOutEmbeddedItem>> {
-        self.with_comment_block_at(location, |_, item| match item {
-            BlockItem::EmbeddedComment { item, .. } => item.clone(),
-            // `with_comment_block_at` only calls `f` for `EmbeddedComment` items.
-            _ => unreachable!(),
-        })
+        self.with_comment_block_at(location, |_, item| item.clone())
     }
 
     /// Number of inline comment blocks ([`BlockItem::EmbeddedComment`]) currently in this view's
@@ -2711,6 +2722,12 @@ impl RenderState {
     /// `at_line` and the removed-line slot index, so two comments sharing an `at_line` but targeting
     /// different removed-line slots do not collide.
     fn apply_comment_blocks(&self, blocks: Vec<CommentBlock>) {
+        // Fast path: skip the full tree rebuild when nothing changes.
+        if blocks.is_empty() && !self.has_comment_blocks.get() {
+            return;
+        }
+        self.has_comment_blocks.set(!blocks.is_empty());
+
         let mut current: HashMap<LineCount, Vec<BlockItem>> = HashMap::new();
         let mut temporary: HashMap<(LineCount, usize), Vec<BlockItem>> = HashMap::new();
         for block in blocks {

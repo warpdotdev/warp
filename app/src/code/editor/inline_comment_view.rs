@@ -1,8 +1,5 @@
-use std::cell::RefCell;
-
 use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::theme::Fill;
 use warp_editor::render::model::RenderState;
 use warpui::elements::{
@@ -18,8 +15,8 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::code::editor::comment_editor::{
-    create_editable_comment_markdown_editor, inline_comment_background,
-    render_inline_comment_shell, COMMENT_CHROME_HEIGHT,
+    comment_chrome_height, create_editable_comment_markdown_editor, inline_comment_background,
+    render_inline_comment_shell,
 };
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::EditorReviewComment;
@@ -94,7 +91,6 @@ pub struct InlineCommentView {
     save_button: ViewHandle<ActionButton>,
     cancel_button: ViewHandle<ActionButton>,
     save_button_disabled: bool,
-    laid_out_size: RefCell<Option<Vector2F>>,
 }
 
 impl InlineCommentView {
@@ -174,7 +170,6 @@ impl InlineCommentView {
             save_button,
             cancel_button,
             save_button_disabled: true,
-            laid_out_size: RefCell::new(None),
         };
         me.apply_mode(ctx);
         me.update_save_button_state(ctx);
@@ -285,19 +280,17 @@ impl InlineCommentView {
         // non-keystroke edits like select-all + delete), so `sync_inline_comment_blocks` always
         // sees an up-to-date value here.
         let content_height = self.inner_render_state(app).as_ref(app).height().as_f32();
-        Pixels::new(content_height + COMMENT_CHROME_HEIGHT)
-    }
-
-    pub fn set_laid_out_size(&self, value: Vector2F) {
-        self.laid_out_size.replace(Some(value));
+        Pixels::new(content_height + comment_chrome_height(&self.save_button, app))
     }
 
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn rendered_body(&self, app: &AppContext) -> String {
         self.comment_text(app)
     }
 
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn set_body_wrap_width_for_test(&mut self, max_width: Pixels, ctx: &mut ViewContext<Self>) {
         self.body_editor.update(ctx, |editor, ctx| {
             editor.set_max_width_for_test(Some(max_width), ctx);
@@ -306,6 +299,7 @@ impl InlineCommentView {
     }
 
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn embeds_diff_snippet_for_test(&self) -> bool {
         false
     }
@@ -353,7 +347,7 @@ impl InlineCommentView {
                 ctx.emit(InlineCommentViewEvent::ContentChanged);
             }
             EditorViewEvent::CmdEnter => self.save(ctx),
-            EditorViewEvent::EscapePressed => self.cancel(ctx),
+            EditorViewEvent::EscapePressed => self.handle_escape(ctx),
             EditorViewEvent::Focused
             | EditorViewEvent::Navigate(_)
             | EditorViewEvent::OpenFile { .. }
@@ -384,6 +378,26 @@ impl InlineCommentView {
 
     fn cancel(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.emit(InlineCommentViewEvent::Cancelled { id: self.id });
+    }
+
+    /// Escape must not discard unsaved work: a new draft cancels only while its body is empty, and
+    /// an edit of an existing comment cancels only while the body still matches the saved content.
+    /// Otherwise Escape is a no-op and the footer Cancel button remains the explicit way to discard
+    /// changes.
+    fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) {
+        let can_discard = match self.mode {
+            InlineCommentMode::NewDraft => self
+                .body_editor
+                .as_ref(ctx)
+                .model()
+                .as_ref(ctx)
+                .is_empty(ctx),
+            InlineCommentMode::EditingExisting => self.comment_text(ctx) == self.saved_content,
+            InlineCommentMode::Saved => false,
+        };
+        if can_discard {
+            self.cancel(ctx);
+        }
     }
 
     fn render_metadata(&self, appearance: &Appearance, background: ColorU) -> Box<dyn Element> {

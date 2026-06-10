@@ -13,7 +13,7 @@ use warp_editor::render::layout::TextLayout;
 use warp_editor::render::model::viewport::ViewportItem;
 use warp_editor::render::model::{
     BlockSpacing, EmbeddedItem, EmbeddedItemHTMLRepresentation, EmbeddedItemRichFormat,
-    LaidOutEmbeddedItem, RenderState,
+    LaidOutEmbeddedItem, RenderLineLocation, RenderState,
 };
 use warpui::elements::ChildView;
 use warpui::event::DispatchedEvent;
@@ -155,6 +155,7 @@ impl LaidOutEmbeddedCommentSpace {
     /// the block's hosted child (not the view's own composer handle). Returns `None` if the hosted
     /// editor can no longer be resolved.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn rendered_body_for_test(&self, app: &AppContext) -> Option<String> {
         self.comment_editor(app)
             .map(|editor| editor.read(app, |editor, app| editor.comment_text(app)))
@@ -183,7 +184,8 @@ impl LaidOutEmbeddedItem for LaidOutEmbeddedCommentSpace {
     ) -> Box<dyn RenderableBlock> {
         // Host the comment editor's element in-tree so it occupies real vertical space at its line
         // and scrolls with the surrounding content. If the editor handle can't be resolved, fall
-        // back to a no-op spacer that still reserves the block's height.
+        // back to a no-op spacer that still reserves the block's height. This legacy path hosts a
+        // markdown embed (not a per-view comment block), so it carries no comment anchor.
         match self.comment_editor(ctx) {
             Some(editor) => {
                 let child = ChildView::new(&editor).finish();
@@ -193,16 +195,17 @@ impl LaidOutEmbeddedItem for LaidOutEmbeddedCommentSpace {
                     viewport_item,
                     child,
                     MAX_COMMENT_HEIGHT,
-                    Box::new(move |measured, app| {
+                    None,
+                    Some(Box::new(move |measured, app| {
                         if let Some(editor) =
                             app.view_with_id::<CommentEditor>(window_id, entity_id)
                         {
                             editor.read(app, |editor, _| editor.set_laid_out_size(measured));
                         }
-                    }),
+                    })),
                 ))
             }
-            None => Box::new(RenderableEmbeddedCommentSpace::new(viewport_item)),
+            None => Box::new(RenderableEmbeddedCommentSpace::new(viewport_item, None)),
         }
     }
 
@@ -219,14 +222,19 @@ type SizeWriteBack = Box<dyn Fn(Vector2F, &AppContext)>;
 
 /// Hosts an inline comment view's element (either the active composer or a saved-comment card)
 /// inside a per-view inline comment block. It lays out the child against the block's content width
-/// (capped at `max_height`), writes the measured size back via `write_back_size` so the next layout
-/// reserves exactly the child's height, and paints and routes events to the child in content space
-/// (so it scrolls with its anchored line).
+/// (capped at `max_height`), optionally writes the measured size back via `write_back_size` (the
+/// legacy composer reserves space from its last measured size; inline cards derive their reserved
+/// height from their render state instead), and paints and routes events to the child in content
+/// space (so it scrolls with its anchored line).
 pub struct RenderableHostedComment {
     viewport_item: ViewportItem,
     child: Box<dyn Element>,
     max_height: f32,
-    write_back_size: SizeWriteBack,
+    /// The anchor of the inline comment block hosting this child, when known. Surfaced through
+    /// [`RenderableBlock::embedded_comment_location`] so gutter rendering can classify comment
+    /// rows without a reverse lookup into the content tree.
+    embedded_comment_location: Option<RenderLineLocation>,
+    write_back_size: Option<SizeWriteBack>,
 }
 
 impl RenderableHostedComment {
@@ -234,12 +242,14 @@ impl RenderableHostedComment {
         viewport_item: ViewportItem,
         child: Box<dyn Element>,
         max_height: f32,
-        write_back_size: SizeWriteBack,
+        embedded_comment_location: Option<RenderLineLocation>,
+        write_back_size: Option<SizeWriteBack>,
     ) -> Self {
         Self {
             viewport_item,
             child,
             max_height,
+            embedded_comment_location,
             write_back_size,
         }
     }
@@ -258,7 +268,9 @@ impl RenderableBlock for RenderableHostedComment {
             app,
         );
 
-        (self.write_back_size)(measured, app);
+        if let Some(write_back_size) = &self.write_back_size {
+            write_back_size(measured, app);
+        }
     }
 
     fn paint(&mut self, _model: &RenderState, ctx: &mut RenderContext, app: &AppContext) {
@@ -282,18 +294,26 @@ impl RenderableBlock for RenderableHostedComment {
         self.child.dispatch_event(event, ctx, app)
     }
 
-    fn is_embedded_comment(&self) -> bool {
-        true
+    fn embedded_comment_location(&self) -> Option<RenderLineLocation> {
+        self.embedded_comment_location
     }
 }
 
 pub struct RenderableEmbeddedCommentSpace {
     viewport_item: ViewportItem,
+    /// See [`RenderableHostedComment::embedded_comment_location`].
+    embedded_comment_location: Option<RenderLineLocation>,
 }
 
 impl RenderableEmbeddedCommentSpace {
-    pub(crate) fn new(viewport_item: ViewportItem) -> Self {
-        Self { viewport_item }
+    pub(crate) fn new(
+        viewport_item: ViewportItem,
+        embedded_comment_location: Option<RenderLineLocation>,
+    ) -> Self {
+        Self {
+            viewport_item,
+            embedded_comment_location,
+        }
     }
 }
 
@@ -321,8 +341,8 @@ impl RenderableBlock for RenderableEmbeddedCommentSpace {
         false
     }
 
-    fn is_embedded_comment(&self) -> bool {
-        true
+    fn embedded_comment_location(&self) -> Option<RenderLineLocation> {
+        self.embedded_comment_location
     }
 }
 
@@ -335,14 +355,23 @@ pub struct LaidOutInlineSavedComment {
     pub size: Vector2F,
     view_entity_id: EntityId,
     window_id: WindowId,
+    /// The anchor of the comment block hosting this card, forwarded to the renderable so gutter
+    /// rendering can classify the row without a reverse lookup into the content tree.
+    location: RenderLineLocation,
 }
 
 impl LaidOutInlineSavedComment {
-    pub fn new(view_entity_id: EntityId, window_id: WindowId, size: Vector2F) -> Self {
+    pub fn new(
+        view_entity_id: EntityId,
+        window_id: WindowId,
+        size: Vector2F,
+        location: RenderLineLocation,
+    ) -> Self {
         Self {
             size,
             view_entity_id,
             window_id,
+            location,
         }
     }
 
@@ -353,6 +382,7 @@ impl LaidOutInlineSavedComment {
     /// The rendered body text of the saved card hosted by this inline block, resolved through the
     /// block's hosted child. Returns `None` if the hosted view can no longer be resolved.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn rendered_body_for_test(&self, app: &AppContext) -> Option<String> {
         self.inline_view(app)
             .map(|view| view.read(app, |view, app| view.rendered_body(app)))
@@ -363,6 +393,7 @@ impl LaidOutInlineSavedComment {
     /// the redundant diff snippet the bottom-panel card renders. `None` if the view can no longer
     /// be resolved.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn embeds_diff_snippet_for_test(&self, app: &AppContext) -> Option<bool> {
         self.inline_view(app)
             .map(|view| view.read(app, |view, _| view.embeds_diff_snippet_for_test()))
@@ -392,22 +423,20 @@ impl LaidOutEmbeddedItem for LaidOutInlineSavedComment {
         match self.inline_view(ctx) {
             Some(view) => {
                 let child = ChildView::new(&view).finish();
-                let window_id = self.window_id;
-                let entity_id = self.view_entity_id;
+                // No size write-back: the inline card's reserved height is derived from its body
+                // editor's render state (see `InlineCommentView::inline_height`).
                 Box::new(RenderableHostedComment::new(
                     viewport_item,
                     child,
                     UNBOUNDED_COMMENT_HEIGHT,
-                    Box::new(move |measured, app| {
-                        if let Some(view) =
-                            app.view_with_id::<InlineCommentView>(window_id, entity_id)
-                        {
-                            view.read(app, |view, _| view.set_laid_out_size(measured));
-                        }
-                    }),
+                    Some(self.location),
+                    None,
                 ))
             }
-            None => Box::new(RenderableEmbeddedCommentSpace::new(viewport_item)),
+            None => Box::new(RenderableEmbeddedCommentSpace::new(
+                viewport_item,
+                Some(self.location),
+            )),
         }
     }
 

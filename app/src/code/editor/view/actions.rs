@@ -23,7 +23,6 @@ use warpui::units::Pixels;
 use warpui::{AppContext, TypedActionView, ViewContext, WeakViewHandle};
 
 use crate::cmd_or_ctrl_shift;
-use crate::code::editor::inline_comment_view::InlineCommentView;
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::model::CodeEditorModel;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorView, VimMode};
@@ -1088,13 +1087,8 @@ impl TypedActionView for CodeEditorView {
             NewCommentOnLine { line: line_info } => {
                 if FeatureFlag::InlineCodeReview.is_enabled() {
                     if FeatureFlag::EmbeddedCodeReviewComments.is_enabled() {
-                        let line = line_info.clone();
-                        let view = ctx
-                            .add_typed_action_view(|ctx| InlineCommentView::new_draft(line, ctx));
-                        CodeEditorView::wire_inline_comment_view(&view, ctx);
-                        let id = view.as_ref(ctx).id();
-                        self.inline_comments.insert(id, view.clone());
-                        self.mark_comment_blocks_dirty(ctx);
+                        let view = self.inline_comments.open_draft(line_info.clone(), ctx);
+                        self.sync_inline_comment_blocks(ctx);
                         ctx.emit(CodeEditorEvent::CommentEditorOpened);
                         view.update(ctx, |view, ctx| view.focus_body(ctx));
                         return;
@@ -1102,7 +1096,7 @@ impl TypedActionView for CodeEditorView {
                     self.model.update(ctx, |model: &mut CodeEditorModel, ctx| {
                         model.open_comment_line(line_info, ctx);
                     });
-                    self.mark_comment_blocks_dirty(ctx);
+                    self.sync_inline_comment_blocks(ctx);
                     ctx.emit(CodeEditorEvent::CommentEditorOpened);
 
                     ctx.focus(&self.active_comment_editor);

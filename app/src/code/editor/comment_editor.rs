@@ -56,18 +56,26 @@ const COMMENT_FOOTER_VERTICAL_PADDING: f32 = 4.0 * 2.0;
 const COMMENT_FOOTER_BORDER: f32 = 1.0;
 /// Outer container border (top + bottom).
 const COMMENT_OUTER_BORDER: f32 = 1.0 * 2.0;
-/// Height of the footer button row (`ButtonSize::Small` at default appearance).
-const COMMENT_BUTTON_ROW_HEIGHT: f32 = 24.0;
 
-/// Fixed vertical chrome around the inner comment editor.
-/// Slightly generous so the reserved inline block is never shorter than the painted shell.
-pub(crate) const COMMENT_CHROME_HEIGHT: f32 = COMMENT_BODY_TOP_PADDING
+/// Fixed vertical chrome around the inner comment editor, excluding the footer button row (which
+/// scales with appearance). Slightly generous so the reserved inline block is never shorter than
+/// the painted shell.
+const COMMENT_STATIC_CHROME_HEIGHT: f32 = COMMENT_BODY_TOP_PADDING
     + COMMENT_BODY_BOTTOM_PADDING
     + COMMENT_FOOTER_VERTICAL_PADDING
     + COMMENT_FOOTER_BORDER
-    + COMMENT_BUTTON_ROW_HEIGHT
     + COMMENT_OUTER_BORDER
     + 1.0; // extra pixel of tolerance
+
+/// Total vertical chrome around the inner comment editor: the static paddings/borders plus the
+/// footer button row measured at the current appearance, so the reserved inline height tracks
+/// button-height changes (e.g. UI font scaling) instead of assuming the default 24px row.
+pub(crate) fn comment_chrome_height(
+    footer_button: &ViewHandle<ActionButton>,
+    app: &AppContext,
+) -> f32 {
+    COMMENT_STATIC_CHROME_HEIGHT + footer_button.as_ref(app).height(app)
+}
 
 pub(crate) fn inline_comment_background(appearance: &Appearance) -> ColorU {
     blended_colors::neutral_2(appearance.theme())
@@ -214,7 +222,8 @@ impl CommentEditor {
     #[allow(unused)]
     pub fn inline_height(&self, app: &AppContext) -> Pixels {
         let content_height = self.inner_render_state(app).as_ref(app).height().as_f32();
-        Pixels::new((content_height + COMMENT_CHROME_HEIGHT).min(MAX_COMMENT_HEIGHT))
+        let chrome_height = comment_chrome_height(&self.save_button, app);
+        Pixels::new((content_height + chrome_height).min(MAX_COMMENT_HEIGHT))
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(unused))]
@@ -225,6 +234,7 @@ impl CommentEditor {
     /// Whether the primary ("Comment"/"Update") button is currently disabled (true while the draft
     /// body is empty). Test-only accessor.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn save_button_disabled_for_test(&self) -> bool {
         self.save_button_disabled
     }
@@ -232,12 +242,14 @@ impl CommentEditor {
     /// The current label of the primary button ("Comment" for a new comment, "Update" when editing
     /// an existing one). Test-only accessor.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn primary_button_label_for_test(&self, app: &AppContext) -> String {
         self.save_button.as_ref(app).label().to_string()
     }
 
     /// Whether the "Remove" button is shown (true when editing an existing comment). Test-only.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn show_remove_button_for_test(&self) -> bool {
         self.show_remove_button
     }
@@ -245,30 +257,35 @@ impl CommentEditor {
     /// Whether the composer is editing a comment imported from GitHub (shows the GitHub indicator).
     /// Test-only accessor.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn is_imported_for_test(&self) -> bool {
         self.is_imported_comment
     }
 
     /// Whether the inner text editor (where typing lands) currently holds focus. Test-only.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn inner_editor_focused_for_test(&self, app: &AppContext) -> bool {
         self.editor.is_focused(app)
     }
 
     /// Focus the inner text editor, mirroring what opening the composer does. Test-only.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn focus_inner_editor_for_test(&self, ctx: &mut ViewContext<Self>) {
         ctx.focus(&self.editor);
     }
 
     /// Invoke the same path Cmd/Ctrl+Enter triggers (save the comment). Test-only drive helper.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn cmd_enter_for_test(&mut self, ctx: &mut ViewContext<Self>) {
         self.save_comment(ctx);
     }
 
     /// Invoke the same path the Escape key triggers (close only when the draft is empty). Test-only.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn escape_for_test(&mut self, ctx: &mut ViewContext<Self>) {
         self.handle_escape(ctx);
     }
@@ -277,6 +294,7 @@ impl CommentEditor {
     /// into the focused composer produces (updating the save-button state and notifying the host so
     /// the inline block re-measures). Test-only drive helper.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn type_text_for_test(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
         let mut markdown = self.editor.as_ref(ctx).model().as_ref(ctx).markdown(ctx);
         markdown.push_str(text);
@@ -294,6 +312,7 @@ impl CommentEditor {
     /// lines), updating the save-button state and notifying the host so the inline block
     /// re-measures. Test-only drive helper.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn set_body_for_test(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
         self.editor.update(ctx, |editor, ctx| {
             editor.model().update(ctx, |model, ctx| {
@@ -309,6 +328,7 @@ impl CommentEditor {
     /// max-height cap). When this exceeds the composer's visible height the composer is internally
     /// scrollable. Test-only accessor.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn inner_content_height_for_test(&self, app: &AppContext) -> f32 {
         self.inner_render_state(app).as_ref(app).height().as_f32()
     }
@@ -316,6 +336,7 @@ impl CommentEditor {
     /// Whether the composer's reserved inline height is pinned at the [`MAX_COMMENT_HEIGHT`] cap
     /// (so further content scrolls internally rather than growing the block). Test-only accessor.
     #[cfg(feature = "integration_tests")]
+    #[allow(dead_code)]
     pub fn is_at_max_height_for_test(&self, app: &AppContext) -> bool {
         self.inline_height(app).as_f32() >= MAX_COMMENT_HEIGHT - 0.5
     }

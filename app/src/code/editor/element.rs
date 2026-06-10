@@ -16,8 +16,8 @@ use warp_editor::editor::EditorView;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{RenderableBlock, RichTextElement, VerticalExpansionBehavior};
 use warp_editor::render::model::{
-    gutter_expansion_button_types, BlockItem, BlockLocation, ExpansionType, LineCount,
-    RenderLineLocation, RenderState,
+    gutter_expansion_button_types, BlockLocation, ExpansionType, LineCount, RenderLineLocation,
+    RenderState,
 };
 use warpui::elements::new_scrollable::{NewScrollableElement, ScrollableAxis};
 use warpui::elements::{
@@ -431,38 +431,30 @@ pub struct EditorWrapper<V: EditorView> {
     find_references_anchor: Option<EditorLineLocation>,
 }
 
-/// Extend a decoration's end Y offset to cover an inline comment block anchored within the
-/// decoration's vertical range.
-fn extend_decoration_end_for_inline_comment(
+/// The bottom Y offset of an inline comment block anchored at `line` within the decoration's
+/// vertical range, or `None` when no inline block is anchored there (or it belongs to a different
+/// decoration). Callers extend the decoration's painted end to cover the block.
+fn inline_comment_decoration_end(
     decoration_start_y: Pixels,
     decoration_end_y: Pixels,
-    extended_end_y: &mut Pixels,
     line: &EditorLineLocation,
     model: &RenderState,
-) {
-    let Some(position) =
-        model.comment_block_position(line.clone().into_inline_comment_render_line_location())
-    else {
-        return;
-    };
+) -> Option<Pixels> {
+    let position =
+        model.comment_block_position(line.clone().into_inline_comment_render_line_location())?;
 
     // Inline comment blocks are inserted immediately after their anchor line, so a block that
     // belongs to this decoration starts at the decoration's current bottom edge. Allow a small
     // tolerance for float-to-pixel conversions and for zero-height intermediate items.
     const DECORATION_TOLERANCE: f32 = 0.5;
     let position_start = position.start_y_offset.as_f32();
-    let decoration_start = decoration_start_y.as_f32();
-    let decoration_end = decoration_end_y.as_f32();
-    if position_start + DECORATION_TOLERANCE < decoration_start
-        || position_start - DECORATION_TOLERANCE > decoration_end
+    if position_start + DECORATION_TOLERANCE < decoration_start_y.as_f32()
+        || position_start - DECORATION_TOLERANCE > decoration_end_y.as_f32()
     {
-        return;
+        return None;
     }
 
-    let block_end = position.start_y_offset + position.content_height;
-    if block_end > *extended_end_y {
-        *extended_end_y = block_end;
-    }
+    Some(position.start_y_offset + position.content_height)
 }
 
 impl<V: EditorView> EditorWrapper<V> {
@@ -619,6 +611,28 @@ impl<V: EditorView> EditorWrapper<V> {
             .iter()
             .find(|comment| comment.location().is_same_line(line))
             .cloned()
+    }
+
+    /// The [`EditorLineLocation`] for a gutter row at `line_count`, spanning its containing diff
+    /// range on the removed or added side, plus whether that range is currently hovered.
+    fn gutter_line_at(
+        &self,
+        line_count: LineCount,
+        removed_side: bool,
+        hovered_range: Option<&EditorLineLocation>,
+    ) -> (EditorLineLocation, bool) {
+        let diff_range = if removed_side {
+            self.diff_status.removed_diff_range(line_count)
+        } else {
+            self.diff_status.added_diff_range(line_count)
+        };
+        let line = EditorLineLocation::Current {
+            line_number: line_count,
+            line_range: diff_range.unwrap_or(line_count..line_count + 1),
+        };
+        let range_hovered = hovered_range
+            .is_some_and(|hovered_line| hovered_line.line_range() == line.line_range());
+        (line, range_hovered)
     }
 
     fn should_display_relative_line_number(&self) -> bool {
@@ -858,18 +872,11 @@ impl<V: EditorView> EditorWrapper<V> {
 
                 continue;
             }
-            if block.is_embedded_comment() {
+            if let Some(embedded_comment_location) = block.embedded_comment_location() {
                 let height = block.viewport_item().content_size.y();
-                let embedded_comment_location = model
-                    .content()
-                    .block_at_height(block.viewport_item().height())
-                    .and_then(|positioned| match positioned.item {
-                        BlockItem::EmbeddedComment { location, .. } => Some(*location),
-                        _ => None,
-                    });
                 let is_removed_comment = matches!(
                     embedded_comment_location,
-                    Some(RenderLineLocation::Temporary { .. })
+                    RenderLineLocation::Temporary { .. }
                 );
                 let diff_hunk = if is_removed_comment {
                     match diff_hunk {
@@ -881,18 +888,11 @@ impl<V: EditorView> EditorWrapper<V> {
                 } else {
                     diff_hunk
                 };
-                let diff_range = if is_removed_comment || is_removal {
-                    self.diff_status.removed_diff_range(line_count)
-                } else {
-                    self.diff_status.added_diff_range(line_count)
-                };
-                let line = EditorLineLocation::Current {
-                    line_number: line_count,
-                    line_range: diff_range.unwrap_or(line_count..line_count + 1),
-                };
-                let range_hovered = hovered_range
-                    .as_ref()
-                    .is_some_and(|hovered_line| hovered_line.line_range() == line.line_range());
+                let (line, range_hovered) = self.gutter_line_at(
+                    line_count,
+                    is_removed_comment || is_removal,
+                    hovered_range.as_ref(),
+                );
                 let element = self.render_gutter_element(
                     None,
                     line_number_config,
@@ -946,14 +946,8 @@ impl<V: EditorView> EditorWrapper<V> {
             // Check if this line is part of any diff hunk when diff hunks are expanded and hovered
             let is_diff_line = self.diff_hunks_are_expanded() && diff_hunk.is_some();
 
-            let line = EditorLineLocation::Current {
-                line_number: line_count,
-                line_range: diff_range.unwrap_or(line_count..line_count + 1),
-            };
-
-            let range_hovered = hovered_range
-                .as_ref()
-                .is_some_and(|hovered_line| hovered_line.line_range() == line.line_range());
+            let (line, range_hovered) =
+                self.gutter_line_at(line_count, false, hovered_range.as_ref());
 
             // Show comment button only on the specific hovered line
             let is_this_line_hovered = hovered_range
@@ -1517,23 +1511,20 @@ impl<V: EditorView> Element for EditorWrapper<V> {
                 let start_y = content.y_offset_at_line(decoration.start);
                 let end_y = content.y_offset_at_line(decoration.end);
                 let mut extended_end_y = end_y;
-                if let Some(comment_box) = &self.comment_box {
-                    extend_decoration_end_for_inline_comment(
-                        start_y,
-                        end_y,
-                        &mut extended_end_y,
-                        &comment_box.line,
-                        model,
-                    );
-                }
-                for saved_comment in &self.saved_comments {
-                    extend_decoration_end_for_inline_comment(
-                        start_y,
-                        end_y,
-                        &mut extended_end_y,
-                        saved_comment.location(),
-                        model,
-                    );
+                let comment_lines = self
+                    .comment_box
+                    .as_ref()
+                    .map(|comment_box| &comment_box.line)
+                    .into_iter()
+                    .chain(self.saved_comments.iter().map(|comment| comment.location()));
+                for line in comment_lines {
+                    if let Some(block_end) =
+                        inline_comment_decoration_end(start_y, end_y, line, model)
+                    {
+                        if block_end > extended_end_y {
+                            extended_end_y = block_end;
+                        }
+                    }
                 }
                 ctx.scene
                     .draw_rect_without_hit_recording(RectF::new(
