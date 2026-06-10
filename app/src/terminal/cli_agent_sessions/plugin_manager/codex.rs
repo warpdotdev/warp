@@ -14,17 +14,19 @@ use crate::features::FeatureFlag;
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
-const PLUGIN_KEY: &str = "warp@codex-warp";
+const PLUGIN_NAME: &str = "warp";
 const MARKETPLACE_REPO: &str = "warpdotdev/codex-warp";
 const MARKETPLACE_NAME: &str = "codex-warp";
 
-const PLATFORM_PLUGIN_KEY: &str = "orchestration@codex-warp";
+const PLATFORM_PLUGIN_NAME: &str = "orchestration";
 
 const CODEX_CONFIG_DIR: &str = ".codex";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 // Keep in sync with the plugin version in warpdotdev/codex-warp.
 const MINIMUM_PLUGIN_VERSION: &str = "0.4.0";
+// Keep in sync with the orchestration plugin version in warpdotdev/codex-warp.
+const MINIMUM_PLATFORM_PLUGIN_VERSION: &str = "0.4.0";
 
 pub(super) struct CodexPluginManager {
     executor: LocalCommandExecutor,
@@ -50,6 +52,23 @@ impl CodexPluginManager {
             .as_deref()
             .map(|path| HashMap::from([("PATH".to_owned(), path.to_owned())]));
         run_cli_command_logged("codex", args, &self.executor, env_vars, log).await
+    }
+
+    async fn ensure_marketplace(&self, log: &mut String) -> Result<(), PluginInstallError> {
+        match codex_home_dir()
+            .ok()
+            .and_then(|dir| codex_warp_marketplace_config(&dir))
+        {
+            Some(config) if config.is_git() => {
+                self.run_logged(&["plugin", "marketplace", "upgrade", MARKETPLACE_NAME], log)
+                    .await
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.run_logged(&["plugin", "marketplace", "add", MARKETPLACE_REPO], log)
+                    .await
+            }
+        }
     }
 }
 
@@ -84,10 +103,44 @@ impl CliAgentPluginManager for CodexPluginManager {
         let Ok(codex_dir) = codex_home_dir() else {
             return false;
         };
-        match installed_version(&codex_dir) {
-            Some(v) => compare_versions(&v, MINIMUM_PLUGIN_VERSION).is_lt(),
-            None => check_installed(&codex_dir),
+        if codex_warp_marketplace_config(&codex_dir).is_some_and(|config| !config.is_git()) {
+            return false;
         }
+        plugin_needs_update(&codex_dir, PLUGIN_NAME, MINIMUM_PLUGIN_VERSION)
+    }
+
+    fn is_platform_plugin_installed(&self) -> bool {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return false;
+        }
+        let Ok(codex_dir) = codex_home_dir() else {
+            return false;
+        };
+        check_platform_plugin_installed(&codex_dir)
+    }
+
+    fn platform_plugin_needs_update(&self) -> bool {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return false;
+        }
+        let Ok(codex_dir) = codex_home_dir() else {
+            return false;
+        };
+        if codex_warp_marketplace_config(&codex_dir).is_some_and(|config| !config.is_git()) {
+            return false;
+        }
+        plugin_needs_update(
+            &codex_dir,
+            PLATFORM_PLUGIN_NAME,
+            MINIMUM_PLATFORM_PLUGIN_VERSION,
+        )
+    }
+
+    fn has_local_marketplace_override(&self) -> bool {
+        let Ok(codex_dir) = codex_home_dir() else {
+            return false;
+        };
+        codex_warp_marketplace_config(&codex_dir).is_some_and(|config| !config.is_git())
     }
 
     async fn install(&self) -> Result<(), PluginInstallError> {
@@ -95,13 +148,7 @@ impl CliAgentPluginManager for CodexPluginManager {
             return Ok(());
         }
         let mut log = String::new();
-        self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
-            &mut log,
-        )
-        .await?;
-        self.run_logged(&["plugin", "add", PLUGIN_KEY], &mut log)
-            .await?;
+        self.ensure_marketplace(&mut log).await?;
         Ok(())
     }
 
@@ -115,8 +162,6 @@ impl CliAgentPluginManager for CodexPluginManager {
             &mut log,
         )
         .await?;
-        self.run_logged(&["plugin", "add", PLUGIN_KEY], &mut log)
-            .await?;
 
         let still_outdated = codex_home_dir()
             .ok()
@@ -166,13 +211,42 @@ impl CliAgentPluginManager for CodexPluginManager {
             return Ok(());
         }
         let mut log = String::new();
+        self.ensure_marketplace(&mut log).await?;
+        let updated = codex_home_dir()
+            .ok()
+            .map(|dir| platform_plugin_version_is_current(&dir))
+            .unwrap_or(false);
+        if !updated {
+            log.push_str("Post-install version check: platform plugin is still outdated\n");
+            return Err(PluginInstallError {
+                message: "Platform plugin installation did not take effect".to_owned(),
+                log,
+            });
+        }
+        Ok(())
+    }
+
+    async fn update_platform_plugin(&self) -> Result<(), PluginInstallError> {
+        if !FeatureFlag::CodexPlugin.is_enabled() {
+            return Ok(());
+        }
+        let mut log = String::new();
         self.run_logged(
-            &["plugin", "marketplace", "add", MARKETPLACE_REPO],
+            &["plugin", "marketplace", "upgrade", MARKETPLACE_NAME],
             &mut log,
         )
         .await?;
-        self.run_logged(&["plugin", "add", PLATFORM_PLUGIN_KEY], &mut log)
-            .await?;
+        let updated = codex_home_dir()
+            .ok()
+            .map(|dir| platform_plugin_version_is_current(&dir))
+            .unwrap_or(false);
+        if !updated {
+            log.push_str("Post-update version check: platform plugin is still outdated\n");
+            return Err(PluginInstallError {
+                message: "Platform plugin update did not take effect".to_owned(),
+                log,
+            });
+        }
         Ok(())
     }
 }
@@ -180,22 +254,17 @@ impl CliAgentPluginManager for CodexPluginManager {
 static PLUGIN_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> =
     LazyLock::new(|| PluginInstructions {
         title: "Install Warp Plugin for Codex",
-        subtitle: "Run the following commands, then restart Codex.",
-        steps: &[
-            PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
-                command: "codex plugin marketplace add warpdotdev/codex-warp",
-                executable: true,
-                link: None,
-            },
-            PluginInstructionStep {
-                description: "Install the Warp plugin",
-                command: "codex plugin add warp@codex-warp",
-                executable: true,
-                link: None,
-            },
+        subtitle: "Run the following command, then restart Codex.",
+        steps: &[PluginInstructionStep {
+            description: "Add the Warp plugin marketplace repository",
+            command: "codex plugin marketplace add warpdotdev/codex-warp",
+            executable: true,
+            link: None,
+        }],
+        post_install_notes: &[
+            "Restart Codex to activate the plugin.",
+            "No separate plugin add/install command is required in current Codex versions.",
         ],
-        post_install_notes: &["Restart Codex to activate the plugin."],
     });
 
 static NATIVE_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
@@ -227,72 +296,107 @@ static EMPTY_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plugi
     post_install_notes: &[],
 });
 
-static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> =
-    LazyLock::new(|| PluginInstructions {
+static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
+    PluginInstructions {
         title: "Update Warp Plugin for Codex",
-        subtitle: "Run the following commands, then restart Codex.",
-        steps: &[
-            PluginInstructionStep {
-                description: "Upgrade the marketplace",
-                command: "codex plugin marketplace upgrade codex-warp",
-                executable: true,
-                link: None,
-            },
-            PluginInstructionStep {
-                description: "Reinstall the Warp plugin",
-                command: "codex plugin add warp@codex-warp",
-                executable: true,
-                link: None,
-            },
+        subtitle: "Run the following command, then restart Codex.",
+        steps: &[PluginInstructionStep {
+            description: "Upgrade the Warp plugin marketplace",
+            command: "codex plugin marketplace upgrade codex-warp",
+            executable: true,
+            link: None,
+        }],
+        post_install_notes: &[
+            "Restart Codex to activate the update.",
+            "If this fails because codex-warp is not configured as a Git marketplace, remove and re-add the marketplace.",
         ],
-        post_install_notes: &["Restart Codex to activate the update."],
-    });
+    }
+});
 
 fn check_installed(codex_dir: &Path) -> bool {
-    let config_path = codex_dir.join("config.toml");
-    let Ok(contents) = fs::read_to_string(config_path) else {
-        return false;
-    };
-    let Ok(parsed) = contents.parse::<toml_edit::DocumentMut>() else {
-        return false;
-    };
-    parsed
-        .get("plugins")
-        .and_then(|plugins| plugins.get(PLUGIN_KEY))
-        .and_then(|plugin| plugin.get("enabled"))
-        .and_then(|enabled| enabled.as_bool())
+    marketplace_plugin_manifest_path(codex_dir, PLUGIN_NAME).is_file()
+}
+
+fn check_platform_plugin_installed(codex_dir: &Path) -> bool {
+    marketplace_plugin_manifest_path(codex_dir, PLATFORM_PLUGIN_NAME).is_file()
+}
+
+/// Reads the current marketplace Warp plugin version, if present.
+fn installed_version(codex_dir: &Path) -> Option<String> {
+    installed_plugin_version(codex_dir, PLUGIN_NAME)
+}
+
+/// Reads the current marketplace orchestration plugin version, if present.
+fn installed_platform_plugin_version(codex_dir: &Path) -> Option<String> {
+    installed_plugin_version(codex_dir, PLATFORM_PLUGIN_NAME)
+}
+
+fn platform_plugin_version_is_current(codex_dir: &Path) -> bool {
+    installed_platform_plugin_version(codex_dir)
+        .map(|v| !compare_versions(&v, MINIMUM_PLATFORM_PLUGIN_VERSION).is_lt())
         .unwrap_or(false)
 }
 
-/// Reads the latest cached Warp plugin version, if present.
-fn installed_version(codex_dir: &Path) -> Option<String> {
-    let cache_dir = codex_dir
-        .join("plugins")
-        .join("cache")
+fn installed_plugin_version(codex_dir: &Path, plugin_name: &str) -> Option<String> {
+    marketplace_plugin_version(codex_dir, plugin_name)
+}
+
+fn marketplace_plugin_manifest_path(codex_dir: &Path, plugin_name: &str) -> PathBuf {
+    codex_dir
+        .join(".tmp")
+        .join("marketplaces")
         .join(MARKETPLACE_NAME)
-        .join("warp");
-    let entries = fs::read_dir(cache_dir).ok()?;
-    let mut latest: Option<String> = None;
-    for entry in entries.flatten() {
-        let manifest_path = entry.path().join(".codex-plugin").join("plugin.json");
-        let Ok(contents) = fs::read_to_string(manifest_path) else {
-            continue;
-        };
-        let Ok(parsed) = serde_json::from_str::<Value>(&contents) else {
-            continue;
-        };
-        let Some(version) = parsed.get("version").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if latest
-            .as_deref()
-            .map(|current| compare_versions(version, current).is_gt())
-            .unwrap_or(true)
-        {
-            latest = Some(version.to_owned());
-        }
+        .join("plugins")
+        .join(plugin_name)
+        .join(".codex-plugin")
+        .join("plugin.json")
+}
+
+fn marketplace_plugin_version(codex_dir: &Path, plugin_name: &str) -> Option<String> {
+    plugin_manifest_version(marketplace_plugin_manifest_path(codex_dir, plugin_name))
+}
+
+fn plugin_manifest_version(manifest_path: impl AsRef<Path>) -> Option<String> {
+    let contents = fs::read_to_string(manifest_path).ok()?;
+    let parsed = serde_json::from_str::<Value>(&contents).ok()?;
+    parsed
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+}
+
+fn plugin_needs_update(codex_dir: &Path, plugin_name: &str, minimum_version: &str) -> bool {
+    if !marketplace_plugin_manifest_path(codex_dir, plugin_name).is_file() {
+        return false;
     }
-    latest
+    match installed_plugin_version(codex_dir, plugin_name) {
+        Some(v) => compare_versions(&v, minimum_version).is_lt(),
+        // No version field means very old plugin.
+        None => true,
+    }
+}
+
+struct CodexWarpMarketplaceConfig {
+    source_type: Option<String>,
+}
+
+impl CodexWarpMarketplaceConfig {
+    fn is_git(&self) -> bool {
+        self.source_type.as_deref() == Some("git")
+    }
+}
+
+fn codex_warp_marketplace_config(codex_dir: &Path) -> Option<CodexWarpMarketplaceConfig> {
+    let config_path = codex_dir.join("config.toml");
+    let contents = fs::read_to_string(config_path).ok()?;
+    let parsed = contents.parse::<toml_edit::DocumentMut>().ok()?;
+    let marketplace = parsed.get("marketplaces")?.get(MARKETPLACE_NAME)?;
+    Some(CodexWarpMarketplaceConfig {
+        source_type: marketplace
+            .get("source_type")
+            .and_then(|source_type| source_type.as_str())
+            .map(str::to_owned),
+    })
 }
 
 /// Checks `CODEX_HOME` first, falls back to `~/.codex`.

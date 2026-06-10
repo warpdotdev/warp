@@ -62,7 +62,7 @@ pub fn file_data_source_for_current_repo(
                     last_opened,
                 }
             } else {
-                let contents = file_search_model.get_repo_contents(app);
+                let contents = file_search_model.get_repo_contents(&query.text, app);
                 FileSnapshot {
                     contents,
                     git_changed_files: HashSet::new(),

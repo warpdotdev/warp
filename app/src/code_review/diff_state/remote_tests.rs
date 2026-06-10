@@ -40,6 +40,7 @@ fn empty_metadata(branch: &str) -> DiffMetadata {
         current_branch_name: branch.to_string(),
         against_head: DiffMetadataAgainstBase {
             aggregate_stats: DiffStats::default(),
+            files: vec![],
         },
         against_base_branch: None,
         has_head_commit: true,
@@ -115,6 +116,7 @@ fn test_metadata(branch: &str) -> DiffMetadata {
                 total_additions: 5,
                 total_deletions: 2,
             },
+            files: vec![],
         },
         against_base_branch: None,
         has_head_commit: true,
@@ -124,6 +126,7 @@ fn test_metadata(branch: &str) -> DiffMetadata {
             files_changed: 1,
             additions: 5,
             deletions: 2,
+            files: vec![],
         }],
         upstream_ref: Some("origin/feature".to_string()),
         pr_info: Some(PrInfo {
@@ -162,6 +165,59 @@ fn apply_snapshot_loaded_with_diffs() {
             assert!(matches!(m.get(), DiffState::Loaded));
             assert!(m.metadata.is_some());
         });
+    });
+}
+
+#[test]
+fn get_committed_branch_files_response_emits_domain_files() {
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        {
+            let emitted = emitted.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&handle, move |_, event, _| {
+                    if let DiffStateModelEvent::BranchCommittedFilesReceived(files) = event {
+                        emitted
+                            .lock()
+                            .expect("emitted mutex should not be poisoned")
+                            .push(files.clone());
+                    }
+                });
+            });
+        }
+
+        // Success: proto entries are converted to domain entries and emitted.
+        let proto_files = vec![remote_server::proto::FileChangeEntry {
+            path: "src/main.rs".to_string(),
+            additions: 3,
+            deletions: 1,
+        }];
+        handle.update(&mut app, |m, ctx| {
+            m.handle_get_committed_branch_files_response(&Ok(proto_files), ctx);
+        });
+
+        // Error: an empty list is emitted so the dialog shows an empty box
+        // rather than stale data.
+        handle.update(&mut app, |m, ctx| {
+            m.handle_get_committed_branch_files_response(&Err("boom".to_string()), ctx);
+        });
+
+        let emitted = emitted
+            .lock()
+            .expect("emitted mutex should not be poisoned");
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(emitted[0].len(), 1);
+        assert_eq!(emitted[0][0].path, "src/main.rs");
+        assert_eq!(emitted[0][0].additions, 3);
+        assert_eq!(emitted[0][0].deletions, 1);
+        assert!(emitted[1].is_empty());
     });
 }
 

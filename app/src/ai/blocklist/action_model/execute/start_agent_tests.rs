@@ -1,4 +1,5 @@
 use ai::agent::action_result::StartAgentVersion;
+use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use super::*;
@@ -25,18 +26,79 @@ fn build_start_agent_action(
     version: StartAgentVersion,
     execution_mode: StartAgentExecutionMode,
 ) -> AIAgentAction {
+    build_start_agent_action_with_prompt(version, execution_mode, "Investigate the failure")
+}
+
+fn build_start_agent_action_with_prompt(
+    version: StartAgentVersion,
+    execution_mode: StartAgentExecutionMode,
+    prompt: &str,
+) -> AIAgentAction {
     AIAgentAction {
         id: AIAgentActionId::from("start-agent-action".to_string()),
         action: AIAgentActionType::StartAgent {
             version,
             name: "Agent 1".to_string(),
-            prompt: "Investigate the failure".to_string(),
+            prompt: prompt.to_string(),
             execution_mode,
             lifecycle_subscription: None,
         },
         task_id: TaskId::new("start-agent-task".to_string()),
         requires_result: false,
     }
+}
+
+#[test]
+fn legacy_local_codex_command_prompt_normalizes_to_local_harness() {
+    let (prompt, execution_mode) = normalize_legacy_local_child_harness_command(
+        "codex --dangerously-bypass-approvals-and-sandbox 'Investigate the failure'".to_string(),
+        StartAgentExecutionMode::local_with_defaults(),
+    );
+
+    assert_eq!(prompt, "Investigate the failure");
+    assert_eq!(
+        execution_mode,
+        StartAgentExecutionMode::local_harness("codex".to_string())
+    );
+}
+
+#[test]
+fn execute_normalizes_legacy_local_codex_command_before_validation() {
+    App::test((), |mut app| async move {
+        let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let executor = app.add_model(StartAgentExecutor::new);
+        let parent_conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let action = build_start_agent_action_with_prompt(
+            StartAgentVersion::V1,
+            StartAgentExecutionMode::local_with_defaults(),
+            "codex --dangerously-bypass-approvals-and-sandbox 'Investigate the failure'",
+        );
+
+        let execution = executor.update(&mut app, |executor, ctx| {
+            let input = ExecuteActionInput {
+                action: &action,
+                conversation_id: parent_conversation_id,
+            };
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            result
+        });
+
+        let AnyActionExecution::Sync(result) = execution else {
+            panic!("expected sync execution");
+        };
+
+        assert!(matches!(
+            result,
+            AIAgentActionResultType::StartAgent(StartAgentResult::Error { error, version })
+                if error
+                    == "Local harness child agents require the parent run_id to be available."
+                    && version == StartAgentVersion::V1
+        ));
+    });
 }
 
 #[test]
@@ -542,6 +604,44 @@ fn execute_rejects_disabled_local_codex_before_other_local_harness_validation() 
             result,
             AIAgentActionResultType::StartAgent(StartAgentResult::Error { error, version })
                 if error == "Local Codex child agents are temporarily disabled."
+                    && version == StartAgentVersion::V2
+        ));
+    });
+}
+
+#[test]
+fn execute_allows_local_codex_when_flag_is_enabled() {
+    App::test((), |mut app| async move {
+        let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let executor = app.add_model(StartAgentExecutor::new);
+        let parent_conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let action = build_start_agent_action(
+            StartAgentVersion::V2,
+            StartAgentExecutionMode::local_harness("codex".to_string()),
+        );
+
+        let execution = executor.update(&mut app, |executor, ctx| {
+            let input = ExecuteActionInput {
+                action: &action,
+                conversation_id: parent_conversation_id,
+            };
+            let result: AnyActionExecution = executor.execute(input, ctx).into();
+            result
+        });
+
+        let AnyActionExecution::Sync(result) = execution else {
+            panic!("expected sync execution");
+        };
+
+        assert!(matches!(
+            result,
+            AIAgentActionResultType::StartAgent(StartAgentResult::Error { error, version })
+                if error
+                    == "Local harness child agents require the parent run_id to be available."
                     && version == StartAgentVersion::V2
         ));
     });

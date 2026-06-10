@@ -2,12 +2,38 @@
 //!
 //! The topology is stored as a parent → children index on
 //! [`BlocklistAIHistoryModel`]. These helpers are factored out of the
-//! orchestration pill bar so other surfaces (e.g. the agent-mode usage
-//! footer's credit rollup) can walk the same tree without duplicating the
-//! traversal.
+//! orchestration pill bar so other surfaces (e.g. keyboard navigation and
+//! the agent-mode usage footer's credit rollup) can walk and order the same
+//! tree without duplicating the logic.
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrchestrationNavigationDirection {
+    Previous,
+    Next,
+}
+
+const DONE_STATUS_KEY: u8 = 3;
+
+fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {
+    match status {
+        Some(ConversationStatus::Blocked { .. }) => 0,
+        Some(ConversationStatus::Error) => 1,
+        Some(ConversationStatus::InProgress) => 2,
+        Some(ConversationStatus::Cancelled) | Some(ConversationStatus::Success) => DONE_STATUS_KEY,
+        None => 2,
+    }
+}
+
+fn pill_secondary_sort_key(status_key: u8, last_modified_ms: Option<i64>) -> i64 {
+    if status_key == DONE_STATUS_KEY {
+        last_modified_ms.unwrap_or(0).saturating_neg()
+    } else {
+        0
+    }
+}
 
 /// Returns all locally-known descendants (children, grandchildren, …) of
 /// `parent_id`, flattened in pre-order with each parent's child registration
@@ -39,6 +65,89 @@ pub fn collect_descendant_conversation_ids_in_spawn_order(
         descendants.push(*child_id);
         collect_descendant_conversation_ids_in_spawn_order(history, *child_id, descendants);
     }
+}
+
+/// Returns descendants in the canonical orchestration pill order:
+///   1) pinned children
+///   2) unpinned children
+/// each bucket ordered by status priority, then done-recency, then spawn order.
+///
+/// This is the single ordering source used by both the pill bar and keyboard
+/// navigation. Callers should preserve the returned order rather than sorting
+/// the conversations again.
+pub fn descendant_conversation_ids_in_pill_order(
+    history: &BlocklistAIHistoryModel,
+    parent_id: AIConversationId,
+) -> Vec<AIConversationId> {
+    let mut descendants = descendant_conversation_ids_in_spawn_order(history, parent_id)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(spawn_index, conversation_id)| {
+            history.conversation(&conversation_id).map(|conversation| {
+                let status_key = pill_status_sort_key(Some(conversation.status()));
+                let secondary_key = pill_secondary_sort_key(
+                    status_key,
+                    conversation
+                        .last_modified_at()
+                        .map(|time| time.timestamp_millis()),
+                );
+                (
+                    !conversation.is_pinned(),
+                    status_key,
+                    secondary_key,
+                    spawn_index,
+                    conversation_id,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    descendants.sort_by_key(
+        |(is_unpinned, status_key, secondary_key, spawn_index, _conversation_id)| {
+            (*is_unpinned, *status_key, *secondary_key, *spawn_index)
+        },
+    );
+    descendants
+        .into_iter()
+        .map(|(_, _, _, _, conversation_id)| conversation_id)
+        .collect()
+}
+
+/// Returns the adjacent conversation in the active orchestration tree,
+/// cycling across the orchestrator and all descendants.
+///
+/// Traversal order is:
+///   [orchestrator, descendants in pill-bar order]
+/// where descendants use the same pinned/status/recency ordering rendered by
+/// the orchestration pill bar. Navigation wraps within this full list.
+pub fn adjacent_orchestration_child_conversation_id(
+    history: &BlocklistAIHistoryModel,
+    active_conversation_id: AIConversationId,
+    direction: OrchestrationNavigationDirection,
+) -> Option<AIConversationId> {
+    let active_conversation = history.conversation(&active_conversation_id)?;
+    let orchestration_root_id = history
+        .resolved_parent_conversation_id_for_conversation(active_conversation)
+        .unwrap_or(active_conversation_id);
+    let descendant_ids = descendant_conversation_ids_in_pill_order(history, orchestration_root_id);
+    if descendant_ids.is_empty() {
+        return None;
+    }
+    let conversation_ids = std::iter::once(orchestration_root_id)
+        .chain(descendant_ids)
+        .collect::<Vec<_>>();
+
+    let active_index = conversation_ids
+        .iter()
+        .position(|child_id| *child_id == active_conversation_id)?;
+
+    let target_index = match direction {
+        OrchestrationNavigationDirection::Previous => active_index
+            .checked_sub(1)
+            .unwrap_or(conversation_ids.len() - 1),
+        OrchestrationNavigationDirection::Next => (active_index + 1) % conversation_ids.len(),
+    };
+    conversation_ids.get(target_index).copied()
 }
 
 /// Returns a `ConversationStatus` that summarises the orchestrator's state

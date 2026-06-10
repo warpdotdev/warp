@@ -98,5 +98,9 @@ pub struct PtyOptions {
     pub enable_ssh_wrapper: bool,
     pub shell_debug_mode: bool,
     pub honor_ps1: bool,
+    /// Whether the Node.js Version context chip is enabled for this session. When
+    /// `false`, the shell bootstrap skips the per-prompt `node --version` detection
+    /// (gated via the `WARP_PROMPT_NODE_VERSION_ENABLED` env var).
+    pub node_version_chip_enabled: bool,
     pub close_fds: bool,
 }

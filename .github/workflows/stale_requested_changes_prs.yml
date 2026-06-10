@@ -5,8 +5,8 @@
 # Usage:
 #   - Runs daily and follows up on external-contributor PRs that have an active
 #     requested-changes review and have gone inactive.
-#   - Posts reminder comments at 7, 14, and 26 days of author inactivity, then closes
-#     the PR at 30 days — but only after the day-26 final warning has been posted.
+#   - Posts reminder comments at 7 and 10 days of author inactivity, then closes
+#     the PR at 14 days — but only after the day-10 final warning has been posted.
 #   - Inactivity is author-driven: a head-branch push (GitHub-recorded) or a comment by
 #     the PR author resets the timer; maintainer/third-party/bot comments do not.
 #   - Reminder progress is tracked via marker comments authored by github-actions[bot],

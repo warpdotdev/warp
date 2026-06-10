@@ -185,8 +185,14 @@ pub enum QueuedPromptsPanelAction {
 /// Events emitted to the host input view.
 #[derive(Clone, Debug)]
 pub enum QueuedPromptsPanelEvent {
-    /// A row was removed via its send-now button. The host should immediately submit `text`.
-    SendNow { text: String },
+    /// A row's send-now button was clicked. The row is left in the queue so the host can dispatch
+    /// it according to its kind, read prompt attachments by id, and remove it after dispatch.
+    SendNow {
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        text: String,
+        is_command: bool,
+    },
     /// A row was deleted via the trash button. The host should refocus the input.
     RowDeleted,
     /// An inline edit was committed or cancelled. The host should refocus the input.
@@ -595,11 +601,20 @@ impl TypedActionView for QueuedPromptsPanelView {
                     self.commit_edit(ctx);
                 }
 
-                let removed = QueuedQueryModel::handle(ctx)
-                    .update(ctx, |model, ctx| model.remove_by_id(conv_id, query_id, ctx));
-                if let Some(removed) = removed {
+                // Leave the row in the queue so the host can read its attachments by id when it
+                // fires; the host removes the fired row afterward. Locked rows (the initial
+                // cloud-mode prompt) are not send-now-able.
+                let row = QueuedQueryModel::as_ref(ctx)
+                    .queue(conv_id)
+                    .iter()
+                    .find(|row| row.id() == query_id && !row.is_locked())
+                    .map(|row| (row.text().to_owned(), row.is_command()));
+                if let Some((text, is_command)) = row {
                     ctx.emit(QueuedPromptsPanelEvent::SendNow {
-                        text: removed.text().to_owned(),
+                        conversation_id: conv_id,
+                        query_id,
+                        text,
+                        is_command,
                     });
                 }
             }
@@ -750,6 +765,7 @@ impl View for QueuedPromptsPanelView {
                         panel_view_id,
                         index,
                         origin: query.origin(),
+                        is_command: query.is_command(),
                         is_in_edit_mode,
                         is_being_dragged,
                         show_drag_handle,
@@ -891,6 +907,8 @@ struct RenderRowProps<'a> {
     panel_view_id: EntityId,
     index: usize,
     origin: QueuedQueryOrigin,
+    /// Whether this row is a shell command (rendered with a blue `!` prefix) vs an agent prompt.
+    is_command: bool,
     is_in_edit_mode: bool,
     is_being_dragged: bool,
     show_drag_handle: bool,
@@ -906,6 +924,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
         panel_view_id,
         index,
         origin,
+        is_command,
         is_in_edit_mode,
         is_being_dragged,
         show_drag_handle,
@@ -918,7 +937,9 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     // Match the prompt input, which renders at the monospace font size.
-    let prompt_font_size = appearance.monospace_font_size();
+    let queued_input_font_size = appearance.monospace_font_size();
+    // Blue used for the `!` prefix on command rows, matching shell-mode input styling.
+    let command_prefix_color = theme.ansi_fg_blue();
 
     let row_action_button_size = ButtonSize::XSmall.button_height(appearance, app);
     let editor_handle = edit_editor.clone();
@@ -962,20 +983,39 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
                     .with_horizontal_padding(4.)
                     .finish(),
             )
-            .with_max_height(prompt_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO * MAX_PROMPT_LINES)
+            .with_max_height(
+                queued_input_font_size * DEFAULT_UI_LINE_HEIGHT_RATIO * MAX_PROMPT_LINES,
+            )
             .finish()
         } else {
             // Single-line preview that truncates by width with a trailing ellipsis.
-            Text::new(
+            let preview = Text::new(
                 preview_text.clone(),
                 appearance.ui_font_family(),
-                prompt_font_size,
+                queued_input_font_size,
             )
             .with_color(theme.foreground().into())
             .with_selectable(false)
             .soft_wrap(false)
             .with_clip(ClipConfig::ellipsis())
-            .finish()
+            .finish();
+            // Command rows are prefaced with a blue `!` so they read as shell commands; prompt
+            // rows render their text directly.
+            if is_command {
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(4.)
+                    .with_child(
+                        Text::new("!", appearance.ui_font_family(), queued_input_font_size)
+                            .with_color(command_prefix_color)
+                            .with_selectable(false)
+                            .finish(),
+                    )
+                    .with_child(Expanded::new(1., preview).finish())
+                    .finish()
+            } else {
+                preview
+            }
         };
 
         let drag_handle: Box<dyn Element> = if !show_drag_handle {

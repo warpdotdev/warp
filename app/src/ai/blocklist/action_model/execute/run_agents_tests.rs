@@ -6,6 +6,7 @@ use ai::agent::orchestration_config::{
 };
 use settings::Setting;
 use warp_core::execution_mode::ExecutionMode;
+use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::*;
@@ -216,6 +217,34 @@ fn with_agent_name(mut action: AIAgentAction, name: &str) -> AIAgentAction {
     };
     request.agent_run_configs[0].name = name.to_string();
     action
+}
+
+#[test]
+fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
+    let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate the failure".to_string(),
+        title: String::new(),
+    };
+
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Local,
+        "codex",
+        "",
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("local Codex should be accepted when the feature flag is enabled");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: Some("codex".to_string()),
+            model_id: None,
+        }
+    );
 }
 
 fn persist_default_auth_secret(app: &mut App, harness_config_name: &str, secret_name: &str) {

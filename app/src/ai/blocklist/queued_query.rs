@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
 use crate::settings::{AISettings, AISettingsChangedEvent, PromptSubmissionMode};
 
 /// A globally unique identifier for a single queued prompt row.
@@ -36,20 +36,51 @@ pub enum QueuedQueryOrigin {
     ForkAndCompactSlashCommand,
 }
 
-/// A single queued prompt.
+/// Whether a queued row is an agent prompt or a shell command. Attachments live inside the
+/// `Prompt` variant so a `Command` structurally cannot carry any.
+#[derive(Debug, Clone)]
+enum QueuedQueryKind {
+    /// An agent prompt, with any image/file attachments captured from the input when it was
+    /// queued. The attachments fire with the prompt and are dropped when the row is removed.
+    Prompt { attachments: Vec<PendingAttachment> },
+    /// A shell command run in the terminal (or via the shared session for cloud panes).
+    Command,
+}
+
+/// A single queued row: an agent prompt or a shell command.
 #[derive(Debug, Clone)]
 pub struct QueuedQuery {
     id: QueuedQueryId,
     text: String,
     origin: QueuedQueryOrigin,
+    kind: QueuedQueryKind,
 }
 
 impl QueuedQuery {
     pub fn new(text: String, origin: QueuedQueryOrigin) -> Self {
+        Self::new_with_attachments(text, origin, Vec::new())
+    }
+
+    pub fn new_with_attachments(
+        text: String,
+        origin: QueuedQueryOrigin,
+        attachments: Vec<PendingAttachment>,
+    ) -> Self {
         Self {
             id: QueuedQueryId::new(),
             text,
             origin,
+            kind: QueuedQueryKind::Prompt { attachments },
+        }
+    }
+
+    /// Builds a queued shell command. Commands never carry attachments.
+    pub fn new_command(text: String, origin: QueuedQueryOrigin) -> Self {
+        Self {
+            id: QueuedQueryId::new(),
+            text,
+            origin,
+            kind: QueuedQueryKind::Command,
         }
     }
 
@@ -65,6 +96,18 @@ impl QueuedQuery {
         self.origin
     }
 
+    /// Returns true if this row is a shell command rather than an agent prompt.
+    pub fn is_command(&self) -> bool {
+        matches!(self.kind, QueuedQueryKind::Command)
+    }
+
+    pub fn attachments(&self) -> &[PendingAttachment] {
+        match &self.kind {
+            QueuedQueryKind::Prompt { attachments } => attachments,
+            QueuedQueryKind::Command => &[],
+        }
+    }
+
     /// Returns true if this row is locked from user mutation, reorder, and auto-fire.
     /// Currently only the locked initial Cloud Mode row is non-mutable; lifecycle code
     /// removes it explicitly via [`QueuedQueryModel::remove_initial_cloud_mode_row`].
@@ -73,14 +116,33 @@ impl QueuedQuery {
     }
 }
 
-/// What the auto-fire drain should do with a popped row.
+/// What the auto-fire drain should do with the head row. Produced by
+/// [`QueuedQueryModel::peek_autofire`] *without* removing the row; the caller removes it via
+/// [`QueuedQueryModel::remove_fired_row`] once the prompt has been dispatched or restored.
 #[derive(Debug)]
 pub enum AutofireAction {
-    /// Submit this prompt as a normal queued user query.
-    Submit { text: String },
-    /// The popped row was in edit mode at the time of pop.
-    /// The caller places `text` (the row's last committed text) in the input box.
-    PopFromEditMode { text: String },
+    /// Submit this prompt as a normal queued user query. The row stays in the queue so the send
+    /// path can read its attachments by `query_id`; the caller removes it afterward.
+    Submit {
+        query_id: QueuedQueryId,
+        text: String,
+    },
+    /// The head row was in edit mode. The caller restores `text` (the row's last committed text)
+    /// and `attachments` to the input box, then removes the row. `is_command` distinguishes a
+    /// shell command (no attachments; restored in shell mode) from an agent prompt, so the
+    /// restored row keeps its kind instead of being re-submitted as the wrong type.
+    PopFromEditMode {
+        query_id: QueuedQueryId,
+        text: String,
+        attachments: Vec<PendingAttachment>,
+        is_command: bool,
+    },
+    /// Execute this row as a shell command (its kind is `Command`). The caller runs the command,
+    /// removes the row, and waits for the command to finish before draining the next row.
+    ExecuteCommand {
+        query_id: QueuedQueryId,
+        command: String,
+    },
 }
 
 /// Per-conversation queue / edit / toggle state.
@@ -95,6 +157,10 @@ struct ConversationQueueState {
     /// `default_mode`; `Some` means the user has toggled this conversation
     /// at least once.
     queue_next_prompt_override: Option<bool>,
+    /// True while a drained shell command from this queue is running. Set when the command is
+    /// dispatched and cleared when it finishes; keeps the queue accepting new rows while the
+    /// agent is idle and gates the next drain until the command completes.
+    command_in_flight: bool,
 }
 
 /// App-wide singleton owning the queued prompts and auto-queue toggle for every conversation,
@@ -237,6 +303,45 @@ impl QueuedQueryModel {
             .is_some_and(|state| !state.queue.is_empty())
     }
 
+    /// Marks that a dispatched queued command is running for `conversation_id`. While set, the
+    /// queue keeps accepting new rows (the agent is idle) and the next drain waits for the
+    /// command to finish.
+    pub fn arm_command_in_flight(&mut self, conversation_id: AIConversationId) {
+        self.queues
+            .entry(conversation_id)
+            .or_default()
+            .command_in_flight = true;
+    }
+
+    /// Clears the in-flight-command marker for `conversation_id`.
+    pub fn clear_command_in_flight(&mut self, conversation_id: AIConversationId) {
+        if let Some(state) = self.queues.get_mut(&conversation_id) {
+            state.command_in_flight = false;
+        }
+    }
+
+    /// Returns true while a dispatched queued command is running for `conversation_id`.
+    pub fn has_command_in_flight(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .is_some_and(|state| state.command_in_flight)
+    }
+
+    /// Returns the conversation owned by `terminal_view_id` that currently has a queued command in
+    /// flight, if any.
+    pub fn command_in_flight_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        history_model: &BlocklistAIHistoryModel,
+    ) -> Option<AIConversationId> {
+        history_model
+            .all_live_conversations_for_terminal_view(terminal_view_id)
+            .find_map(|conversation| {
+                self.has_command_in_flight(conversation.id())
+                    .then_some(conversation.id())
+            })
+    }
+
     /// Returns the row currently in edit mode for `conversation_id`, if any.
     pub fn editing_row(&self, conversation_id: AIConversationId) -> Option<QueuedQueryId> {
         self.queues
@@ -322,35 +427,96 @@ impl QueuedQueryModel {
         Some(popped)
     }
 
-    /// Auto-fire drain entry point for `conversation_id`.
-    /// Returns `None` for empty queues or when the head is locked
-    /// ([`QueuedQuery::is_locked`]); otherwise pops the first row and returns whether
-    /// the caller should submit it normally or treat it as a popped edit-mode row.
-    pub fn pop_for_autofire(
-        &mut self,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) -> Option<AutofireAction> {
-        let state = self.queues.get_mut(&conversation_id)?;
+    /// Auto-fire drain entry point for `conversation_id`. Returns the action for the head row
+    /// *without* removing it (so the send path can read its attachments by id), or `None` for an
+    /// empty queue or a locked head ([`QueuedQuery::is_locked`]). The caller removes the row via
+    /// [`Self::remove_fired_row`] once it has been dispatched or restored to the input.
+    pub fn peek_autofire(&self, conversation_id: AIConversationId) -> Option<AutofireAction> {
+        let state = self.queues.get(&conversation_id)?;
         let first = state.queue.first()?;
         if first.is_locked() {
             return None;
         }
         let first_in_edit_mode = state.editing == Some(first.id);
-        let popped = state.queue.remove(0);
-        if first_in_edit_mode {
+        Some(if first_in_edit_mode {
+            AutofireAction::PopFromEditMode {
+                query_id: first.id,
+                text: first.text.clone(),
+                attachments: first.attachments().to_vec(),
+                is_command: first.is_command(),
+            }
+        } else if first.is_command() {
+            AutofireAction::ExecuteCommand {
+                query_id: first.id,
+                command: first.text.clone(),
+            }
+        } else {
+            AutofireAction::Submit {
+                query_id: first.id,
+                text: first.text.clone(),
+            }
+        })
+    }
+
+    /// Removes the row `query_id` from `conversation_id`'s queue after it has been fired. In the
+    /// edit-mode auto-fire path, the caller first restores the row's committed text and
+    /// attachments to the input, then calls this to drop the row and clear edit state.
+    pub fn remove_fired_row(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        let Some(idx) = state.queue.iter().position(|q| q.id == query_id) else {
+            return;
+        };
+        state.queue.remove(idx);
+        if state.editing == Some(query_id) {
             state.editing = None;
         }
         ctx.emit(QueuedQueryEvent::Removed {
             conversation_id,
-            query_id: popped.id,
+            query_id,
         });
+    }
 
-        Some(if first_in_edit_mode {
-            AutofireAction::PopFromEditMode { text: popped.text }
-        } else {
-            AutofireAction::Submit { text: popped.text }
-        })
+    /// Restores a fired row when submission fails after the row was removed.
+    pub(crate) fn restore_fired_row(
+        &mut self,
+        conversation_id: AIConversationId,
+        insert_index: usize,
+        query: QueuedQuery,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let state = self.queues.entry(conversation_id).or_default();
+        let query_id = query.id;
+        if state.queue.iter().any(|queued| queued.id == query_id) {
+            return;
+        }
+        let insert_index = insert_index.min(state.queue.len());
+        state.queue.insert(insert_index, query);
+        ctx.emit(QueuedQueryEvent::Appended {
+            conversation_id,
+            query_id,
+        });
+    }
+
+    /// Returns the attachments captured on the queued row `query_id` within `conversation_id`'s
+    /// queue, or an empty slice if no such row exists. Used by the send path to attach a fired
+    /// queued prompt's images/files without removing the row first.
+    pub fn attachments_for(
+        &self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+    ) -> &[PendingAttachment] {
+        self.queues
+            .get(&conversation_id)
+            .and_then(|state| state.queue.iter().find(|q| q.id == query_id))
+            .map(QueuedQuery::attachments)
+            .unwrap_or(&[])
     }
 
     /// Removes a specific row by id within `conversation_id`'s queue, if present. Returns the

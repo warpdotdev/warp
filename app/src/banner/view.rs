@@ -205,6 +205,19 @@ impl<T: Action + Clone> Banner<T> {
         ctx.notify();
     }
 
+    /// Updates the label of an action button at the given index.
+    pub fn set_action_button_label(
+        &mut self,
+        index: usize,
+        label: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(button) = self.end_buttons.get_mut(index) {
+            button.text = label.to_owned();
+            ctx.notify();
+        }
+    }
+
     pub fn with_icon(mut self, icon: Icon) -> Self {
         self.icon = Some(icon);
         self
