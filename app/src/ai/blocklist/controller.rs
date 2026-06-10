@@ -2558,6 +2558,28 @@ impl BlocklistAIController {
             .in_flight_response_streams
             .try_cancel_streams_for_conversation(conversation_id, reason, ctx)
         {
+            // A parked auto-resume was aborted above. With no active stream (and
+            // possibly no pending actions) nothing else will move the conversation out
+            // of the non-terminal TransientError status, so surface the cancellation
+            // directly.
+            if !reason.should_preserve_in_progress_status() {
+                let history_model = BlocklistAIHistoryModel::handle(ctx);
+                let is_recovering = history_model
+                    .as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .is_some_and(|conversation| conversation.status().is_transient_error());
+                if is_recovering {
+                    history_model.update(ctx, |history_model, ctx| {
+                        history_model.update_conversation_status(
+                            self.terminal_view_id,
+                            conversation_id,
+                            ConversationStatus::Cancelled,
+                            ctx,
+                        );
+                    });
+                }
+            }
+
             // Otherwise, cancel pending actions and update the input state.
             self.action_model.update(ctx, |action_model, ctx| {
                 action_model.cancel_all_pending_actions(conversation_id, Some(reason), ctx);

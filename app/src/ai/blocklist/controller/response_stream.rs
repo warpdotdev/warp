@@ -376,37 +376,7 @@ impl ResponseStream {
                 }
                 self.error_event_emitted = true;
 
-                #[cfg(feature = "crash_reporting")]
-                sentry::with_scope(
-                    |scope| {
-                        scope.set_tag(
-                            "has_received_client_actions",
-                            self.has_received_client_actions,
-                        );
-                        scope.set_tag("error", format!("{e:?}"));
-                        scope.set_tag("is_retryable", e.is_retryable());
-                        scope.set_tag("is_transient_failure", e.is_transient_failure());
-                        scope.set_tag(
-                            "will_attempt_resume",
-                            self.should_resume_conversation_after_stream_finished,
-                        );
-                        scope.set_tag("is_online", is_online);
-                        scope.set_tag("retry_count", self.retry_count);
-                    },
-                    || {
-                        report_error!(anyhow!(e.clone()).context(format!(
-                            "MultiAgent request failed after {} retries",
-                            self.retry_count
-                        )));
-                    },
-                );
-                #[cfg(not(feature = "crash_reporting"))]
-                {
-                    report_error!(anyhow!(e.clone()).context(format!(
-                        "MultiAgent request failed after {} retries",
-                        self.retry_count
-                    )));
-                }
+                self.report_request_failure(e, is_online);
 
                 ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(event)));
             }
@@ -431,14 +401,15 @@ impl ResponseStream {
             log::warn!(
                 "generate_multi_agent_output stream ended without emitting StreamFinished event."
             );
-            let truncated = AIApiError::StreamTruncated;
+            let truncated = Arc::new(AIApiError::StreamTruncated);
+            let is_online = NetworkStatus::as_ref(ctx).is_online();
             match recovery_action(
                 self.has_received_client_actions,
                 truncated.is_retryable(),
                 truncated.is_transient_failure(),
                 self.retry_count < MAX_RETRIES,
                 self.can_attempt_resume_on_error,
-                NetworkStatus::as_ref(ctx).is_online(),
+                is_online,
             ) {
                 RecoveryAction::RetryNow => {
                     log::warn!(
@@ -463,14 +434,16 @@ impl ResponseStream {
                 RecoveryAction::Resume => {
                     self.should_resume_conversation_after_stream_finished = true;
                     self.error_event_emitted = true;
+                    self.report_request_failure(&truncated, is_online);
                     ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
-                        Arc::new(truncated),
+                        truncated,
                     ))));
                 }
                 RecoveryAction::Fail => {
                     self.error_event_emitted = true;
+                    self.report_request_failure(&truncated, is_online);
                     ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
-                        Arc::new(truncated),
+                        truncated,
                     ))));
                 }
             }
@@ -478,6 +451,44 @@ impl ResponseStream {
 
         ctx.emit(ResponseStreamEvent::AfterStreamFinished { cancellation: None });
         self.cancellation_tx = None;
+    }
+
+    /// Reports a non-retried request failure to crash reporting with classification
+    /// tags. Shared by the error-event path and the synthesized stream-truncation
+    /// path so both failure shapes are visible with the same tags.
+    #[cfg_attr(not(feature = "crash_reporting"), expect(unused_variables))]
+    fn report_request_failure(&self, error: &Arc<AIApiError>, is_online: bool) {
+        #[cfg(feature = "crash_reporting")]
+        sentry::with_scope(
+            |scope| {
+                scope.set_tag(
+                    "has_received_client_actions",
+                    self.has_received_client_actions,
+                );
+                scope.set_tag("error", format!("{error:?}"));
+                scope.set_tag("is_retryable", error.is_retryable());
+                scope.set_tag("is_transient_failure", error.is_transient_failure());
+                scope.set_tag(
+                    "will_attempt_resume",
+                    self.should_resume_conversation_after_stream_finished,
+                );
+                scope.set_tag("is_online", is_online);
+                scope.set_tag("retry_count", self.retry_count);
+            },
+            || {
+                report_error!(anyhow!(error.clone()).context(format!(
+                    "MultiAgent request failed after {} retries",
+                    self.retry_count
+                )));
+            },
+        );
+        #[cfg(not(feature = "crash_reporting"))]
+        {
+            report_error!(anyhow!(error.clone()).context(format!(
+                "MultiAgent request failed after {} retries",
+                self.retry_count
+            )));
+        }
     }
 
     /// Parks a retry until connectivity returns. The controller mirrors the parked

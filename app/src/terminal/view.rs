@@ -6256,8 +6256,11 @@ impl TerminalView {
 
                 if FeatureFlag::QueuedPromptsV2.is_enabled()
                     && self.is_ambient_agent_session(ctx)
-                    && previous_status
-                        .is_some_and(|status| status.is_in_progress() || status.is_blocked())
+                    && previous_status.is_some_and(|status| {
+                        status.is_in_progress()
+                            || status.is_transient_error()
+                            || status.is_blocked()
+                    })
                 {
                     let finish_reason = match new_status {
                         ConversationStatus::Success => Some(FinishReason::Complete),
