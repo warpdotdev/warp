@@ -754,6 +754,10 @@ pub enum HostRequestError {
     /// server-provided message verbatim so callers can surface it directly.
     #[error("{0}")]
     OperationFailed(String),
+    /// The request was cancelled client-side via
+    /// [`RemoteServerManager::abort_host_request`].
+    #[error("host request aborted")]
+    Aborted,
 }
 
 impl From<crate::client::ClientError> for HostRequestError {
@@ -805,6 +809,55 @@ impl PendingHostRequest {
     fn cancel_timeout(&self) {
         if let Some(abort) = &self.timeout_abort {
             abort.abort();
+        }
+    }
+}
+
+/// A host-scoped remote ripgrep search registered synchronously with
+/// [`RemoteServerManager`], whose typed result can be awaited off-thread.
+///
+/// Synchronous registration is important for query cancellation: by the time
+/// this value is returned, [`RemoteServerManager::abort_host_request`] can
+/// always find the request instead of racing an asynchronously queued
+/// registration task.
+#[must_use = "pending remote searches must be awaited or aborted by request id"]
+pub struct PendingRipgrepSearch {
+    request_id: crate::protocol::RequestId,
+    response: oneshot::Receiver<Result<crate::proto::ServerMessage, HostRequestError>>,
+}
+
+impl PendingRipgrepSearch {
+    pub fn request_id(&self) -> &crate::protocol::RequestId {
+        &self.request_id
+    }
+
+    pub async fn result(self) -> Result<crate::proto::RipgrepSearchSuccess, HostRequestError> {
+        let msg = self
+            .response
+            .await
+            .map_err(|_| HostRequestError::AllSessionsDisconnected)??;
+        ripgrep_search_result(msg)
+    }
+}
+
+fn ripgrep_search_result(
+    msg: crate::proto::ServerMessage,
+) -> Result<crate::proto::RipgrepSearchSuccess, HostRequestError> {
+    match msg.message {
+        Some(crate::proto::server_message::Message::RipgrepSearchResponse(resp)) => {
+            match resp.result {
+                Some(crate::proto::ripgrep_search_response::Result::Success(success)) => {
+                    Ok(success)
+                }
+                Some(crate::proto::ripgrep_search_response::Result::Error(error)) => {
+                    Err(HostRequestError::OperationFailed(error.message))
+                }
+                None => Err(HostRequestError::UnexpectedResponse),
+            }
+        }
+        other => {
+            log::error!("Unexpected response variant for RipgrepSearch: {other:?}");
+            Err(HostRequestError::UnexpectedResponse)
         }
     }
 }
@@ -1539,6 +1592,48 @@ impl RemoteServerManager {
             client.abort_request(&request_id);
         }
         let _ = pending.result_tx.send(Err(HostRequestError::Timeout));
+    }
+
+    /// Registers a remote ripgrep request synchronously and returns its typed
+    /// pending result. Global search uses this instead of `HostRequestHandle`
+    /// so query cancellation cannot race request registration.
+    pub fn start_ripgrep_search(
+        &mut self,
+        host_id: &HostId,
+        request: crate::proto::RipgrepSearchRequest,
+    ) -> PendingRipgrepSearch {
+        let request_id = crate::protocol::RequestId::new();
+        let msg = crate::proto::ClientMessage::host_scoped(
+            request_id.to_string(),
+            crate::proto::host_scoped_request::Message::RipgrepSearch(request),
+        );
+        let response = self.send_host_request(host_id, msg);
+        PendingRipgrepSearch {
+            request_id,
+            response,
+        }
+    }
+
+    /// Aborts a pending host-scoped request: resolves the caller with
+    /// [`HostRequestError::Aborted`], cancels its timeout timer, and sends a
+    /// best-effort `Abort` notification so the daemon stops work. No-op if
+    /// the request already resolved (response arrived, timed out, or all
+    /// sessions disconnected).
+    pub fn abort_host_request(&mut self, request_id: &crate::protocol::RequestId) {
+        let Some(pending) = self.pending_host_requests.remove(request_id) else {
+            return;
+        };
+        pending.cancel_timeout();
+        log::info!(
+            "Aborting host-scoped request: host={} request_id={request_id}",
+            pending.host_id
+        );
+        // Best-effort daemon-side cancellation. The connection may already
+        // be gone, in which case this is a no-op.
+        if let Some(client) = self.client_for_host(&pending.host_id) {
+            client.abort_request(request_id);
+        }
+        let _ = pending.result_tx.send(Err(HostRequestError::Aborted));
     }
 
     /// Convenience wrapper: constructs a `ClientMessage::host_scoped` from
@@ -2603,7 +2698,8 @@ impl RemoteServerManager {
                             HostRequestError::Timeout => RemoteServerErrorKind::Timeout,
                             HostRequestError::ServerError { .. }
                             | HostRequestError::OperationFailed(_) => RemoteServerErrorKind::ServerError,
-                            HostRequestError::UnexpectedResponse => RemoteServerErrorKind::Other,
+                            HostRequestError::UnexpectedResponse
+                            | HostRequestError::Aborted => RemoteServerErrorKind::Other,
                         };
                         let _ = spawner
                             .spawn(move |_me, ctx| {
@@ -3964,3 +4060,7 @@ impl RemoteServerManager {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "manager_tests.rs"]
+mod tests;
