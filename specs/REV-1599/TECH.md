@@ -186,18 +186,18 @@ sequenceDiagram
   participant S as warp-server
   participant G as GCP STS / IAM
   participant V as Vertex AI (customer project)
-  Note over C: trigger (startup / settings change); client already holds the user's Warp auth token
-  C->>S: IssueTaskIdentityToken(aud = gcpAudience, 1h) — authed with regular Warp auth token
-  Note over S: GetRequiredPrincipalFromContext → IssueToken
-  S-->>C: Warp OIDC JWT (sub, email, teams from the principal)
+  Note over C: trigger fires; client holds Warp auth token
+  C->>S: IssueTaskIdentityToken(aud=gcpAudience, 1h) authed by Warp session
+  Note over S: GetRequiredPrincipalFromContext - IssueToken
+  S-->>C: Warp OIDC JWT (sub, email, teams)
   C->>G: STS token exchange (RFC 8693)
   G-->>C: federated token
   C->>G: generateAccessToken(gcpSaEmail)
   G-->>C: SA access token (~1h)
   Note over C: GeapCredentialsState::Loaded (in memory)
   C->>S: agent request + GoogleCloudCredentials.access_token
-  S->>V: BackendVertexAI(gcpProjectId, gcpLocation) + request token
-  V-->>S: stream (audit log: pool subject = user email, principal = SA)
+  S->>V: BackendVertexAI(gcpProjectId, gcpLocation) + token
+  V-->>S: stream
 ```
 
 Security invariants: the access token lives only in memory, is never persisted, never logged (logs carry the audience — a public identifier — and outcomes only); no refresh token, ADC file, or SA key exists anywhere in the flow; expired tokens are never sent.
