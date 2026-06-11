@@ -1,4 +1,6 @@
-use super::{truncate_from_beginning, CreateGitBranch, GitBranch, GitLineChanges};
+use super::{
+    truncate_from_beginning, CreateGitBranch, GitBranch, GitBranchTrackingStatus, GitLineChanges,
+};
 use crate::context_chips::display_chip::PromptChipShellCommand;
 use crate::context_chips::display_menu::GenericMenuItem;
 use crate::context_chips::git_branch_on_click::GitBranchOnClickValue;
@@ -41,6 +43,127 @@ fn test_github_pr_chip_display_value_falls_back_to_raw_value() {
     assert_eq!(
         ContextChipKind::GithubPullRequest.display_value(&value),
         "https://example.com/not-a-pr"
+    );
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_ahead_and_behind_when_upstream_exists() {
+    let status = GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        2,
+        1,
+    );
+
+    assert_eq!(status.display_text(), "feature-a • ↑2 ↓1");
+}
+
+#[test]
+fn test_git_branch_tracking_status_hides_zero_counts() {
+    let status = GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        2,
+        0,
+    );
+
+    assert_eq!(status.display_text(), "feature-a • ↑2");
+}
+
+#[test]
+fn test_git_branch_tracking_status_caps_large_counts() {
+    let status = GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        1000,
+        1001,
+    );
+
+    assert_eq!(status.display_text(), "feature-a • ↑999+ ↓999+");
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_rebased_indicator() {
+    let status =
+        GitBranchTrackingStatus::rebased("feature-a".to_string(), "origin/feature-a".to_string());
+
+    assert_eq!(status.display_text(), "feature-a • ⇅");
+}
+
+#[test]
+fn test_git_branch_tracking_status_parses_shell_fallback_display_text() {
+    let status = GitBranchTrackingStatus::from_display_text("feature-a • ↑999+ ↓2").unwrap();
+
+    assert_eq!(status.branch, "feature-a");
+    assert_eq!(status.ahead, 1000);
+    assert_eq!(status.behind, 2);
+    assert!(status.counts_available);
+}
+
+#[test]
+fn test_git_branch_tracking_status_keeps_branch_names_with_bullet_delimiter() {
+    let status = GitBranchTrackingStatus::from_display_text("feature • test").unwrap();
+
+    assert_eq!(status.branch, "feature • test");
+    assert!(!status.counts_available);
+}
+
+#[test]
+fn test_git_branch_tracking_status_parses_status_after_branch_name_with_bullet_delimiter() {
+    let status = GitBranchTrackingStatus::from_display_text("feature • test • ↑2").unwrap();
+
+    assert_eq!(status.branch, "feature • test");
+    assert_eq!(status.ahead, 2);
+    assert!(status.counts_available);
+}
+
+#[test]
+fn test_git_branch_tracking_status_tooltip_reports_fallback_counts_without_upstream() {
+    let status = GitBranchTrackingStatus::from_display_text("feature-a • ↑2 ↓1").unwrap();
+
+    assert_eq!(
+        status.tooltip_text(),
+        "Ahead 2, behind 1; upstream name is unavailable"
+    );
+}
+
+#[test]
+fn test_git_branch_tracking_status_parses_shell_fallback_rebased_text() {
+    let status = GitBranchTrackingStatus::from_display_text("feature-a • ⇅").unwrap();
+
+    assert_eq!(status.branch, "feature-a");
+    assert!(status.is_rebased());
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_branch_only_without_upstream() {
+    let status = GitBranchTrackingStatus::new("feature-a".to_string(), None, 0, 0);
+
+    assert_eq!(status.display_text(), "feature-a");
+}
+
+#[test]
+fn test_git_branch_tracking_status_displays_branch_only_when_counts_are_unavailable() {
+    let status = GitBranchTrackingStatus::without_counts(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+    );
+
+    assert_eq!(status.display_text(), "feature-a");
+}
+
+#[test]
+fn test_git_branch_status_chip_display_value_uses_git_prefix() {
+    let value = crate::context_chips::ChipValue::GitBranchStatus(GitBranchTrackingStatus::new(
+        "feature-a".to_string(),
+        Some("origin/feature-a".to_string()),
+        2,
+        1,
+    ));
+
+    assert_eq!(
+        ContextChipKind::GitBranchStatus.display_value(&value),
+        "git:(feature-a • ↑2 ↓1)"
     );
 }
 

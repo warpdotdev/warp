@@ -170,12 +170,7 @@ impl PromptDisplay {
             || new_chips.iter().enumerate().any(|(i, chip_result)| {
                 let existing_chip = &self.display_chips[i];
                 existing_chip.read(ctx, |chip, _| {
-                    chip.text()
-                        != chip_result
-                            .value
-                            .as_ref()
-                            .map(|v| v.to_string())
-                            .unwrap_or_default()
+                    chip.value() != chip_result.value.as_ref()
                         || chip.chip_kind() != &chip_result.kind
                         || chip.on_click_values() != chip_result.on_click_values.as_slice()
                 })

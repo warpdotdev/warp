@@ -44,6 +44,7 @@ use crate::ui_components::icons::Icon;
 pub enum ChipValue {
     Text(String),
     GitDiffStats(display_chip::GitLineChanges),
+    GitBranchStatus(display_chip::GitBranchTrackingStatus),
 }
 
 impl ChipValue {
@@ -51,7 +52,7 @@ impl ChipValue {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             ChipValue::Text(s) => Some(s),
-            ChipValue::GitDiffStats(_) => None,
+            ChipValue::GitDiffStats(_) | ChipValue::GitBranchStatus(_) => None,
         }
     }
 
@@ -59,7 +60,14 @@ impl ChipValue {
     pub fn as_git_diff_stats(&self) -> Option<&display_chip::GitLineChanges> {
         match self {
             ChipValue::GitDiffStats(g) => Some(g),
-            ChipValue::Text(_) => None,
+            ChipValue::Text(_) | ChipValue::GitBranchStatus(_) => None,
+        }
+    }
+
+    pub fn as_git_branch_tracking_status(&self) -> Option<&display_chip::GitBranchTrackingStatus> {
+        match self {
+            ChipValue::GitBranchStatus(status) => Some(status),
+            ChipValue::Text(_) | ChipValue::GitDiffStats(_) => None,
         }
     }
 }
@@ -81,6 +89,7 @@ impl std::fmt::Display for ChipValue {
                     g.files_changed, g.lines_added, g.lines_removed
                 )
             }
+            ChipValue::GitBranchStatus(status) => f.write_str(&status.display_text()),
         }
     }
 }
@@ -177,6 +186,7 @@ pub enum ContextChipKind {
         title: String,
     },
     ShellGitBranch,
+    GitBranchStatus,
     GitDiffStats,
     GithubPullRequest,
     KubernetesContext,
@@ -297,6 +307,12 @@ impl ContextChipKind {
                 Some(builtins::shell_other_git_branches()),
                 GIT_REFRESH_CONFIG,
             )),
+            Self::GitBranchStatus => Some(ContextChip::shell_builtin(
+                "Git Branch Status",
+                builtins::shell_git_branch_status(),
+                None,
+                GIT_REFRESH_CONFIG,
+            )),
             Self::GitDiffStats => Some(
                 ContextChip::shell_builtin(
                     "Git Diff Stats",
@@ -378,6 +394,14 @@ impl ContextChipKind {
             Self::Username => ChipValue::Text("alice".to_string()),
             Self::Hostname => ChipValue::Text("ubuntu-04".to_string()),
             Self::ShellGitBranch => ChipValue::Text("git-feature-branch".to_string()),
+            Self::GitBranchStatus => {
+                ChipValue::GitBranchStatus(display_chip::GitBranchTrackingStatus::new(
+                    "main".to_string(),
+                    Some("origin/main".to_string()),
+                    1,
+                    2,
+                ))
+            }
             Self::GitDiffStats => ChipValue::Text("3 • +10 -2".to_string()),
             Self::GithubPullRequest => ChipValue::Text("PR #123".to_string()),
             Self::VirtualEnvironment => ChipValue::Text("pyenv".to_string()),
@@ -411,6 +435,7 @@ impl ContextChipKind {
             Self::Username => prompt_colors.input_prompt_user_and_host,
             Self::Hostname => prompt_colors.input_prompt_user_and_host,
             Self::ShellGitBranch => prompt_colors.input_prompt_branch,
+            Self::GitBranchStatus => prompt_colors.input_prompt_branch,
             Self::GitDiffStats => prompt_colors.input_prompt_branch,
             Self::GithubPullRequest => prompt_colors.input_prompt_branch,
             Self::VirtualEnvironment => prompt_colors.input_prompt_virtual_env,
@@ -452,7 +477,7 @@ impl ContextChipKind {
     pub fn display_value(&self, value: &ChipValue) -> String {
         let text = value.to_string();
         match self {
-            Self::ShellGitBranch => format!("git:({text})"),
+            Self::ShellGitBranch | Self::GitBranchStatus => format!("git:({text})"),
             Self::GithubPullRequest => github_pr_display_text_from_url(&text).unwrap_or(text),
             Self::KubernetesContext => format!("⎈ {text}"),
             Self::SvnBranch => format!("svn:({text})"),
@@ -513,7 +538,7 @@ impl ContextChipKind {
                 Some(Icon::Terminal)
             }
             Self::NodeVersion => Some(Icon::NodeJS),
-            Self::ShellGitBranch | Self::SvnBranch => Some(Icon::GitBranch),
+            Self::ShellGitBranch | Self::GitBranchStatus | Self::SvnBranch => Some(Icon::GitBranch),
             Self::GitDiffStats | Self::SvnDirtyItems => Some(Icon::File),
             Self::GithubPullRequest => Some(Icon::Github),
             Self::KubernetesContext => Some(Icon::Globe),
@@ -538,6 +563,7 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::Hostname,
         ContextChipKind::Ssh,
         ContextChipKind::ShellGitBranch,
+        ContextChipKind::GitBranchStatus,
         ContextChipKind::GitDiffStats,
     ];
     if FeatureFlag::GithubPrPromptChip.is_enabled() {
@@ -575,6 +601,11 @@ pub fn git_line_changes_from_chips(chips: &[ChipResult]) -> Option<display_chip:
                         lines_added: 0,
                         lines_removed: 0,
                     }),
+                ChipValue::GitBranchStatus(_) => display_chip::GitLineChanges {
+                    files_changed: 0,
+                    lines_added: 0,
+                    lines_removed: 0,
+                },
             })
         } else {
             None
@@ -632,7 +663,7 @@ pub fn render_text_from_kind(
 
     // Keep in sync with `ContextChipKind::display_value`
     match kind {
-        ContextChipKind::ShellGitBranch => {
+        ContextChipKind::ShellGitBranch | ContextChipKind::GitBranchStatus => {
             text.add_text_with_highlights(
                 "git:(",
                 if is_in_agent_view {
@@ -686,7 +717,7 @@ pub fn render_text_from_kind(
     text.add_text_with_highlights(value, styles.value_color, styles.font_properties);
 
     match kind {
-        ContextChipKind::ShellGitBranch => {
+        ContextChipKind::ShellGitBranch | ContextChipKind::GitBranchStatus => {
             text.add_text_with_highlights(
                 ")",
                 if is_in_agent_view {
