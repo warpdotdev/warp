@@ -100,9 +100,7 @@ use crate::code_review::diff_state::{
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{
-    GitRepoStatusEvent, GitRepoStatusModel, GitStatusUpdateModel,
-};
+use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel};
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::code_review::hidden_lines::calculate_hidden_lines;
@@ -6383,8 +6381,8 @@ impl CodeReviewView {
         else {
             return;
         };
-        let result = GitStatusUpdateModel::handle(ctx)
-            .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
+        let result =
+            GitRepoModels::handle(ctx).update(ctx, |model, ctx| model.subscribe(&repo, ctx));
         let handle = match result {
             Ok(handle) => handle,
             Err(err) => {
@@ -6411,9 +6409,8 @@ impl CodeReviewView {
             return;
         };
 
-        let result = GitStatusUpdateModel::handle(ctx).update(ctx, |model, ctx| {
-            model.subscribe_github_repo(&repo_path, ctx)
-        });
+        let result = GitRepoModels::handle(ctx)
+            .update(ctx, |model, ctx| model.subscribe_github_repo(&repo, ctx));
         let handle = match result {
             Ok(handle) => handle,
             Err(err) => {

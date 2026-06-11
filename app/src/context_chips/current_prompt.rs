@@ -24,7 +24,7 @@ use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLo
 use super::prompt::Prompt;
 use super::{chips_to_string, ChipResult, ChipValue, ContextChipKind};
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
+use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 #[cfg(feature = "local_fs")]

@@ -3,7 +3,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{App, ModelHandle};
 
 use super::*;
-use crate::code_review::git_status_update::GitRepoStatusModel;
+use crate::code_review::git_repo_model::GitRepoStatusModel;
 use crate::util::git::RepositoryInfo;
 
 fn pr(number: u64) -> PrInfo {
@@ -42,11 +42,12 @@ fn test_repository_handle(
 /// model. The model never subscribes or fetches; tests drive state directly.
 fn new_github_repo_model_for_test(
     app: &mut App,
-) -> (tempfile::TempDir, ModelHandle<GitHubRepoModel>) {
+) -> (tempfile::TempDir, ModelHandle<LocalGitHubRepoModel>) {
     let temp_dir = tempfile::TempDir::new().unwrap();
     let repository = test_repository_handle(app, &temp_dir);
-    let git_status = app.add_model(move |_| GitRepoStatusModel::new_for_test(repository, None));
-    let model = app.add_model(move |_| GitHubRepoModel::new_for_test(git_status));
+    let git_status =
+        app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+    let model = app.add_model(move |_| LocalGitHubRepoModel::new_for_test(git_status));
     (temp_dir, model)
 }
 
