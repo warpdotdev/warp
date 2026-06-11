@@ -81,12 +81,12 @@ const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 /// The minimum interval between local export failure diagnostics.
 const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
-/// Retains bootstrap authentication only when the endpoint and dispatch credential enabled export.
+
+/// Process-global authentication context for cloud-agent OTLP export.
 ///
 /// The exporter is built once during [`init`], while the stored context later starts dynamic
 /// credential refresh after authenticated application services become available, and this static
 /// remains unset for processes that did not opt in.
-
 static AUTH_CONTEXT: OnceLock<AuthContext> = OnceLock::new();
 
 /// Installs the native tracing subscriber and optional cloud-agent OTLP exporter.

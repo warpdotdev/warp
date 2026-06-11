@@ -49,12 +49,12 @@ const MAX_FAILURE_BACKOFF: Duration = Duration::from_secs(5 * 60);
 const FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
 /// A stalled identity-token request must release the single in-flight refresh slot.
 const REFRESH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// Shares dispatch authentication state between the exporter and the later refresh coordinator.
+
+/// Shared dispatch authentication state between the exporter and the later refresh coordinator.
 ///
 /// The optional expected run ID intentionally does not gate initial tracing: a valid dispatch
 /// credential remains usable when `OZ_RUN_ID` is missing or empty, but every refreshed credential
 /// is rejected until an immutable expected run ID is available to the replacement gate.
-
 #[derive(Clone)]
 pub(super) struct AuthContext {
     token_store: TokenStore,
@@ -129,7 +129,7 @@ impl fmt::Debug for AuthContext {
     }
 }
 
-/// Stores the latest credential snapshot behind a short-lived reader/writer lock.
+/// A snapshot of the latest credential, stored behind a short-lived reader/writer lock.
 ///
 /// Readers clone only the sensitive authorization header, and no caller holds this lock during
 /// network I/O. Replacement constructs and validates a complete snapshot before taking the write
@@ -187,7 +187,7 @@ impl fmt::Debug for TokenStore {
     }
 }
 
-/// Caches the already-parsed sensitive authorization header with its trusted server expiry.
+/// An already-parsed sensitive authorization header and its trusted server expiry.
 struct TokenSnapshot {
     authorization_header: HeaderValue,
     expires_at: DateTime<Utc>,
@@ -216,7 +216,7 @@ impl fmt::Debug for TokenSnapshot {
     }
 }
 
-/// Requires the unverified refreshed-token payload to name the immutable expected run exactly.
+/// Validates that the unverified refreshed-token payload names the immutable expected run exactly.
 ///
 /// This local decode never establishes token authenticity. The collector remains responsible for
 /// cryptographically verifying the token, while malformed or mismatched tokens fail closed here
@@ -262,7 +262,7 @@ fn validate_refreshed_token_run_id(
     Ok(())
 }
 
-/// Reports only token-free transport failure categories to the exporter.
+/// The set of errors that can occur when making an HTTP request using [`AuthenticatedHttpClient`].
 #[derive(thiserror::Error, Debug)]
 enum AuthenticatedHttpError {
     #[error("No unexpired cloud-agent OTLP token is available")]
@@ -271,8 +271,7 @@ enum AuthenticatedHttpError {
     HttpStatus(u16),
 }
 
-/// Injects the latest valid token immediately before each request from the exporter built at
-/// startup.
+/// An HTTP client that injects the latest valid token immediately before each request.
 ///
 /// The token-store lock is released before network I/O begins. A manual `Debug` implementation
 /// prevents the client from formatting cached state, while sensitive [`HeaderValue`] instances
