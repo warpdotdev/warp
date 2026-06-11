@@ -2122,6 +2122,12 @@ impl AISettingsPageView {
         /// (success or error) automatically replaces the in-progress one.
         const CONNECT_TOAST_OBJECT_ID: &str = "grok_oauth_connect_toast";
 
+        // Record attempt initiation on click (before we attempt to bind the
+        // loopback server). This ensures every terminal SuperGrokSubscriptionConnectFinished
+        // (including immediate bind failures) is paired with a preceding Initiated
+        // for funnel/drop-off analysis.
+        send_telemetry_from_ctx!(TelemetryEvent::SuperGrokSubscriptionConnectInitiated, ctx);
+
         // Starting the attempt binds the loopback callback server before the
         // browser opens, so a bind failure surfaces immediately, without a
         // dangling browser tab.
@@ -2147,8 +2153,6 @@ impl AISettingsPageView {
                 return;
             }
         };
-
-        send_telemetry_from_ctx!(TelemetryEvent::SuperGrokSubscriptionConnectInitiated, ctx);
 
         // Open xAI's consent screen in the user's default browser.
         let authorize_url = attempt.authorize_url();

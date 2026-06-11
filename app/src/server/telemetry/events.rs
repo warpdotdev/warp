@@ -2143,9 +2143,12 @@ pub enum TelemetryEvent {
     },
 
     /// Emitted when the user clicks "Connect SuperGrok subscription" (or
-    /// equivalent) in the AI settings page and we successfully launch the
-    /// visible part of the OAuth flow (i.e. we open the browser to xAI's
-    /// consent screen).
+    /// equivalent) in the AI settings page to begin the OAuth connection flow.
+    ///
+    /// This is emitted at the start of the attempt (immediately on click),
+    /// before binding the loopback callback server or opening the browser.
+    /// It is always followed by a `SuperGrokSubscriptionConnectFinished`
+    /// (success or a short stable error code on failure).
     SuperGrokSubscriptionConnectInitiated,
 
     /// Outcome (success or failure) of the user attempting to connect their
@@ -7099,7 +7102,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Opened the sharing settings dialog for a session or Warp Drive object"
             }
 			Self::ToggleGlobalAI => "Toggled global AI enablement.",
-			Self::SuperGrokSubscriptionConnectInitiated => "User clicked Connect SuperGrok subscription; the OAuth consent flow was initiated (browser opened).",
+			Self::SuperGrokSubscriptionConnectInitiated => "User clicked Connect SuperGrok subscription; OAuth connection attempt initiated.",
             Self::SuperGrokSubscriptionConnectFinished => "SuperGrok subscription OAuth connection flow finished (success or failure).",
             Self::ToggleActiveAI => "Toggled active AI enablement.",
             Self::ToggleLigatureRendering => "Toggled ligature rendering",
