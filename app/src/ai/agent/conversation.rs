@@ -62,8 +62,8 @@ use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::model::{
-    AgentConversationData, ConversationUsageMetadata, ModelTokenUsage, PersistedAutoexecuteMode,
-    ToolUsageMetadata,
+    AgentConversationData, ConversationUsageMetadata, ModelTokenUsage, PendingConversationHandoff,
+    PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
@@ -242,6 +242,7 @@ pub struct AIConversation {
 
     /// The server conversation ID of the source conversation if this conversation was forked.
     forked_from_server_conversation_token: Option<ServerConversationToken>,
+    pending_conversation_handoff: Option<PendingConversationHandoff>,
 
     /// Metadata from the server for this conversation (permissions, timestamps, etc.).
     /// This is None for new conversations and gets populated after the first response completes.
@@ -356,6 +357,7 @@ impl AIConversation {
             server_conversation_token: None,
             task_id: None,
             forked_from_server_conversation_token: None,
+            pending_conversation_handoff: None,
             server_metadata: None,
             transaction: None,
             autoexecute_override: Default::default(),
@@ -500,6 +502,7 @@ impl AIConversation {
         let (
             server_conversation_token,
             forked_from_server_conversation_token,
+            pending_conversation_handoff,
             conversation_usage_metadata,
             reverted_action_ids,
             artifacts,
@@ -526,6 +529,7 @@ impl AIConversation {
             let forked_from_server_conversation_token = data
                 .forked_from_server_conversation_token
                 .map(ServerConversationToken::new);
+            let pending_conversation_handoff = data.pending_conversation_handoff;
             let artifacts: Vec<Artifact> = data
                 .artifacts_json
                 .and_then(|json| {
@@ -547,6 +551,7 @@ impl AIConversation {
             (
                 server_conversation_token,
                 forked_from_server_conversation_token,
+                pending_conversation_handoff,
                 conversation_usage_metadata,
                 reverted_action_ids,
                 artifacts,
@@ -562,6 +567,7 @@ impl AIConversation {
             )
         } else {
             (
+                None,
                 None,
                 None,
                 ConversationUsageMetadata::default(),
@@ -594,6 +600,7 @@ impl AIConversation {
             server_conversation_token,
             task_id: run_id.as_deref().and_then(|id| id.parse().ok()),
             forked_from_server_conversation_token,
+            pending_conversation_handoff,
             server_metadata: None,
             transaction: None,
             autoexecute_override,
@@ -973,6 +980,21 @@ impl AIConversation {
 
     pub fn forked_from_server_conversation_token(&self) -> Option<&ServerConversationToken> {
         self.forked_from_server_conversation_token.as_ref()
+    }
+
+    pub fn pending_conversation_handoff(&self) -> Option<PendingConversationHandoff> {
+        self.pending_conversation_handoff
+    }
+
+    pub fn set_pending_conversation_handoff(
+        &mut self,
+        pending_handoff: PendingConversationHandoff,
+    ) {
+        self.pending_conversation_handoff = Some(pending_handoff);
+    }
+
+    pub fn clear_pending_conversation_handoff(&mut self) {
+        self.pending_conversation_handoff = None;
     }
 
     /// Clears the forked_from token after the first Init event has been sent to viewers.
@@ -3239,6 +3261,7 @@ impl AIConversation {
                     .forked_from_server_conversation_token
                     .clone()
                     .map(|token| token.into()),
+                pending_conversation_handoff: self.pending_conversation_handoff,
                 artifacts_json,
                 parent_agent_id: self.parent_agent_id.clone(),
                 agent_name: self.agent_name.clone(),

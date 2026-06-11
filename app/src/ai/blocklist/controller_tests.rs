@@ -1,19 +1,99 @@
 use std::collections::HashMap;
 
+use chrono::Local;
 use uuid::Uuid;
 use warpui::{App, SingletonEntity};
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, ImageContext, PassiveSuggestionTrigger,
+    api, AIAgentAttachment, AIAgentContext, AIAgentInput, ImageContext, PassiveSuggestionTrigger,
     UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, PendingAttachment, PendingFile};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput, SessionContext,
+};
+use crate::ai::llms::LLMId;
+use crate::persistence::model::PendingConversationHandoff;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
+}
+
+fn request_input_for_test(input: AIAgentInput) -> RequestInput {
+    let model = LLMId::from("test-model");
+    RequestInput {
+        conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
+        input_messages: HashMap::from([(TaskId::new("test-task".to_owned()), vec![input])]),
+        working_directory: None,
+        model_id: model.clone(),
+        coding_model_id: model.clone(),
+        cli_agent_model_id: model.clone(),
+        computer_use_model_id: model,
+        shared_session_response_initiator: None,
+        request_start_ts: Local::now(),
+        supported_tools_override: None,
+    }
+}
+
+fn normal_user_query_input() -> AIAgentInput {
+    AIAgentInput::UserQuery {
+        query: "continue".to_owned(),
+        context: vec![].into(),
+        static_query_type: None,
+        referenced_attachments: HashMap::new(),
+        user_query_mode: UserQueryMode::Normal,
+        running_command: None,
+        intended_agent: None,
+    }
+}
+
+#[test]
+fn request_params_snapshots_pending_handoff_only_for_normal_user_queries() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        app.update(|ctx| {
+            let eligible_request = request_input_for_test(normal_user_query_input());
+            let ineligible_request = request_input_for_test(AIAgentInput::SummarizeConversation {
+                prompt: None,
+                context: vec![].into(),
+            });
+            let conversation = api::ConversationData {
+                id: eligible_request.conversation_id,
+                tasks: vec![],
+                server_conversation_token: None,
+                forked_from_conversation_token: None,
+                pending_conversation_handoff: Some(PendingConversationHandoff::CloudToLocal),
+                ambient_agent_task_id: None,
+                existing_suggestions: None,
+            };
+
+            let eligible_params = api::RequestParams::new(
+                None,
+                SessionContext::new_for_test(),
+                &eligible_request,
+                conversation.clone(),
+                None,
+                ctx,
+            );
+            assert_eq!(
+                eligible_params.pending_conversation_handoff,
+                Some(PendingConversationHandoff::CloudToLocal),
+            );
+
+            let ineligible_params = api::RequestParams::new(
+                None,
+                SessionContext::new_for_test(),
+                &ineligible_request,
+                conversation,
+                None,
+                ctx,
+            );
+            assert_eq!(ineligible_params.pending_conversation_handoff, None);
+        });
+    });
 }
 
 fn image_attachment(file_name: &str) -> PendingAttachment {

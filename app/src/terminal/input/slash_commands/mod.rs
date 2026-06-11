@@ -1044,19 +1044,8 @@ impl Input {
                     ctx
                 );
 
-                // Move any pending attachments out of the source input so they travel with the
-                // initial prompt into the continued local pane and no longer linger on the
-                // original input. Only drain them when a non-empty prompt will actually be sent;
-                // the fork drops attachments when there is no initial prompt, which would
-                // silently discard them.
-                let initial_attachments =
-                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
-
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
-                    fork_from_exchange: None,
-                    summarize_after_fork: false,
-                    summarization_prompt: None,
                     initial_prompt: argument.cloned(),
                     initial_attachments,
                     destination,

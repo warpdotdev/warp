@@ -77,6 +77,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             forked_from_server_conversation_token: Some(
                 metadata.server_conversation_token.as_str().to_string(),
             ),
+            pending_conversation_handoff: None,
             // If we fork, new conversation, artifacts don't carry over
             artifacts_json: None,
             parent_agent_id: None,
@@ -97,6 +98,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             conversation_usage_metadata: usage_metadata,
             reverted_action_ids: None,
             forked_from_server_conversation_token: None,
+            pending_conversation_handoff: None,
             artifacts_json: serde_json::to_string(&metadata.artifacts).ok(),
             parent_agent_id: None,
             agent_name: None,
