@@ -459,6 +459,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // dispatching, except when the gesture belongs to AppKit's native window chrome.
         case NSEventTypeLeftMouseUp:
             if (_leftMouseDownShouldUseAppKit ||
+                self.inLiveResize ||
                 [self eventShouldUseAppKitWindowChromeHandling:event]) {
                 _leftMouseDownShouldUseAppKit = NO;
                 [super sendEvent:event];
@@ -468,7 +469,13 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
             break;
         case NSEventTypeLeftMouseDragged:
             if (_leftMouseDownShouldUseAppKit ||
+                self.inLiveResize ||
                 [self eventShouldUseAppKitWindowChromeHandling:event]) {
+                // If a drag transitions into AppKit-owned window chrome handling, keep the
+                // rest of the mouse sequence on AppKit too. Without this latch, resize drags
+                // can be stolen back by contentView once the cursor moves inward, which makes
+                // shrinking the window fail intermittently.
+                _leftMouseDownShouldUseAppKit = YES;
                 [super sendEvent:event];
             } else {
                 [self.contentView mouseDragged:event];
