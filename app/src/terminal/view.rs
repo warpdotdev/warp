@@ -11767,9 +11767,6 @@ impl TerminalView {
 
         self.active_block_metadata = Some(block_metadata.clone());
 
-        // Not needed for correctness, but this method memoizes its result. This "warms" the cache.
-        let _ = self.canonical_session_pwd_if_local(ctx);
-
         if let Some(session) = block_metadata
             .session_id()
             .and_then(|id| self.sessions.as_ref(ctx).get(id))

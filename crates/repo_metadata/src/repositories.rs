@@ -224,7 +224,7 @@ impl DetectedRepositories {
     /// file system: the path is canonicalized first (resolving symlinks and
     /// requiring it to exist) so it can match the canonicalized cached roots.
     /// If the input is already canonicalized, prefer
-    /// [`Self::get_root_for_canonicalized_path`], which performs no I/O.
+    /// [`Self::get_root_for_canonical_path`], which performs no I/O.
     pub fn get_root_for_path(&self, path: &LocalOrRemotePath) -> Option<LocalOrRemotePath> {
         match path {
             LocalOrRemotePath::Local(local_path) => {
