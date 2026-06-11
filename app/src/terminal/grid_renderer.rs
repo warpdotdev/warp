@@ -333,6 +333,7 @@ pub fn render_grid<'a>(
                 cell_size,
                 padding_x,
                 grid_origin,
+                glyphs,
                 alpha,
                 highlighted_url,
                 link_tool_tip,
@@ -365,6 +366,7 @@ pub fn render_grid<'a>(
                 cell_size,
                 padding_x,
                 grid_origin,
+                glyphs,
                 alpha,
                 highlighted_url,
                 link_tool_tip,
@@ -980,6 +982,7 @@ fn render_grid_with_ligatures<'a>(
     cell_size: Vector2F,
     padding_x: Pixels,
     grid_origin: Vector2F,
+    glyphs: &mut CellGlyphCache,
     alpha: u8,
     highlighted_url: Option<&Link>, // Url highlighted on mouse hover.
     link_tool_tip: Option<&Link>,   // Link that has an opened tool-tip.
@@ -1125,7 +1128,11 @@ fn render_grid_with_ligatures<'a>(
         // Thai "วั") are excluded from layout_line and rendered here via glyph_for_char, which
         // has DirectWrite system-font fallback. layout_line uses cosmic_text/fontdb and cannot
         // load system Thai fonts on demand, so it produces glyph_id=0 for those characters.
-        let mut deferred_str_cells: Vec<(usize, ColorU, String)> = Vec::new();
+        // (col, fg, styled font, font properties, content). We carry the styled font
+        // and its properties — rather than reusing `default_font_id` — so bold/italic
+        // and filter-match styling survive on complex-script cells, and so HarfBuzz
+        // shapes the run with the correct face.
+        let mut deferred_str_cells: Vec<(usize, ColorU, FontId, Properties, String)> = Vec::new();
 
         let Some(row) = grid.row(row_idx) else {
             log::error!("grid_renderer should not try to render an out-of-bounds row");
@@ -1433,11 +1440,31 @@ fn render_grid_with_ligatures<'a>(
                     // attempt the same thing, so we replace it with a placeholder
                     string_builder.append_placeholder(col);
                 } else {
+                    // Resolve the cell's *styled* font (filter matches render bold, matching
+                    // `string_builder.update_style` above) so deferred complex-script cells keep
+                    // their weight/slant instead of falling back to the base font.
+                    let font_style: FontStyle = if cell_type.is_filter_match() {
+                        let mut flags = cell.flags;
+                        flags.insert(Flags::BOLD);
+                        flags.into()
+                    } else {
+                        cell.flags.into()
+                    };
+                    let properties = font_style.to_properties();
+                    let styled_font_id = *font_id_cache
+                        .entry(font_style)
+                        .or_insert_with(|| ctx.font_cache.select_font(font_family, properties));
+
                     match cell.content_for_display() {
                         CharOrStr::Str(s) => {
                             string_builder.append_placeholder(col);
-                            deferred_str_cells
-                                .push((col, cell_colors.foreground_color, s.to_owned()));
+                            deferred_str_cells.push((
+                                col,
+                                cell_colors.foreground_color,
+                                styled_font_id,
+                                properties,
+                                s.to_owned(),
+                            ));
                         }
                         // Thai/Lao SARA AM: defer like a Str cell, splitting it into the spacing
                         // "aa" tail (this cell) and the nikhahit dot drawn over the preceding
@@ -1449,11 +1476,15 @@ fn render_grid_with_ligatures<'a>(
                             deferred_str_cells.push((
                                 col,
                                 cell_colors.foreground_color,
+                                styled_font_id,
+                                properties,
                                 sara_aa.to_string(),
                             ));
                             deferred_str_cells.push((
                                 col.saturating_sub(1),
                                 cell_colors.foreground_color,
+                                styled_font_id,
+                                properties,
                                 nikhahit.to_string(),
                             ));
                         }
@@ -1488,27 +1519,36 @@ fn render_grid_with_ligatures<'a>(
             ctx.scene,
         );
 
-        // Render deferred CharOrStr::Str cells (base + combining chars, e.g. Thai "วั").
-        // Look up the base char with full DirectWrite fallback to find the script font, then
-        // reuse that font for every combining mark — DirectWrite cannot map combining marks
-        // standalone (no script context), but the script font that contains ว also contains ั.
-        for (col, foreground_color, content) in deferred_str_cells.drain(..) {
+        // Render deferred CharOrStr::Str cells (base + combining chars, e.g. Thai "วั", as well
+        // as emoji variation selectors and ZWJ sequences). Shape the whole run through
+        // `glyphs_for_string` (HarfBuzz via layout_line) so that:
+        //   * multi-codepoint clusters — VS16 emoji, ZWJ families — are shaped as one unit
+        //     instead of being drawn one codepoint at a time;
+        //   * each glyph is placed at its baseline-relative GPOS position rather than stacked
+        //     at the cell origin, so Thai/Lao combining marks land above the right base;
+        //   * the cell's styled font (bold/italic, filter-match) is honoured.
+        // `glyphs_for_string` falls back to per-character lookup anchored on the base char's
+        // script font when the primary font lacks the script.
+        for (col, foreground_color, styled_font_id, properties, content) in
+            deferred_str_cells.drain(..)
+        {
             let origin = line_origin + vec2f(col as f32 * cell_size.x(), 0.);
-            let mut chars = content.chars();
-            let Some(first_char) = chars.next() else { continue };
-            let Some((first_glyph, base_font_id)) =
-                ctx.font_cache.glyph_for_char(default_font_id, first_char, true)
-            else {
-                continue;
-            };
-            ctx.scene
-                .draw_glyph(origin, first_glyph, base_font_id, font_size, foreground_color);
-            for c in chars {
-                if let Some((glyph_id, _)) = ctx.font_cache.glyph_for_char(base_font_id, c, false)
-                {
-                    ctx.scene
-                        .draw_glyph(origin, glyph_id, base_font_id, font_size, foreground_color);
-                }
+            for (glyph_id, glyph_font_id, position) in glyphs.glyphs_for_string(
+                &content,
+                styled_font_id,
+                ctx.font_cache,
+                font_family,
+                font_size,
+                properties,
+                ctx,
+            ) {
+                ctx.scene.draw_glyph(
+                    origin + position,
+                    glyph_id,
+                    glyph_font_id,
+                    font_size,
+                    foreground_color,
+                );
             }
         }
 
