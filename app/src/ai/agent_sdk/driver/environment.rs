@@ -10,7 +10,6 @@ use ai::index::full_source_code_embedding::manager::{
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
-use tracing::Instrument as _;
 use warp_cli::agent::Harness;
 use warp_completer::completer::CommandExitStatus;
 use warp_core::command::ExitCode;
@@ -131,13 +130,9 @@ async fn prepare_environment_impl(
     if !github_repos.is_empty() {
         setup_events
             .record_result(SetupStep::EnvironmentRepoClone, async {
-                clone_repos(github_repos, working_dir, spawner)
-                .instrument(tracing::info_span!("clone_repos", tags.cloud_agent = true))
-                .await?;
+                clone_repos(github_repos, working_dir, spawner).await?;
                 for repo in github_repos {
-                    register_cloned_repo(repo, working_dir, is_sandbox, spawner)
-                    .instrument(tracing::info_span!("register_cloned_repo", tags.cloud_agent = true, repo = %repo.repo))
-                    .await?;
+                    register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
                     if !is_sandbox && should_index_codebase {
                         let receiver = index_repo_codebase(
                             &repo.repo,
@@ -145,10 +140,6 @@ async fn prepare_environment_impl(
                             Arc::clone(&repo_channels),
                             spawner,
                         )
-                        .instrument(tracing::info_span!(
-                            "index_repo_codebase",
-                            tags.cloud_agent = true
-                        ))
                         .await?;
                         if let Some(receiver) = receiver {
                             codebase_context_receivers.push(receiver);
@@ -387,6 +378,7 @@ pub(super) async fn clone_repos(
 
 /// Clone a GitHub repository to `{working_dir}/{repo.repo}` if it does not already exist.
 /// This only performs the clone -- it does NOT register the repo with `DetectedRepositories`.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo))]
 pub(super) async fn clone_repo(
     repo: &GithubRepo,
     working_dir: &Path,
@@ -447,6 +439,7 @@ pub(super) async fn clone_repo(
 
 /// Register a cloned GitHub repository with `DetectedRepositories` so that the
 /// skill watcher and other repo-aware subsystems can discover it.
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo, is_sandbox = is_sandbox))]
 pub(super) async fn register_cloned_repo(
     repo: &GithubRepo,
     working_dir: &Path,
@@ -555,6 +548,7 @@ async fn subscribe_to_codebase_index_events(
         .map_err(|_| PrepareEnvironmentError::InvalidRuntimeState)
 }
 
+#[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, repo = %repo_name))]
 async fn index_repo_codebase(
     repo_name: &str,
     working_dir: &Path,
