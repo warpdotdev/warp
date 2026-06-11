@@ -2150,8 +2150,9 @@ pub enum TelemetryEvent {
 
     /// Outcome (success or failure) of the user attempting to connect their
     /// SuperGrok / xAI subscription via the OAuth flow in AI settings.
+    ///
+    /// `error` is `None` on success and `Some(...)` on failure.
     SuperGrokSubscriptionConnectFinished {
-        success: bool,
         /// Human-readable error message on failure; absent on success.
         error: Option<String>,
     },
@@ -3884,11 +3885,8 @@ impl TelemetryEvent {
                 Some(json!({"is_ai_enabled": is_ai_enabled}))
             }
             TelemetryEvent::SuperGrokSubscriptionConnectInitiated => None,
-            TelemetryEvent::SuperGrokSubscriptionConnectFinished { success, error } => {
-                Some(json!({
-                    "success": success,
-                    "error": error,
-                }))
+            TelemetryEvent::SuperGrokSubscriptionConnectFinished { error } => {
+                Some(json!({ "error": error }))
             }
             TelemetryEvent::ToggleActiveAI {
                 is_active_ai_enabled,

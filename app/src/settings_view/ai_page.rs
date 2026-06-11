@@ -2130,7 +2130,6 @@ impl AISettingsPageView {
                 log::error!("Failed to start Grok OAuth callback server: {err:#}");
                 send_telemetry_from_ctx!(
                     TelemetryEvent::SuperGrokSubscriptionConnectFinished {
-                        success: false,
                         error: Some(err.to_string()),
                     },
                     ctx
@@ -2174,10 +2173,7 @@ impl AISettingsPageView {
             let toast = match result {
                 Ok(tokens) => {
                     send_telemetry_from_ctx!(
-                        TelemetryEvent::SuperGrokSubscriptionConnectFinished {
-                            success: true,
-                            error: None,
-                        },
+                        TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
                         ctx
                     );
                     // Persist the tokens to secure storage and kick off the
@@ -2192,7 +2188,6 @@ impl AISettingsPageView {
                     log::error!("Grok OAuth failed: {err:#}");
                     send_telemetry_from_ctx!(
                         TelemetryEvent::SuperGrokSubscriptionConnectFinished {
-                            success: false,
                             error: Some(err.to_string()),
                         },
                         ctx
