@@ -534,7 +534,7 @@ fn parse_dcs_ssh() {
                 remote_shell: "zsh".to_string(),
                 session_id: Some(167303092612201),
                 remote_session_id: Some(167303092612202),
-                external_master: false,
+                external_control_master: false,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -542,7 +542,7 @@ fn parse_dcs_ssh() {
 }
 
 #[test]
-fn parse_dcs_ssh_with_external_master() {
+fn parse_dcs_ssh_with_external_control_master() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "SSH",
@@ -551,7 +551,7 @@ fn parse_dcs_ssh_with_external_master() {
                     "remote_shell": "zsh",
                     "session_id": 167303092612201,
                     "remote_session_id": 167303092612202,
-                    "external_master": true
+                    "external_control_master": true
                 }
             }"#,
     );
@@ -566,7 +566,7 @@ fn parse_dcs_ssh_with_external_master() {
                 remote_shell: "zsh".to_string(),
                 session_id: Some(167303092612201),
                 remote_session_id: Some(167303092612202),
-                external_master: true,
+                external_control_master: true,
             }
         ),
         _ => panic!("incorrect dcs value"),

@@ -538,7 +538,7 @@ pub enum IsLegacySSHSession {
         /// already had running (the SSH wrapper attached to it instead of
         /// creating a Warp-owned one). Warp must not tear down such a
         /// master on session exit.
-        external_master: bool,
+        external_control_master: bool,
     },
     No,
 }
@@ -623,7 +623,7 @@ impl SessionInfo {
         let is_legacy_ssh_session = match legacy_ssh_session {
             Some(ssh_value) => IsLegacySSHSession::Yes {
                 socket_path: ssh_value.socket_path,
-                external_master: ssh_value.external_master,
+                external_control_master: ssh_value.external_control_master,
             },
             None => IsLegacySSHSession::No,
         };
@@ -1697,7 +1697,7 @@ pub mod testing {
             }
             self.is_legacy_ssh_session = IsLegacySSHSession::Yes {
                 socket_path,
-                external_master: false,
+                external_control_master: false,
             };
             self
         }

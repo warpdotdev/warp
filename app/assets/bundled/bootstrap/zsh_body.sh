@@ -905,9 +905,9 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
           # master, preserving the existing behavior.
           local control_path="$SSH_SOCKET_DIR/$WARP_SESSION_ID"
           local control_master_mode="yes"
-          local external_master="false"
+          local external_control_master="false"
           if [[ "$WARP_SSH_REUSE_CONTROL_MASTER" == "1" ]]; then
-              local user_control_path=$(command ssh -G "${@:1}" 2>/dev/null | command -p awk '$1 == "controlpath" { sub(/^controlpath[ \t]+/, ""); print; exit }')
+              local user_control_path=$(command ssh -G "${@:1}" 2>/dev/null | command -p sed -n 's/^controlpath //p')
               case "$user_control_path" in
                   "" | none)
                       # No ControlPath configured for this destination.
@@ -924,7 +924,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
                           # the client know Warp does not own it.
                           control_path="$user_control_path"
                           control_master_mode="no"
-                          external_master="true"
+                          external_control_master="true"
                       fi
                       ;;
               esac
@@ -948,7 +948,7 @@ export WARP_IS_SSH='1'
 test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
 test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VERSION='$WARP_CLI_AGENT_PROTOCOL_VERSION'
-hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$control_path'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"', \"external_master\": '"$external_master"'}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
+hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$control_path'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"', \"external_control_master\": '"$external_control_master"'}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
 printf '$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR%s$OSC_END' "'$hook'"
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then

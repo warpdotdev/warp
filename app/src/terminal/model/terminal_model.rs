@@ -2972,7 +2972,7 @@ impl ansi::Handler for TerminalModel {
                 return;
             }
             self.register_session_id(remote_session_id);
-            if value.external_master {
+            if value.external_control_master {
                 log::info!(
                     "SSH wrapper attached to an external ControlMaster at {}; \
                      Warp will not tear it down on session exit",

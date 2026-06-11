@@ -389,7 +389,9 @@ impl DProtoHook {
                 "remote_shell" => value.remote_shell = v,
                 "session_id" => value.session_id = v.parse::<u64>().ok(),
                 "remote_session_id" => value.remote_session_id = v.parse::<u64>().ok(),
-                "external_master" => value.external_master = v.parse::<bool>().unwrap_or(false),
+                "external_control_master" => {
+                    value.external_control_master = v.parse::<bool>().unwrap_or(false)
+                }
                 _ => {
                     log::warn!("Tried to add unknown field {key} to SSH hook");
                 }
@@ -731,7 +733,7 @@ pub struct SSHValue {
     /// Warp must not tear down such a master on session exit. Defaults to
     /// `false` for hooks emitted by older bootstrap scripts.
     #[serde(default)]
-    pub external_master: bool,
+    pub external_control_master: bool,
 }
 
 /// Received from the pty after the shell session has been initialized, marking

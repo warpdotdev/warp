@@ -2312,27 +2312,17 @@ impl RemoteServerManager {
         }
         ctx.emit(RemoteServerManagerEvent::SessionDeregistered { session_id });
 
-        // Force the local SSH ControlMaster to exit after teardown when
-        // Warp owns it. Spawned detached because the ssh subcommand may
-        // take a moment to complete and we don't want to block the main
-        // thread on it. User-owned masters are deliberately left running.
+        // Force the local SSH ControlMaster to exit after teardown.
+        // `stop_control_master` only acts on Warp-managed masters and
+        // leaves user-owned masters running. Spawned detached because
+        // the ssh subcommand may take a moment to complete and we don't
+        // want to block the main thread on it.
         #[cfg(not(target_family = "wasm"))]
-        match control_path {
-            ControlPath::WarpManaged(control_path) => {
-                ctx.background_executor()
-                    .spawn(async move {
-                        crate::ssh::stop_control_master(&control_path).await;
-                    })
-                    .detach();
-            }
-            ControlPath::UserOwned(control_path) => {
-                log::info!(
-                    "deregister_session: leaving user-owned ControlMaster at {} running",
-                    control_path.display()
-                );
-            }
-            ControlPath::None => {}
-        }
+        ctx.background_executor()
+            .spawn(async move {
+                crate::ssh::stop_control_master(&control_path).await;
+            })
+            .detach();
     }
 
     /// Returns the client for this session, if connected.

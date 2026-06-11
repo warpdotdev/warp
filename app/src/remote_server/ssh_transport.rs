@@ -37,14 +37,14 @@ pub struct SshTransport {
     /// when the SSH wrapper attached to a master the user already had
     /// running, in which case Warp must not run `ssh -O exit` against it
     /// on teardown.
-    owns_master: bool,
+    warp_owns_control_master: bool,
 }
 
 impl fmt::Debug for SshTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshTransport")
             .field("socket_path", &self.socket_path)
-            .field("owns_master", &self.owns_master)
+            .field("warp_owns_control_master", &self.warp_owns_control_master)
             .finish_non_exhaustive()
     }
 }
@@ -53,12 +53,12 @@ impl SshTransport {
     pub fn new(
         socket_path: PathBuf,
         auth_context: Arc<RemoteServerAuthContext>,
-        owns_master: bool,
+        warp_owns_control_master: bool,
     ) -> Self {
         Self {
             socket_path,
             auth_context,
-            owns_master,
+            warp_owns_control_master,
         }
     }
 
@@ -66,8 +66,8 @@ impl SshTransport {
         &self.socket_path
     }
 
-    pub fn owns_master(&self) -> bool {
-        self.owns_master
+    pub fn warp_owns_control_master(&self) -> bool {
+        self.warp_owns_control_master
     }
 
     pub fn remote_daemon_socket_path(&self) -> String {
@@ -227,7 +227,7 @@ impl RemoteTransport for SshTransport {
         executor: Arc<executor::Background>,
     ) -> Pin<Box<dyn Future<Output = Result<Connection>> + Send>> {
         let socket_path = self.socket_path.clone();
-        let owns_master = self.owns_master;
+        let warp_owns_control_master = self.warp_owns_control_master;
         let remote_proxy_command = self.remote_proxy_command();
         Box::pin(async move {
             let mut args = ssh_args(&socket_path);
@@ -271,7 +271,7 @@ impl RemoteTransport for SshTransport {
                 // `ssh -O exit` against Warp-managed masters; a user-owned
                 // (external) master must be left running when the Warp
                 // session exits.
-                control_path: if owns_master {
+                control_path: if warp_owns_control_master {
                     ControlPath::WarpManaged(socket_path)
                 } else {
                     ControlPath::UserOwned(socket_path)
