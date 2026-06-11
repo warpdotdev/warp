@@ -203,7 +203,6 @@ opentelemetry-http = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
   "gzip-http",
   "http-proto",
-  "reqwest-blocking-client",
   "trace",
   "zstd-http",
 ] }

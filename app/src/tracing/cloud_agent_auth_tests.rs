@@ -13,7 +13,7 @@ fn jwt_with_payload(payload: serde_json::Value) -> String {
 fn client_with_expiry(token: &str, expires_at: DateTime<Utc>) -> AuthenticatedHttpClient {
     let (refresh_hint_sender, _) = async_channel::bounded(1);
     AuthenticatedHttpClient {
-        inner: reqwest::blocking::Client::new(),
+        inner: reqwest::Client::new(),
         token_store: TokenStore::new(token.to_owned(), expires_at).unwrap(),
         refresh_hint_sender,
     }

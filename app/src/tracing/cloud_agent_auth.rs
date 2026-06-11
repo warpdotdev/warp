@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context as _};
 use async_channel::{Receiver, Sender};
+use async_compat::Compat;
 use async_trait::async_trait;
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
@@ -104,7 +105,7 @@ impl AuthContext {
     /// Creates a transport sharing the latest credential while leaving the exporter itself stable.
     pub(super) fn http_client(&self) -> AuthenticatedHttpClient {
         AuthenticatedHttpClient {
-            inner: reqwest::blocking::Client::new(),
+            inner: reqwest::Client::new(),
             token_store: self.token_store.clone(),
             refresh_hint_sender: self.refresh_hint_sender.clone(),
         }
@@ -277,7 +278,7 @@ enum AuthenticatedHttpError {
 /// prevents the client from formatting cached state, while sensitive [`HeaderValue`] instances
 /// redact request headers. Expired credentials are removed and refused rather than sent.
 pub(super) struct AuthenticatedHttpClient {
-    inner: reqwest::blocking::Client,
+    inner: reqwest::Client,
     token_store: TokenStore,
     refresh_hint_sender: Sender<()>,
 }
@@ -315,20 +316,29 @@ impl HttpClient for AuthenticatedHttpClient {
     async fn send_bytes(&self, mut request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
         self.authorize_request(&mut request)?;
 
-        let request: reqwest::blocking::Request = request.try_into()?;
-        let mut response = self.inner.execute(request)?;
-        let status = response.status();
+        let request: reqwest::Request = request.try_into()?;
+        // Reqwest requires a Tokio-compatible context, while the exporter may use another executor.
+        let (status, response) = Compat::new(async {
+            let mut response = self.inner.execute(request).await?;
+            let status = response.status();
+            let response = if status.is_success() {
+                let headers = std::mem::take(response.headers_mut());
+                Some((headers, response.bytes().await?))
+            } else {
+                None
+            };
+            Ok::<_, reqwest::Error>((status, response))
+        })
+        .await?;
         if status == http::StatusCode::UNAUTHORIZED {
             // The bounded nonblocking hint cannot recurse into or delay this export request.
             let _ = self.refresh_hint_sender.try_send(());
         }
-
-        if !status.is_success() {
+        let Some((headers, body)) = response else {
             return Err(AuthenticatedHttpError::HttpStatus(status.as_u16()).into());
-        }
+        };
 
-        let headers = std::mem::take(response.headers_mut());
-        let mut response = Response::builder().status(status).body(response.bytes()?)?;
+        let mut response = Response::builder().status(status).body(body)?;
         *response.headers_mut() = headers;
         Ok(response)
     }
