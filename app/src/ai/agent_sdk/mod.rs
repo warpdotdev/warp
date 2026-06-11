@@ -836,19 +836,21 @@ impl AgentDriverRunner {
         task_id_str: &str,
         args: &RunAgentArgs,
     ) -> Result<(), AgentDriverError> {
-        if warp_isolation_platform::detect().is_none() && args.configure_git_credentials_with_github {
-            foreground.spawn(|_, _| {
-                command::blocking::Command::new("gh")
-                    .args(["auth", "setup-git"])
-                    .spawn()
-                    .map_err(|err| {
-                        AgentDriverError::SkillResolutionFailed(format!(
-                            "gh auth setup-git failed: {err:?}"
-                        ))
-                    })
-            })
-            .await?
-            .map(|_| ())?
+        if warp_isolation_platform::detect().is_none() && args.configure_git_credentials_with_github
+        {
+            foreground
+                .spawn(|_, _| {
+                    command::blocking::Command::new("gh")
+                        .args(["auth", "setup-git"])
+                        .spawn()
+                        .map_err(|err| {
+                            AgentDriverError::SkillResolutionFailed(format!(
+                                "gh auth setup-git failed: {err:?}"
+                            ))
+                        })
+                })
+                .await?
+                .map(|_| ())?
         }
 
         if !FeatureFlag::GitCredentialRefresh.is_enabled() {
