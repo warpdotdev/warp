@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::store_client::{IntermediateNode, StoreClient};
@@ -109,6 +111,8 @@ use warp_graphql::queries::task_git_credentials::{
 };
 use warp_multi_agent_api::ConversationData;
 
+#[cfg(not(target_family = "wasm"))]
+use super::download::write_response_body_to_path;
 use super::harness_support::{UploadField, UploadFieldValue, UploadTarget};
 use super::ServerApi;
 use crate::ai::agent::api::ServerConversationToken;
@@ -1146,6 +1150,13 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: &AmbientAgentTaskId,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_run_transcript_to_path(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        destination: &Path,
+    ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn submit_run_followup(
         &self,
@@ -2529,6 +2540,18 @@ impl AIClient for ServerApi {
                     .unwrap_or_else(|| "application/octet-stream".to_string()),
             })
             .collect())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_run_transcript_to_path(
+        &self,
+        run_id: &AmbientAgentTaskId,
+        destination: &Path,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        let response = self
+            .get_public_api_response(&format!("agent/runs/{run_id}/transcript"))
+            .await?;
+        write_response_body_to_path(response, destination).await
     }
 
     // --- Orchestrations V2 messaging ---

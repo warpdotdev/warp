@@ -15,10 +15,12 @@ use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
 
 const PLUGIN_NAME: &str = "warp";
+const PLUGIN_KEY: &str = "warp@codex-warp";
 const MARKETPLACE_REPO: &str = "warpdotdev/codex-warp";
 const MARKETPLACE_NAME: &str = "codex-warp";
 
 const PLATFORM_PLUGIN_NAME: &str = "orchestration";
+const PLATFORM_PLUGIN_KEY: &str = "orchestration@codex-warp";
 
 const CODEX_CONFIG_DIR: &str = ".codex";
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
@@ -53,23 +55,6 @@ impl CodexPluginManager {
             .map(|path| HashMap::from([("PATH".to_owned(), path.to_owned())]));
         run_cli_command_logged("codex", args, &self.executor, env_vars, log).await
     }
-
-    async fn ensure_marketplace(&self, log: &mut String) -> Result<(), PluginInstallError> {
-        match codex_home_dir()
-            .ok()
-            .and_then(|dir| codex_warp_marketplace_config(&dir))
-        {
-            Some(config) if config.is_git() => {
-                self.run_logged(&["plugin", "marketplace", "upgrade", MARKETPLACE_NAME], log)
-                    .await
-            }
-            Some(_) => Ok(()),
-            None => {
-                self.run_logged(&["plugin", "marketplace", "add", MARKETPLACE_REPO], log)
-                    .await
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -93,7 +78,7 @@ impl CliAgentPluginManager for CodexPluginManager {
         let Ok(codex_dir) = codex_home_dir() else {
             return false;
         };
-        check_installed(&codex_dir)
+        dbg!(check_installed(&codex_dir))
     }
 
     fn needs_update(&self) -> bool {
@@ -147,8 +132,10 @@ impl CliAgentPluginManager for CodexPluginManager {
         if !FeatureFlag::CodexPlugin.is_enabled() {
             return Ok(());
         }
+        log::info!("[PLUGIN_INSTALL] updating codex plugin");
         let mut log = String::new();
-        self.ensure_marketplace(&mut log).await?;
+        self.run_logged(&["plugin", "marketplace", "add", MARKETPLACE_REPO], &mut log).await?;
+        self.run_logged(&["plugin", "add", PLUGIN_KEY], &mut log).await?;
         Ok(())
     }
 
@@ -162,6 +149,7 @@ impl CliAgentPluginManager for CodexPluginManager {
             &mut log,
         )
         .await?;
+        self.run_logged(&["plugin", "add", PLUGIN_KEY], &mut log).await?;
 
         let still_outdated = codex_home_dir()
             .ok()
@@ -211,18 +199,8 @@ impl CliAgentPluginManager for CodexPluginManager {
             return Ok(());
         }
         let mut log = String::new();
-        self.ensure_marketplace(&mut log).await?;
-        let updated = codex_home_dir()
-            .ok()
-            .map(|dir| platform_plugin_version_is_current(&dir))
-            .unwrap_or(false);
-        if !updated {
-            log.push_str("Post-install version check: platform plugin is still outdated\n");
-            return Err(PluginInstallError {
-                message: "Platform plugin installation did not take effect".to_owned(),
-                log,
-            });
-        }
+        self.run_logged(&["plugin", "marketplace", "add", MARKETPLACE_REPO], &mut log).await?;
+        self.run_logged(&["plugin", "add", PLATFORM_PLUGIN_KEY], &mut log).await?;
         Ok(())
     }
 
@@ -236,6 +214,8 @@ impl CliAgentPluginManager for CodexPluginManager {
             &mut log,
         )
         .await?;
+        self.run_logged(&["plugin", "add", PLATFORM_PLUGIN_KEY], &mut log).await?;
+
         let updated = codex_home_dir()
             .ok()
             .map(|dir| platform_plugin_version_is_current(&dir))

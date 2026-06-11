@@ -15,7 +15,7 @@
 //! Split out from `claude_code.rs` so the `AIClient` transcript-fetch impl can deserialize
 //! envelopes without pulling in the rest of the harness runner.
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -65,6 +65,11 @@ pub(crate) struct ClaudeResumeInfo {
     /// directory before being written to disk, so `claude --resume <uuid>` finds the jsonl under
     /// `~/.claude/projects/<encoded(new_cwd)>/`.
     pub(crate) envelope: ClaudeTranscriptEnvelope,
+}
+
+#[derive(Debug)]
+pub(crate) struct ClaudeLocalContinuation {
+    pub(crate) command: String,
 }
 
 /// Encode a filesystem path as a Claude config directory name, matching the
@@ -232,6 +237,32 @@ pub(crate) fn write_envelope(
     }
 
     Ok(())
+}
+
+pub(crate) fn rehydrate_claude_transcript(
+    envelope: &mut ClaudeTranscriptEnvelope,
+    local_cwd: &Path,
+) -> Result<ClaudeLocalContinuation> {
+    envelope.cwd = local_cwd.to_path_buf();
+    let session_id = envelope.uuid;
+    let config_root = claude_config_dir().context("Failed to resolve Claude config dir")?;
+    write_envelope(envelope, &config_root).context("Failed to rehydrate Claude transcript")?;
+    if let Err(e) = write_session_index_entry(session_id, local_cwd, &config_root) {
+        log::warn!("Failed to update Claude sessions-index.json: {e:#}");
+    }
+
+    Ok(ClaudeLocalContinuation {
+        command: format!("claude --resume {session_id} --dangerously-skip-permissions"),
+    })
+}
+
+pub(crate) fn rehydrate_claude_transcript_from_reader(
+    reader: impl Read,
+    local_cwd: &Path,
+) -> Result<ClaudeLocalContinuation> {
+    let mut envelope: ClaudeTranscriptEnvelope =
+        serde_json::from_reader(reader).context("Failed to parse Claude transcript envelope")?;
+    rehydrate_claude_transcript(&mut envelope, local_cwd)
 }
 
 /// Filename of Claude's global session index.
