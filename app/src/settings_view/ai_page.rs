@@ -134,6 +134,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
+use warp_core::safe_error;
 
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::appearance::Appearance;
@@ -2127,10 +2128,13 @@ impl AISettingsPageView {
         let attempt = match oauth::OauthAttempt::start() {
             Ok(attempt) => attempt,
             Err(err) => {
-                log::error!("Failed to start Grok OAuth callback server: {err:#}");
+                safe_error!(
+                    safe: ("Failed to start Grok OAuth callback server"),
+                    full: ("Failed to start Grok OAuth callback server: {err:#}")
+                );
                 send_telemetry_from_ctx!(
                     TelemetryEvent::SuperGrokSubscriptionConnectFinished {
-                        error: Some(err.to_string()),
+                        error: Some("bind_failed".to_string()),
                     },
                     ctx
                 );
@@ -2185,10 +2189,13 @@ impl AISettingsPageView {
                     DismissibleToast::success("SuperGrok subscription connected".to_string())
                 }
                 Err(err) => {
-                    log::error!("Grok OAuth failed: {err:#}");
+                    safe_error!(
+                        safe: ("Grok OAuth failed"),
+                        full: ("Grok OAuth failed: {err:#}")
+                    );
                     send_telemetry_from_ctx!(
                         TelemetryEvent::SuperGrokSubscriptionConnectFinished {
-                            error: Some(err.to_string()),
+                            error: Some("oauth_failed".to_string()),
                         },
                         ctx
                     );

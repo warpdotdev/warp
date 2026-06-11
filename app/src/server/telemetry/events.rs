@@ -2151,9 +2151,11 @@ pub enum TelemetryEvent {
     /// Outcome (success or failure) of the user attempting to connect their
     /// SuperGrok / xAI subscription via the OAuth flow in AI settings.
     ///
-    /// `error` is `None` on success and `Some(...)` on failure.
+    /// On failure, `error` contains a short stable error *code* (e.g.
+    /// "bind_failed", "oauth_failed"). The full error chain/body is emitted
+    /// via `safe_error!` at the call site (only the code goes into telemetry).
     SuperGrokSubscriptionConnectFinished {
-        /// Human-readable error message on failure; absent on success.
+        /// Short stable error code on failure (e.g. "bind_failed"); absent on success.
         error: Option<String>,
     },
 
