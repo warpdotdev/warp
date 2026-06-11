@@ -1991,6 +1991,19 @@ type LlmHostSettings {
   enablementSetting: HostEnablementSetting
 
   """
+  Full resource name of the GCP workload identity provider that Gemini Enterprise
+  clients exchange Warp OIDC JWTs against (used as both the JWT audience and the
+  STS exchange audience).
+  """
+  gcpAudience: String
+
+  """
+  Email of the GCP service account that Gemini Enterprise clients impersonate after
+  the STS exchange. Empty means the federated token is used directly.
+  """
+  gcpSaEmail: String
+
+  """
   IAM role ARN that Oz Cloud Agents assume via the OIDC trust flow to obtain credentials for AWS Bedrock requests.
   """
   oidcAssumeRoleArn: String

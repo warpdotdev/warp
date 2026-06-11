@@ -770,6 +770,8 @@ impl From<warp_graphql::workspace::LlmHostSettings> for super::workspace::LlmHos
                 .enablement_setting
                 .map(Into::into)
                 .unwrap_or_default(),
+            gcp_audience: gql_settings.gcp_audience,
+            gcp_sa_email: gql_settings.gcp_sa_email,
         }
     }
 }
