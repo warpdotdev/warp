@@ -321,9 +321,7 @@ use crate::code_review::context::{
 use crate::code_review::diff_state::LocalDiffStateModel;
 use crate::code_review::diff_state::{DiffMode, GitDeltaPreference};
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{
-    GitRepoStatusModel, GitStatusMetadata, GitStatusUpdateModel,
-};
+use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusModel, GitStatusMetadata};
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -5024,7 +5022,7 @@ impl TerminalView {
     fn git_status_metadata<'a>(&'a self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
         self.git_repo_status
             .as_ref()
-            .and_then(|h| h.as_ref(ctx).metadata())
+            .and_then(|h| h.as_ref(ctx).metadata(ctx))
     }
 
     #[cfg(feature = "local_fs")]
@@ -5140,7 +5138,7 @@ impl TerminalView {
             let Some(repo_path) = self.current_local_repo_path().map(Path::to_path_buf) else {
                 return;
             };
-            let result = GitStatusUpdateModel::handle(ctx).update(ctx, |model, ctx| {
+            let result = GitRepoModels::handle(ctx).update(ctx, |model, ctx| {
                 model.subscribe_github_repo(&repo_path, ctx)
             });
             match result {
@@ -5205,7 +5203,7 @@ impl TerminalView {
             if self.git_repo_status.is_some() {
                 self.sync_pr_info_subscription(ctx);
             } else if let Some(repo_path) = self.current_local_repo_path().map(Path::to_path_buf) {
-                let result = GitStatusUpdateModel::handle(ctx)
+                let result = GitRepoModels::handle(ctx)
                     .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
                 match result {
                     Ok(handle) => {
@@ -5227,7 +5225,7 @@ impl TerminalView {
                         self.sync_pr_info_subscription(ctx);
                     }
                     Err(err) => {
-                        log::warn!("GitStatusUpdateModel subscribe failed: {err}");
+                        log::warn!("GitRepoModels subscribe failed: {err}");
                     }
                 }
             }

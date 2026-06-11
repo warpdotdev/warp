@@ -100,9 +100,7 @@ use crate::code_review::diff_state::{
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{
-    GitRepoStatusEvent, GitRepoStatusModel, GitStatusUpdateModel,
-};
+use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel};
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 use crate::code_review::hidden_lines::calculate_hidden_lines;
@@ -6336,7 +6334,7 @@ impl CodeReviewView {
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
                 let github_repo_model = self.github_repo_model.as_ref()?;
-                github_repo_model.as_ref(ctx).pr_info().cloned()
+                github_repo_model.as_ref(ctx).pr_info(ctx).cloned()
             } else {
                 None
             }
@@ -6349,7 +6347,7 @@ impl CodeReviewView {
         {
             self.github_repo_model
                 .as_ref()
-                .map(|h| h.as_ref(ctx).is_refreshing_pr_info())
+                .map(|h| h.as_ref(ctx).is_refreshing_pr_info(ctx))
                 .unwrap_or(false)
         }
 
@@ -6383,8 +6381,8 @@ impl CodeReviewView {
         else {
             return;
         };
-        let result = GitStatusUpdateModel::handle(ctx)
-            .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
+        let result =
+            GitRepoModels::handle(ctx).update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
         let handle = match result {
             Ok(handle) => handle,
             Err(err) => {
@@ -6411,7 +6409,7 @@ impl CodeReviewView {
             return;
         };
 
-        let result = GitStatusUpdateModel::handle(ctx).update(ctx, |model, ctx| {
+        let result = GitRepoModels::handle(ctx).update(ctx, |model, ctx| {
             model.subscribe_github_repo(&repo_path, ctx)
         });
         let handle = match result {
