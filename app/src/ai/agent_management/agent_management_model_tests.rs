@@ -23,6 +23,9 @@ fn setup_app(
 ) {
     initialize_settings_for_tests(app);
     let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+    // Registered after the history model since it subscribes to history events; the
+    // notifications model reads it to suppress completion notifications when a prompt is queued.
+    app.add_singleton_model(crate::ai::blocklist::QueuedQueryModel::new);
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     let notifications = app.add_singleton_model(AgentNotificationsModel::new);

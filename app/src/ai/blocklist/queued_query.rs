@@ -303,6 +303,16 @@ impl QueuedQueryModel {
             .is_some_and(|state| !state.queue.is_empty())
     }
 
+    /// Returns true when a queued row would auto-fire for `conversation_id` the next time the
+    /// conversation finishes successfully. Mirrors [`Self::peek_autofire`]'s gating: false for an
+    /// empty queue or a locked head row (which never auto-fires).
+    pub fn has_autofireable_prompt(&self, conversation_id: AIConversationId) -> bool {
+        self.queues
+            .get(&conversation_id)
+            .and_then(|state| state.queue.first())
+            .is_some_and(|first| !first.is_locked())
+    }
+
     /// Marks that a dispatched queued command is running for `conversation_id`. While set, the
     /// queue keeps accepting new rows (the agent is idle) and the next drain waits for the
     /// command to finish.
