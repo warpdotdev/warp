@@ -287,6 +287,7 @@ fn test_environment_form_values_default() {
     assert!(form_state.docker_image.is_empty());
     assert!(form_state.setup_commands.is_empty());
     assert!(form_state.selected_repos.is_empty());
+    assert!(form_state.secrets.is_none());
 }
 
 #[test]
@@ -309,6 +310,7 @@ fn test_edit_mode_initializes_form_state_from_initial_values() {
                     "pip install -r requirements.txt".to_string(),
                     "pytest".to_string(),
                 ],
+                secrets: None,
             };
 
             let view_handle = ctx.add_typed_action_view(window_id, |ctx| {
@@ -682,6 +684,7 @@ fn test_can_suggest_image_for_edit_requires_repos_modified() {
             )],
             docker_image: "ubuntu:latest".to_string(),
             setup_commands: vec![],
+            secrets: None,
         };
 
         app.update(|ctx| {
@@ -784,6 +787,7 @@ fn test_render_docker_image_field_shows_suggest_image_button_on_edit() {
                 selected_repos: vec![],
                 docker_image: "ubuntu:latest".to_string(),
                 setup_commands: vec![],
+                secrets: None,
             };
 
             let view_handle = ctx.add_typed_action_view(window_id, |ctx| {

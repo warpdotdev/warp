@@ -272,6 +272,9 @@ impl EnvironmentsPageView {
                         selected_repos: model.github_repos.clone(),
                         docker_image: model.base_image.to_string(),
                         setup_commands: model.setup_commands.clone(),
+                        // Carry the existing secrets opaquely so a desktop-form
+                        // save does not wipe a secrets list set via the web UI.
+                        secrets: model.secrets.clone(),
                     }
                 });
 

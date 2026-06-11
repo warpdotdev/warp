@@ -1,6 +1,6 @@
 use super::{
-    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, GcpProviderConfig, GithubRepo,
-    ProvidersConfig,
+    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, EnvironmentSecretRef, GcpProviderConfig,
+    GithubRepo, ProvidersConfig,
 };
 
 #[test]
@@ -176,4 +176,125 @@ fn roundtrip_serde_with_providers() {
     let serialized = serde_json::to_string(&env).unwrap();
     let deserialized: AmbientAgentEnvironment = serde_json::from_str(&serialized).unwrap();
     assert_eq!(env, deserialized);
+}
+
+// --- Secrets field tests ---
+
+#[test]
+fn secrets_none_omits_field_in_serialization() {
+    // Environments created via new() should have secrets=None, which must be
+    // omitted from the serialized JSON so the server interprets it as
+    // "no environment-level scoping" (legacy all-secrets behaviour).
+    let env = AmbientAgentEnvironment::new(
+        "env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+    let json = serde_json::to_value(&env).unwrap();
+    assert!(!json.as_object().unwrap().contains_key("secrets"));
+}
+
+#[test]
+fn secrets_empty_vec_serializes_as_empty_array() {
+    // An environment with an empty secrets list must serialize as `"secrets": []`
+    // so the server stores "no secrets" rather than omitting the field.
+    let mut env = AmbientAgentEnvironment::new(
+        "env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+    env.secrets = Some(vec![]);
+    let json = serde_json::to_value(&env).unwrap();
+    let secrets = json.get("secrets").expect("secrets field must be present");
+    assert_eq!(secrets, &serde_json::json!([]));
+}
+
+#[test]
+fn secrets_specific_list_serializes_correctly() {
+    let mut env = AmbientAgentEnvironment::new(
+        "env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+    env.secrets = Some(vec![
+        EnvironmentSecretRef { name: "API_KEY".into() },
+        EnvironmentSecretRef { name: "DB_PASS".into() },
+    ]);
+    let json = serde_json::to_value(&env).unwrap();
+    let secrets = json.get("secrets").expect("secrets field must be present");
+    assert_eq!(
+        secrets,
+        &serde_json::json!([{"name": "API_KEY"}, {"name": "DB_PASS"}])
+    );
+}
+
+#[test]
+fn deserialize_environment_with_secrets_list() {
+    // When the server returns an environment with specific secrets, the client
+    // must deserialize and round-trip them correctly so a CLI update does not
+    // accidentally wipe the secrets (regression test for REMOTE-1880).
+    let json = serde_json::json!({
+        "name": "secret-env",
+        "github_repos": [],
+        "docker_image": "ubuntu:latest",
+        "secrets": [{"name": "MY_SECRET"}, {"name": "OTHER_SECRET"}]
+    });
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    let secrets = env.secrets.expect("secrets must be Some");
+    assert_eq!(secrets.len(), 2);
+    assert_eq!(secrets[0].name, "MY_SECRET");
+    assert_eq!(secrets[1].name, "OTHER_SECRET");
+}
+
+#[test]
+fn deserialize_environment_with_empty_secrets_list() {
+    let json = serde_json::json!({
+        "name": "no-secret-env",
+        "github_repos": [],
+        "docker_image": "ubuntu:latest",
+        "secrets": []
+    });
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    assert_eq!(env.secrets, Some(vec![]));
+}
+
+#[test]
+fn deserialize_environment_without_secrets_field_gives_none() {
+    // Legacy environments without a secrets field must deserialize with secrets=None,
+    // preserving the "all secrets" behaviour.
+    let json = serde_json::json!({
+        "name": "legacy-env",
+        "github_repos": [],
+        "docker_image": "ubuntu:latest"
+    });
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    assert_eq!(env.secrets, None);
+}
+
+#[test]
+fn roundtrip_preserves_secrets() {
+    // Core regression test: serializing an environment that has secrets and
+    // deserializing the result must produce the same secrets list.  This
+    // simulates what happens during a CLI update: the existing environment is
+    // read, modified (e.g. name changed), and written back.
+    let mut env = AmbientAgentEnvironment::new(
+        "env-with-secrets".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+    env.secrets = Some(vec![
+        EnvironmentSecretRef { name: "SECRET_A".into() },
+    ]);
+
+    let serialized = serde_json::to_string(&env).unwrap();
+    let deserialized: AmbientAgentEnvironment = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(env.secrets, deserialized.secrets);
 }

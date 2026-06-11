@@ -31,7 +31,7 @@ use super::settings_page::{render_input_list, InputListItem};
 use crate::ai::ambient_agents::github_auth_notifier::{GitHubAuthEvent, GitHubAuthNotifier};
 use crate::ai::ambient_agents::github_auth_url::{self, AuthSource, GithubAuthRedirectTarget};
 use crate::ai::ambient_agents::telemetry::CloudAgentTelemetryEvent;
-use crate::ai::cloud_environments::{AmbientAgentEnvironment, GithubRepo};
+use crate::ai::cloud_environments::{AmbientAgentEnvironment, EnvironmentSecretRef, GithubRepo};
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorOptions, EditorView, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions,
@@ -91,6 +91,14 @@ pub struct EnvironmentFormValues {
     pub selected_repos: Vec<GithubRepo>,
     pub docker_image: String,
     pub setup_commands: Vec<String>,
+    /// Secrets from the existing environment, preserved opaquely through the
+    /// edit flow so that a save via the desktop form does not inadvertently
+    /// clear a secrets list that was configured via the web UI.
+    ///
+    /// The desktop environment form does not expose a secrets editor yet, so
+    /// this field is never modified — it is only carried through from the
+    /// initial environment model and written back unchanged on submit.
+    pub secrets: Option<Vec<EnvironmentSecretRef>>,
 }
 
 impl EnvironmentFormValues {
@@ -113,13 +121,15 @@ impl EnvironmentFormValues {
             }
         };
 
-        AmbientAgentEnvironment::new(
+        let mut env = AmbientAgentEnvironment::new(
             self.name.trim().to_string(),
             description,
             self.selected_repos.clone(),
             self.docker_image.trim().to_string(),
             setup_commands,
-        )
+        );
+        env.secrets = self.secrets.clone();
+        env
     }
 
     /// Validates the form values.
