@@ -87,11 +87,18 @@ pub struct BindingDescription {
     // description deduplication that runs against already-materialized
     // `CommandBinding`s.
     dynamic_override: Option<DynamicDescriptionResolver>,
+
+    // Search-only keywords matched by palette search in addition to the
+    // visible description (e.g. synonyms like "navigate" or "history" for
+    // "Go Back"). Never rendered.
+    search_keywords: Vec<String>,
 }
 
 impl PartialEq for BindingDescription {
     fn eq(&self, other: &Self) -> bool {
-        self.description == other.description && self.custom == other.custom
+        self.description == other.description
+            && self.custom == other.custom
+            && self.search_keywords == other.search_keywords
     }
 }
 impl Eq for BindingDescription {}
@@ -105,6 +112,7 @@ impl fmt::Debug for BindingDescription {
                 "dynamic_override",
                 &self.dynamic_override.as_ref().map(|_| "<dynamic>"),
             )
+            .field("search_keywords", &self.search_keywords)
             .finish()
     }
 }
@@ -158,6 +166,23 @@ impl BindingDescription {
         self.dynamic_override.is_some()
     }
 
+    /// Attaches search-only keywords that palette search should match in
+    /// addition to the visible description (e.g. synonyms like "navigate"
+    /// or "history" for "Go Back"). Keywords are never rendered.
+    pub fn with_search_keywords<I, S>(mut self, keywords: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.search_keywords = keywords.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Search-only keywords attached to this description.
+    pub fn search_keywords(&self) -> &[String] {
+        &self.search_keywords
+    }
+
     /// Returns the description for the given context, applying the dynamic
     /// override if one is attached and returns `Some`. Prefer this over
     /// [`Self::in_context`] anywhere `&AppContext` is in scope.
@@ -176,6 +201,7 @@ impl BindingDescription {
         let mut description = BindingDescription::new_preserve_case(
             self.resolve(ctx, DescriptionContext::Default).into_owned(),
         );
+        description.search_keywords = self.search_keywords.clone();
 
         if let Some(custom) = &self.custom {
             description.custom = Some(

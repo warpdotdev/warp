@@ -933,7 +933,11 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:navigate_back",
-            "Go Back",
+            BindingDescription::new("Go Back").with_search_keywords([
+                "navigate",
+                "navigation",
+                "history",
+            ]),
             WorkspaceAction::NavigateBack,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
@@ -943,7 +947,11 @@ pub fn init(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("alt-left"),
         EditableBinding::new(
             "workspace:navigate_forward",
-            "Go Forward",
+            BindingDescription::new("Go Forward").with_search_keywords([
+                "navigate",
+                "navigation",
+                "history",
+            ]),
             WorkspaceAction::NavigateForward,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
@@ -953,7 +961,8 @@ pub fn init(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("alt-right"),
         EditableBinding::new(
             "workspace:clear_navigation_stack",
-            "Clear Navigation Stack",
+            BindingDescription::new("Clear Navigation Stack")
+                .with_search_keywords(["navigate", "history"]),
             WorkspaceAction::ClearNavigationStack,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())

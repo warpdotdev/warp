@@ -159,6 +159,7 @@ impl ActionSearcher for FuzzyActionSearcher {
                         .as_str(),
                     search_term.to_lowercase().as_str(),
                 )
+                .or_else(|| match_search_keywords(binding, search_term))
                 .map(|result| (result, binding))
             })
             .map(|(match_result, binding)| {
@@ -240,7 +241,20 @@ mod full_text_searcher {
                         return None;
                     }
 
-                    let matched_indices = match_result.highlights.action;
+                    // The index also contains search-only keywords appended after the
+                    // description; drop highlight indices that fall past the rendered
+                    // description text.
+                    let description_char_count = binding
+                        .description
+                        .in_context(DescriptionContext::Default)
+                        .chars()
+                        .count();
+                    let matched_indices = match_result
+                        .highlights
+                        .action
+                        .into_iter()
+                        .filter(|index| *index < description_char_count)
+                        .collect();
                     Some(
                         MatchedBinding::new(
                             FuzzyMatchResult {
@@ -281,13 +295,17 @@ mod full_text_searcher {
         fn rebuild_search_index(&mut self) -> Result<(), anyhow::Error> {
             self.clear_search_index();
             let documents = self.all_bindings.iter().map(|(id, binding)| {
-                let binding_description = binding
+                let mut indexed_text = binding
                     .description
                     .in_context(DescriptionContext::Default)
                     .to_lowercase();
+                for keyword in binding.description.search_keywords() {
+                    indexed_text.push(' ');
+                    indexed_text.push_str(keyword.to_lowercase().as_str());
+                }
 
                 ActionDocument {
-                    action: binding_description,
+                    action: indexed_text,
                     id: id.0 as u64,
                 }
             });
@@ -307,3 +325,28 @@ mod full_text_searcher {
 fn is_excluded_binding(binding: &CommandBinding) -> bool {
     binding.name == *"workspace:search_drive"
 }
+
+/// Matches the search term against a binding's search-only keywords. Returns the
+/// best-scoring keyword match with no highlight indices, since keywords are not
+/// part of the rendered description.
+fn match_search_keywords(binding: &CommandBinding, search_term: &str) -> Option<FuzzyMatchResult> {
+    binding
+        .description
+        .search_keywords()
+        .iter()
+        .filter_map(|keyword| {
+            match_indices_case_insensitive(
+                keyword.to_lowercase().as_str(),
+                search_term.to_lowercase().as_str(),
+            )
+        })
+        .max_by_key(|result| result.score)
+        .map(|result| FuzzyMatchResult {
+            score: result.score,
+            matched_indices: vec![],
+        })
+}
+
+#[cfg(test)]
+#[path = "data_source_tests.rs"]
+mod tests;

@@ -33,7 +33,6 @@ Users need a predictable back/forward model that restores their prior working lo
 ### Deferred (explicitly out of scope for this release)
 
 - An onboarding, changelog, or coachmark affordance introducing the feature. Verification flagged that nothing proactively introduces back/forward navigation; this is deliberately deferred to a follow-up.
-- Command palette search keyword aliases. Searching "navigate" or "history" in the palette does not surface `Go Back` / `Go Forward` because palette search only matches binding descriptions; supporting search aliases requires keymap-level support and is deferred.
 
 ## 5. Figma / Design References
 
@@ -55,6 +54,7 @@ Figma: none provided
 
 - Back and forward actions are exposed through keyboard shortcuts, the command palette, and optional tab bar buttons.
 - A `Clear Navigation Stack` command is exposed through the command palette when the feature is enabled.
+- Palette search surfaces the navigation actions for synonym queries: searching "navigate", "navigation", or "history" matches `Go Back`, `Go Forward`, and `Clear Navigation Stack` via search-only keywords attached to the bindings. Keywords affect matching only and are never rendered or highlighted.
 - Default keyboard shortcuts match VS Code conventions:
   - macOS:
     - Back: `Ctrl+-`
@@ -226,6 +226,7 @@ Figma: none provided
 30. All surfaces use the `Go Back` / `Go Forward` naming; the palette toggle for the buttons setting is state-aware (`Enable …` / `Disable …`).
 31. A net-zero scroll twitch does not create a history entry; Back after such a twitch is not a near-duplicate no-op.
 32. The buttons render and function in vertical-tabs mode, and history survives switching between horizontal and vertical layouts.
+33. Searching "navigate", "navigation", or "history" in the command palette surfaces the navigation actions.
 
 ## 8. Validation
 
@@ -250,8 +251,9 @@ Figma: none provided
 - Manual: hover both chevrons on a fresh launch (disabled state) and confirm tooltips appear; compare enabled vs disabled brightness.
 - Manual: with the buttons visible, confirm the command palette shows `Disable Navigation Buttons in Tab Bar` (and `Enable …` when hidden).
 - Manual: nudge the scroll wheel up/down within a second, wait for the debounce, and confirm Back does not perform a near-duplicate micro-jump.
+- Manual: search "navigate" and "history" in the command palette and confirm `Go Back` / `Go Forward` / `Clear Navigation Stack` appear in the results.
 - Regression: verify that Back and Forward both work at runtime when corresponding history exists.
 
 ## 9. Open Questions
 
-None. See the Deferred subsection of Non-goals for intentionally postponed work (onboarding/changelog affordance, palette search keyword aliases).
+None. See the Deferred subsection of Non-goals for intentionally postponed work (onboarding/changelog affordance).

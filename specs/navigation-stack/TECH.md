@@ -236,7 +236,9 @@ End-to-end verification of the ported branch surfaced gaps whose required implem
 
 **Discoverability.** `render_tab_bar_icon_button` attaches the tooltip in the disabled branch as well, and gains an `emphasized` parameter so the nav chevrons use `main_text_color` when enabled (matching neighboring toolbar icons) instead of the muted sub-text color. Tooltips read "Go back" / "Go forward" to match the palette/binding names. The palette toggle label is made state-aware by inserting `flags::SHOW_NAVIGATION_BUTTONS_FLAG` into the workspace keymap context when the setting is on (the `ToggleSettingActionPair` enable/disable split keys off that context flag). The settings row gains descriptive subtext.
 
-**Minimum scroll delta.** `NavigationEntry::should_push` treats terminal scroll snapshots within 10 lines of the stack top (same `ScrollLines` variant) as duplicates via `ScrollPosition::is_within_lines`, so net-zero scroll twitches do not create near-duplicate anchors. Editor/code-diff/code-review snapshots keep exact comparison.
+**Palette search keywords.** `BindingDescription` carries search-only `search_keywords` (builder `with_search_keywords`, preserved through `materialized`). Both palette action searchers honor them: the fuzzy searcher falls back to keyword matching when the description does not match (returning the best keyword score with no highlight indices), and the full-text searcher appends keywords to the indexed text while filtering highlight indices past the rendered description length. The three navigation bindings attach `navigate` / `navigation` / `history` keywords so synonym queries surface `Go Back`, `Go Forward`, and `Clear Navigation Stack`. Covered by `app/src/search/action/data_source_tests.rs`.
+
+**Minimum scroll delta.** Near-duplicate detection (`NavigationEntry::is_near_duplicate_of`, threshold 8 lines for terminal snapshots via `ScrollPosition::is_within_lines`; exact comparison for editor/code-diff/code-review snapshots) is applied in two places. `should_push` dedupes consecutive anchors at record time, and — critically — `navigate_stack_history` discards Back/Forward candidates that are near-duplicates of the user's *live* current entry before restoring. The traversal-time check is what prevents the net-zero-twitch case: the twitch anchor is far from the previous stack entry (so record-time dedupe cannot catch it) but imperceptibly close to where the user actually is.
 
 ## 5. End-to-End Flow
 
@@ -347,5 +349,4 @@ Because automated coverage is currently lighter for some specialized surfaces, m
 - Add targeted integration coverage for notebook, code diff, and code review restoration.
 - Remove any temporary navigation debug instrumentation before shipping if it is no longer needed for branch debugging.
 - Add an onboarding/changelog affordance introducing the feature (deferred from this release).
-- Add palette search keyword aliases so "navigate" and "history" surface Go Back / Go Forward; requires keymap-level alias support in `BindingDescription`.
 - Consider caret co-location for notebook scroll restoration (currently editor panes and code diffs only).
