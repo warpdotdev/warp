@@ -177,8 +177,7 @@ impl PromptDisplay {
                             .map(|v| v.to_string())
                             .unwrap_or_default()
                         || chip.chip_kind() != &chip_result.kind
-                        // I'm only comparing the first on-click values for efficiency, but we may need to change this in the future.
-                        || chip.first_on_click_value() != chip_result.on_click_values.first()
+                        || chip.on_click_values() != chip_result.on_click_values.as_slice()
                 })
             })
     }
@@ -290,7 +289,9 @@ impl PromptDisplay {
     pub fn on_pane_focus_changed(&mut self, focused: bool, ctx: &mut ViewContext<Self>) {
         self.pane_is_focused = focused;
         let new_chips = self.collect_chips(ctx);
-        self.reset_chips(&new_chips, ctx);
+        if self.check_if_chip_values_have_changed(&new_chips, ctx) {
+            self.reset_chips(&new_chips, ctx);
+        }
         ctx.notify();
     }
 
@@ -355,7 +356,9 @@ impl PromptDisplay {
     pub fn update_repo_path(&mut self, repo_path: Option<PathBuf>, ctx: &mut ViewContext<Self>) {
         self.current_repo_path = repo_path;
         let new_chips = self.collect_chips(ctx);
-        self.reset_chips(&new_chips, ctx);
+        if self.check_if_chip_values_have_changed(&new_chips, ctx) {
+            self.reset_chips(&new_chips, ctx);
+        }
         ctx.notify();
     }
 }

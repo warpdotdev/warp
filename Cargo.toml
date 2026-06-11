@@ -198,6 +198,15 @@ notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "9
 nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
+  "gzip-http",
+  "http-proto",
+  "reqwest-blocking-client",
+  "trace",
+  "zstd-http",
+] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["trace"] }
 openh264 = "0.8"
 static_assertions = "1.1.0"
 url = "2.5.4"
@@ -277,6 +286,12 @@ toml_edit = "0.25.5"
 tower = "0.5.2"
 tower-http = "0.6.6"
 tracing = "0.1.40"
+tracing-futures = "0.2.5"
+tracing-opentelemetry = { version = "0.33.0", default-features = false }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = [
+  "registry",
+  "std",
+] }
 arborium = { version = "2", default-features = false, features = [
   "lang-rust",
   "lang-go",
@@ -319,7 +334,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "c67de64fc4949f693a679552dc88cebc9f7d0180" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "97d1b367b955c562812e0a1315a6ec7ee6a5389e" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [

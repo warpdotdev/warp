@@ -878,6 +878,15 @@ pub enum FeatureFlag {
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 
+    /// Gates the Pinned Tabs feature, which lets users pin individual tabs
+    /// and whole tab groups so they stay at the front of the tab list and
+    /// are protected from reordering.
+    PinnedTabs,
+
+    /// Gates the SuperGrok feature, which lets users
+    /// connect a Grok subscription instead of pasting an API key.
+    SuperGrok,
+
     /// Gates availability of the read-only Git Graph (commit DAG) tab per channel.
     /// Within channels where it is enabled, the user setting `GitSettings.show_git_graph`
     /// controls whether the panel is actually shown.
@@ -959,6 +968,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GitGraphWrite,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::SuperGrok,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

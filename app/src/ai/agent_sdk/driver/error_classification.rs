@@ -100,13 +100,22 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::MCPStartupFailed => (
-            AgentTaskState::Failed,
-            TaskStatusUpdate::with_error_code(
-                "One or more MCP servers failed to start. Check that your MCP server configuration is valid and the server process is runnable.",
-                PlatformErrorCode::EnvironmentSetupFailed,
-            ),
-        ),
+        AgentDriverError::MCPStartupFailed { details } => {
+            let server_lines = details
+                .iter()
+                .map(|detail| format!("- {detail}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                AgentTaskState::Failed,
+                TaskStatusUpdate::with_error_code(
+                    format!(
+                        "One or more MCP servers failed to start:\n\n{server_lines}\n\nCheck that each server's configuration is valid and that it is reachable from the agent's environment."
+                    ),
+                    PlatformErrorCode::EnvironmentSetupFailed,
+                ),
+            )
+        }
         AgentDriverError::MCPJsonParseError(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

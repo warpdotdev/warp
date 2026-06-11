@@ -18,6 +18,7 @@ cfg_if::cfg_if! {
 pub use futures_util::future::LocalBoxFuture;
 // Re-export a variety of symbols from the internal implementation modules.
 pub use imp::{block_on, BoxFuture, Spawnable, SpawnableOutput, Stream, Timer, TransportStream};
+use thiserror::Error;
 
 pub mod executor {
     #[derive(thiserror::Error, Debug)]
@@ -106,7 +107,8 @@ impl futures_util::task::Spawn for executor::Background {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
+#[error("Timed out waiting for future")]
 pub struct TimeoutError;
 
 pub trait FutureExt: Future {

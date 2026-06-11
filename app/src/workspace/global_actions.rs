@@ -232,6 +232,7 @@ fn fork_ai_conversation(params: &ForkAIConversationParams, ctx: &mut AppContext)
             summarize_after_fork: params.summarize_after_fork,
             summarization_prompt: params.summarization_prompt.clone(),
             initial_prompt: params.initial_prompt.clone(),
+            initial_attachments: vec![],
             destination: params.destination,
         },
     );

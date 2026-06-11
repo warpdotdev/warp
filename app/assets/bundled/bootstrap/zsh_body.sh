@@ -680,6 +680,21 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       fi
   }
 
+  # Strips prompt constructs that zsh counts as visible "glitch" columns even
+  # when they appear inside a %{...%} zero-width region, returning the result
+  # in $REPLY. The explicit-width form %n{ is rewritten to %{ (preserving the
+  # brace pairing), and the %G, %nG, and %-nG forms are removed entirely.
+  # Neither change affects the rendered prompt bytes, only zsh's internal
+  # width accounting. Literal %% escapes are matched first so that they cannot
+  # form false positives (e.g. %%1{ renders as literal text and must be left
+  # alone).
+  function warp_strip_glitch_width_constructs() {
+    setopt localoptions extendedglob
+    local match mbegin mend
+    REPLY=${1:-}
+    REPLY=${REPLY//(#b)(%%|%<->\{|%(-|)(<->|)G)/${${match[1]:#%(-|)(<->|)G}/(#s)%<->\{(#e)/%\{}}
+  }
+
   # Check whether the prompt-related variables have OSC prompt marker sequences,
   # and if not, wrap them with the appropriate markers so that we can direct the
   # prompt bytes to the appropriate grids.
@@ -761,7 +776,21 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         PROMPT=$preceding_suffix$following_suffix
       fi
 
-      ORIGINAL_PROMPT=$PROMPT
+      # If the prompt we extracted is exactly the glitch-stripped value that we
+      # installed on a previous refresh, keep the existing ORIGINAL_PROMPT: it
+      # holds the pristine value, whose width annotations are still needed if
+      # we later switch to honoring the PS1.
+      if [[ "$PROMPT" != "${WARP_STRIPPED_ORIGINAL_PROMPT:-}" ]]; then
+        if [[ -n "${WARP_STRIPPED_ORIGINAL_PROMPT:-}" && "$PROMPT" == *"$WARP_STRIPPED_ORIGINAL_PROMPT"* ]]; then
+          # Another hook added content around the stripped prompt that we
+          # installed (e.g. a virtualenv prefix). Rehydrate the stripped
+          # portion back to its pristine value before saving, so that the
+          # width annotations survive alongside the added content.
+          ORIGINAL_PROMPT=${PROMPT//$WARP_STRIPPED_ORIGINAL_PROMPT/$ORIGINAL_PROMPT}
+        else
+          ORIGINAL_PROMPT=$PROMPT
+        fi
+      fi
       PROMPT="$prompt_prefix$PROMPT$suffix"
     fi
 
@@ -781,14 +810,26 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     # If we are using the Warp prompt, we pass a "hidden left prompt" to the prompt
     # preview grid (the hidden prompt grid) with cursor markers surrounding the entire prompt.
     if [[ "$WARP_HONOR_PS1" != "1" ]]; then
-      if [[ "$PROMPT" != "%{$prompt_prefix$ORIGINAL_PROMPT$suffix%}" ]]; then
+      # Even though the entire prompt is surrounded by cursor markers below,
+      # zsh still counts explicit-width constructs (%n{...%} and %G) within it
+      # as visible "glitch" columns. Since the prompt is routed to the hidden
+      # prompt grid and occupies zero columns of the combined prompt/command
+      # grid, any nonzero counted width desyncs zle's internal cursor position
+      # from the physical one, which corrupts partial redraws of the command
+      # (e.g. when zsh-syntax-highlighting recolors individual tokens). Strip
+      # those constructs before wrapping; this only changes zsh's width
+      # accounting, never the rendered prompt bytes.
+      local REPLY
+      warp_strip_glitch_width_constructs "$ORIGINAL_PROMPT"
+      WARP_STRIPPED_ORIGINAL_PROMPT=$REPLY
+      if [[ "$PROMPT" != "%{$prompt_prefix$WARP_STRIPPED_ORIGINAL_PROMPT$suffix%}" ]]; then
         # We purposefully surround this entire prompt with cursor markers to prevent
         # the shell from moving its internal state of the cursor position, for purposes
         # of printing the command with the Warp prompt.
         # Note that the Warp prompt is always ABOVE the combined grid in finished blocks
         # (same line prompt only affects the input editor with Warp prompt, not
         # finished blocks).
-        PROMPT="%{$prompt_prefix$ORIGINAL_PROMPT$suffix%}"
+        PROMPT="%{$prompt_prefix$WARP_STRIPPED_ORIGINAL_PROMPT$suffix%}"
       fi
     # Otherwise, if we are using the PS1, we use the normal prompt markers.
     else

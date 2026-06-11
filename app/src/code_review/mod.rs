@@ -9,6 +9,8 @@ pub(crate) mod find_model;
 pub(crate) mod git_actions;
 pub(crate) mod git_dialog;
 pub mod git_status_update;
+#[cfg(feature = "local_fs")]
+pub mod github_repo_model;
 mod hidden_lines;
 pub mod telemetry_event;
 #[cfg_attr(not(feature = "local_fs"), allow(unused_imports))]

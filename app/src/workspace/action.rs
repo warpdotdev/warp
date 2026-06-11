@@ -21,6 +21,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::PendingAttachment;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::drive::items::WarpDriveItemId;
@@ -559,6 +560,8 @@ pub enum WorkspaceAction {
         summarization_prompt: Option<String>,
         /// Initial prompt to send in the forked conversation (sent after summarization if enabled).
         initial_prompt: Option<String>,
+        /// Attachments (images/files) to send along with the initial prompt in the forked pane.
+        initial_attachments: Vec<PendingAttachment>,
         /// Where to open the forked conversation.
         destination: ForkedConversationDestination,
     },

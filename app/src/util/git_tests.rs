@@ -111,10 +111,10 @@ async fn get_repository_info_reads_gh_repo_view() {
         super::get_repository_info(&repo, Some(&path_env))
             .await
             .unwrap(),
-        Some(RepositoryInfo {
+        RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
-        })
+        }
     );
 }
 

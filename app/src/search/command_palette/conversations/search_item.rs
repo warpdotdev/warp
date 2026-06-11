@@ -204,7 +204,8 @@ impl ConversationSearchItem {
             .finish();
 
         // We only want to show the fork button if the conversation is completed
-        // (i.e. the agent has finished responding and there are no blocked commands).
+        // (i.e. the agent has finished responding and there are no blocked commands
+        // and is not yielded waiting for events).
         let conversation_is_done = BlocklistAIHistoryModel::as_ref(app)
             .conversation(&conversation.id())
             .map(|c| c.status().is_done())

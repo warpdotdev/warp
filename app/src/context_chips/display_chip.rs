@@ -289,7 +289,7 @@ pub struct DisplayChip {
     chip_kind: ContextChipKind,
     display_chip_kind: DisplayChipKind,
     next_chip_kind: Option<ContextChipKind>,
-    first_on_click_value: Option<String>,
+    on_click_values: Vec<String>,
     quota_reset_popup: ViewHandle<FeaturePopup>,
     session_context: Option<SessionContext>,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
@@ -688,17 +688,16 @@ impl DisplayChip {
                 });
 
                 // Subscribe to DirectoryFetcher events to update menu
-                let directory_fetcher_clone = directory_fetcher.clone();
                 ctx.subscribe_to_model(
                     &directory_fetcher,
-                    move |display_chip, _model, event, ctx| {
+                    move |display_chip, model, event, ctx| {
                         match event {
                             DirectoryFetcherEvent::DirectoryContentsUpdated => {
                                 // Update the existing menu with new directory contents
                                 if let DisplayChipKind::WorkingDirectory { menu, .. } =
                                     &mut display_chip.display_chip_kind
                                 {
-                                    let new_files = directory_fetcher_clone
+                                    let new_files = model
                                         .read(ctx, |fetcher, _| fetcher.cached_files().to_vec());
                                     // Update the existing menu with new content instead of recreating it
                                     menu.update(ctx, |menu_view, menu_ctx| {
@@ -888,7 +887,7 @@ impl DisplayChip {
             chip_kind: chip_result.kind,
             display_chip_kind,
             next_chip_kind,
-            first_on_click_value: chip_result.on_click_values.first().cloned(),
+            on_click_values: chip_result.on_click_values,
             quota_reset_popup,
             session_context: config.session_context,
             menu_positioning_provider: config.menu_positioning_provider,
@@ -928,8 +927,8 @@ impl DisplayChip {
         &self.display_chip_kind
     }
 
-    pub fn first_on_click_value(&self) -> Option<&String> {
-        self.first_on_click_value.as_ref()
+    pub(crate) fn on_click_values(&self) -> &[String] {
+        &self.on_click_values
     }
 
     pub fn close_git_branch_menu(&mut self, ctx: &mut ViewContext<Self>) {
