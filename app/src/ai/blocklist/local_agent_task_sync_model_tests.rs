@@ -125,7 +125,56 @@ fn other_error_is_error_with_internal() {
     );
 }
 
-// --- task_update_for_conversation_error ---
+// --- map_conversation_status ---
+
+/// A yielded conversation must report `IN_PROGRESS` to the task service
+/// so the task row stays active across the yield. No status message is
+/// attached because the yield is an internal state.
+#[test]
+fn map_conversation_status_waiting_for_events_reports_in_progress_with_no_message() {
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+        history_model.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status(ConversationStatus::WaitingForEvents, terminal_view_id, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            let conv = model.conversation(&conversation_id).unwrap();
+            assert_eq!(conv.status(), &ConversationStatus::WaitingForEvents);
+            let (state, update) = map_conversation_status(conv);
+            assert_eq!(state, AgentTaskState::InProgress);
+            assert!(
+                update.is_none(),
+                "WaitingForEvents must not attach a status message"
+            );
+        });
+    });
+}
+
+#[test]
+fn map_conversation_status_in_progress_reports_in_progress_with_no_message() {
+    let conversation = AIConversation::new(false, false);
+    assert_eq!(
+        conversation.status(),
+        &ConversationStatus::InProgress,
+        "freshly constructed conversation should start in InProgress"
+    );
+
+    let (state, update) = map_conversation_status(&conversation);
+
+    assert_eq!(state, AgentTaskState::InProgress);
+    assert!(update.is_none());
+}
 
 #[test]
 fn transient_error_status_maps_to_in_progress() {
@@ -140,6 +189,8 @@ fn transient_error_status_maps_to_in_progress() {
         Some("attempting to resume"),
     );
 }
+
+// --- task_update_for_conversation_error ---
 
 #[test]
 fn resume_rendering_hint_is_ignored_for_terminal_classification() {

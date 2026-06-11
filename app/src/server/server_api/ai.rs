@@ -310,6 +310,18 @@ pub struct ForkConversationResponse {
     pub forked_conversation_id: String,
 }
 
+/// Request body for `POST /agent/conversations/{conversation_id}/rename`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RenameConversationRequest {
+    pub title: String,
+}
+
+/// Response body for `POST /agent/conversations/{conversation_id}/rename`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RenameConversationResponse {
+    pub title: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RunFollowupRequest {
     pub message: String,
@@ -847,6 +859,13 @@ pub(crate) fn build_fork_conversation_url(conversation_id: &str) -> String {
     )
 }
 
+pub(crate) fn build_rename_conversation_url(conversation_id: &str) -> String {
+    format!(
+        "agent/conversations/{}/rename",
+        urlencoding::encode(conversation_id)
+    )
+}
+
 struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
 }
@@ -1096,6 +1115,13 @@ pub trait AIClient: 'static + Send + Sync {
         conversation_id: String,
         title: Option<String>,
     ) -> anyhow::Result<ForkConversationResponse, anyhow::Error>;
+
+    /// Rename a server-side conversation and return the normalized title.
+    async fn rename_conversation(
+        &self,
+        conversation_id: String,
+        title: String,
+    ) -> anyhow::Result<RenameConversationResponse, anyhow::Error>;
 
     async fn list_ambient_agent_tasks(
         &self,
@@ -1828,6 +1854,11 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[tracing::instrument(skip_all, err, fields(
+        tags.cloud_agent = true,
+        config.worker_host = tracing::field::Empty,
+        config.harness = tracing::field::Empty
+    ))]
     async fn create_agent_task(
         &self,
         prompt: String,
@@ -1835,6 +1866,19 @@ impl AIClient for ServerApi {
         parent_run_id: Option<String>,
         config: Option<AgentConfigSnapshot>,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error> {
+        if let Some(config) = &config {
+            if let Some(worker_host) = &config.worker_host {
+                tracing::Span::current().record("config.worker_host", worker_host);
+            }
+            if let Some(harness) = &config.harness {
+                let harness: Option<serde_json::Value> =
+                    serde_json::to_value(harness.harness_type).ok();
+                if let Some(serde_json::Value::String(harness)) = harness {
+                    tracing::Span::current().record("config.harness", harness);
+                }
+            }
+        }
+
         // Serialize the config to JSON if provided
         let agent_config_snapshot = config
             .map(|c| serde_json::to_string(&c))
@@ -1867,6 +1911,7 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true, ?task_state))]
     async fn update_agent_task(
         &self,
         task_id: AmbientAgentTaskId,
@@ -1934,6 +1979,18 @@ impl AIClient for ServerApi {
         let request = ForkConversationRequest { title };
         let response: ForkConversationResponse = self
             .post_public_api(&build_fork_conversation_url(&conversation_id), &request)
+            .await?;
+        Ok(response)
+    }
+
+    async fn rename_conversation(
+        &self,
+        conversation_id: String,
+        title: String,
+    ) -> anyhow::Result<RenameConversationResponse, anyhow::Error> {
+        let request = RenameConversationRequest { title };
+        let response: RenameConversationResponse = self
+            .post_public_api(&build_rename_conversation_url(&conversation_id), &request)
             .await?;
         Ok(response)
     }
@@ -2012,6 +2069,7 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn get_ai_conversation(
         &self,
         server_conversation_token: ServerConversationToken,
@@ -2767,6 +2825,9 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::CustomEndpoint => {
                 LLMModelHost::CustomEndpoint
+            }
+            warp_graphql::queries::get_feature_model_choices::LlmModelHost::GeminiEnterprise => {
+                LLMModelHost::GeminiEnterprise
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::Other(value) => {
                 report_error!(

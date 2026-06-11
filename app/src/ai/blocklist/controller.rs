@@ -1635,8 +1635,14 @@ impl BlocklistAIController {
             );
             return false;
         };
-        let is_success = matches!(conversation.status(), ConversationStatus::Success);
-        if !owns || has_active_stream || !is_success {
+        // WaitingForEvents is treated as Success here: pending events
+        // drain via the next outbound request and the server-side
+        // supersede emits the resume signal.
+        let is_ready_status = matches!(
+            conversation.status(),
+            ConversationStatus::Success | ConversationStatus::WaitingForEvents,
+        );
+        if !owns || has_active_stream || !is_ready_status {
             log::info!(
                 "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?}",
                 conversation.status()
@@ -1849,6 +1855,11 @@ impl BlocklistAIController {
             return;
         };
 
+        // The resume request supersedes any in-flight wait_for_events.
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
+        });
+
         if self
             .send_request_input(
                 RequestInput::for_task(
@@ -1868,6 +1879,14 @@ impl BlocklistAIController {
             )
             .is_err()
         {
+            // TODO: surface retry exhaustion. The existing requeue
+            // re-emits `EventsReady` until `MAX_RETRY_ATTEMPTS` is hit,
+            // after which events are dropped silently and the wait has
+            // already been cancelled — the conversation can end up stuck
+            // with no executor pending entry, no watchdog, and no
+            // in-flight stream. Follow-up: park-on-exhaust the events
+            // and transition the conversation to `Error` so the next
+            // user resume can carry them along.
             OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
                 svc.requeue_awaiting_events(conversation_id, ctx);
             });
@@ -2356,6 +2375,21 @@ impl BlocklistAIController {
             &conversation_data.tasks,
             &conversation_data.server_conversation_token,
         );
+
+        // Safety net: if the connected Grok subscription's OAuth token is
+        // nearing or past expiry, kick off a background refresh so upcoming
+        // requests can authenticate even when the proactive refresh loop
+        // isn't running. This request still carries the currently stored
+        // token; the server is the authority on its validity.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use ::ai::api_keys::ApiKeyManager;
+
+            let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.refresh_grok_tokens_if_needed(byo_allowed, ctx);
+            });
+        }
 
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_view_id),

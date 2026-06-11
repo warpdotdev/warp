@@ -213,6 +213,7 @@ tikv-jemallocator = { version = "0.6", optional = true, features = [
 toml = "0.8.13"
 toml_edit.workspace = true
 tracing.workspace = true
+tracing-futures = { workspace = true, features = ["futures-03"] }
 ui_components.workspace = true
 unicase = "2.7.0"
 unicode-general-category.workspace = true
@@ -316,8 +317,13 @@ http_server.workspace = true
 hyper.workspace = true
 libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
 
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.16", features = ["credentials-login"] }
@@ -457,6 +463,7 @@ ai_resume_button = []
 autoupdate = []
 figma_detection = []
 bundled_skills = []
+supergrok = []
 agent_mode = []
 agent_mode_computer_use = []
 agent_mode_debug = []
@@ -674,6 +681,7 @@ default = [
     "remote_codebase_indexing",
     "solo_user_byok",
     "custom_inference_endpoints",
+    "supergrok",
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
@@ -976,6 +984,7 @@ vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
 grouped_tabs = []
+pinned_tabs = []
 warp_control_cli = []
 agent_harness = []
 oz_handoff = []

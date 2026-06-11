@@ -763,21 +763,21 @@ fn repository_info_from_gh_output(output: &str) -> Result<RepositoryInfo> {
 pub async fn get_repository_info(
     repo_path: &Path,
     path_env: Option<&str>,
-) -> Result<Option<RepositoryInfo>> {
+) -> Result<RepositoryInfo> {
     let stdout = run_gh_command(
         repo_path,
         &["repo", "view", "--json", "name,owner"],
         path_env,
     )
     .await?;
-    repository_info_from_gh_output(&stdout).map(Some)
+    repository_info_from_gh_output(&stdout)
 }
 
 #[cfg(not(feature = "local_fs"))]
 pub async fn get_repository_info(
     _repo_path: &Path,
     _path_env: Option<&str>,
-) -> Result<Option<RepositoryInfo>> {
+) -> Result<RepositoryInfo> {
     Err(anyhow!("Not supported without local_fs"))
 }
 

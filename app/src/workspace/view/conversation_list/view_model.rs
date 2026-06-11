@@ -3,8 +3,8 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationsModel,
-    AgentConversationsModelEvent, AgentManagementFilters, ArtifactFilter, CreatedOnFilter,
-    CreatorFilter, OwnerFilter, SourceFilter, StatusFilter,
+    AgentConversationsModelEvent, AgentManagementFilters, ArtifactFilter, ConversationUpdateKind,
+    CreatedOnFilter, CreatorFilter, OwnerFilter, SourceFilter, StatusFilter,
 };
 
 pub struct ConversationListViewModelEvent;
@@ -41,8 +41,16 @@ impl ConversationListViewModel {
                 }
                 // Status changes don't affect the set of IDs (status is read
                 // at render time via get_item_by_id); just signal a re-render.
-                AgentConversationsModelEvent::ConversationUpdated { .. } => {
-                    ctx.emit(ConversationListViewModelEvent);
+                AgentConversationsModelEvent::ConversationUpdated { kind } => {
+                    if matches!(
+                        kind,
+                        ConversationUpdateKind::MetadataChanged
+                            | ConversationUpdateKind::TitleChanged
+                    ) {
+                        me.refresh_cached_items(ctx);
+                    } else {
+                        ctx.emit(ConversationListViewModelEvent);
+                    }
                 }
                 // Artifact updates don't affect the conversation list
                 AgentConversationsModelEvent::ConversationArtifactsUpdated { .. } => {}

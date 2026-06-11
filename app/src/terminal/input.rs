@@ -3182,6 +3182,7 @@ impl Input {
                         | BlocklistAIHistoryEvent::SplitConversation { .. }
                         | BlocklistAIHistoryEvent::AppendedExchange { .. }
                         | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. }
+                        | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
                         | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
                         | BlocklistAIHistoryEvent::RestoredConversations { .. }
                 );
@@ -5056,6 +5057,7 @@ impl Input {
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: None,
+                    initial_attachments: vec![],
                     destination,
                 });
 
@@ -15109,16 +15111,12 @@ impl Input {
         banner: Box<dyn Element>,
         is_compact_mode: bool,
         input_mode: InputMode,
-        appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
-        let constrained_banner = ConstrainedBox::new(banner)
-            .with_height(2. * appearance.line_height_ratio() * appearance.monospace_font_size())
-            .finish();
         let should_use_udi_spacing = self.should_show_universal_developer_input(app)
             || (FeatureFlag::AgentView.is_enabled()
                 && self.agent_view_controller.as_ref(app).is_active());
-        let mut container: Container = Container::new(constrained_banner);
+        let mut container: Container = Container::new(banner);
         let (suggestion_to_prompt_padding, suggestion_to_input_border_padding) =
             if should_use_udi_spacing {
                 (0., 0.)
@@ -15143,7 +15141,6 @@ impl Input {
     /// Renders a banner that should stay next to the input box.
     fn render_input_banner(
         &self,
-        appearance: &Appearance,
         app: &AppContext,
         input_mode: InputMode,
         is_compact_mode: bool,
@@ -15159,7 +15156,6 @@ impl Input {
                 prompt_suggestions_banner,
                 is_compact_mode,
                 input_mode,
-                appearance,
                 app,
             ))
         } else {

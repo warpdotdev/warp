@@ -285,6 +285,7 @@ impl StartAgentExecutor {
             | BlocklistAIHistoryEvent::RemoveConversation { .. }
             | BlocklistAIHistoryEvent::DeletedConversation { .. }
             | BlocklistAIHistoryEvent::RestoredConversations { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. } => {}
@@ -577,10 +578,16 @@ fn start_agent_error_message_for_status(
                 blocked_action.to_string()
             })
         }
-        // TransientError is non-terminal: a recovery is in flight, so keep waiting.
+        // `WaitingForEvents` is treated like `InProgress`/`Success` here:
+        // a child that's actively waiting for events has, by definition,
+        // already initialized successfully and is not an error case.
+        // TransientError is likewise non-terminal: a recovery is in flight,
+        // so keep waiting. The agent run is still in flight in all of these
+        // cases, so we don't surface an error message for the start path.
         ConversationStatus::InProgress
         | ConversationStatus::TransientError
-        | ConversationStatus::Success => None,
+        | ConversationStatus::Success
+        | ConversationStatus::WaitingForEvents => None,
     }
 }
 

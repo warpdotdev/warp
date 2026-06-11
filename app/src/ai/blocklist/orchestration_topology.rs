@@ -22,7 +22,9 @@ fn pill_status_sort_key(status: Option<&ConversationStatus>) -> u8 {
         Some(ConversationStatus::Blocked { .. }) => 0,
         Some(ConversationStatus::Error) => 1,
         // A recovering conversation sorts with the actively-running ones.
-        Some(ConversationStatus::InProgress) | Some(ConversationStatus::TransientError) => 2,
+        Some(ConversationStatus::InProgress)
+        | Some(ConversationStatus::TransientError)
+        | Some(ConversationStatus::WaitingForEvents) => 2,
         Some(ConversationStatus::Cancelled) | Some(ConversationStatus::Success) => DONE_STATUS_KEY,
         None => 2,
     }
@@ -162,36 +164,51 @@ pub fn adjacent_orchestration_child_conversation_id(
 /// in flight.
 ///
 /// Aggregation precedence (highest wins):
-///   1. `InProgress` — any node in the tree is actively running.
+///   1. `InProgress` — any node in the tree is actively running, **unless**
+///      the orchestrator itself yielded into `WaitingForEvents`. The parent's
+///      waiting state is a more specific and useful signal to the user than
+///      "something somewhere is running".
 ///   2. `Blocked` — at least one node is waiting on user input. The
 ///      `blocked_action` from the first blocked node encountered is preserved
 ///      so callers can display it.
-///   3. `Error` — at least one node finished with an error.
-///   4. `Cancelled` — at least one node was cancelled.
-///   5. `Success` — everything finished successfully.
+///   3. `WaitingForEvents` — at least one node yielded via `wait_for_events`
+///      and is listening for inbound input. The run is quiescent but not
+///      terminal — the driver stays alive until something resumes it.
+///      Carve-out: when the orchestrator itself is `Cancelled` or `Error`,
+///      the parent's terminal status wins over a descendant `WaitingForEvents`
+///      so the pill does not falsely advertise a resumable run.
+///   4. `Error` — at least one node finished with an error.
+///   5. `Cancelled` — at least one node was cancelled.
+///   6. `Success` — everything finished successfully.
 ///
 /// Returns `Success` if the orchestrator is not loaded and has no descendants.
 pub fn aggregated_orchestrator_status(
     history: &BlocklistAIHistoryModel,
     orchestrator_id: AIConversationId,
 ) -> ConversationStatus {
-    let statuses = std::iter::once(orchestrator_id)
-        .chain(descendant_conversation_ids_in_spawn_order(
-            history,
-            orchestrator_id,
-        ))
-        .filter_map(|id| history.conversation(&id).map(|c| c.status().clone()));
-
+    let mut orchestrator_status: Option<ConversationStatus> = None;
     let mut first_blocked: Option<ConversationStatus> = None;
     let mut any_in_progress = false;
+    let mut any_waiting = false;
     let mut any_error = false;
     let mut any_cancelled = false;
-    for status in statuses {
+
+    for id in std::iter::once(orchestrator_id).chain(descendant_conversation_ids_in_spawn_order(
+        history,
+        orchestrator_id,
+    )) {
+        let Some(status) = history.conversation(&id).map(|c| c.status().clone()) else {
+            continue;
+        };
+        if id == orchestrator_id {
+            orchestrator_status = Some(status.clone());
+        }
         match status {
             // A recovering node counts as still running for aggregation purposes.
             ConversationStatus::InProgress | ConversationStatus::TransientError => {
                 any_in_progress = true
             }
+            ConversationStatus::WaitingForEvents => any_waiting = true,
             ConversationStatus::Blocked { .. } => {
                 if first_blocked.is_none() {
                     first_blocked = Some(status);
@@ -204,10 +221,27 @@ pub fn aggregated_orchestrator_status(
     }
 
     if any_in_progress {
+        // Parent's own waiting state outranks descendant in-progress so
+        // the pill reflects that THIS conversation is paused.
+        if matches!(
+            orchestrator_status,
+            Some(ConversationStatus::WaitingForEvents)
+        ) {
+            return ConversationStatus::WaitingForEvents;
+        }
         return ConversationStatus::InProgress;
     }
     if let Some(blocked) = first_blocked {
         return blocked;
+    }
+    if any_waiting {
+        // Parent's terminal status beats descendant waiting — a
+        // finalized run can't resume, so surface the parent's outcome.
+        match orchestrator_status {
+            Some(ConversationStatus::Cancelled) => return ConversationStatus::Cancelled,
+            Some(ConversationStatus::Error) => return ConversationStatus::Error,
+            _ => return ConversationStatus::WaitingForEvents,
+        }
     }
     if any_error {
         return ConversationStatus::Error;

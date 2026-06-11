@@ -140,6 +140,9 @@ impl ToolExt for api::message::tool_call::Tool {
             Tool::SendMessageToAgent(_) => "send_message_to_agent",
             Tool::TransferShellCommandControlToUser(_) => "transfer_shell_command_control",
             Tool::RunAgents(_) => "orchestrate",
+            // Matches the legacy server-handled name so analytics don't
+            // double-count the rollout.
+            Tool::WaitForEvents(_) => "wait_for_events",
         }
     }
 }

@@ -183,6 +183,26 @@ pub enum UpdateHistoryError {
     ConversationNotFound(AIConversationId),
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub(crate) enum BeginConversationRenameError {
+    #[error("conversation not found")]
+    ConversationNotFound,
+    #[error("conversation has no server token")]
+    MissingServerConversationToken,
+    #[error("conversation is not ready to rename")]
+    ConversationNotReady,
+    #[error("conversation rename already in progress")]
+    RenameInProgress,
+}
+
+#[derive(Debug, Clone)]
+struct InFlightConversationRename {
+    attempted_title: String,
+    previous_root_task_description: String,
+    previous_server_metadata_title: Option<String>,
+    previous_cached_metadata_title: Option<String>,
+}
+
 /// Responsible for managing the history of user and AI exchanges.
 #[derive(Default)]
 pub struct BlocklistAIHistoryModel {
@@ -252,6 +272,9 @@ pub struct BlocklistAIHistoryModel {
     /// Populated at startup from the local DB and kept in sync at runtime
     /// via `set_parent_for_conversation` and `restore_conversations`.
     children_by_parent: HashMap<AIConversationId, Vec<AIConversationId>>,
+
+    /// In-flight optimistic conversation rename state keyed by conversation.
+    in_flight_conversation_renames: HashMap<AIConversationId, InFlightConversationRename>,
 
     #[cfg(feature = "local_fs")]
     db_connection: Option<Arc<Mutex<SqliteConnection>>>,
@@ -532,6 +555,170 @@ impl BlocklistAIHistoryModel {
             metadata.server_conversation_metadata = Some(server_metadata.clone());
             metadata.has_cloud_data = true;
         }
+    }
+
+    /// Starts an optimistic local rename and records rollback state.
+    pub(crate) fn begin_conversation_rename(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<String, BeginConversationRenameError> {
+        if self
+            .in_flight_conversation_renames
+            .contains_key(&conversation_id)
+        {
+            return Err(BeginConversationRenameError::RenameInProgress);
+        }
+
+        let conversation = self
+            .conversations_by_id
+            .get(&conversation_id)
+            .ok_or(BeginConversationRenameError::ConversationNotFound)?;
+        let server_conversation_token = conversation
+            .server_conversation_token()
+            .ok_or(BeginConversationRenameError::MissingServerConversationToken)?
+            .as_str()
+            .to_owned();
+        let root_task = conversation
+            .get_root_task()
+            .ok_or(BeginConversationRenameError::ConversationNotReady)?;
+        if root_task.source().is_none() {
+            return Err(BeginConversationRenameError::ConversationNotReady);
+        }
+        let previous_root_task_description = root_task.description().to_owned();
+        let previous_server_metadata_title = conversation
+            .server_metadata()
+            .map(|metadata| metadata.title.clone());
+        let previous_cached_metadata_title = self
+            .all_conversations_metadata
+            .get(&conversation_id)
+            .map(|metadata| metadata.title.clone());
+
+        self.in_flight_conversation_renames.insert(
+            conversation_id,
+            InFlightConversationRename {
+                attempted_title: title.clone(),
+                previous_root_task_description,
+                previous_server_metadata_title,
+                previous_cached_metadata_title,
+            },
+        );
+        self.apply_conversation_title(conversation_id, title, ctx);
+        Ok(server_conversation_token)
+    }
+
+    /// Completes an in-flight rename and applies any server-normalized title.
+    pub(crate) fn complete_conversation_rename(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(rename) = self.in_flight_conversation_renames.remove(&conversation_id) else {
+            log::warn!(
+                "complete_conversation_rename called for conversation {conversation_id:?} with no in-flight rename"
+            );
+            return;
+        };
+
+        if rename.attempted_title != title {
+            self.apply_conversation_title(conversation_id, title, ctx);
+        }
+    }
+
+    /// Reverts an in-flight rename to the captured previous title snapshot.
+    pub(crate) fn fail_conversation_rename(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(rename) = self.in_flight_conversation_renames.remove(&conversation_id) else {
+            log::warn!(
+                "fail_conversation_rename called for conversation {conversation_id:?} with no in-flight rename"
+            );
+            return;
+        };
+
+        let terminal_view_id = self.terminal_view_id_for_conversation(&conversation_id);
+
+        let mut updated = false;
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.restore_conversation_title(
+                rename.previous_root_task_description,
+                rename.previous_server_metadata_title,
+                ctx,
+            );
+            updated = true;
+        } else {
+            log::warn!(
+                "fail_conversation_rename called for missing conversation {conversation_id:?}"
+            );
+        }
+
+        let title = if let Some(previous_title) = rename.previous_cached_metadata_title {
+            if let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) {
+                metadata.title = previous_title.clone();
+                if let Some(server_metadata) = metadata.server_conversation_metadata.as_mut() {
+                    server_metadata.title = previous_title.clone();
+                }
+                updated = true;
+            }
+            previous_title
+        } else {
+            self.conversations_by_id
+                .get(&conversation_id)
+                .and_then(AIConversation::title)
+                .unwrap_or_default()
+        };
+
+        if !updated {
+            return;
+        }
+
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationTitle {
+            terminal_view_id,
+            conversation_id,
+            title,
+        });
+    }
+
+    /// Applies a conversation title locally and notifies title observers.
+    pub(crate) fn apply_conversation_title(
+        &mut self,
+        conversation_id: AIConversationId,
+        title: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_view_id = self.terminal_view_id_for_conversation(&conversation_id);
+
+        let mut updated = false;
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            conversation.update_conversation_title(title.clone(), ctx);
+            updated = true;
+        } else {
+            log::warn!(
+                "apply_conversation_title called for missing conversation {conversation_id:?}"
+            );
+        }
+
+        if let Some(metadata) = self.all_conversations_metadata.get_mut(&conversation_id) {
+            metadata.title = title.clone();
+            if let Some(server_metadata) = metadata.server_conversation_metadata.as_mut() {
+                server_metadata.title = title.clone();
+            }
+            updated = true;
+        }
+
+        if !updated {
+            return;
+        }
+
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationTitle {
+            terminal_view_id,
+            conversation_id,
+            title,
+        });
     }
     pub fn mark_conversation_as_remote_child(
         &mut self,
@@ -2667,6 +2854,13 @@ pub enum BlocklistAIHistoryEvent {
         conversation_id: AIConversationId,
     },
 
+    /// Emitted when a conversation title changes.
+    UpdatedConversationTitle {
+        terminal_view_id: Option<EntityId>,
+        conversation_id: AIConversationId,
+        title: String,
+    },
+
     /// Emitted when conversation artifacts are updated (plans, PRs, etc.)
     UpdatedConversationArtifacts {
         terminal_view_id: EntityId,
@@ -2794,6 +2988,9 @@ impl BlocklistAIHistoryEvent {
             } => Some(*terminal_view_id),
             // UpdatedConversationMetadata can have None when updating historical-only conversations
             BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                terminal_view_id, ..
+            }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle {
                 terminal_view_id, ..
             } => *terminal_view_id,
             // NewConversationRequestComplete is executor-scoped and has no
