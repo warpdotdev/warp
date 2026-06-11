@@ -37,7 +37,7 @@ Non-goals:
 
 1. When the agent response stream fails mid-turn from a transient network/server failure (connection reset, TLS close_notify EOF, truncated response, 5xx, request timeout), the conversation automatically recovers and continues. A single such failure never produces a failed run.
 
-2. If the failure happens before the agent has streamed any actions for the turn, recovery is invisible: the request is re-sent (up to 3 attempts) and, if an attempt succeeds, the user sees a normal uninterrupted turn.
+2. If the failure happens before the agent has streamed any actions for the turn, recovery is invisible: the request is re-sent (up to 3 times) and, if an attempt succeeds, the user sees a normal uninterrupted turn.
 
 3. If the failure happens after actions have streamed, the conversation resumes from the server's authoritative state. Work that already executed (commands, tool calls) is never re-executed by the recovery.
 
@@ -73,7 +73,7 @@ Non-goals:
 
 15. Cancelling a conversation while recovery is pending takes effect immediately: the conversation shows Cancelled, and no recovery attempt fires afterward.
 
-16. Sending a new message to a conversation with a pending recovery replaces the recovery: the pending resume is dropped and the new request proceeds normally.
+16. Sending a new message to a conversation with a pending resume replaces the recovery: the pending resume is dropped and the new request proceeds normally. (While a retry is parked the original request is still logically active, so new messages queue as usual.)
 
 17. Passive background requests (e.g. automatic code-diff suggestions) never auto-resume; their failures are silent and terminal as before.
 
