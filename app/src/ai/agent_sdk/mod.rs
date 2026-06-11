@@ -834,7 +834,23 @@ impl AgentDriverRunner {
     async fn bootstrap_git_credentials_for_task(
         foreground: &ModelSpawner<Self>,
         task_id_str: &str,
+        args: &RunAgentArgs,
     ) -> Result<(), AgentDriverError> {
+        if warp_isolation_platform::detect().is_none() && args.configure_git_credentials_with_github {
+            foreground.spawn(|_, _| {
+                command::blocking::Command::new("gh")
+                    .args(["auth", "setup-git"])
+                    .spawn()
+                    .map_err(|err| {
+                        AgentDriverError::SkillResolutionFailed(format!(
+                            "gh auth setup-git failed: {err:?}"
+                        ))
+                    })
+            })
+            .await?
+            .map(|_| ())?
+        }
+
         if !FeatureFlag::GitCredentialRefresh.is_enabled() {
             return Ok(());
         }
@@ -964,7 +980,7 @@ impl AgentDriverRunner {
         .map_err(AgentDriverError::ConfigBuildFailed)?;
 
         if let Some(task_id_str) = args.task_id.as_ref() {
-            Self::bootstrap_git_credentials_for_task(foreground, task_id_str).await?;
+            Self::bootstrap_git_credentials_for_task(foreground, task_id_str, &args).await?;
         }
         // Resolve the skill, if we have one
         let resolved_skill =
