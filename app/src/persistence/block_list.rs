@@ -128,7 +128,7 @@ fn upsert_ai_query_with_limit(
     let new_ai_query = NewAIQuery::try_from(query.as_ref())?;
 
     Ok(conn.transaction::<_, Error, _>(|conn| {
-        // Only a genuinely new exchange grows the table. 
+        // Only a genuinely new exchange grows the table.
         let is_new_exchange = ai_queries
             .filter(exchange_id.eq(&new_ai_query.exchange_id))
             .count()

@@ -81,15 +81,17 @@ fn upsert_ai_query_caps_table_and_evicts_oldest_first() {
     let exchange_ids: Vec<String> = queries.iter().map(|q| q.exchange_id.to_string()).collect();
 
     for query in &queries {
-        upsert_ai_query_with_limit(&mut conn, query.clone(), limit)
-            .expect("upsert should succeed");
+        upsert_ai_query_with_limit(&mut conn, query.clone(), limit).expect("upsert should succeed");
     }
 
     // The table never exceeds the limit.
     assert_eq!(ai_query_count(&mut conn), limit);
 
     // The two oldest (q0, q1) are evicted; the three newest remain in insertion order.
-    assert_eq!(remaining_exchange_ids(&mut conn), exchange_ids[2..].to_vec());
+    assert_eq!(
+        remaining_exchange_ids(&mut conn),
+        exchange_ids[2..].to_vec()
+    );
 }
 
 #[test]
@@ -103,8 +105,7 @@ fn upsert_ai_query_stays_below_limit_without_evicting() {
     let exchange_ids: Vec<String> = queries.iter().map(|q| q.exchange_id.to_string()).collect();
 
     for query in &queries {
-        upsert_ai_query_with_limit(&mut conn, query.clone(), limit)
-            .expect("upsert should succeed");
+        upsert_ai_query_with_limit(&mut conn, query.clone(), limit).expect("upsert should succeed");
     }
 
     assert_eq!(ai_query_count(&mut conn), limit);
@@ -142,7 +143,10 @@ fn upsert_ai_query_updates_existing_exchange_without_evicting() {
     assert_eq!(ai_query_count(&mut conn), limit);
     assert_eq!(
         remaining_exchange_ids(&mut conn),
-        vec![first.exchange_id.to_string(), second.exchange_id.to_string()]
+        vec![
+            first.exchange_id.to_string(),
+            second.exchange_id.to_string()
+        ]
     );
 
     // The in-place update took effect.

@@ -2181,7 +2181,7 @@ fn handle_ai_history_event(
             }
 
             // Only query-bearing inputs (e.g. user queries) are persisted for
-            // up-arrow history. Early return and skip writing when xchanges that carry 
+            // up-arrow history. Early return and skip writing when xchanges that carry
             // empty input
             let inputs: Vec<_> = exchange
                 .input
