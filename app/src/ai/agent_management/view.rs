@@ -18,10 +18,10 @@ use warpui::elements::new_scrollable::{
 };
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Empty, Expanded, Fill as ElementFill, Flex, Hoverable, List,
-    ListState, MainAxisSize, MouseStateHandle, NewScrollable, OffsetPositioning, Padding,
-    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, ScrollStateHandle,
-    ScrollbarWidth, Shrinkable, SizeConstraintCondition, SizeConstraintSwitch, Stack, Text, Wrap,
+    CrossAxisAlignment, Element, Empty, Expanded, Flex, Hoverable, List, ListState, MainAxisSize,
+    MouseStateHandle, NewScrollable, OffsetPositioning, Padding, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, Rect, ScrollStateHandle, ScrollbarWidth, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
@@ -29,7 +29,6 @@ use warpui::platform::Cursor;
 use warpui::scene::DropShadow;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
-use warpui::ui_components::text_input::TextInput;
 use warpui::{
     AppContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle, WeakViewHandle,
@@ -60,7 +59,6 @@ use crate::ai::blocklist::format_credits;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
-use crate::ai::conversation_rename::rename_conversation;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::app_state::PersistedAgentManagementFilters;
@@ -136,7 +134,6 @@ pub type ManagementCardItemId = AgentConversationEntryId;
 /// Store state for a given task row
 struct CardState {
     hover_state: MouseStateHandle,
-    title_hover_state: MouseStateHandle,
     avatar_hover_state: MouseStateHandle,
     session_status_hover_state: MouseStateHandle,
     artifact_buttons_view: Option<ViewHandle<ArtifactButtonsRow>>,
@@ -144,11 +141,6 @@ struct CardState {
     action_buttons_view: ViewHandle<ConversationActionButtonsRow>,
     /// Use this ID to look up the full data from the model
     item_id: ManagementCardItemId,
-}
-/// State for the active inline conversation rename editor.
-struct InlineRenameState {
-    editor: ViewHandle<EditorView>,
-    conversation_id: Option<AIConversationId>,
 }
 
 pub struct AgentManagementView {
@@ -194,7 +186,6 @@ pub struct AgentManagementView {
 
     /// Details panel for showing task/conversation metadata
     details_panel: ViewHandle<ConversationDetailsPanel>,
-    inline_rename: InlineRenameState,
     /// Currently selected item ID (for rendering details)
     selected_item_id: Option<ManagementCardItemId>,
 }
@@ -326,30 +317,6 @@ impl AgentManagementView {
         ctx.subscribe_to_view(&search_editor, |me, _handle, event, ctx| {
             me.handle_search_editor_event(event, ctx);
         });
-        let rename_editor = ctx.add_typed_action_view(|ctx| {
-            let appearance = Appearance::as_ref(ctx);
-            EditorView::single_line(
-                SingleLineEditorOptions {
-                    text: TextOptions::ui_text(Some(appearance.ui_font_size()), appearance),
-                    select_all_on_focus: true,
-                    clear_selections_on_blur: true,
-                    propagate_and_no_op_vertical_navigation_keys:
-                        PropagateAndNoOpNavigationKeys::Always,
-                    propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::Always,
-                    ..Default::default()
-                },
-                ctx,
-            )
-        });
-        ctx.subscribe_to_view(&rename_editor, |me, _, event, ctx| match event {
-            EditorEvent::Blurred | EditorEvent::Enter => {
-                me.finish_rename(ctx);
-            }
-            EditorEvent::Escape => {
-                me.cancel_rename(ctx);
-            }
-            _ => {}
-        });
 
         let new_agent_button = CompactibleActionButton::new(
             "New agent".to_string(),
@@ -403,10 +370,6 @@ impl AgentManagementView {
             agent_type_selector,
             is_agent_type_selector_open: false,
             details_panel,
-            inline_rename: InlineRenameState {
-                editor: rename_editor,
-                conversation_id: None,
-            },
             selected_item_id: None,
         };
 
@@ -1070,7 +1033,6 @@ impl AgentManagementView {
 
                 new_items.push(CardState {
                     hover_state: MouseStateHandle::default(),
-                    title_hover_state: MouseStateHandle::default(),
                     avatar_hover_state: MouseStateHandle::default(),
                     session_status_hover_state: MouseStateHandle::default(),
                     action_buttons_hover_state: MouseStateHandle::default(),
@@ -1094,47 +1056,6 @@ impl AgentManagementView {
         }
 
         self.items = new_items;
-        ctx.notify();
-    }
-
-    fn start_rename(&mut self, item_id: ManagementCardItemId, ctx: &mut ViewContext<Self>) {
-        let Some(entry) = AgentConversationsModel::as_ref(ctx).get_entry_by_id(&item_id, ctx)
-        else {
-            return;
-        };
-        let Some(conversation_id) = entry.identity.local_conversation_id else {
-            return;
-        };
-
-        self.inline_rename.conversation_id = Some(conversation_id);
-        let title = entry.display.title;
-        self.inline_rename.editor.update(ctx, |editor, ctx| {
-            editor.clear_buffer_and_reset_undo_stack(ctx);
-            editor.insert_selected_text(&title, ctx);
-        });
-        ctx.focus(&self.inline_rename.editor);
-        ctx.notify();
-    }
-
-    fn finish_rename(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(conversation_id) = self.inline_rename.conversation_id.take() else {
-            return;
-        };
-        let title = self.inline_rename.editor.as_ref(ctx).buffer_text(ctx);
-        self.inline_rename.editor.update(ctx, |editor, ctx| {
-            editor.clear_buffer_and_reset_undo_stack(ctx);
-        });
-        rename_conversation(conversation_id, title, "Conversation not found", ctx);
-        ctx.notify();
-    }
-
-    fn cancel_rename(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.inline_rename.conversation_id.take().is_none() {
-            return;
-        }
-        self.inline_rename.editor.update(ctx, |editor, ctx| {
-            editor.clear_buffer_and_reset_undo_stack(ctx);
-        });
         ctx.notify();
     }
 
@@ -1717,20 +1638,11 @@ impl AgentManagementView {
             .expect("action buttons hover state lock poisoned")
             .is_mouse_over_element();
         let action_buttons_is_empty = card_state.action_buttons_view.as_ref(app).is_empty();
-        let is_renaming =
-            entry.identity.local_conversation_id == self.inline_rename.conversation_id;
-        let rename_editor = self.inline_rename.editor.clone();
 
         let card_hoverable = Hoverable::new(card_state.hover_state.clone(), move |mouse_state| {
             let mut card_content = Flex::column()
                 .with_spacing(CARD_ROW_SPACING)
-                .with_child(Self::render_header_row(
-                    card_state,
-                    entry,
-                    is_renaming,
-                    is_renaming.then_some(&rename_editor),
-                    appearance,
-                ))
+                .with_child(Self::render_header_row(card_state, entry, appearance))
                 .with_child(Self::render_metadata_row(entry, appearance, app));
 
             // Add artifacts row if there is a buttons view
@@ -1740,8 +1652,7 @@ impl AgentManagementView {
 
             // Determine whether to show the buttons based on whether we are hovering on the action buttons or the card,
             // to prevent lots of flickering.
-            let should_show_action_buttons =
-                !is_renaming && (mouse_state.is_hovered() || action_buttons_mouse_over);
+            let should_show_action_buttons = mouse_state.is_hovered() || action_buttons_mouse_over;
 
             let card_background = if should_show_action_buttons {
                 internal_colors::fg_overlay_2(theme)
@@ -1794,7 +1705,7 @@ impl AgentManagementView {
         .with_defer_events_to_children();
 
         let item_id = card_state.item_id;
-        let card_hoverable = if entry.capabilities.can_open && !is_renaming {
+        let card_hoverable = if entry.capabilities.can_open {
             card_hoverable
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| {
@@ -1810,42 +1721,14 @@ impl AgentManagementView {
     fn render_header_row(
         card_state: &CardState,
         entry: &AgentConversationEntry,
-        is_renaming: bool,
-        rename_editor: Option<&ViewHandle<EditorView>>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
         let font_size = appearance.ui_font_size();
-        let title_element: Box<dyn Element> =
-            if let Some(rename_editor) = rename_editor.filter(|_| is_renaming) {
-                TextInput::new(
-                    rename_editor.clone(),
-                    UiComponentStyles::default()
-                        .set_background(ElementFill::None)
-                        .set_border_radius(CornerRadius::with_all(Radius::Pixels(0.)))
-                        .set_border_width(0.)
-                        .set_font_size(appearance.ui_font_size()),
-                )
-                .build()
-                .finish()
-            } else {
-                Text::new_inline(entry.display.title.clone(), font_family, font_size)
-                    .with_color(theme.active_ui_text_color().into())
-                    .finish()
-            };
-        let title_element = if entry.identity.local_conversation_id.is_some() && !is_renaming {
-            let title_hover_state = card_state.title_hover_state.clone();
-            let item_id = entry.id;
-            Hoverable::new(title_hover_state, move |_| title_element)
-                .on_double_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(AgentManagementViewAction::StartRename { item_id });
-                })
-                .with_cursor(Cursor::PointingHand)
-                .finish()
-        } else {
-            title_element
-        };
+
+        let title_text = Text::new_inline(entry.display.title.clone(), font_family, font_size)
+            .with_color(theme.active_ui_text_color().into());
         let status_icon = render_icon_with_status(
             agent_conversation_entry_icon_variant(entry),
             CARD_AGENT_ICON_SIZE,
@@ -1872,7 +1755,7 @@ impl AgentManagementView {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(2.)
             .with_child(Container::new(status_icon).with_margin_right(4.).finish())
-            .with_child(Expanded::new(1., title_element).finish());
+            .with_child(Expanded::new(1., title_text.finish()).finish());
         let mut time_and_avatar = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.);
@@ -2344,7 +2227,6 @@ pub enum AgentManagementViewAction {
     ToggleSetupGuide,
     ShowAgentTypeSelector,
     OpenSession { item_id: ManagementCardItemId },
-    StartRename { item_id: ManagementCardItemId },
     FocusSearch,
 }
 
@@ -2506,9 +2388,6 @@ impl TypedActionView for AgentManagementView {
                     }
                 }
                 ctx.dispatch_typed_action(&action);
-            }
-            AgentManagementViewAction::StartRename { item_id } => {
-                self.start_rename(*item_id, ctx);
             }
             AgentManagementViewAction::FocusSearch => {
                 ctx.focus(&self.search_editor);
