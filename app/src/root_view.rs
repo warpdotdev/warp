@@ -262,6 +262,8 @@ pub fn init(app: &mut AppContext) {
 
     app.add_global_action("root_view:open_from_restored", open_from_restored);
     app.add_global_action("root_view:open_new", open_new);
+    // When macOS Dock/Cmd-Tab visibility is disabled, the status item menu is
+    // the required recovery surface for foregrounding Warp or opening Settings.
     app.add_global_action("root_view:show_primary_window", show_primary_window);
     app.add_global_action(
         "root_view:open_settings_from_status_item",
