@@ -9,68 +9,84 @@ use crate::workspace::ToastStack;
 
 pub(crate) const CONVERSATION_TITLE_MAX_CHARS: usize = 500;
 
-/// Renames a conversation using the same optimistic path as `/rename-conversation`.
+/// Renames a conversation locally and triggers a conversation rename on the server.
 pub(crate) fn rename_conversation<T: View>(
     conversation_id: AIConversationId,
     title: String,
     conversation_not_found_message: &'static str,
     ctx: &mut ViewContext<T>,
 ) -> bool {
-    let Some(title) = validate_conversation_title(title, ctx) else {
-        return true;
+    let title = match validate_conversation_title(title) {
+        Ok(title) => title,
+        Err(message) => {
+            let window_id = ctx.window_id();
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
+            });
+            return true;
+        }
     };
-    if conversation_title_matches(conversation_id, &title, ctx) {
+    if conversation_already_has_title(conversation_id, &title, ctx) {
         return true;
     }
 
-    if BlocklistAIHistoryModel::as_ref(ctx)
-        .conversation(&conversation_id)
-        .is_some()
-    {
-        begin_loaded_conversation_rename(
-            conversation_id,
-            title,
-            conversation_not_found_message,
-            ctx,
-        );
-        return true;
-    }
-
+    // `load_conversation_data` resolves immediately when the conversation is already in
+    // memory, so loaded and unloaded conversations share this single load-then-rename path.
     let history = BlocklistAIHistoryModel::handle(ctx);
     let future = history
         .as_ref(ctx)
         .load_conversation_data(conversation_id, ctx);
-    ctx.spawn(future, move |_, conversation, ctx| match conversation {
-        Some(CloudConversationData::Oz(conversation)) => {
-            history.update(ctx, |history, _| {
-                history.register_loaded_conversation(*conversation);
-            });
-            if conversation_title_matches(conversation_id, &title, ctx) {
+    ctx.spawn(future, move |_, conversation, ctx| {
+        match conversation {
+            Some(CloudConversationData::Oz(conversation)) => {
+                history.update(ctx, |history, _| {
+                    // The load resolves with a clone when the conversation is already in
+                    // memory; re-registering it would overwrite newer in-memory state.
+                    if history.conversation(&conversation_id).is_none() {
+                        history.register_loaded_conversation(*conversation);
+                    }
+                });
+            }
+            Some(CloudConversationData::CLIAgent(_)) => {
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(
+                            "Conversations created by CLI agents like Claude Code can't be renamed"
+                                .to_owned(),
+                        ),
+                        window_id,
+                        ctx,
+                    );
+                });
                 return;
             }
-            begin_loaded_conversation_rename(
-                conversation_id,
-                title,
-                conversation_not_found_message,
-                ctx,
-            );
+            None => {
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::error(
+                            "Failed to load conversation for renaming".to_owned(),
+                        ),
+                        window_id,
+                        ctx,
+                    );
+                });
+                return;
+            }
         }
-        Some(CloudConversationData::CLIAgent(_)) => {
-            show_error_toast(
-                "This conversation can't be renamed from this client.".to_string(),
-                ctx,
-            );
+        if conversation_already_has_title(conversation_id, &title, ctx) {
+            return;
         }
-        None => {
-            show_error_toast("Failed to load conversation for renaming".to_string(), ctx);
-        }
+        begin_conversation_rename(conversation_id, title, conversation_not_found_message, ctx);
     });
 
     true
 }
 
-/// Returns whether the requested title already matches local conversation state.
-fn conversation_title_matches<T: View>(
+/// Returns whether the conversation's current local title already matches `title`,
+/// making the rename a no-op.
+fn conversation_already_has_title<T: View>(
     conversation_id: AIConversationId,
     title: &str,
     ctx: &ViewContext<T>,
@@ -87,32 +103,25 @@ fn conversation_title_matches<T: View>(
         .is_some_and(|current_title| current_title == title)
 }
 
-/// Trims and validates a requested conversation title before renaming.
-fn validate_conversation_title<T: View>(title: String, ctx: &mut ViewContext<T>) -> Option<String> {
+/// Trims and validates a requested conversation title, returning a user-facing
+/// error message when the title is invalid.
+fn validate_conversation_title(title: String) -> Result<String, String> {
     let title = title.trim();
     if title.is_empty() {
-        show_error_toast(
-            "Please provide a title after /rename-conversation".to_owned(),
-            ctx,
-        );
-        return None;
+        return Err("Please provide a title after /rename-conversation".to_owned());
     }
 
     if title.chars().count() > CONVERSATION_TITLE_MAX_CHARS {
-        show_error_toast(
-            format!(
-                "Conversation title must be {CONVERSATION_TITLE_MAX_CHARS} characters or fewer",
-            ),
-            ctx,
-        );
-        return None;
+        return Err(format!(
+            "Conversation title must be {CONVERSATION_TITLE_MAX_CHARS} characters or fewer",
+        ));
     }
 
-    Some(title.to_owned())
+    Ok(title.to_owned())
 }
 
-/// Starts an optimistic rename for a loaded local conversation.
-fn begin_loaded_conversation_rename<T: View>(
+/// Starts an optimistic rename for a loaded conversation and syncs it to the server.
+fn begin_conversation_rename<T: View>(
     conversation_id: AIConversationId,
     title: String,
     conversation_not_found_message: &'static str,
@@ -124,7 +133,28 @@ fn begin_loaded_conversation_rename<T: View>(
     }) {
         Ok(server_conversation_id) => server_conversation_id,
         Err(err) => {
-            show_begin_error_toast(err, conversation_not_found_message, ctx);
+            let message = match err {
+                BeginConversationRenameError::MissingServerConversationToken => {
+                    "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again."
+                }
+                BeginConversationRenameError::RenameInProgress => {
+                    "A rename is already in progress for this conversation"
+                }
+                BeginConversationRenameError::ConversationNotFound => {
+                    conversation_not_found_message
+                }
+                BeginConversationRenameError::ConversationNotReady => {
+                    "Your conversation is still syncing. Try renaming it again in a moment."
+                }
+            };
+            let window_id = ctx.window_id();
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error(message.to_owned()),
+                    window_id,
+                    ctx,
+                );
+            });
             return;
         }
     };
@@ -136,56 +166,35 @@ fn begin_loaded_conversation_rename<T: View>(
                 .rename_conversation(server_conversation_id, title)
                 .await
         },
-        move |_, result, ctx| match result {
-            Ok(response) => {
-                let title = response.title;
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                    history.complete_conversation_rename(conversation_id, title.clone(), ctx);
-                });
-                let window_id = ctx.window_id();
-                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success(format!("Conversation renamed to {title}")),
-                        window_id,
-                        ctx,
-                    );
-                });
-            }
-            Err(e) => {
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                    history.fail_conversation_rename(conversation_id, ctx);
-                });
-                show_error_toast(format!("Failed to rename conversation: {e}"), ctx);
+        move |_, result, ctx| {
+            let window_id = ctx.window_id();
+            match result {
+                Ok(response) => {
+                    let title = response.title;
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.complete_conversation_rename(conversation_id, title.clone(), ctx);
+                    });
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::success(format!("Conversation renamed to {title}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                }
+                Err(e) => {
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        history.fail_conversation_rename(conversation_id, ctx);
+                    });
+                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_ephemeral_toast(
+                            DismissibleToast::error(format!("Failed to rename conversation: {e}")),
+                            window_id,
+                            ctx,
+                        );
+                    });
+                }
             }
         },
     );
-}
-
-/// Shows the user-facing error for a rename that could not be started.
-fn show_begin_error_toast<T: View>(
-    err: BeginConversationRenameError,
-    conversation_not_found_message: &'static str,
-    ctx: &mut ViewContext<T>,
-) {
-    let message = match err {
-        BeginConversationRenameError::MissingServerConversationToken => {
-            "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again."
-        }
-        BeginConversationRenameError::RenameInProgress => {
-            "A rename is already in progress for this conversation"
-        }
-        BeginConversationRenameError::ConversationNotFound => conversation_not_found_message,
-        BeginConversationRenameError::ConversationNotReady => {
-            "Your conversation is still syncing. Try renaming it again in a moment."
-        }
-    };
-    show_error_toast(message.to_owned(), ctx);
-}
-
-/// Shows a rename-related error toast.
-fn show_error_toast<T: View>(message: String, ctx: &mut ViewContext<T>) {
-    let window_id = ctx.window_id();
-    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-        toast_stack.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
-    });
 }

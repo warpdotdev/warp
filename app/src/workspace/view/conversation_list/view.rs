@@ -710,6 +710,7 @@ impl ConversationListView {
         });
         ctx.notify();
     }
+
     fn toggle_section_collapse(
         &mut self,
         section: ConversationSection,
