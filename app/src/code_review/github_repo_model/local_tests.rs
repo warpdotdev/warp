@@ -79,7 +79,7 @@ fn pr_info_cleared_on_branch_change() {
 }
 
 #[test]
-fn repository_info_cleared_on_fetch_error() {
+fn repository_info_preserved_on_fetch_error() {
     App::test((), |mut app| async move {
         let (_temp_dir, model) = new_github_repo_model_for_test(&mut app);
 
@@ -92,6 +92,27 @@ fn repository_info_cleared_on_fetch_error() {
 
         model.update(&mut app, |model, ctx| {
             model.handle_repository_info_result(Err(anyhow::anyhow!("gh failed")), ctx);
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.repository_info(), Some(&repository_info()));
+        });
+    });
+}
+
+#[test]
+fn repository_info_cleared_on_authoritative_empty_result() {
+    App::test((), |mut app| async move {
+        let (_temp_dir, model) = new_github_repo_model_for_test(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.set_repository_info_for_test(Some(repository_info()), ctx);
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.repository_info(), Some(&repository_info()));
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.handle_repository_info_result(Ok(None), ctx);
         });
         model.read(&app, |model, _| {
             assert_eq!(model.repository_info(), None);
