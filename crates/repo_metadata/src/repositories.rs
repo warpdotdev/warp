@@ -243,7 +243,7 @@ impl DetectedRepositories {
     /// are only normalized here, without any filesystem I/O. A
     /// non-canonical path may fail to match the canonicalized cached roots
     /// — use [`Self::get_root_for_path`] for such paths instead.
-    pub fn get_root_for_canonicalized_path(
+    pub fn get_root_for_canonical_path(
         &self,
         path: &LocalOrRemotePath,
     ) -> Option<LocalOrRemotePath> {
