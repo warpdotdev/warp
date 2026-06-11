@@ -319,12 +319,15 @@ pub async fn spawn_server(
     let resources =
         query_resources_for(capabilities, &server_name, || service.list_all_resources()).await;
     let tools = query_tools_for(capabilities, &server_name, || service.list_all_tools()).await;
+    let prompts =
+        query_prompts_for(capabilities, &server_name, || service.list_all_prompts()).await;
 
     Ok(TemplatableMCPServerInfo {
         name: server_name,
         service,
         resources,
         tools,
+        prompts,
         installation_id: uuid,
         description,
         is_authenticated_transport,
@@ -476,6 +479,17 @@ fn should_query_tools(capabilities: Option<&rmcp::model::ServerCapabilities>) ->
     capabilities.is_some_and(|c| c.tools.is_some())
 }
 
+/// Whether to query `prompts/list` for a server with the given capabilities.
+///
+/// Per the MCP spec, the client should only invoke a list method when the
+/// server has advertised the corresponding capability during initialization.
+/// The `list_changed` flag inside `PromptsCapability` is independent of the
+/// gating decision: presence of the capability alone determines whether we
+/// list.
+fn should_query_prompts(capabilities: Option<&rmcp::model::ServerCapabilities>) -> bool {
+    capabilities.is_some_and(|c| c.prompts.is_some())
+}
+
 /// Query `resources/list` for a connected MCP server.
 ///
 /// Skips the call entirely when `resources` was not advertised. Treats any
@@ -526,6 +540,34 @@ where
         Ok(result) => result,
         Err(err) => {
             log::warn!("Failed to list tools for MCP server '{server_name}': {err}");
+            Vec::new()
+        }
+    }
+}
+
+/// Query `prompts/list` for a connected MCP server.
+///
+/// Skips the call entirely when `prompts` was not advertised. Treats any
+/// listing error as "no prompts" (fail-soft) so a flaky `prompts/list` does
+/// not abort the entire server startup. Mirrors the behavior of
+/// [`query_tools_for`] and [`query_resources_for`] so all three capabilities
+/// are handled symmetrically.
+async fn query_prompts_for<F, Fut>(
+    capabilities: Option<&rmcp::model::ServerCapabilities>,
+    server_name: &str,
+    list_prompts: F,
+) -> Vec<rmcp::model::Prompt>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Vec<rmcp::model::Prompt>, rmcp::ServiceError>>,
+{
+    if !should_query_prompts(capabilities) {
+        return Vec::new();
+    }
+    match list_prompts().await {
+        Ok(result) => result,
+        Err(err) => {
+            log::warn!("Failed to list prompts for MCP server '{server_name}': {err}");
             Vec::new()
         }
     }
