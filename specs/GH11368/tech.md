@@ -15,7 +15,7 @@ To resolve this, we must wire `CLIAgent::Antigravity` into the terminal's agent 
 - `app/src/terminal/cli_agent.rs` — `CLIAgent` enum with all identity methods: `command_prefix()`, `to_serialized_name()`, `from_serialized_name()`, `from_harness()`, `display_name()`, `icon()`, `supported_skill_providers()`, `skill_command_prefix()`, `supports_bash_mode()`, `brand_color()`, `brand_icon_color()`, `detect()`, and the `From<CLIAgent> for CLIAgentType` telemetry conversion.
 - `crates/input_classifier/src/util.rs` — `ONE_OFF_SHELL_COMMAND_KEYWORDS` that determine shell-vs-natural-language classification.
 - `crates/warp_core/src/ui/icons.rs` — `Icon` enum register and SVG asset mappings.
-- `app/src/server/telemetry.rs` — `CLIAgentType` telemetry enum.
+- `app/src/server/telemetry/events.rs` — `CLIAgentType` telemetry enum.
 
 ## 3. Proposed Changes
 
@@ -45,7 +45,7 @@ To resolve this, we must wire `CLIAgent::Antigravity` into the terminal's agent 
    - `brand_color()`: returns `Some(ColorU::from_rgb(0x63, 0x66, 0xF1))` (Indigo brand color). Add an `ANTIGRAVITY_INDIGO` constant at module level.
    - `brand_icon_color()`: Falls through to wildcard `_ => ColorU::white()`.
    - `detect()`: Works automatically via `enum_iterator::Sequence` and prefix `"agy"`.
-3. Add `CLIAgent::Antigravity => CLIAgentType::Antigravity` to the telemetry conversion. Add an `Antigravity` variant to `CLIAgentType` in `app/src/server/telemetry.rs`.
+3. Add `CLIAgent::Antigravity => CLIAgentType::Antigravity` to the telemetry conversion. Add an `Antigravity` variant to `CLIAgentType` in `app/src/server/telemetry/events.rs`.
 
 ### 3b. Register Command Classifier (`crates/input_classifier/src/util.rs`)
 
@@ -75,4 +75,5 @@ static ref ONE_OFF_SHELL_COMMAND_KEYWORDS: HashSet<&'static str> = HashSet::from
 ## 5. Testing and Validation
 
 - **Unit tests**: Verify CLI agent detection works for prefix `agy` in `cli_agent_tests.rs`.
+- **Unit tests**: Verify `"agy"` short-circuits as a one-off shell keyword in `input_classifier` tests, ensuring it bypasses natural language classification.
 - **Manual Verification**: Run Warp locally, trigger `agy`, and verify Agent Mode transition and UI styling.
