@@ -86,13 +86,11 @@ use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::code_review::git_actions;
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
-use crate::settings::PrivacySettings;
 use crate::terminal::model::session::command_executor::{
     ExecuteCommandOptions, LocalCommandExecutor,
 };
 use crate::util::git;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::workspace::OrganizationTelemetryPolicy;
 use crate::{send_telemetry_sync_from_ctx, TelemetryEvent};
 
 /// Outcome of dispatching a request-style `ClientMessage`.
@@ -623,16 +621,14 @@ impl ServerModel {
     }
 
     /// Resolves the daemon's telemetry policy after an authenticated context is supplied.
-    /// Initialize and Authenticate remain non-blocking; startup telemetry is emitted once only
-    /// after a successful resolution.
+    /// Initialize and Authenticate remain non-blocking; until resolution completes the
+    /// policy stays Unmanaged (respecting the user's own setting), and the startup
+    /// telemetry event is emitted once only after a successful resolution.
     fn refresh_telemetry_policy_after_auth(&mut self, ctx: &mut ModelContext<Self>) {
         if !self.should_refresh_telemetry_policy_after_auth() {
             return;
         }
 
-        PrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.set_organization_telemetry_policy(OrganizationTelemetryPolicy::Unknown, ctx);
-        });
         self.telemetry_policy_refresh_in_flight = true;
         let refresh = TeamUpdateManager::handle(ctx)
             .update(ctx, |manager, ctx| manager.refresh_workspace_metadata(ctx));

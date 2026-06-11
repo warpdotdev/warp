@@ -458,8 +458,10 @@ pub enum TelemetryEnablementSetting {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OrganizationTelemetryPolicy {
+    /// The organization does not enforce telemetry; the user's own setting applies.
+    /// This is also the fallback when the organization policy has not (yet) been
+    /// resolved from workspace metadata.
     #[default]
-    Unknown,
     Unmanaged,
     Enforced(TelemetryEnablementSetting),
 }

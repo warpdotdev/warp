@@ -117,9 +117,9 @@ pub(super) fn organization_telemetry_policy(
                 ),
                 warp_core::errors::ReportErrorLogMode::OncePerRun
             );
-            // Fail closed: keep telemetry disabled until the client understands the
-            // organization's policy.
-            OrganizationTelemetryPolicy::Unknown
+            // Fall back to respecting the user's own setting until the client
+            // understands the organization's policy.
+            OrganizationTelemetryPolicy::Unmanaged
         }
     }
 }

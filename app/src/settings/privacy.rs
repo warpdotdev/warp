@@ -35,6 +35,7 @@ pub trait RegexDisplayInfo {
 pub const TELEMETRY_ENABLED_DEFAULTS_KEY: &str = "TelemetryEnabled";
 pub const CRASH_REPORTING_ENABLED_DEFAULTS_KEY: &str = "CrashReportingEnabled";
 pub const CLOUD_CONVERSATION_STORAGE_ENABLED_DEFAULTS_KEY: &str = "CloudConversationStorageEnabled";
+pub const UGC_COLLECTION_ENABLED_DEFAULTS_KEY: &str = "UgcCollectionEnabled";
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(description = "A custom regex pattern for detecting and redacting secrets.")]
@@ -169,8 +170,8 @@ pub struct PrivacySettings {
     /// List of enterprise-level secret regexes provided by the organization.
     /// These are kept separate from user-level secrets to support additive behavior.
     pub enterprise_secret_regex_list: Vec<CustomSecretRegex>,
-    /// The effective telemetry policy for the current organization. A logged-in session starts
-    /// Unknown and fails closed until fresh workspace metadata resolves the policy.
+    /// The effective telemetry policy for the current organization. Starts Unmanaged
+    /// (respecting the user's own setting) until workspace metadata resolves the policy.
     organization_telemetry_policy: OrganizationTelemetryPolicy,
     /// Whether or not the user's organization has enabled enterprise secret redaction.
     /// This is populated by the server when teams data is fetched.
@@ -226,7 +227,6 @@ impl PrivacySettingsSnapshot {
                 && !FeatureFlag::AgentModeAnalytics.is_enabled();
         }
         match self.organization_telemetry_policy {
-            OrganizationTelemetryPolicy::Unknown => true,
             OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => true,
             OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => false,
             OrganizationTelemetryPolicy::Unmanaged => {
@@ -334,12 +334,6 @@ impl PrivacySettings {
             CustomSecretRegexList::new_from_storage(ctx);
         let has_initialized_default_secret_regexes: HasInitializedDefaultSecretRegexes =
             HasInitializedDefaultSecretRegexes::new_from_storage(ctx);
-        let organization_telemetry_policy =
-            if FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() && auth_state.is_logged_in() {
-                OrganizationTelemetryPolicy::Unknown
-            } else {
-                OrganizationTelemetryPolicy::Unmanaged
-            };
 
         Self {
             auth_state,
@@ -350,7 +344,7 @@ impl PrivacySettings {
             is_ugc_collection_enabled,
             user_secret_regex_list,
             has_initialized_default_secret_regexes,
-            organization_telemetry_policy,
+            organization_telemetry_policy: OrganizationTelemetryPolicy::Unmanaged,
             is_enterprise_secret_redaction_enabled: false,
             enterprise_secret_regex_list: Vec::new(),
         }
@@ -365,7 +359,7 @@ impl PrivacySettings {
             OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => {
                 FeatureFlag::EnterpriseTelemetryPolicy.is_enabled()
             }
-            OrganizationTelemetryPolicy::Unknown | OrganizationTelemetryPolicy::Unmanaged => false,
+            OrganizationTelemetryPolicy::Unmanaged => false,
         }
     }
 
@@ -381,8 +375,7 @@ impl PrivacySettings {
                 OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => {
                     policy
                 }
-                OrganizationTelemetryPolicy::Unknown
-                | OrganizationTelemetryPolicy::Unmanaged
+                OrganizationTelemetryPolicy::Unmanaged
                 | OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => {
                     OrganizationTelemetryPolicy::Unmanaged
                 }

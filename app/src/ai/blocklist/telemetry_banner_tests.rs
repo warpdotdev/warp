@@ -42,18 +42,6 @@ fn enforced_disabled_telemetry_cascades_to_ugc() {
 }
 
 #[test]
-fn unknown_telemetry_policy_cascades_to_ugc() {
-    let _policy_flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
-    let _agent_flag = FeatureFlag::AgentModeAnalytics.override_enabled(true);
-    assert!(!should_collect_ai_ugc_telemetry_for_settings(
-        UgcCollectionEnablementSetting::Enable,
-        OrganizationTelemetryPolicy::Unknown,
-        true,
-        true,
-    ));
-}
-
-#[test]
 fn user_telemetry_opt_out_cascades_to_ugc_under_unmanaged_policy() {
     let _policy_flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
     let _agent_flag = FeatureFlag::AgentModeAnalytics.override_enabled(false);

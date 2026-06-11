@@ -1495,7 +1495,6 @@ impl SettingsWidget for AppAnalyticsWidget {
         // organization's telemetry policy and the user's telemetry preference. UGC
         // collection has its own dedicated toggle below.
         let (is_toggleable, is_checked) = match privacy_settings.organization_telemetry_policy() {
-            OrganizationTelemetryPolicy::Unknown => (false, false),
             OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => {
                 (false, true)
             }
@@ -1640,11 +1639,10 @@ impl SettingsWidget for UgcCollectionWidget {
 
         let org_ugc_setting = UserWorkspaces::as_ref(app).get_ugc_collection_enablement_setting();
 
-        // Cascade: when all-up usage telemetry is off (org-enforced, unresolved, or via the
-        // user's telemetry toggle), UGC collection is effectively disabled too.
+        // Cascade: when all-up usage telemetry is off (org-enforced or via the user's
+        // telemetry toggle), UGC collection is effectively disabled too.
         let is_telemetry_off = match privacy_settings.organization_telemetry_policy() {
-            OrganizationTelemetryPolicy::Unknown
-            | OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => true,
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => true,
             OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => false,
             OrganizationTelemetryPolicy::Unmanaged => !privacy_settings.is_telemetry_enabled,
         };

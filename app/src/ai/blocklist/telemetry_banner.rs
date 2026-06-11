@@ -218,8 +218,7 @@ fn should_collect_ai_ugc_telemetry_for_settings(
     // `PrivacySettingsSnapshot::should_disable_telemetry`.
     let is_telemetry_effectively_enabled = if FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() {
         match organization_telemetry_policy {
-            OrganizationTelemetryPolicy::Unknown
-            | OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => false,
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled) => false,
             OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled) => true,
             OrganizationTelemetryPolicy::Unmanaged => {
                 is_telemetry_enabled || FeatureFlag::AgentModeAnalytics.is_enabled()

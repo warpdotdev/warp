@@ -47,14 +47,14 @@ fn setting_overrides_legacy_force_enabled() {
 }
 
 #[test]
-fn unknown_setting_fails_closed() {
+fn unknown_setting_falls_back_to_unmanaged() {
     let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
     assert_eq!(
         organization_telemetry_policy(
             GqlTelemetryEnabled::Other("SOME_NEW_VALUE".to_string()),
             false,
         ),
-        OrganizationTelemetryPolicy::Unknown
+        OrganizationTelemetryPolicy::Unmanaged
     );
 }
 

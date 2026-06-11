@@ -23,7 +23,7 @@ fn logout_does_not_require_auth() {
 }
 
 #[test]
-fn authenticated_non_agent_cli_telemetry_is_suppressed_while_policy_is_unknown() {
+fn authenticated_non_agent_cli_telemetry_respects_user_setting_before_policy_refresh() {
     let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
     let command = CliCommand::Artifact(ArtifactCommand::Download(DownloadArtifactArgs {
         artifact_uid: "artifact-123".to_string(),
@@ -32,8 +32,8 @@ fn authenticated_non_agent_cli_telemetry_is_suppressed_while_policy_is_unknown()
 
     assert!(command_requires_auth(&command));
     assert!(!should_defer_cli_telemetry_until_policy_refresh(&command));
-    assert!(PrivacySettingsSnapshot::mock_with_organization_policy(
-        OrganizationTelemetryPolicy::Unknown
+    assert!(!PrivacySettingsSnapshot::mock_with_organization_policy(
+        OrganizationTelemetryPolicy::Unmanaged
     )
     .should_disable_telemetry());
 }
@@ -48,7 +48,7 @@ fn rollout_off_does_not_defer_or_suppress_authenticated_non_agent_cli_telemetry(
 
     assert!(!should_defer_cli_telemetry_until_policy_refresh(&command));
     assert!(!PrivacySettingsSnapshot::mock_with_organization_policy(
-        OrganizationTelemetryPolicy::Unknown
+        OrganizationTelemetryPolicy::Unmanaged
     )
     .should_disable_telemetry());
 }

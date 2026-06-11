@@ -21,8 +21,6 @@ use warpui::SingletonEntity;
 
 use super::server_model::{ConnectionId, ServerModel};
 use crate::features::FeatureFlag;
-use crate::settings::PrivacySettings;
-use crate::workspaces::workspace::OrganizationTelemetryPolicy;
 use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
 
 /// Run the `remote-server-daemon` subcommand.
@@ -91,9 +89,8 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
             timer.compute_stats()
         });
     let pending_startup_timing_data = if FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() {
-        PrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.set_organization_telemetry_policy(OrganizationTelemetryPolicy::Unknown, ctx);
-        });
+        // Defer the startup event until the organization telemetry policy has been
+        // resolved post-auth; until then telemetry respects the user's own setting.
         Some(timing_data)
     } else {
         send_telemetry_from_app_ctx!(

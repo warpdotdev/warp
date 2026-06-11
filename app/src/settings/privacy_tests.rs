@@ -14,9 +14,11 @@ fn snapshot(policy: OrganizationTelemetryPolicy, user_enabled: bool) -> PrivacyS
 }
 
 #[test]
-fn unknown_organization_policy_fails_closed() {
-    let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
-    assert!(snapshot(OrganizationTelemetryPolicy::Unknown, true).should_disable_telemetry());
+fn unresolved_policy_defaults_to_respecting_user_setting() {
+    let _policy_flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
+    let _analytics_flag = FeatureFlag::AgentModeAnalytics.override_enabled(false);
+    assert!(!snapshot(OrganizationTelemetryPolicy::default(), true).should_disable_telemetry());
+    assert!(snapshot(OrganizationTelemetryPolicy::default(), false).should_disable_telemetry());
 }
 
 #[test]
@@ -76,11 +78,10 @@ fn unmanaged_preserves_user_preference_and_agent_analytics_override() {
 }
 
 #[test]
-fn rollout_off_ignores_unknown_and_disabled_but_preserves_legacy_enabled() {
+fn rollout_off_ignores_disabled_but_preserves_legacy_enabled() {
     let _policy_flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(false);
     let _analytics_flag = FeatureFlag::AgentModeAnalytics.override_enabled(false);
 
-    assert!(!snapshot(OrganizationTelemetryPolicy::Unknown, true).should_disable_telemetry());
     assert!(!snapshot(
         OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled),
         true,
