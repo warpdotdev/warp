@@ -1,4 +1,6 @@
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+#[cfg(feature = "local_fs")]
+use warpui::ModelHandle;
+use warpui::{AppContext, Entity, ModelContext};
 
 #[cfg(feature = "local_fs")]
 mod local;
@@ -11,6 +13,7 @@ pub use super::git_repo_models::GitRepoModels;
 
 /// Public metadata exposed to consumers — the subset of diff metadata
 /// that the git chip (prompt display, agent view footer) needs.
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct GitStatusMetadata {
     pub current_branch_name: String,
@@ -18,6 +21,7 @@ pub struct GitStatusMetadata {
     pub stats_against_head: DiffStats,
 }
 
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 #[derive(Debug)]
 pub enum GitRepoStatusEvent {
     /// Emitted whenever the metadata changes (branch name, diff stats, etc.).
@@ -26,6 +30,7 @@ pub enum GitRepoStatusEvent {
 
 /// Unified per-repo git status model. PR 1 only contains the local backend;
 /// remote support is added in the stacked PR.
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub enum GitRepoStatusModel {
     #[cfg(feature = "local_fs")]
     Local(ModelHandle<LocalGitRepoStatusModel>),
@@ -35,9 +40,11 @@ impl Entity for GitRepoStatusModel {
     type Event = GitRepoStatusEvent;
 }
 
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 impl GitRepoStatusModel {
     /// Re-emit a sub-model event so subscribers of the unified model observe
     /// the same `GitRepoStatusEvent`s regardless of backend.
+    #[cfg(feature = "local_fs")]
     fn forward_event(&mut self, event: &GitRepoStatusEvent, ctx: &mut ModelContext<Self>) {
         match event {
             GitRepoStatusEvent::MetadataChanged => ctx.emit(GitRepoStatusEvent::MetadataChanged),
@@ -49,6 +56,13 @@ impl GitRepoStatusModel {
         match self {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.as_ref(ctx).metadata(),
+            // Without `local_fs` the enum has no variants, so a value can
+            // never be constructed and this arm is unreachable.
+            #[cfg(not(feature = "local_fs"))]
+            _ => {
+                let _ = ctx;
+                unreachable!("GitRepoStatusModel cannot be constructed without local_fs")
+            }
         }
     }
 
@@ -57,6 +71,13 @@ impl GitRepoStatusModel {
         match self {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.update(ctx, |m, ctx| m.refresh_metadata(ctx)),
+            // Without `local_fs` the enum has no variants, so a value can
+            // never be constructed and this arm is unreachable.
+            #[cfg(not(feature = "local_fs"))]
+            _ => {
+                let _ = ctx;
+                unreachable!("GitRepoStatusModel cannot be constructed without local_fs")
+            }
         }
     }
 }
