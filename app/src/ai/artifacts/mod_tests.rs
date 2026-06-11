@@ -152,6 +152,40 @@ fn default_download_filename_falls_back_to_artifact_uid_with_extension() {
 }
 
 #[test]
+fn merge_artifacts_dedupes_by_identity_and_preserves_order() {
+    let plan = Artifact::Plan {
+        document_uid: "doc-1".to_string(),
+        notebook_uid: None,
+        title: Some("Plan".to_string()),
+    };
+    // Same plan identity, different metadata: the first occurrence must win.
+    let plan_with_notebook = Artifact::Plan {
+        document_uid: "doc-1".to_string(),
+        notebook_uid: None,
+        title: Some("Plan (synced)".to_string()),
+    };
+    let pr = Artifact::PullRequest {
+        url: "https://github.com/o/r/pull/1".to_string(),
+        branch: "main".to_string(),
+        repo: None,
+        number: None,
+    };
+    let screenshot = Artifact::Screenshot {
+        artifact_uid: "shot-1".to_string(),
+        mime_type: "image/png".to_string(),
+        description: None,
+    };
+
+    let merged = merge_artifacts([
+        vec![plan.clone(), pr.clone()],
+        vec![pr.clone(), screenshot.clone()],
+        vec![plan_with_notebook],
+    ]);
+
+    assert_eq!(merged, vec![plan, pr, screenshot]);
+}
+
+#[test]
 fn converts_graphql_file_artifact() {
     let artifact = Artifact::try_from(warp_graphql::ai::AIConversationArtifact::FileArtifact(
         warp_graphql::ai::FileArtifact {

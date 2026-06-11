@@ -6,7 +6,11 @@
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
 
+use std::collections::HashMap;
+
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId};
+use crate::ai::artifacts::{merge_artifacts, Artifact};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,6 +216,75 @@ pub fn aggregated_orchestrator_status(
         return ConversationStatus::Cancelled;
     }
     ConversationStatus::Success
+}
+
+/// Returns the artifacts for the orchestration tree rooted at `root_id`:
+/// the root's artifacts followed by each descendant's in spawn order,
+/// deduped by artifact identity (first occurrence wins).
+///
+/// Each node contributes its conversation artifacts (falling back to cached
+/// historical metadata when not loaded) plus the artifacts on its backing
+/// run record in `tasks`. The run record matters for remote children: their
+/// artifact events are never applied to the local placeholder conversation,
+/// so the run is the only local source. Reads only in-memory state — never
+/// fetches. For non-orchestration conversations this degrades to the
+/// conversation's own artifacts.
+pub fn aggregated_conversation_artifacts(
+    history: &BlocklistAIHistoryModel,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+    root_id: AIConversationId,
+) -> Vec<Artifact> {
+    let lists = std::iter::once(root_id)
+        .chain(descendant_conversation_ids_in_spawn_order(history, root_id))
+        .flat_map(|id| {
+            let conversation = history.conversation(&id);
+            let conversation_artifacts = conversation
+                .map(|conversation| conversation.artifacts().to_vec())
+                .or_else(|| {
+                    history
+                        .get_conversation_metadata(&id)
+                        .map(|metadata| metadata.artifacts.clone())
+                })
+                .unwrap_or_default();
+            let run_artifacts = conversation
+                .and_then(|conversation| conversation.task_id())
+                .and_then(|task_id| tasks.get(&task_id))
+                .map(|task| task.artifacts.clone())
+                .unwrap_or_default();
+            [conversation_artifacts, run_artifacts]
+        });
+    merge_artifacts(lists)
+}
+
+/// Returns `conversation_id` followed by its orchestration ancestors
+/// (nearest parent first), walking parent links on loaded conversations.
+pub fn conversation_and_ancestors(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+) -> Vec<AIConversationId> {
+    let mut chain = vec![conversation_id];
+    let mut current = conversation_id;
+    while let Some(parent) = history.conversation(&current).and_then(|conversation| {
+        history.resolved_parent_conversation_id_for_conversation(conversation)
+    }) {
+        // Guard against parent-link cycles.
+        if chain.contains(&parent) {
+            break;
+        }
+        chain.push(parent);
+        current = parent;
+    }
+    chain
+}
+
+/// Returns whether `conversation_id` is `root_id` itself or one of its
+/// descendants, by walking parent links upward from `conversation_id`.
+pub fn is_in_orchestration_subtree(
+    history: &BlocklistAIHistoryModel,
+    root_id: AIConversationId,
+    conversation_id: AIConversationId,
+) -> bool {
+    conversation_and_ancestors(history, conversation_id).contains(&root_id)
 }
 
 /// Returns a conversation's direct status, or the aggregated subtree status

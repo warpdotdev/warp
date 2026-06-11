@@ -4,6 +4,119 @@ use super::*;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
+
+/// Convenience: a PR artifact with the given URL (the URL is the dedupe identity).
+fn pr_artifact(url: &str) -> Artifact {
+    Artifact::PullRequest {
+        url: url.to_string(),
+        branch: "main".to_string(),
+        repo: None,
+        number: None,
+    }
+}
+
+#[test]
+fn aggregated_conversation_artifacts_merges_subtree_and_dedupes() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        let parent_pr = pr_artifact("https://github.com/o/r/pull/1");
+        let child_a_pr = pr_artifact("https://github.com/o/r/pull/2");
+        let child_b_pr = pr_artifact("https://github.com/o/r/pull/3");
+
+        history_model.update(&mut app, |history_model, ctx| {
+            for (conversation_id, artifact) in [
+                (orchestrator_id, parent_pr.clone()),
+                (child_a, child_a_pr.clone()),
+                // A child re-reporting the parent's PR must be deduped.
+                (child_a, parent_pr.clone()),
+                (child_b, child_b_pr.clone()),
+            ] {
+                history_model
+                    .conversation_mut(&conversation_id)
+                    .expect("conversation exists")
+                    .add_artifact(artifact, terminal_view_id, ctx);
+            }
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let tasks = HashMap::new();
+            assert_eq!(
+                aggregated_conversation_artifacts(history_model, &tasks, orchestrator_id),
+                vec![parent_pr.clone(), child_a_pr.clone(), child_b_pr],
+            );
+            // A child's aggregation only covers its own subtree.
+            assert_eq!(
+                aggregated_conversation_artifacts(history_model, &tasks, child_a),
+                vec![child_a_pr, parent_pr],
+            );
+        });
+    });
+}
+
+#[test]
+fn conversation_ancestors_and_subtree_membership() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let orchestrator_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let child = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "child".to_string(),
+                orchestrator_id,
+                None,
+                ctx,
+            )
+        });
+        let grandchild = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "grandchild".to_string(),
+                child,
+                None,
+                ctx,
+            )
+        });
+        let unrelated = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(
+                conversation_and_ancestors(history_model, grandchild),
+                vec![grandchild, child, orchestrator_id],
+            );
+            assert!(is_in_orchestration_subtree(
+                history_model,
+                orchestrator_id,
+                grandchild
+            ));
+            assert!(is_in_orchestration_subtree(
+                history_model,
+                orchestrator_id,
+                orchestrator_id
+            ));
+            assert!(!is_in_orchestration_subtree(
+                history_model,
+                orchestrator_id,
+                unrelated
+            ));
+            assert!(!is_in_orchestration_subtree(
+                history_model,
+                child,
+                orchestrator_id
+            ));
+        });
+    });
+}
 #[test]
 fn pill_order_keys_prioritize_attention_then_in_progress_then_done() {
     let blocked = ConversationStatus::Blocked {

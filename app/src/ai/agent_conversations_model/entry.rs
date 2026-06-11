@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
@@ -13,8 +15,9 @@ use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrT
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::{AgentSource, AmbientAgentTask, AmbientAgentTaskId};
-use crate::ai::artifacts::Artifact;
+use crate::ai::artifacts::{merge_artifacts, Artifact};
 use crate::ai::blocklist::history_model::{AIConversationMetadata, BlocklistAIHistoryModel};
+use crate::ai::blocklist::orchestration_topology::aggregated_conversation_artifacts;
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::util::time_format::human_readable_precise_duration;
@@ -390,19 +393,49 @@ fn conversation_request_usage(
         })
 }
 
-fn conversation_artifacts(
-    metadata: &ConversationMetadata,
+/// Artifact lists for a run and its transitive child runs, reading only
+/// in-memory task data. Child runs that aren't loaded contribute nothing.
+fn run_subtree_artifact_lists(
+    root: &AmbientAgentTask,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+) -> Vec<Vec<Artifact>> {
+    let mut visited = HashSet::from([root.task_id]);
+    let mut lists = vec![root.artifacts.clone()];
+    let mut queue: VecDeque<&String> = root.children.iter().collect();
+    while let Some(run_id) = queue.pop_front() {
+        let Ok(task_id) = run_id.parse::<AmbientAgentTaskId>() else {
+            continue;
+        };
+        if !visited.insert(task_id) {
+            continue;
+        }
+        let Some(task) = tasks.get(&task_id) else {
+            continue;
+        };
+        lists.push(task.artifacts.clone());
+        queue.extend(task.children.iter());
+    }
+    lists
+}
+
+/// Aggregated artifacts for a run: the run's own artifacts, its transitive
+/// child runs' artifacts, and the linked local conversation subtree's
+/// artifacts, deduped by identity. In-memory only — never fetches.
+pub(super) fn aggregated_run_artifacts(
+    task: &AmbientAgentTask,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+    local_conversation_id: Option<AIConversationId>,
     history_model: &BlocklistAIHistoryModel,
 ) -> Vec<Artifact> {
-    history_model
-        .conversation(&metadata.nav_data.id)
-        .map(|conversation| conversation.artifacts().to_vec())
-        .or_else(|| {
-            history_model
-                .get_conversation_metadata(&metadata.nav_data.id)
-                .map(|metadata| metadata.artifacts.clone())
-        })
-        .unwrap_or_default()
+    let mut lists = run_subtree_artifact_lists(task, tasks);
+    if let Some(conversation_id) = local_conversation_id {
+        lists.push(aggregated_conversation_artifacts(
+            history_model,
+            tasks,
+            conversation_id,
+        ));
+    }
+    merge_artifacts(lists)
 }
 
 fn principal_from_user_profile(profile: &UserProfileWithUID) -> AgentConversationPrincipal {
@@ -448,6 +481,7 @@ fn conversation_creator(
 
 pub(super) fn entry_for_task(
     task: &AmbientAgentTask,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
@@ -520,7 +554,7 @@ pub(super) fn entry_for_task(
                 .as_ref()
                 .and_then(|snapshot| snapshot.environment_id.clone()),
             harness: task_harness(task),
-            artifacts: task.artifacts.clone(),
+            artifacts: aggregated_run_artifacts(task, tasks, local_conversation_id, history_model),
         },
         backing: AgentConversationBackingData {
             has_loaded_conversation: local_conversation_id
@@ -546,6 +580,7 @@ pub(super) fn entry_for_task(
 
 pub(super) fn entry_for_conversation(
     metadata: &ConversationMetadata,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
@@ -553,6 +588,7 @@ pub(super) fn entry_for_conversation(
     entry_for_conversation_parts(
         metadata.nav_data.clone(),
         conversation_metadata,
+        tasks,
         history_model,
         app,
     )
@@ -561,15 +597,17 @@ pub(super) fn entry_for_conversation(
 pub(super) fn entry_for_historical_metadata(
     metadata: &AIConversationMetadata,
     nav_data: ConversationNavigationData,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
-    entry_for_conversation_parts(nav_data, Some(metadata), history_model, app)
+    entry_for_conversation_parts(nav_data, Some(metadata), tasks, history_model, app)
 }
 
 fn entry_for_conversation_parts(
     nav_data: ConversationNavigationData,
     conversation_metadata: Option<&AIConversationMetadata>,
+    tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     history_model: &BlocklistAIHistoryModel,
     app: &AppContext,
 ) -> AgentConversationEntry {
@@ -630,7 +668,7 @@ fn entry_for_conversation_parts(
                 .and_then(|metadata| metadata.server_conversation_metadata.as_ref())
                 .map(|metadata| Harness::from(metadata.harness))
                 .or(Some(Harness::Oz)),
-            artifacts: conversation_artifacts(&metadata, history_model),
+            artifacts: aggregated_conversation_artifacts(history_model, tasks, conversation_id),
         },
         backing: AgentConversationBackingData {
             has_loaded_conversation,

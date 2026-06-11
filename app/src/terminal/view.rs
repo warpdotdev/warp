@@ -256,7 +256,9 @@ use crate::ai::blocklist::inline_action::code_diff_view::{CodeDiffView, FileDiff
 use crate::ai::blocklist::model::{
     AIBlockModel, AIBlockModelHelper, AIBlockModelImpl, AIBlockOutputStatus,
 };
-use crate::ai::blocklist::orchestration_topology::OrchestrationNavigationDirection;
+use crate::ai::blocklist::orchestration_topology::{
+    is_in_orchestration_subtree, OrchestrationNavigationDirection,
+};
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
 use crate::ai::blocklist::summarization_cancel_dialog::SummarizationCancelDialog;
@@ -3664,15 +3666,47 @@ impl TerminalView {
                         | AgentConversationsModelEvent::ConversationArtifactsUpdated { .. }
                 );
                 // Only refresh panel if it's currently open (avoids unnecessary work)
-                if should_refresh_details_panel
-                    && me.is_conversation_details_panel_open
-                    && me
+                if should_refresh_details_panel && me.is_conversation_details_panel_open {
+                    let is_ambient = me
                         .ambient_agent_view_model
                         .as_ref()
-                        .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
-                {
-                    me.fetch_and_update_conversation_details_panel(ctx);
-                    ctx.notify();
+                        .is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
+                    // Non-ambient panes refresh when an artifact update lands in
+                    // the active conversation's orchestration subtree, or when
+                    // task data changes while the active conversation has
+                    // children (remote children report artifacts on their run
+                    // records, which arrive via task updates).
+                    let is_subtree_artifact_update = match event {
+                        AgentConversationsModelEvent::ConversationArtifactsUpdated {
+                            conversation_id,
+                        } => {
+                            let history = BlocklistAIHistoryModel::as_ref(ctx);
+                            history
+                                .active_conversation(me.view_id)
+                                .is_some_and(|active| {
+                                    is_in_orchestration_subtree(
+                                        history,
+                                        active.id(),
+                                        *conversation_id,
+                                    )
+                                })
+                        }
+                        AgentConversationsModelEvent::NewTasksReceived
+                        | AgentConversationsModelEvent::TasksUpdated => {
+                            let history = BlocklistAIHistoryModel::as_ref(ctx);
+                            history
+                                .active_conversation(me.view_id)
+                                .is_some_and(|active| {
+                                    !history.child_conversation_ids_of(&active.id()).is_empty()
+                                })
+                        }
+                        AgentConversationsModelEvent::ConversationsLoaded
+                        | AgentConversationsModelEvent::ConversationUpdated { .. } => false,
+                    };
+                    if is_ambient || is_subtree_artifact_update {
+                        me.fetch_and_update_conversation_details_panel(ctx);
+                        ctx.notify();
+                    }
                 }
             },
         );

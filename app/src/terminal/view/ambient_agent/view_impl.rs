@@ -963,7 +963,11 @@ impl TerminalView {
             let conversations_handle =
                 crate::ai::agent_conversations_model::AgentConversationsModel::handle(ctx);
             let task = conversations_handle.update(ctx, |model, ctx| {
-                model.get_or_async_fetch_task_data(&task_id, ctx)
+                let task = model.get_or_async_fetch_task_data(&task_id, ctx);
+                // Backfill missing child runs so the panel can aggregate their
+                // artifacts; at most one request per parent run per session.
+                model.ensure_child_tasks_loaded(&task_id, ctx);
+                task
             });
 
             let data = task
@@ -985,6 +989,24 @@ impl TerminalView {
         // No backing cloud task — populate from the active local conversation, if any.
         let view_id = self.id();
         let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let Some(active_conversation_id) = history_model
+            .as_ref(ctx)
+            .active_conversation(view_id)
+            .map(|conversation| conversation.id())
+        else {
+            return;
+        };
+
+        // Backfill missing child runs (e.g. remote children of a local
+        // orchestrator) so the panel can aggregate their artifacts; at most
+        // one request per parent run per session.
+        crate::ai::agent_conversations_model::AgentConversationsModel::handle(ctx).update(
+            ctx,
+            |model, ctx| {
+                model.ensure_child_tasks_loaded_for_conversation(active_conversation_id, ctx);
+            },
+        );
+
         let data = history_model
             .as_ref(ctx)
             .active_conversation(view_id)
