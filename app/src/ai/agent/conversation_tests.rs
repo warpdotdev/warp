@@ -53,6 +53,7 @@ fn restored_conversation_with_root_description(description: &str) -> AIConversat
 
 fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: "root-task".to_string(),
         server_message_data: String::new(),
@@ -71,6 +72,7 @@ fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
 
 fn agent_output_message(id: &str, request_id: &str) -> api::Message {
     api::Message {
+        fetched_memories: vec![],
         id: id.to_string(),
         task_id: "root-task".to_string(),
         server_message_data: String::new(),
