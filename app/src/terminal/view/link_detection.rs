@@ -76,24 +76,7 @@ impl GridHighlightedLink {
             #[cfg(feature = "local_fs")]
             GridHighlightedLink::File(_) => "Open file",
             GridHighlightedLink::Url(_) => "Open link",
-            GridHighlightedLink::Hyperlink { uri, .. } => {
-                // Tell the user *why* the click is inert when the scheme
-                // fails the OSC 8 allow-list (product invariant 16) or the
-                // URI is unparseable. The hover/copy still work; this
-                // tooltip just explains the open-path rejection.
-                use super::link_security::{
-                    check_open_scheme, LinkSource, SchemeCheck, SchemeRejectReason,
-                };
-                match check_open_scheme(uri, LinkSource::OscHyperlink) {
-                    SchemeCheck::Allowed => "Open link",
-                    SchemeCheck::Rejected {
-                        reason: SchemeRejectReason::Unparseable,
-                    } => "Cannot open: URI is malformed",
-                    SchemeCheck::Rejected {
-                        reason: SchemeRejectReason::DisallowedScheme { .. },
-                    } => "Cannot open: scheme not allowed",
-                }
-            }
+            GridHighlightedLink::Hyperlink { .. } => "Open link",
         }
     }
 }
@@ -457,32 +440,10 @@ impl super::TerminalView {
                     .model
                     .lock()
                     .link_at_range(url, RespectObfuscatedSecrets::No);
-                // Route the auto-detected URL flow through the centralized
-                // scheme allow-list (Layer 5a). Today this gate is a no-op
-                // on the happy path because urlocator only emits schemes in
-                // AUTO_DETECTED_ALLOWED_SCHEMES, but it closes the gap if
-                // any other code path stuffs a URI into this open path.
-                if matches!(
-                    super::link_security::check_open_scheme(
-                        &uri,
-                        super::link_security::LinkSource::AutoDetected,
-                    ),
-                    super::link_security::SchemeCheck::Allowed
-                ) {
-                    ctx.open_url(&uri);
-                }
+                ctx.open_url(&uri);
             }
             GridHighlightedLink::Hyperlink { uri, .. } => {
-                // OSC 8 strict allow-list. See product invariant 16.
-                if matches!(
-                    super::link_security::check_open_scheme(
-                        uri,
-                        super::link_security::LinkSource::OscHyperlink,
-                    ),
-                    super::link_security::SchemeCheck::Allowed
-                ) {
-                    ctx.open_url(uri);
-                }
+                ctx.open_url(uri);
             }
         };
     }

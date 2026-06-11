@@ -1384,7 +1384,6 @@ impl SingleBlock {
                 &model.image_id_to_metadata,
                 None,
                 false, // hide_cursor_cell
-                "", // share_block_modal renders read-only previews; no need for OSC 8 position caching.
                 ctx,
                 app,
             );
@@ -1442,7 +1441,6 @@ impl SingleBlock {
                 &model.image_id_to_metadata,
                 None,
                 false, // hide_cursor_cell
-                "", // share_block_modal renders read-only previews; no need for OSC 8 position caching.
                 ctx,
                 app,
             );

@@ -29,7 +29,7 @@ A WIP foundation (`Hyperlink` type + parser + Handler hook + OSC 8 dispatch arm 
 
 ## Proposed changes
 
-The implementation is broken into the layers below, listed bottom-up. Each layer can be merged independently behind the `OscHyperlinks` feature flag described in (6); the ordering in **Parallelization** below maps each layer to its dependencies. Layer 5a (scheme allow-list) is independent of the rest and intentionally lands first as a hardening of the existing URL click path.
+The implementation is broken into the layers below, listed bottom-up. Each layer can be merged independently behind the `OscHyperlinks` feature flag described in (6); the ordering in **Parallelization** below maps each layer to its dependencies.
 
 ### 1. ANSI types — `crates/warp_terminal/src/model/ansi/control_sequence_parameters.rs`
 
@@ -204,114 +204,19 @@ The existing `Link` (`grid_handler.rs:143`) is a single `RangeInclusive<Point>` 
 
 - Extend `GridHighlightedLink` with a third variant: `Hyperlink(WithinModel<Link>, String /* uri */)`. The variant carries the URI directly because, unlike `Url`, it is not recoverable from the cell text.
 - In the hover state machine (lines 299-339), call `model.hyperlink_at_point(position)` first; if it returns `Some`, set `GridHighlightedLink::Hyperlink(...)`. Only fall through to `url_at_point` (and the file-path scanner) when no OSC 8 span is found at that point — this implements product invariant 9 (OSC 8 wins over auto-detected URL on the same cell).
-- In the click handler (lines 391-395), add the `Hyperlink` arm: pass the URI through the centralized scheme validator (5a) before any open call; if it fails, the click is a no-op and the hover tooltip surfaces the rejection reason. Same telemetry path (`TelemetryEvent::OpenLink`).
-- Tooltip text: `GridHighlightedLink::tooltip_text` (line 63) returns "Open link" for the new variant; for a hyperlink whose scheme fails the allow-list, the tooltip text is "Scheme not allowed: <scheme>" so the user understands why the click is inert.
+- In the click handler (lines 391-395), add the `Hyperlink` arm: open the URI via `ctx.open_url` (the same path the auto-detected `Url` arm uses). Same telemetry path (`TelemetryEvent::OpenLink`). URIs are not gated by a scheme allow-list (product invariant 16); `file://` works and is opened like any other scheme.
+- Tooltip text: `GridHighlightedLink::tooltip_text` (line 63) returns "Open link" for the new variant.
 
 `app/src/terminal/view.rs`:
 
-- The `OpenGridLink(link)` action (line 24786) gets a new arm for `Hyperlink` that calls the validated open helper from (5a).
-- The right-click context menu wiring around line 15040 gets a `GridHighlightedLink::Hyperlink` branch with "Open link" / "Copy link" items. "Open link" routes through (5a). "Copy link" copies the URI to the clipboard verbatim regardless of scheme — copying is not navigating, so the allow-list does not gate it.
-
-### 5a. Centralized scheme allow-list (security)
-
-Terminal output is untrusted, OSC 8 carries arbitrary URIs, and `ctx.open_url` is a thin wrapper that hands the string to the platform — it is **not** itself a validator. We add a single chokepoint that every open path must call. The validator takes the URI as a `&str` (not a parsed `Url`) so it never forces the caller to throw away a URI that happens to be unparseable — that matters for hover/copy on malformed input (product invariant 15) — and is parameterized by `LinkSource` so OSC 8 can be conservative without regressing the existing auto-detected URL behavior (product invariant 18).
-
-```rust
-// New module: app/src/terminal/view/link_security.rs
-
-/// What pipeline produced the URI we're about to open. Determines
-/// which allow-list applies. See product invariant 16.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum LinkSource {
-    /// URI was emitted by the program via OSC 8. URI is decoupled
-    /// from visible text and entirely attacker-controlled.
-    OscHyperlink,
-    /// URI was extracted from the visible cell text by the existing
-    /// urlocator-based scanner. The user could already see and copy
-    /// it by hand.
-    AutoDetected,
-}
-
-pub enum SchemeCheck {
-    Allowed,
-    Rejected { reason: SchemeRejectReason },
-}
-
-pub enum SchemeRejectReason {
-    Unparseable,
-    DisallowedScheme { scheme: String },
-}
-
-/// Returns Allowed iff the URI parses as a URL whose scheme is in the
-/// allow-list for `source`. Called by every code path that opens a
-/// URI coming from terminal output.
-pub fn check_open_scheme(uri: &str, source: LinkSource) -> SchemeCheck;
-
-/// Convenience: validate then call ctx.open_url. Returns SchemeCheck
-/// so the caller can pick a tooltip and decide whether to fire
-/// OpenLink telemetry.
-pub fn open_validated(
-    ctx: &mut impl AppContextLike,
-    uri: &str,
-    source: LinkSource,
-) -> SchemeCheck;
-```
-
-**Allow-lists, both compile-time `const &[&str]`** so the boundary is auditable. Product invariant 16 is the source of truth.
-
-```rust
-const OSC8_ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
-
-// Mirrors what `urlocator` (the existing auto-detect scanner) emits today.
-// We codify it as a `const` rather than asking the validator to ask
-// urlocator at runtime — `LinkSource::AutoDetected` URIs always pass through
-// urlocator first, so any scheme that reaches `check_open_scheme` from this
-// source is already in this set. Locking it down as a `const` lets us
-// detect drift if urlocator (or our use of it) ever expands what it emits.
-const AUTO_DETECTED_ALLOWED_SCHEMES: &[&str] =
-    &["http", "https", "ftp", "ftps", "file", "git", "ssh", "mailto", "news", "gopher"];
-```
-
-**Why two lists, not one.**
-- *OSC 8* is attacker-chosen output that the user has not yet seen written out as a URL — it could be hidden behind any visible text. Conservative by default.
-- *Auto-detected* extracts URIs that already exist as visible text in the block; the user could highlight and copy them by hand. Tightening that path beyond what `urlocator` already produces would be a regression on invariant 18 (notably, `file:` and `ssh:` links from `git status` / `ls -F` output). That regression risk is not introduced by this PR and shouldn't be silently fixed by it; the discussion of whether to drop `file:` from auto-detect is a separate spec.
-
-**Migration / rollout.**
-- The auto-detected URL flow gains validation in this PR. Because `AUTO_DETECTED_ALLOWED_SCHEMES` mirrors what urlocator emits today, validation is a no-op on the happy path; what it *does* prevent is bypass attacks where a URI sourced from another path (e.g. a custom rich-content link) is fed into the auto-detected open path with an unexpected scheme.
-- Telemetry: emit `LinkRejectedScheme { source, scheme }` on every `Rejected` outcome. We expect ≈0 `AutoDetected` rejections post-rollout. Any non-zero count flags drift between `AUTO_DETECTED_ALLOWED_SCHEMES` and what urlocator now emits — both lists must change in lockstep.
-- If urlocator ever expands its detected schemes (or we adopt a different scanner), `AUTO_DETECTED_ALLOWED_SCHEMES` is the one place that must change to preserve invariant 18.
-- No data migration is needed because both lists are compile-time only.
-
-**Hover, copy, and click semantics for malformed/disallowed URIs** (product invariant 15):
-- The hyperlink span on the cells is unaffected by validity: hover always works, the tooltip always shows the literal URI, and right-click "Copy link" always copies the literal URI to the clipboard regardless of `SchemeCheck`. Validation only gates *opening* the URI.
-- Click ("Open link") paths call `open_validated` and switch on the result:
-  - `Allowed` → URI was opened; tooltip is "Open link".
-  - `Rejected { Unparseable }` → click was a no-op; tooltip is "Cannot open: URI is malformed".
-  - `Rejected { DisallowedScheme { scheme } }` → click was a no-op; tooltip is "Scheme not allowed: <scheme>".
-
-Required call sites (each one becomes a "must call `open_validated` / `check_open_scheme`" bullet in code review):
-
-- `app/src/terminal/view/link_detection.rs:391` — auto-detected URL click. **Today this calls `ctx.open_url` directly with no validation; this PR closes that gap as well**, so OSC 8 and auto-detected URLs share the same security boundary.
-- New `Hyperlink` arm in the click handler.
-- The `OpenGridLink` action arm at `app/src/terminal/view.rs:24786`.
-- The right-click "Open link" menu arm.
-- Any future code path that opens a URL that originated in terminal output. Lint rule (custom clippy or grep-based presubmit check) flags raw `ctx.open_url` calls inside `app/src/terminal/view/`; existing call sites that open *Warp-internal* URLs (settings deep links, docs URLs) are explicitly allow-listed in the lint.
-
-Tests live in `link_security_tests.rs`:
-- `http://x`, `https://x`, `mailto:a@b`, `ftp://x` → `Allowed`.
-- `javascript:alert(1)`, `data:text/html,…`, `file:///etc/passwd`, `vbscript:`, `about:blank`, empty scheme → `Rejected { DisallowedScheme }`.
-- Mixed-case (`HTTP://`, `JavaScript:`) is canonicalized — case-insensitive scheme match.
-- Garbage strings (`"hello world"`, `""`, `"://"`) → `Rejected { Unparseable }`.
-- A click test for OSC 8 with `javascript:alert(1)` confirms `ctx.open_url` is **never** called and the tooltip shows the rejection reason.
-- A hover test for an unparseable URI confirms the tooltip still shows the literal URI and "Copy link" still copies it.
+- The `OpenGridLink(link)` action (line 24786) gets a new arm for `Hyperlink` that calls `ctx.open_url`.
+- The right-click context menu wiring around line 15040 gets a `GridHighlightedLink::Hyperlink` branch with "Open link" / "Copy link" items. "Open link" dispatches `OpenGridLink`. "Copy link" copies the URI to the clipboard verbatim.
 
 ### 6. Feature flag
 
 `FeatureFlag::OscHyperlinks` (added per `WARP.md`'s feature-flag guide, defaulted on for dogfood) gates **OSC 8 specific** behavior only: when off, `osc_dispatch`'s `b"8"` arm calls `unhandled(params)` and the rest of layers (3)–(5)/(6a)/(7) never sees an OSC 8 hyperlink.
 
-Layer (5a) — the scheme allow-list — is **deliberately not** gated by this flag. Validation is a hardening change to the existing auto-detected URL click path that benefits users regardless of OSC 8. Disabling `OscHyperlinks` must not regress security on the URL flow. The flag's compile-time wiring is restricted to the `b"8"` arm and the layer (5) `Hyperlink` variant of `GridHighlightedLink`; layer (5a) lives outside the flag and is on for everyone the moment its layer ships.
-
-This split lets each layer land independently and lets the team revert OSC 8 in one place if a regression appears, without losing the hardening of the auto-detected URL flow.
+The flag's compile-time wiring is restricted to the `b"8"` arm and the layer (5) `Hyperlink` variant of `GridHighlightedLink`. This lets the team revert OSC 8 in one place if a regression appears.
 
 ### 6a. Session persistence (Warp Drive, history, shared sessions)
 
@@ -364,11 +269,11 @@ The protocol's serialization (whichever framing — protobuf, MessagePack, JSON-
 
 This subsumes the earlier "session persistence" follow-up; it is no longer deferred.
 
-### 7. Sharing, copy-as-markdown, and AI context
+### 7. AI context
 
-- **Markdown sharing** (product invariant 13, first sentence). The block→markdown serializer (search for `to_markdown` / shared-session export) emits `[visible text](URI)` for spans that carry a `HyperlinkId`.
-- **Copy block as terminal bytes** (product invariant 13, second sentence). The byte serializer emits a *semantically equivalent* OSC 8 sequence around each span: `ESC ] 8 ; ; <uri> ESC \` … visible bytes … `ESC ] 8 ; ; ESC \`. We **do not** preserve the original OSC bytes — only the URI is round-tripped, params are normalized to empty, and the terminator is normalized to `ESC \`. This is deliberate: the registry stores normalized `Hyperlink { id, uri }`, not raw bytes, so byte-exact round-tripping would require carrying the original OSC bytes per cell. The cost (per-cell byte arrays) outweighs the benefit (only programs that round-trip Warp output through another OSC-8-aware terminal would notice the difference, and the receiving terminal renders the same clickable link either way). Product invariant 13 is updated to reflect this.
 - **AI context** (invariant 14). The block→agent context formatter inlines `visible text (URI)` for hyperlinked spans so an agent reading wizcli output sees the URI without losing the visible label.
+
+Dedicated "copy as markdown" and "copy as terminal bytes" export actions are out of scope for this iteration (product invariant 13).
 
 ## End-to-end flow
 
@@ -380,7 +285,6 @@ sequenceDiagram
     participant Registry as HyperlinkRegistry
     participant Storage as FlatStorage / Cell+Row
     participant View as TerminalView
-    participant Validator as link_security
     participant Browser
 
     PTY->>Processor: ESC ] 8 ; id=foo ; https://x ESC \ "Click me" ESC ] 8 ; ; ESC \
@@ -401,15 +305,7 @@ sequenceDiagram
     View->>View: cursor=PointingHand, tooltip="Open link" + uri
 
     Note over View: User Cmd-clicks
-    View->>Validator: open_validated(ctx, "https://x", LinkSource::OscHyperlink)
-    Validator->>Validator: parse + scheme allow-list check
-    alt Allowed
-        Validator->>Browser: ctx.open_url("https://x")
-        Validator-->>View: SchemeCheck::Allowed
-    else Rejected (Unparseable / DisallowedScheme)
-        Validator-->>View: SchemeCheck::Rejected{...}
-        View->>View: tooltip explains why click is inert
-    end
+    View->>Browser: ctx.open_url("https://x")
 ```
 
 ## Testing and validation
@@ -439,14 +335,11 @@ Each numbered item below maps to a product invariant from `product.md`.
 
 **Integration tests** (`crates/integration/`, following the patterns in the `warp-integration-test` skill).
 - **`osc8_open_close.rs`** — pipe an OSC 8 open + visible text + close to a fake PTY, assert the cells carry a hyperlink, hover one, observe `PointingHand` cursor and tooltip showing the URI → invariants 1, 5, 17.
-- **`osc8_cmd_click_opens_url.rs`** — same setup, simulate Cmd+click on a hyperlinked cell, assert `ctx.open_url` was called with the URI (via the validated path) and that telemetry fired; simulate plain click and assert it was *not* called → invariants 6, 7.
 - **`osc8_implicit_close_at_block_boundary.rs`** — open a hyperlink before a `precmd` / new prompt, assert the next block's cells do not carry the hyperlink → invariant 10.
-- **`osc8_soft_wrap_keeps_one_span.rs`** — open a hyperlink whose visible text crosses a soft wrap; assert hover on either wrapped row highlights the full contiguous span and a single Cmd+click anywhere on the span opens the URI → invariants 5, 10. (Replaces the dropped non-contiguous `id` grouping test, which is moved to Follow-ups.)
-- **`osc8_copy_text_vs_link.rs`** — select across a hyperlink and copy: clipboard contains visible text. Right-click → "Copy link": clipboard contains the URI → invariant 8.
-- **`osc8_share_as_markdown.rs`** — share/copy-as-markdown produces `[visible](uri)` → invariant 13.
-- **`osc8_disallowed_scheme_inert.rs`** — an OSC 8 span with `javascript:` URI does not navigate on click; tooltip shows "Scheme not allowed: javascript". Right-click → "Copy link" still copies the literal URI → invariants 15, 16.
-- **`osc8_unparseable_uri_inert.rs`** — an OSC 8 span with a URI that fails URL parsing (e.g. `not a url`) is hoverable, copyable, and inert on click; tooltip shows "Cannot open: URI is malformed" → invariant 15.
-- **`osc8_no_regression_on_url_autodetect.rs`** — output without OSC 8 still hyperlinks via auto-detection, and the auto-detected click also goes through `open_validated` (regression test for layer 5a) → invariant 18.
+- **`osc8_copy_text_vs_link.rs`** — select across a hyperlink and copy: clipboard contains visible text (no OSC 8 escape bytes) → invariant 8.
+- **`osc8_no_regression_on_url_autodetect.rs`** — output without OSC 8 still hyperlinks via auto-detection → invariant 18.
+
+Cmd+click → `open_url` coverage previously relied on a per-cell position cache stamped during grid rendering; that cache was removed (too risky for the render hot path), so synthetic-click integration tests are not included. Click behavior needs a different test mechanism (follow-up).
 
 **Manual verification (recorded in PR description with a short clip).**
 - Run `printf '\e]8;;https://warp.dev\e\\Open Warp\e]8;;\e\\\n'` in a Warp block; hover, observe pointer; Cmd+click, observe browser open.
@@ -458,7 +351,6 @@ Each numbered item below maps to a product invariant from `product.md`.
 
 - **Memory / DoS from the registry.** Designed in, not deferred — see "Bounded registry, no reclamation" in (3). The cap (4096 distinct entries × 4096-byte max URI ≈ 16 MB worst-case per block) plus the bounded URI byte length plus the registry's grid-scoped lifetime put a hard ceiling on the working set. Adopting no-reclaim avoids a class of refcount/use-after-free bugs across cell overwrite, RLE split/merge, scrollback eviction, reflow, and deserialization.
 - **Cell-size budget.** `cell.rs:122` is explicit that growing `Cell` past 24 bytes is a 33% memory hit. The `HyperlinkId` lives in `CellExtra` exactly to avoid this; the only `Cell`-shaped change is to `CellExtra`'s box, which is already optional and pays only when present.
-- **Security: `javascript:` / `data:` / unexpected schemes.** Centralized in (5a) — every code path that can be reached from terminal output goes through `check_open_scheme` / `open_validated` before any platform open call. The plan also closes the same gap for the existing auto-detected URL flow.
 - **URIs containing `;` are addressed in the parser contract,** not as a deferred mitigation. See §1: the URI field is the `b";"`-rejoin of all `params[1..]` slice elements, and a `uri_with_semicolons_is_rejoined` unit test is required.
 - **Existing handler implementors not overriding `set_hyperlink`.** Default no-op means OSC 8 is silently dropped on those surfaces (e.g. `EarlyOutputHandler`). Acceptable: those surfaces don't render clickable output today either. They can be wired later without a behavior change for users.
 - **Persistence compatibility, three formats, three different stories.** sqlite history and Warp Drive round-trip OSC 8 transparently because the format is already the raw ANSI byte stream — no schema or protocol change. Session-sharing is event-streamed and gains a new `SetHyperlink` event; old clients must skip unknown events (audited per-framing in §6a-iii) and a CI matrix locks in both directions of the compat. If skip-unknown turns out to be unavailable, the fallback is a client-capability negotiation that downgrades when paired with a pre-PR client.
@@ -470,15 +362,14 @@ Each numbered item below maps to a product invariant from `product.md`.
 - Layer (3a) and (3b) can run in parallel after (1). (3c) depends on (2) and the chosen (3a/3b) for the surface it covers.
 - Layer (4) depends on (3).
 - Layer (5) depends on (4).
-- Layer (5a) — scheme allow-list — depends on nothing else and can land first as a hardening change to the existing auto-detected URL click path. Doing it first means (5)'s `Hyperlink` arm has the validator already in place.
 - Layer (6a) — session persistence — depends on (3) (the on-cell field shape) and on the session-sharing protocol crate. Independent of (4)/(5).
-- Layer (7) (sharing, AI context) depends on (3) but is otherwise independent of (4)/(5)/(6a).
+- Layer (7) (AI context) depends on (3) but is otherwise independent of (4)/(5)/(6a).
 
-The natural agent split is: one agent on (5a) (lands independently, no dependency on the rest); one on (1)+(2)+parser tests; one on (3a); one on (3b); then one each on (4), (5), (6a), (7).
+The natural agent split is: one on (1)+(2)+parser tests; one on (3a); one on (3b); then one each on (4), (5), (6a), (7).
 
 ## Follow-ups
 
 - **Cross-run id grouping.** Treating two non-contiguous OSC 8 emissions with the same `id` as one logical link span. Requires a multi-range link type (something like `HyperlinkSpan { id: HyperlinkId, ranges: Vec<RangeInclusive<Point>> }`) and a generalization of `GridHighlightedLink` and the hover/click code to operate on a set of ranges. Deferred because (a) the common case is a single contiguous span, (b) Warp's existing `Link` and the highlighted-link UI assume one contiguous range, and (c) the user-facing benefit is small relative to the breadth of code that would change.
 - **Underline-on-hover styling** for OSC 8 spans. Today the spec defers to existing SGR styling. Once the hover state is wired, an additional `Flags::HYPERLINK_HOVER` flag plus a small render change is a clean follow-on.
-- **Byte-exact OSC 8 round-trip on copy.** Today the byte-copy path emits a normalized OSC 8 wrapper (see (7)). If we later decide preserving original bytes (params, terminator choice, custom keys) matters, we'd add a per-span byte buffer to the registry. Out of scope for v1.
+- **Copy as markdown / terminal bytes.** Dedicated export actions — "copy as markdown" (`[visible](uri)`) and "copy as terminal bytes" (re-emitting normalized OSC 8 wrappers) — are out of scope for this iteration (product invariant 13).
 - **Outgoing OSC 8.** Emitting hyperlinks from Warp's own UI when piping output through the terminal is out of scope for this issue.

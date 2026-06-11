@@ -2219,12 +2219,6 @@ impl Block {
             .contents_to_string_force_full_grid_contents(false, None)
     }
 
-    /// Block output as GitHub-flavored markdown with OSC 8 hyperlinks
-    /// rendered as `[visible](URI)`. See `BlockGrid::contents_to_markdown_string`.
-    pub fn output_to_markdown_string(&self) -> String {
-        self.output_grid().contents_to_markdown_string()
-    }
-
     pub fn output_with_secrets_unobfuscated(&self) -> String {
         self.output_grid()
             .contents_to_string_with_secrets_unobfuscated(false, None)

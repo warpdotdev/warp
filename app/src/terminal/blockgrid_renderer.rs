@@ -62,7 +62,6 @@ impl BlockGrid {
         block_grid_params: &BlockGridParams,
         visible_cursor_shape: Option<CursorShape>,
         image_metadata: &HashMap<u32, StoredImageMetadata>,
-        osc8_cache_scope: &str,
         ctx: &mut PaintContext,
         app: &AppContext,
     ) {
@@ -120,7 +119,6 @@ impl BlockGrid {
             image_metadata,
             None,
             block_grid_params.grid_render_params.hide_cursor_cell,
-            osc8_cache_scope,
             ctx,
             app,
         );
@@ -149,7 +147,6 @@ impl BlockGrid {
             block_grid_params,
             None,
             &HashMap::new(),
-            "", // No OSC 8 position caching needed for default-params draws.
             ctx,
             app,
         )
