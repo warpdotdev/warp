@@ -24,7 +24,7 @@ use crate::ai::blocklist::{
     BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
 };
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::GitRepoStatusModel;
+use crate::code_review::git_repo_model::GitRepoStatusModel;
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::terminal::color::{self, Colors};
@@ -66,8 +66,10 @@ fn repository_context_reads_github_repo_model() {
                 )
                 .unwrap()
         });
-        let git_status = app.add_model(move |_| GitRepoStatusModel::new_for_test(repository, None));
-        let github_repo_model = app.add_model(move |_| GitHubRepoModel::new_for_test(git_status));
+        let git_status =
+            app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+        let github_repo_model =
+            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx));
 
         github_repo_model.update(&mut app, |model, ctx| {
             model.set_repository_info_for_test(
@@ -248,8 +250,10 @@ fn pull_request_context_reads_github_repo_model() {
                 )
                 .unwrap()
         });
-        let git_status = app.add_model(move |_| GitRepoStatusModel::new_for_test(repository, None));
-        let github_repo_model = app.add_model(move |_| GitHubRepoModel::new_for_test(git_status));
+        let git_status =
+            app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+        let github_repo_model =
+            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx));
 
         github_repo_model.update(&mut app, |model, ctx| {
             model.set_pr_info_for_test(

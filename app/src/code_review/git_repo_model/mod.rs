@@ -1,0 +1,124 @@
+use warpui::Entity;
+#[cfg(feature = "local_fs")]
+use warpui::{AppContext, ModelContext, ModelHandle};
+
+#[cfg(feature = "local_fs")]
+mod local;
+#[cfg(feature = "local_fs")]
+pub use local::LocalGitRepoStatusModel;
+
+#[cfg(feature = "local_fs")]
+use super::diff_state::DiffStats;
+pub use super::git_repo_models::GitRepoModels;
+
+/// Public metadata exposed to consumers — the subset of diff metadata
+/// that the git chip (prompt display, agent view footer) needs.
+#[cfg(feature = "local_fs")]
+#[derive(Debug, Clone)]
+pub struct GitStatusMetadata {
+    pub current_branch_name: String,
+    pub main_branch_name: String,
+    pub stats_against_head: DiffStats,
+}
+
+// ── GitRepoStatusModel ──────────────────────────────────────────────────────
+
+#[cfg(feature = "local_fs")]
+#[derive(Debug)]
+pub enum GitRepoStatusEvent {
+    /// Emitted whenever the metadata changes (branch name, diff stats, etc.).
+    MetadataChanged,
+}
+
+// ── Unified GitRepoStatusModel (local backend) ──────────────────────────────
+
+/// Unified per-repo git status model. Today it only wraps a local
+/// watcher-backed backend, but it exists as an enum so a remote backend can be
+/// added without changing consumers.
+///
+/// Consumers (prompt chips, tabs, code review, agent context) hold a
+/// `ModelHandle<GitRepoStatusModel>` and subscribe to its [`GitRepoStatusEvent`]s
+/// without caring about the backend.
+#[cfg(feature = "local_fs")]
+pub enum GitRepoStatusModel {
+    Local(ModelHandle<LocalGitRepoStatusModel>),
+}
+
+#[cfg(feature = "local_fs")]
+impl Entity for GitRepoStatusModel {
+    type Event = GitRepoStatusEvent;
+}
+
+#[cfg(feature = "local_fs")]
+impl GitRepoStatusModel {
+    /// Re-emit a sub-model event so subscribers of the unified model observe
+    /// the same `GitRepoStatusEvent`s regardless of backend.
+    fn forward_event(&mut self, event: &GitRepoStatusEvent, ctx: &mut ModelContext<Self>) {
+        match event {
+            GitRepoStatusEvent::MetadataChanged => ctx.emit(GitRepoStatusEvent::MetadataChanged),
+        }
+    }
+
+    /// Mode-independent status metadata (branch names + HEAD diff stats).
+    pub fn metadata<'a>(&self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
+        match self {
+            Self::Local(m) => m.as_ref(ctx).metadata(),
+        }
+    }
+
+    /// Force a metadata refresh (branch names, diff stats).
+    pub fn refresh_metadata(&self, ctx: &mut ModelContext<Self>) {
+        match self {
+            Self::Local(m) => m.update(ctx, |m, ctx| m.refresh_metadata(ctx)),
+        }
+    }
+}
+
+// ── Non-local_fs stub ───────────────────────────────────────────────────────
+
+#[cfg(not(feature = "local_fs"))]
+#[allow(dead_code)]
+pub struct GitRepoStatusModel;
+
+#[cfg(not(feature = "local_fs"))]
+impl Entity for GitRepoStatusModel {
+    type Event = ();
+}
+
+#[cfg(feature = "local_fs")]
+pub(super) fn new_local_git_repo_status_model(
+    repo_path: std::path::PathBuf,
+    repository_model: ModelHandle<repo_metadata::Repository>,
+    ctx: &mut ModelContext<GitRepoModels>,
+) -> ModelHandle<GitRepoStatusModel> {
+    let inner = ctx.add_model(|ctx| LocalGitRepoStatusModel::new(repo_path, repository_model, ctx));
+    ctx.add_model(|ctx| {
+        ctx.subscribe_to_model(&inner, GitRepoStatusModel::forward_event);
+        GitRepoStatusModel::Local(inner)
+    })
+}
+
+#[cfg(all(test, feature = "local_fs"))]
+impl GitRepoStatusModel {
+    /// Wraps a local-backend test model in the unified enum.
+    pub(crate) fn new_local_for_test(
+        repository: ModelHandle<repo_metadata::Repository>,
+        metadata: Option<GitStatusMetadata>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        let inner =
+            ctx.add_model(move |_| LocalGitRepoStatusModel::new_for_test(repository, metadata));
+        ctx.subscribe_to_model(&inner, Self::forward_event);
+        Self::Local(inner)
+    }
+
+    pub(crate) fn set_metadata_for_test(
+        &mut self,
+        metadata: Option<GitStatusMetadata>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self {
+            Self::Local(m) => m.update(ctx, |m, ctx| m.set_metadata_for_test(metadata, ctx)),
+        }
+    }
+}

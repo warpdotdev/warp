@@ -1624,8 +1624,8 @@ pub(crate) fn initialize_app(
     }
 
     {
-        use code_review::git_status_update::GitStatusUpdateModel;
-        ctx.add_singleton_model(|_| GitStatusUpdateModel::new());
+        use code_review::git_repo_model::GitRepoModels;
+        ctx.add_singleton_model(|_| GitRepoModels::new());
     }
 
     ctx.add_singleton_model(|ctx| {

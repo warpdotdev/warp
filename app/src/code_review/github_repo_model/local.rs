@@ -5,7 +5,8 @@ use settings::Setting as _;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::git_status_update::{GitRepoStatusEvent, GitRepoStatusModel};
+use super::GitHubRepoEvent;
+use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
 use crate::report_if_error;
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
@@ -18,6 +19,7 @@ use crate::util::git::{
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 const GITHUB_INFO_PERIODIC_REFRESH: Duration = Duration::from_secs(60);
 const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Per-repository model that owns the GitHub-sourced metadata lifecycle for a
 /// single repo — the values fetched through the (relatively expensive) `gh`
 /// CLI rather than local `git`:
@@ -25,7 +27,7 @@ const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 ///   - `repository_info` (name/owner) for the repo (`gh repo view`).
 ///
 /// `GitHubRepoModel` is created lazily when a consumer asks for it via
-/// [`super::git_status_update::GitStatusUpdateModel::subscribe_github_repo`].
+/// [`crate::code_review::git_repo_model::GitRepoModels::subscribe_github_repo`].
 /// While at least one strong `ModelHandle<GitHubRepoModel>` is alive, the model:
 ///   - tracks the current branch by subscribing to its sibling
 ///     [`GitRepoStatusModel`] for `MetadataChanged` events,
@@ -41,9 +43,9 @@ const REPOSITORY_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// When the last strong handle is dropped, the model is torn down and any
 /// in-flight `gh` fetch is aborted. The sibling [`GitRepoStatusModel`] is
-/// retained via a strong handle, so creating a `GitHubRepoModel` keeps git
+/// retained via a strong handle, so creating a `LocalGitHubRepoModel` keeps git
 /// status alive for as long as GitHub info is needed.
-pub struct GitHubRepoModel {
+pub struct LocalGitHubRepoModel {
     repo_path: PathBuf,
     /// Strong handle to the sibling git-status model. Keeps it alive so we
     /// always have a branch source.
@@ -69,20 +71,11 @@ pub struct GitHubRepoModel {
     periodic_refresh_handle: Option<SpawnedFutureHandle>,
 }
 
-#[derive(Debug)]
-pub enum GitHubRepoEvent {
-    /// Emitted when `pr_info` changes value (fetch result differs from
-    /// cached, branch change cleared the cache, etc.).
-    PrInfoChanged,
-    /// Emitted when `repository_info` changes value.
-    RepositoryInfoChanged,
-}
-
-impl Entity for GitHubRepoModel {
+impl Entity for LocalGitHubRepoModel {
     type Event = GitHubRepoEvent;
 }
 
-impl GitHubRepoModel {
+impl LocalGitHubRepoModel {
     /// Create a new per-repo GitHub-info model.
     ///
     /// Subscribes to `git_status` for `MetadataChanged` events to track the
@@ -98,7 +91,7 @@ impl GitHubRepoModel {
     ) -> Self {
         let branch = git_status
             .as_ref(ctx)
-            .metadata()
+            .metadata(ctx)
             .map(|m| m.current_branch_name.clone());
 
         // Track branch changes from the sibling. Only PR info depends on the
@@ -108,7 +101,7 @@ impl GitHubRepoModel {
                 let new_branch = me
                     .git_status
                     .as_ref(ctx)
-                    .metadata()
+                    .metadata(ctx)
                     .map(|m| m.current_branch_name.clone());
                 if new_branch != me.branch {
                     me.branch = new_branch;
@@ -179,8 +172,8 @@ impl GitHubRepoModel {
     }
 
     /// Manually trigger a PR-info refresh. Called after `gh`/`gt` commands
-    /// complete, since those don't touch `.git/` and so won't be picked up by
-    /// the filesystem watcher.
+    /// complete, since those don't touch `.git/` so the filesystem watcher won't
+    /// catch them.
     pub fn refresh_pr_info(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(branch) = self.branch.clone() else {
             return;
@@ -227,7 +220,7 @@ impl GitHubRepoModel {
     /// on creation and re-checked by the periodic timer on each tick. Never
     /// called from the branch-change path, so switching branches does not
     /// trigger a `gh repo view`.
-    fn refresh_repository_info(&mut self, ctx: &mut ModelContext<Self>) {
+    pub fn refresh_repository_info(&mut self, ctx: &mut ModelContext<Self>) {
         // Guard against overlapping fetches.
         if self.repository_info_abort_handle.is_some() {
             return;
@@ -341,11 +334,10 @@ impl GitHubRepoModel {
 }
 
 #[cfg(test)]
-impl GitHubRepoModel {
+impl LocalGitHubRepoModel {
     /// Inert constructor: no branch-tracking subscription, timers, or `gh`
     /// fetch, so tests stay deterministic and never spawn a real subprocess.
-    /// Mirrors `GitRepoStatusModel::new_for_test`. Drive state via the
-    /// `set_*_for_test` helpers.
+    /// Drive state via the `set_*_for_test` helpers.
     pub(crate) fn new_for_test(git_status: ModelHandle<GitRepoStatusModel>) -> Self {
         Self {
             repo_path: PathBuf::from("/test"),
@@ -379,10 +371,10 @@ impl GitHubRepoModel {
 }
 
 #[cfg(test)]
-#[path = "github_repo_model_tests.rs"]
+#[path = "local_tests.rs"]
 mod tests;
 
-impl Drop for GitHubRepoModel {
+impl Drop for LocalGitHubRepoModel {
     fn drop(&mut self) {
         if let Some(h) = self.refreshing_pr_info_abort_handle.take() {
             h.abort();
