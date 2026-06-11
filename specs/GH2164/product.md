@@ -82,7 +82,7 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 
 17. The address/search field accepts a typed or pasted `http` or `https` URL and navigates the Browser Pane to that URL.
 
-18. If the address/search field input is not a URL, Browser Pane treats it as a search query and opens a search-results page. V1 uses Google search by default if Warp does not already expose a browser/search-engine setting. Because this sends the raw search query to a third-party provider, the address/search surface or adjacent product copy must make that data flow clear before the user submits a search.
+18. If the address/search field input is not a URL, Browser Pane treats it as a search query and opens a search-results page. Warp does not currently expose a browser/search-engine preference, so v1 uses Google Search as the fixed search provider. Because this sends the raw search query to Google, the address/search surface or adjacent product copy must make that data flow clear before the user submits a search.
 
 19. The toolbar does not include bookmarks, extensions, downloads management, browser profiles, developer tools, automation controls, or an internal tab strip in v1.
 

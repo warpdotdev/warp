@@ -26,6 +26,7 @@ Warp already has the right product surface for this feature: typed panes inside 
 - `app/src/search/command_palette/mixer.rs:18` defines `CommandPaletteItemAction`; URL/search opening from command palette needs either a new action variant or a binding that launches a URL/search prompt.
 - `app/src/search/command_palette/mixer.rs:86` maps `CommandPaletteItemAction` values to `ItemSummary`; browser URL/search actions should map to `ItemSummary::NoOp`.
 - `app/src/search/command_palette/view.rs:722` dispatches command-palette actions and is the place to route a command-palette browser result into workspace/browser-pane opening.
+- Existing web search controls are scoped to Agent Mode execution profiles, not browser URL/search navigation. `app/src/ai/execution_profiles/editor/ui_helpers.rs:958` renders the Agent web search toggle and `app/src/ai/blocklist/permissions.rs:562` reads per-profile web-search permission; neither provides a browser/search-engine preference for Browser Pane.
 - cmux is a useful local-dev-browser precedent for live in-app preview ergonomics, but Warp v1 intentionally does not adopt cmux-style browser URL session snapshots. Browser Pane keeps URL state while the pane is alive and omits Browser Pane URLs from durable Warp app/session restore state.
 
 There is no general-purpose Browser Pane in the app today. The implementation should add one as a new pane type instead of trying to route web URLs through the Markdown/file viewer. Markdown viewing remains native rich-text/file viewing; Browser Pane handles `http` and `https` content plus plain search queries that are converted into search-result URLs.
@@ -72,8 +73,9 @@ Add a small browser-pane module, for example `app/src/browser_pane/`, with share
   - Preserves path, query string, and fragment only for live navigation, display, copy URL, and reload while the pane exists. V1 does not write Browser Pane URLs into app/session restore state.
 - `BrowserPaneInput`
   - Represents either a direct URL or a plain search query.
-  - Converts search queries to `https://www.google.com/search?q={query}` in v1 unless Warp already has a browser/search-engine setting by implementation time.
-  - Requires the user-facing search surface to disclose that search query text is sent to the configured third-party search provider before submission.
+  - Converts search queries to `https://www.google.com/search?q={query}` in v1.
+  - Does not add a new browser search-engine preference in v1; configurable search providers remain a follow-up.
+  - Requires the user-facing search surface to disclose that search query text is sent to Google before submission.
   - Rejects or externally routes unsupported non-`http`/`https` schemes instead of loading them in Browser Pane.
 - `BrowserPaneUrlKind`
   - `LoopbackPreview`
@@ -354,7 +356,7 @@ flowchart TD
 Add focused unit tests for:
 
 - `BrowserPaneUrl` accepts only `http` and `https`.
-- `BrowserPaneInput` converts plain search text into the v1 Google search URL.
+- `BrowserPaneInput` converts plain search text into the v1 Google Search URL.
 - `BrowserPaneInput` rejects or externally routes unsupported schemes.
 - Loopback classification returns true for `localhost`, `127.0.0.1`, `[::1]`, and loopback IP literals.
 - Loopback classification returns false for non-loopback hosts and does not perform DNS.
@@ -403,7 +405,7 @@ Run Warp locally with `FeatureFlag::BrowserPane` enabled and validate:
 6. Right-click the same URL and choose `Open in new tab`. Confirm Warp creates a new Warp tab without an internal browser tab strip.
 7. Primary-click the URL. Confirm it still opens externally as it does today.
 8. Paste an `https` URL into the command palette route. Confirm it opens a Browser Pane.
-9. Type a docs/search query into the command palette route or Browser Pane address/search field. Confirm the surface discloses that the query is sent to the configured third-party search provider before submission, then opens a search-results page.
+9. Type a docs/search query into the command palette route or Browser Pane address/search field. Confirm the surface discloses that the query is sent to Google before submission, then opens a Google Search results page.
 10. Use keyboard routes to focus the address/search field, navigate back/forward, reload, and return focus to the terminal.
 11. Try a non-`http` URL. Confirm it does not load directly in Browser Pane.
 12. Try page-controlled `file:`, custom protocol, and popup/new-window URLs. Confirm Browser Pane blocks automatic dispatch and only offers an explicit external route where appropriate.
@@ -422,7 +424,7 @@ Run Warp locally with `FeatureFlag::BrowserPane` enabled and validate:
 | #9, #11 | Terminal URL primary-click regression test still calls the existing external URL path for normal and loopback-preview URLs. |
 | #10 | Unit tests cover syntactic loopback classification for `localhost`, `127.0.0.1`, `[::1]`, other loopback literals, non-loopback hosts, and no DNS lookup. |
 | #14, #15, #16, #19 | Browser Pane view tests or visual/manual validation cover pane chrome, toolbar controls, URL visibility on failure, and absence of bookmarks/extensions/downloads/profiles/devtools/automation/tab strip. |
-| #17, #18 | Unit tests cover address/search parsing; manual validation confirms direct URL navigation, search-provider disclosure before search submission, and search-result navigation. |
+| #17, #18 | Unit tests cover address/search parsing; manual validation confirms direct URL navigation, Google Search disclosure before search submission, and search-result navigation. |
 | #20, #21, #22 | Browser surface/load-state and capability-policy tests cover loading, loaded, failed load, connection refused, unsupported scheme, certificate/security warning, blocked embedding, permission/API requests, retry, copy URL, and open externally; manual validation covers stopped local server retry. |
 | #23 | UI/action tests and manual keyboard validation cover reload/stop from toolbar and keyboard route. |
 | #24, #25 | Pane/workspace tests and manual validation confirm closing Browser Pane or stopping the producing terminal process does not terminate the other surface. |
