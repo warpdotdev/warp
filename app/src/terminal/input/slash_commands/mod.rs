@@ -517,12 +517,7 @@ impl Input {
                     );
                     return true;
                 };
-                rename_conversation(
-                    conversation_id,
-                    argument.cloned().unwrap_or_default(),
-                    "/rename-conversation requires an active conversation",
-                    ctx,
-                );
+                rename_conversation(conversation_id, argument.cloned().unwrap_or_default(), ctx);
             }
             set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
                 let supported_options = || {

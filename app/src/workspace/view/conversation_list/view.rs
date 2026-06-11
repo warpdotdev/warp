@@ -727,7 +727,7 @@ impl ConversationListView {
         self.rename_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
-        rename_conversation(conversation_id, title, "Conversation not found", ctx);
+        rename_conversation(conversation_id, title, ctx);
         ctx.notify();
     }
 
