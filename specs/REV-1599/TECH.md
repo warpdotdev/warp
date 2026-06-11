@@ -484,8 +484,16 @@ gcloud iam workload-identity-pools create "$POOL_ID" \
 
 **Step 3 — Create the OIDC provider inside the pool.** This tells GCP to trust JWTs signed by Warp's identity service. The allowed audience is the provider's own resource name — this exact string is what the admin pastes into `gcpAudience` on the admin Models page.
 
+**Tenant isolation is mandatory here, not optional hardening.** Warp is a *shared* OIDC issuer: `IssueTaskIdentityToken` mints a validly-signed JWT for **any authenticated Warp user**, and the audience is a public identifier (synced to every member's client; its format is guessable). Issuer + audience alone would therefore admit every Warp user, not just this workspace's members. The provider must additionally pin trust to the customer's Warp team UID (`$TEAM_UID`), carried in the JWT's `teams` claim (a JSON array of team UIDs; warp-server omits the claim for team-less users, which fails the condition below and rejects them). Two controls, defense in depth:
+
+- `--attribute-condition="'$TEAM_UID' in assertion.teams"` — Google STS refuses the exchange for any JWT whose `teams` claim does not contain the workspace's team UID; identities outside the workspace never enter the pool at all.
+- `attribute.team` in `--attribute-mapping` — maps to `$TEAM_UID` iff the member belongs to the workspace (CEL ternary; WIF attribute values must be strings, so the list-valued `teams` claim cannot be mapped directly). Step 4's scoped IAM binding keys on this attribute.
+
+Remaining flags:
+
 - `--issuer-uri`: Warp's production OIDC issuer. Staging/local-dev tokens use `https://staging.warp.dev` instead (the E2E test pool is configured against staging).
 - `--attribute-mapping`: `google.subject` maps to `assertion.sub` (stable `user:<uid>`) for the IAM binding; `attribute.user_email` maps to `assertion.email` for human-readable audit logs. Do not swap subject to email — emails can change and would invalidate bindings.
+- `$TEAM_UID`: the workspace's stable Warp team UID. The final setup docs / admin Models page must surface it beside the other GEAP fields so admins never have to decode a JWT to find it.
 
 ```bash
 gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
@@ -493,7 +501,8 @@ gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
   --workload-identity-pool="$POOL_ID" \
   --issuer-uri="https://auth.warp.dev" \
   --allowed-audiences="//iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/providers/$PROVIDER_ID" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.user_email=assertion.email" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.user_email=assertion.email,attribute.team=('$TEAM_UID' in assertion.teams) ? '$TEAM_UID' : ''" \
+  --attribute-condition="'$TEAM_UID' in assertion.teams" \
   --project="$PROJECT_ID"
 ```
 
@@ -508,17 +517,20 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/aiplatform.user"
 
-# Allow pool identities to impersonate the SA.
-# The example below uses the pool wildcard (/*) for simplicity.
-# For tighter security, scope to specific subjects:
-#   --member="principal://iam.googleapis.com/.../subject/user:SPECIFIC_UID"
-# or to an email attribute condition.
+# Allow ONLY this workspace's identities to impersonate the SA, keyed on the
+# attribute.team mapping from Step 3. Least privilege by default; paired with
+# Step 3's attribute condition this is defense in depth — either control alone
+# already blocks identities outside the workspace.
 gcloud iam service-accounts add-iam-policy-binding \
   "$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/*" \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/attribute.team/$TEAM_UID" \
   --project="$PROJECT_ID"
 ```
+
+To restrict impersonation to named individuals instead, bind exact subjects — one binding per user, using the stable `google.subject` from Step 3: `--member="principal://iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/subject/user:SPECIFIC_UID"`.
+
+> **Test pools only.** The pool-wide wildcard member (`principalSet://.../workloadIdentityPools/$POOL_ID/*`) lets **every identity the provider trusts** impersonate the SA — on a provider missing Step 3's attribute condition, that is any authenticated Warp user. Acceptable only for throwaway pools in isolated test projects (e.g. the E2E project below); never in a customer setup.
 
 **After running these steps,** the admin pastes the audience string (`//iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/providers/$PROVIDER_ID`) into `gcpAudience`, and `$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com` into `gcpSaEmail` on the admin Models page.
 
@@ -561,8 +573,9 @@ No client `FeatureFlag`, deliberately: the rollout switch is the server-side adm
 
 - **Mid-session token expiry.** Covered by the three lifecycle layers (one-shot timer at `expires_at − 5min`; request-time safety net on every agent request; always-send + Google 401 → inline recovery — see "Token lifecycle: complete case enumeration"). `Refreshing { previous }` keeps serving the old token during re-mints, so healthy sessions never see a Google 401 for plain expiry.
 - **Workspace saves and config drift.** `UpdateWorkspaceSettingsSuccess` does not distinguish GEAP fields, but the mint binding (data model #2) makes the refresh guard a no-op unless the audience/SA actually changed — unrelated admin saves cost no STS round-trip, while real federation-config changes re-mint immediately.
-- **Customer-side misconfiguration.** The trust bridge is only as tight as the customer's IAM: setup docs must recommend scoping the `workloadIdentityUser` binding to team/user attributes (not the pool `/*` wildcard), a least-privilege (ideally custom) role on the SA, and a stable `google.subject` mapping (`assertion.sub`) with `attribute.user_email` for human-readable audit logs.
+- **Customer-side misconfiguration.** The trust bridge is only as tight as the customer's IAM, and Warp is a shared issuer — so the setup steps above bake the tenant-isolation controls into the default commands: the provider `--attribute-condition` pinning the pool to the workspace's team UID, the `workloadIdentityUser` binding scoped to `attribute.team` (the pool `/*` wildcard is explicitly test-only), and a stable `google.subject` mapping (`assertion.sub`) with `attribute.user_email` for human-readable audit logs. Final customer-facing docs must carry the same defaults verbatim, plus a least-privilege (ideally custom) role on the SA.
 
 ## Follow-ups
 
 - Cloud-agent (Oz runner) mint path: same exchange keyed off task identity, the GEAP analog of `AwsCredentialsRefreshStrategy::OidcManaged`.
+- `warp-terraform` PR to enable Vertex models on Warp staging (requested in PR review): once the client work lands and E2E validation against the personal/test GCP project passes, enable Vertex models on staging infra so GEAP can be exercised end-to-end there.
