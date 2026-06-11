@@ -55,18 +55,18 @@ The generated changed event should be handled alongside `AppIconState` in `Appea
 ### 2. Read the setting during macOS startup
 In `app/src/lib.rs`, after public preferences are available and before `app_builder.run`, read the saved `ShowDockIcon` value from `prefs_for_public_settings` using the generated setting helper, following the same pre-app-read pattern used by `ForceX11`.
 
-Extend `warpui::platform::mac::AppExt` with a builder method such as `set_show_dock_icon_on_launch(bool)` and call it from the macOS block next to `set_activate_on_launch`, `set_dev_icon`, `set_menu_bar_builder`, and `set_dock_menu_builder`.
+Extend `warpui::platform::mac::AppExt` with a builder method that initializes the platform's `show_dock_icon` state before launch, and call it from the macOS block next to `set_activate_on_launch`, `set_dev_icon`, `set_menu_bar_builder`, and `set_dock_menu_builder`.
 
-This lets the AppKit layer apply accessory mode as early as practical during launch, reducing visible Dock flicker for users who have already hidden the Dock icon.
+This is the same Dock visibility state that runtime setting changes update later. Initializing it before launch lets the AppKit layer apply accessory mode as early as practical, reducing visible Dock flicker for users who have already hidden the Dock icon.
 
 ### 3. Add macOS platform support for activation policy and status item
 Extend `crates/warpui/src/platform/mac/app.rs` and the Objective-C bridge in `crates/warpui/src/platform/mac/objc/app.m` / `app.h`.
 
 Recommended shape:
-- Add `show_dock_icon_on_launch: bool` to the macOS `App` backend, defaulting to `true`.
+- Track a single `show_dock_icon` presentation state in the macOS `App` backend, defaulting to `true`. The saved value initializes it at launch, and runtime setting changes update the same state.
 - Add an optional status item menu builder to the backend, similar to `dock_menu_builder`.
 - During `warp_app_will_finish_launching`, build the status item menu and hand it to the Objective-C delegate.
-- Add a Rust-callable platform function such as `set_dock_icon_visible(show: bool, status_menu: id)` or separate functions to update activation policy and status item visibility.
+- Add a Rust-callable platform function such as `set_dock_icon_visible(show: bool, status_menu: id)` or separate functions to apply that `show_dock_icon` state to the activation policy and status item visibility.
 - In Objective-C, make `WarpDelegate` own a retained `NSStatusItem *statusItem` in addition to `dockMenu`.
 - When `show_dock_icon` is true:
   - set `NSApp.activationPolicy = NSApplicationActivationPolicyRegular`
@@ -93,7 +93,7 @@ The initial menu should include:
 Update `AppExt` with `set_status_item_menu_builder` and call it from `app/src/lib.rs` next to `set_dock_menu_builder`.
 
 ### 5. Add a non-toggling "Show Warp" action
-Add a new global action in `app/src/root_view.rs`, for example `root_view:show_primary_window`, with product semantics tailored to the status item:
+Add a new global action in `app/src/root_view.rs`, for example `root_view:show_primary_window`, with product semantics tailored to the status item. Dock visibility remains independent from dedicated hotkey / quake mode; the action only needs to know about quake mode because **Show Warp** should foreground the user's primary Warp surface:
 
 1. If dedicated hotkey mode is enabled:
    - If a quake window exists and is hidden, show it via `ctx.windows().show_window_and_focus_app`.
@@ -103,7 +103,7 @@ Add a new global action in `app/src/root_view.rs`, for example `root_view:show_p
    - If a normal Warp window exists, activate the app and bring a normal window forward.
    - If no normal window exists, call `open_new`.
 
-Do not reuse `toggle_quake_mode_window` directly for the status item Show Warp command, because toggling would hide the hotkey window when the user is trying to recover or foreground Warp.
+Do not reuse `toggle_quake_mode_window` directly for the status item Show Warp command. The status item is a recovery path when Dock/Cmd-Tab are hidden, so choosing **Show Warp** must never toggle the dedicated hotkey window closed when the user is trying to foreground Warp.
 
 If the creation path shares substantial logic with `toggle_quake_mode_window`, extract helper functions rather than duplicating the full hotkey-window construction.
 
