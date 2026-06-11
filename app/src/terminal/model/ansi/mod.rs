@@ -941,20 +941,12 @@ where
 
             // OSC 8: Hyperlink (terminal anchor) sequences.
             // Format: OSC 8 ; params ; URI ST. An empty URI closes the active
-            // hyperlink. Gated behind FeatureFlag::OscHyperlinks; when off,
-            // the bytes fall through to `unhandled(params)` and behavior
-            // matches pre-feature.
-            //
+            // hyperlink.
             // Reference: https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda
             b"8" if FeatureFlag::OscHyperlinks.is_enabled() => {
                 match Hyperlink::parse_osc_params(&params[1..]) {
                     Ok(hyperlink) => self.handler.set_hyperlink(hyperlink),
-                    Err(err) => {
-                        // Do NOT pass `params` to the generic `unhandled` formatter:
-                        // OSC 8 payloads are untrusted terminal data and can be
-                        // arbitrarily large. Log only the bounded error variant.
-                        debug!("[osc 8 parse error]: {:?}", err);
-                    }
+                    Err(_) => unhandled(params),
                 }
             }
 

@@ -711,8 +711,8 @@ impl TryFrom<&[u8]> for PromptKind {
 /// Maximum byte length of a URI carried by an OSC 8 hyperlink. Sequences
 /// whose URI exceeds this cap are dropped at parse time before the URI
 /// `String` is allocated, so a hostile sender can't trigger an arbitrarily
-/// large heap allocation.
-pub const MAX_URI_BYTES: usize = 4096;
+/// large heap allocation. Matches VTE's OSC 8 URI cap.
+pub const MAX_URI_BYTES: usize = 2083;
 
 /// Maximum byte length of the OSC 8 `id` param value. The id is attacker-
 /// controlled terminal data and ends up in the `Hyperlink` registry key, so

@@ -2,19 +2,17 @@
 //! handles, so each cell stores a 4-byte `HyperlinkId` instead of cloning
 //! the URI string.
 //!
-//! Two design points worth knowing about (see `specs/GH6393/tech.md` §3e):
+//! Two design points worth knowing about:
 //!
 //! 1. **Bounded.** The registry refuses interns past `MAX_DISTINCT_ENTRIES`
 //!    and returns `None`. The URI byte cap (`MAX_URI_BYTES`) is enforced
-//!    earlier in the parser before allocating the URI `String`, so a
-//!    1 GB OSC 8 sequence never produces a 1 GB allocation; this module
+//!    earlier in the parser before allocating the URI `String`; this module
 //!    asserts the same cap defensively as a backstop.
 //! 2. **No reclamation.** Entries are never freed while the registry is
 //!    alive; the registry's lifetime is the grid's lifetime. This avoids
 //!    the use-after-free / leak hazards that a refcounted scheme would
 //!    have to handle across cell overwrite, RLE split/merge in
 //!    `FlatStorage`, scrollback eviction, reflow, and deserialization.
-//!    Worst case per grid: `MAX_DISTINCT_ENTRIES` * `MAX_URI_BYTES` ≈ 16 MB.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -37,17 +35,6 @@ pub const MAX_DISTINCT_ENTRIES: usize = 4096;
 /// other per-cell attributes.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct HyperlinkId(NonZeroU32);
-
-impl HyperlinkId {
-    /// Returns the underlying integer value of this id. Intended for callers
-    /// that need a stable string identity for the hyperlink (e.g. caching a
-    /// rendered cell position by id for integration tests); other callers
-    /// should treat ids as opaque.
-    #[inline]
-    pub fn get(self) -> u32 {
-        self.0.get()
-    }
-}
 
 impl GetSize for HyperlinkId {}
 
@@ -75,8 +62,7 @@ impl HyperlinkRegistry {
     /// interned, a fresh id if the registry has capacity, or `None` if the
     /// registry has reached `MAX_DISTINCT_ENTRIES` (in which case the caller
     /// should treat the OSC 8 sequence as if it had been malformed and stamp
-    /// the visible cells with `None`, per the no-dangling-id invariant in
-    /// `specs/GH6393/tech.md` §3c).
+    /// the visible cells with `None`, so no cell references a missing id).
     pub fn intern(&mut self, hyperlink: Hyperlink) -> Option<HyperlinkId> {
         // Defensive: parser enforces this, but assert here too so a future
         // call site that bypasses the parser still respects the cap.

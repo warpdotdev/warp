@@ -2477,7 +2477,7 @@ impl ansi::Handler for TerminalModel {
     fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
         // Routes to the active AltScreen or BlockGrid, both of which delegate
         // to their inner GridHandler — which owns the active id and the
-        // per-grid HyperlinkRegistry. See `specs/GH6393/tech.md` §3c.
+        // per-grid HyperlinkRegistry.
         delegate!(self.set_hyperlink(hyperlink));
     }
 

@@ -396,7 +396,7 @@ impl ansi::Handler for AltScreen {
 
     fn set_hyperlink(&mut self, hyperlink: Option<warp_terminal::model::ansi::Hyperlink>) {
         // AltScreen wraps a GridHandler that owns active_hyperlink_id and the
-        // per-screen HyperlinkRegistry — delegate. See `specs/GH6393/tech.md` §3c.
+        // per-screen HyperlinkRegistry — delegate.
         self.ansi_handler().set_hyperlink(hyperlink);
     }
 

@@ -293,20 +293,18 @@ impl Cell {
     /// only when setting a non-`None` id; clearing an unset cell is free.
     #[inline]
     pub fn set_hyperlink_id(&mut self, id: Option<super::HyperlinkId>) {
-        match (id, self.extra.as_deref_mut()) {
-            (Some(id), Some(extra)) => extra.hyperlink_id = Some(id),
-            (Some(id), None) => {
-                self.extra.get_or_insert_with(Default::default).hyperlink_id = Some(id);
-            }
-            (None, Some(extra)) => extra.hyperlink_id = None,
-            (None, None) => {} // already cleared, no allocation
+        if id.is_some() {
+            self.extra.get_or_insert_with(Default::default).hyperlink_id = id;
+        } else if let Some(extra) = self.extra.as_deref_mut() {
+            // Don't allocate `extra` just to clear an already-unset id.
+            extra.hyperlink_id = None;
         }
     }
 
     /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker
     /// if present. NOTE: this does NOT preserve `hyperlink_id` — that field is
-    /// content-bound and per the §3d table in `specs/GH6393/tech.md` is
-    /// cleared whenever the cell's content is reset (erase/clear/reset_state).
+    /// content-bound and is cleared whenever the cell's content is reset
+    /// (erase/clear/reset_state).
     #[inline]
     pub fn drop_extra(&mut self) {
         if let Some(extra) = self.extra.take() {
