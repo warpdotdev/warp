@@ -311,6 +311,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-jq",
   "lang-hcl",
   "lang-lua",
+  "lang-nix",
   "lang-ruby",
   "lang-php",
   "lang-toml",

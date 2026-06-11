@@ -631,6 +631,7 @@ dependencies = [
  "arborium-json",
  "arborium-kotlin",
  "arborium-lua",
+ "arborium-nix",
  "arborium-objc",
  "arborium-php",
  "arborium-powershell",
@@ -836,6 +837,17 @@ name = "arborium-lua"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0132cce1b343560a26ae8a9af8da70bcec44432106c9670399ac9c59c61f2dee"
+dependencies = [
+ "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "arborium-nix"
+version = "2.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a08a703d5502526e68f7ad8dbffd303537d6828005bed0ef0fc7d37e45bf7078"
 dependencies = [
  "arborium-sysroot",
  "cc",

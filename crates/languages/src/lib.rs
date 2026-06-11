@@ -18,7 +18,7 @@ lazy_static! {
     static ref LANGUAGE_REGISTRY: LanguageRegistry = LanguageRegistry::new();
 }
 
-pub const SUPPORTED_LANGUAGES: [&str; 33] = [
+pub const SUPPORTED_LANGUAGES: [&str; 34] = [
     "rust",
     "golang",
     "yaml",
@@ -52,6 +52,7 @@ pub const SUPPORTED_LANGUAGES: [&str; 33] = [
     "xml",
     "vue",
     "dockerfile",
+    "nix",
 ];
 
 /// Registry that holds all of the supported languages.
@@ -177,6 +178,7 @@ fn language_by_filename_parts(
         "jq" => language_by_name("jq"),
         "tf" | "hcl" | "tfvars" => language_by_name("hcl"),
         "lua" => language_by_name("lua"),
+        "nix" => language_by_name("nix"),
         "rb" => language_by_name("ruby"),
         "php" | "phtml" => language_by_name("php"),
         "toml" => language_by_name("toml"),
@@ -273,6 +275,7 @@ fn get_arborium_highlight_query(lang: &str) -> Option<&str> {
         "jq" => Some(arborium::lang_jq::HIGHLIGHTS_QUERY),
         "hcl" => Some(arborium::lang_hcl::HIGHLIGHTS_QUERY),
         "lua" => Some(arborium::lang_lua::HIGHLIGHTS_QUERY),
+        "nix" => Some(arborium::lang_nix::HIGHLIGHTS_QUERY),
         "ruby" => Some(arborium::lang_ruby::HIGHLIGHTS_QUERY),
         "php" => Some(arborium::lang_php::HIGHLIGHTS_QUERY),
         "toml" => Some(arborium::lang_toml::HIGHLIGHTS_QUERY),
