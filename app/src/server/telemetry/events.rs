@@ -2142,6 +2142,12 @@ pub enum TelemetryEvent {
         is_ai_enabled: bool,
     },
 
+    /// Emitted when the user clicks "Connect SuperGrok subscription" (or
+    /// equivalent) in the AI settings page and we successfully launch the
+    /// visible part of the OAuth flow (i.e. we open the browser to xAI's
+    /// consent screen).
+    SuperGrokSubscriptionConnectInitiated,
+
     /// Result (success or failure) of the user attempting to connect their
     /// SuperGrok / xAI subscription via the OAuth flow in AI settings.
     SuperGrokSubscriptionConnectResult {
@@ -3874,9 +3880,10 @@ impl TelemetryEvent {
                 json!({ "citation": citation, "block_id": block_id, "conversation_id": conversation_id, "server_output_id": server_output_id }),
             ),
             TelemetryEvent::OpenedSharingDialog(event) => Some(json!(event)),
-			TelemetryEvent::ToggleGlobalAI { is_ai_enabled } => {
+            TelemetryEvent::ToggleGlobalAI { is_ai_enabled } => {
                 Some(json!({"is_ai_enabled": is_ai_enabled}))
             }
+            TelemetryEvent::SuperGrokSubscriptionConnectInitiated => None,
             TelemetryEvent::SuperGrokSubscriptionConnectResult { success, error } => Some(json!({
                 "success": success,
                 "error": error,
@@ -5119,8 +5126,9 @@ impl TelemetryEvent {
             | TelemetryEvent::AgentModeCodeSuggestionEditedByUser { .. }
             | TelemetryEvent::AgentModeCodeFilesNavigated { .. }
             | TelemetryEvent::AgentModeCodeDiffHunksNavigated { .. }
-			| TelemetryEvent::ToggleIntelligentAutosuggestionsSetting { .. }
+            | TelemetryEvent::ToggleIntelligentAutosuggestionsSetting { .. }
             | TelemetryEvent::ToggleGlobalAI { .. }
+            | TelemetryEvent::SuperGrokSubscriptionConnectInitiated
             | TelemetryEvent::SuperGrokSubscriptionConnectResult { .. }
             | TelemetryEvent::ToggleCodebaseContext { .. }
             | TelemetryEvent::ToggleAutoIndexing { .. }
@@ -5664,9 +5672,12 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleShowBlockDividers => EnablementState::Flag(FeatureFlag::MinimalistUI),
             Self::DriveSharingOnboardingBlockShown => EnablementState::Always,
             Self::SharedObjectLimitHitBannerViewPlansButtonClicked => EnablementState::Always,
-			Self::ResourceUsageStats => EnablementState::Always,
+            Self::ResourceUsageStats => EnablementState::Always,
             Self::ToggleGlobalAI => EnablementState::Always,
-            Self::SuperGrokSubscriptionConnectResult => EnablementState::Flag(FeatureFlag::SuperGrok),
+            Self::SuperGrokSubscriptionConnectInitiated
+            | Self::SuperGrokSubscriptionConnectResult => {
+                EnablementState::Flag(FeatureFlag::SuperGrok)
+            }
             Self::ToggleActiveAI => EnablementState::Always,
             Self::AgenticOnboardingBlockSelected => EnablementState::Always,
             Self::MemoryUsageStats => EnablementState::ChannelSpecific {
@@ -6254,7 +6265,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AgentModeSurfacedCitations => "AgentMode.SurfacedCitations",
             Self::AgentModeOpenedCitation => "AgentMode.OpenedCitation",
             Self::OpenedSharingDialog => "Opened Sharing Dialog",
-			Self::ToggleGlobalAI => "Toggle Global AI Enablement",
+            Self::ToggleGlobalAI => "Toggle Global AI Enablement",
+            Self::SuperGrokSubscriptionConnectInitiated => "SuperGrok.Connect.Initiated",
             Self::SuperGrokSubscriptionConnectResult => "SuperGrok.Connect.Result",
             Self::ToggleActiveAI => "Toggle Active AI Enablement",
             Self::ToggleLigatureRendering => "Toggle Ligature Rendering",
@@ -7085,6 +7097,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Opened the sharing settings dialog for a session or Warp Drive object"
             }
 			Self::ToggleGlobalAI => "Toggled global AI enablement.",
+            Self::SuperGrokSubscriptionConnectInitiated => "User clicked Connect SuperGrok subscription; the OAuth consent flow was initiated (browser opened).",
             Self::SuperGrokSubscriptionConnectResult => "Result (success or failure) of connecting a SuperGrok / xAI subscription via OAuth in AI settings.",
             Self::ToggleActiveAI => "Toggled active AI enablement.",
             Self::ToggleLigatureRendering => "Toggled ligature rendering",

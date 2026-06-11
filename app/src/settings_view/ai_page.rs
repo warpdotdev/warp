@@ -2124,7 +2124,7 @@ impl AISettingsPageView {
         // Starting the attempt binds the loopback callback server before the
         // browser opens, so a bind failure surfaces immediately, without a
         // dangling browser tab.
-		let attempt = match oauth::OauthAttempt::start() {
+        let attempt = match oauth::OauthAttempt::start() {
             Ok(attempt) => attempt,
             Err(err) => {
                 log::error!("Failed to start Grok OAuth callback server: {err:#}");
@@ -2144,6 +2144,8 @@ impl AISettingsPageView {
                 return;
             }
         };
+
+        send_telemetry_from_ctx!(TelemetryEvent::SuperGrokSubscriptionConnectInitiated, ctx);
 
         // Open xAI's consent screen in the user's default browser.
         let authorize_url = attempt.authorize_url();
@@ -2167,7 +2169,7 @@ impl AISettingsPageView {
             toast_stack.add_persistent_toast(toast, window_id, ctx);
         });
 
-		ctx.spawn(async move { attempt.finish().await }, |_, result, ctx| {
+        ctx.spawn(async move { attempt.finish().await }, |_, result, ctx| {
             let window_id = ctx.window_id();
             let toast = match result {
                 Ok(tokens) => {
