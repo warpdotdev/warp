@@ -345,7 +345,8 @@ use crate::resource_center::{
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ObjectUid, SyncId};
-use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
+use crate::server::server_api::ai::AIClient;
+use crate::server::server_api::block::BlockClient;
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
     self, AgentModeAttachContextMethod, AgentModeEntrypoint, AgentModeRewindEntrypoint,
@@ -10866,11 +10867,10 @@ impl TerminalView {
         }
     }
 
-    /// Best-effort upload of a completed terminal block to the run's
-    /// `client-events` endpoint during a shared Oz run. The server persists the
-    /// payload to GCS keyed by the shared-session UUID so the full session
-    /// transcript (including setup commands and manually-run commands) can be
-    /// reconstructed.
+    /// Best-effort upload of a completed terminal block to GCS for session
+    /// transcript reconstruction, via the `shareBlock` GraphQL mutation with a
+    /// `sharedSessionId`. The server persists the payload keyed by the shared
+    /// session UUID so user-run commands can be included in the full transcript.
     ///
     /// No-op unless block persistence is enabled and this client is sharing an
     /// Oz run. Agent-run blocks are excluded because they are already captured
@@ -10880,40 +10880,29 @@ impl TerminalView {
             return;
         }
 
-        let run_id = {
+        let shared_session_uuid = self
+            .shared_session
+            .as_ref()
+            .map(|s| s.session_id().to_string());
+
+        let is_shared_oz_run = {
             let model = self.model.lock();
-            let is_shared_oz_run = model.shared_session_status().is_sharer()
-                && model.is_shared_ambient_agent_session();
-            if !is_shared_oz_run {
-                return;
-            }
-            match model.ambient_agent_task_id() {
-                Some(run_id) => run_id,
-                None => return,
-            }
+            model.shared_session_status().is_sharer() && model.is_shared_ambient_agent_session()
+        };
+
+        let Some(shared_session_uuid) = shared_session_uuid.filter(|_| is_shared_oz_run) else {
+            return;
         };
 
         let serialized_block = serialized_block.clone();
-        let request = match AgentRunClientEventRequest::block_event(
-            serialized_block.id.as_str(),
-            &serialized_block,
-            chrono::Utc::now(),
-        ) {
-            Ok(request) => request,
-            Err(err) => {
-                log::warn!("Failed to serialize block for shared Oz run {run_id}: {err:#}");
-                return;
-            }
-        };
-
         let server_api = self.server_api.clone();
         self.background_executor
             .spawn(async move {
                 if let Err(err) = server_api
-                    .post_agent_run_client_event(&run_id, request)
+                    .save_block_to_session(&serialized_block, &shared_session_uuid)
                     .await
                 {
-                    log::warn!("Failed to post block client event for run {run_id}: {err:#}");
+                    log::warn!("Failed to save block to session {shared_session_uuid}: {err:#}");
                 }
             })
             .detach();

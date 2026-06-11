@@ -8,7 +8,8 @@ use cynic::{MutationBuilder, QueryBuilder};
 use mockall::automock;
 use warp_core::channel::{Channel, ChannelState};
 use warp_graphql::mutations::share_block::{
-    BlockInput, ShareBlock, ShareBlockResult, ShareBlockVariables,
+    BlockInput, ShareBlock, ShareBlockResult, ShareBlockToSession, ShareBlockToSessionVariables,
+    ShareBlockVariables,
 };
 use warp_graphql::mutations::unshare_block::{
     UnshareBlock, UnshareBlockInput, UnshareBlockResult, UnshareBlockVariables,
@@ -21,6 +22,7 @@ use super::ServerApi;
 use crate::ai::generate_block_title::api::{GenerateBlockTitleRequest, GenerateBlockTitleResponse};
 use crate::server::block::{Block, DisplaySetting};
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
+use crate::terminal::model::block::SerializedBlock;
 
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -37,6 +39,15 @@ pub trait BlockClient: 'static + Send + Sync {
         show_prompt: bool,
         display_setting: DisplaySetting,
     ) -> Result<String, anyhow::Error>;
+
+    /// Persists a completed terminal block to GCS via the shareBlock mutation, keyed by
+    /// `shared_session_id`. Used to reconstruct the full session transcript (including
+    /// user-run commands) after a shared Oz run ends.
+    async fn save_block_to_session(
+        &self,
+        serialized_block: &SerializedBlock,
+        shared_session_id: &str,
+    ) -> Result<(), anyhow::Error>;
 
     async fn blocks_owned_by_user(&self) -> Result<Vec<Block>, anyhow::Error>;
 
@@ -113,6 +124,53 @@ impl BlockClient for ServerApi {
                 Err(anyhow!(get_user_facing_error_message(error)))
             }
             ShareBlockResult::Unknown => Err(anyhow!("Failed to share block")),
+        }
+    }
+
+    async fn save_block_to_session(
+        &self,
+        serialized_block: &SerializedBlock,
+        shared_session_id: &str,
+    ) -> Result<(), anyhow::Error> {
+        let block_uuid = uuid::Uuid::new_v5(
+            &uuid::Uuid::NAMESPACE_OID,
+            serialized_block.id.as_str().as_bytes(),
+        )
+        .to_string();
+        let serialized_json_bytes = serialized_block
+            .to_json()
+            .map_err(|e| anyhow!("Failed to serialize block: {e}"))?;
+        let serialized_json =
+            String::from_utf8(serialized_json_bytes).map_err(|e| anyhow!("{e}"))?;
+
+        let variables = ShareBlockToSessionVariables {
+            block: BlockInput {
+                command: None,
+                embed_display_setting:
+                    warp_graphql::mutations::share_block::DisplaySetting::CommandAndOutput,
+                output: None,
+                show_prompt: false,
+                stylized_command: None,
+                stylized_output: None,
+                stylized_prompt: None,
+                stylized_prompt_and_command: None,
+                time_started_term: None,
+                title: None,
+            },
+            request_context: get_request_context(),
+            shared_session_id: shared_session_id.to_string(),
+            serialized_block: serialized_json,
+            block_uuid,
+        };
+
+        let operation = ShareBlockToSession::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+        match response.share_block {
+            ShareBlockResult::ShareBlockOutput(_) => Ok(()),
+            ShareBlockResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            ShareBlockResult::Unknown => Err(anyhow!("Failed to save block to session")),
         }
     }
 

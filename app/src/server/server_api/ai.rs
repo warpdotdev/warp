@@ -395,9 +395,6 @@ pub struct AgentRunClientEventRequest {
 #[serde(untagged)]
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
-    /// The raw serialized block JSON. The server stores this opaquely in GCS,
-    /// keyed by the shared-session UUID, to reconstruct the session transcript.
-    Block(serde_json::Value),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -416,33 +413,6 @@ impl AgentRunClientEventRequest {
             timestamp,
             payload: None,
         }
-    }
-
-    /// Event name used for block-persistence client events. Must match the
-    /// server-side `clientEventNameBlock` constant.
-    pub const BLOCK_EVENT_NAME: &'static str = "block";
-
-    /// Builds a `"block"` client event whose payload is the serialized block
-    /// JSON. The server requires `event_uuid` to be a valid UUID, but a
-    /// `BlockId` is an arbitrary string (e.g. `{session_id}-{n}` for pty
-    /// blocks). We derive a deterministic v5 UUID from `block_id` so the
-    /// server's GCS key stays stable/idempotent per block across retries while
-    /// satisfying the UUID format.
-    pub fn block_event(
-        block_id: &str,
-        serialized_block: &SerializedBlock,
-        timestamp: DateTime<Utc>,
-    ) -> serde_json::Result<Self> {
-        let event_uuid =
-            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, block_id.as_bytes()).to_string();
-        Ok(Self {
-            event_uuid,
-            event_name: Self::BLOCK_EVENT_NAME.to_string(),
-            timestamp,
-            payload: Some(AgentRunClientEventPayload::Block(serde_json::to_value(
-                serialized_block,
-            )?)),
-        })
     }
 
     pub fn setup_metric_event(

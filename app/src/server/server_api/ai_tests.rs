@@ -13,43 +13,6 @@ use super::{
     CONNECTED_SELF_HOSTED_WORKERS_PATH,
 };
 use crate::notebooks::NotebookId;
-use crate::terminal::model::block::SerializedBlock;
-
-#[test]
-fn block_event_serializes_with_block_event_name_and_raw_block_payload() {
-    let serialized_block = SerializedBlock {
-        id: "block-123".to_string().into(),
-        pwd: Some("/tmp".to_string()),
-        ..Default::default()
-    };
-    let timestamp = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
-
-    let request =
-        AgentRunClientEventRequest::block_event("block-123", &serialized_block, timestamp).unwrap();
-
-    let value = serde_json::to_value(&request).unwrap();
-
-    assert_eq!(
-        value.get("event_name").and_then(|v| v.as_str()),
-        Some("block")
-    );
-    // `event_uuid` is a deterministic v5 UUID derived from the block id, since
-    // the server requires a valid UUID and `BlockId` is an arbitrary string.
-    let expected_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, b"block-123").to_string();
-    assert_eq!(
-        value.get("event_uuid").and_then(|v| v.as_str()),
-        Some(expected_uuid.as_str())
-    );
-    // Confirm it parses as a UUID (the server rejects non-UUID event_uuids).
-    assert!(uuid::Uuid::parse_str(&expected_uuid).is_ok());
-    // The untagged Block payload serializes as the raw SerializedBlock JSON.
-    let payload = value.get("payload").expect("payload present");
-    assert_eq!(
-        payload.get("id").and_then(|v| v.as_str()),
-        Some("block-123")
-    );
-    assert_eq!(payload.get("pwd").and_then(|v| v.as_str()), Some("/tmp"));
-}
 
 #[test]
 fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
