@@ -176,11 +176,10 @@ fn merge_artifacts_dedupes_by_identity_and_preserves_order() {
         description: None,
     };
 
-    let merged = merge_artifacts([
-        vec![plan.clone(), pr.clone()],
-        vec![pr.clone(), screenshot.clone()],
-        vec![plan_with_notebook],
-    ]);
+    let list_a = vec![plan.clone(), pr.clone()];
+    let list_b = vec![pr.clone(), screenshot.clone()];
+    let list_c = vec![plan_with_notebook];
+    let merged = merge_artifacts([list_a.as_slice(), list_b.as_slice(), list_c.as_slice()]);
 
     assert_eq!(merged, vec![plan, pr, screenshot]);
 }

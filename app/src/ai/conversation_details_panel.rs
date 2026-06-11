@@ -715,6 +715,12 @@ impl ConversationDetailsPanel {
         }
     }
 
+    /// Artifacts currently displayed in the panel. Lets callers skip a
+    /// refresh when freshly aggregated artifacts are unchanged.
+    pub(crate) fn current_artifacts(&self) -> &[Artifact] {
+        &self.data.artifacts
+    }
+
     pub fn set_conversation_details(
         &mut self,
         data: ConversationDetailsData,
