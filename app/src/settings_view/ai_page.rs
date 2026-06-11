@@ -134,7 +134,6 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
-use warp_core::safe_error;
 
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::appearance::Appearance;
@@ -2113,6 +2112,7 @@ impl AISettingsPageView {
     #[cfg(not(target_family = "wasm"))]
     fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
         use ::ai::grok_subscription::oauth;
+        use warp_core::safe_error;
 
         use crate::view_components::{DismissibleToast, ToastLink};
         use crate::workspace::WorkspaceAction;
