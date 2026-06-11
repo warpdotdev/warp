@@ -209,16 +209,7 @@ pub struct RequestInput {
 
 impl RequestInput {
     pub fn can_carry_conversation_handoff_marker(&self) -> bool {
-        let mut inputs = self.all_inputs();
-        let Some(first_input) = inputs.next() else {
-            return false;
-        };
-
-        if inputs.next().is_none() {
-            first_input.converts_to_user_input()
-        } else {
-            self.all_inputs().any(AIAgentInput::converts_to_user_input)
-        }
+        self.all_inputs().any(api::can_convert_to_user_input)
     }
     fn for_task(
         inputs: Vec<AIAgentInput>,
@@ -2816,6 +2807,8 @@ impl BlocklistAIController {
                                     {
                                         conversation.clear_forked_from_server_conversation_token();
                                         if should_clear_pending_handoff {
+                                            // The marker has reached the server, so consume it
+                                            // before any follow-up request can send it again.
                                             conversation.clear_pending_conversation_handoff();
                                             conversation.write_updated_conversation_state(ctx);
                                         }

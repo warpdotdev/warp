@@ -13,6 +13,7 @@ pub use convert_from::{
     user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
     MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
 };
+pub(crate) use convert_to::can_convert_to_user_input;
 use futures_lite::Stream;
 use mcp::TemplatableMCPServerInfo;
 pub use r#impl::generate_multi_agent_output;

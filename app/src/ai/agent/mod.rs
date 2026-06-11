@@ -2716,6 +2716,7 @@ pub enum AIAgentInput {
         status: OrchestrationConfigStatus,
     },
 
+    /// Sent on the next outbound request after conversation handoff.
     ConversationHandoff,
 }
 
@@ -2933,21 +2934,6 @@ impl AIAgentInput {
 
     pub fn is_user_query(&self) -> bool {
         matches!(self, AIAgentInput::UserQuery { .. })
-    }
-
-    pub fn converts_to_user_input(&self) -> bool {
-        matches!(
-            self,
-            Self::UserQuery {
-                static_query_type: None,
-                ..
-            } | Self::ActionResult { .. }
-                | Self::MessagesReceivedFromAgents { .. }
-                | Self::EventsFromAgents { .. }
-                | Self::PassiveSuggestionResult { .. }
-                | Self::OrchestrationConfigUpdate { .. }
-                | Self::ConversationHandoff
-        )
     }
 
     pub fn prompt_suggestion_result(&self) -> Option<&String> {

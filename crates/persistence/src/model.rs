@@ -1020,6 +1020,8 @@ impl<'de> Deserialize<'de> for PersistedAutoexecuteMode {
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 pub enum PendingConversationHandoff {
     CloudToLocal,
+    // Currently unused, but enumerated for future local-to-cloud handoff propagation.
+    LocalToCloud,
 }
 fn is_false(value: &bool) -> bool {
     !*value
