@@ -30,6 +30,11 @@ Users need a predictable back/forward model that restores their prior working lo
 - Capturing every tiny scroll delta as a separate history entry.
 - Introducing navigation behavior for system-triggered auto-scroll or restoration-driven state changes.
 
+### Deferred (explicitly out of scope for this release)
+
+- An onboarding, changelog, or coachmark affordance introducing the feature. Verification flagged that nothing proactively introduces back/forward navigation; this is deliberately deferred to a follow-up.
+- Command palette search keyword aliases. Searching "navigate" or "history" in the palette does not surface `Go Back` / `Go Forward` because palette search only matches binding descriptions; supporting search aliases requires keymap-level support and is deferred.
+
 ## 5. Figma / Design References
 
 Figma: none provided
@@ -58,13 +63,27 @@ Figma: none provided
     - Back: `Alt+Left`
     - Forward: `Alt+Right`
 
+### Naming
+
+- The feature uses one consistent action name across every surface: `Go Back` / `Go Forward` (sentence case "Go back" / "Go forward" in tooltips).
+- The command palette, keyboard-shortcut editor, and tab-bar button tooltips must not use divergent verbs (e.g. "Navigate back") for the same action.
+
+### Keybinding non-interference
+
+- Navigation shortcuts must never intercept keys destined for a foreground terminal program. While the focused pane is running a long-running/interactive command, `Alt+Left` / `Alt+Right` (and any rebinding of Go Back / Go Forward) are delivered to the program, not consumed by navigation.
+- While typing in Warp's own input editor, the shortcuts follow IDE convention (navigation wins), matching VS Code; word-movement remains on `Ctrl+Left/Right` on Linux/Windows.
+- The shortcuts are remappable from Settings > Keyboard shortcuts.
+
 ### Tab bar buttons
 
 - Back (`<`) and forward (`>`) chevron buttons appear in the tab bar after the grid/layout icon and before the first tab.
+- In vertical-tabs mode, the same buttons appear in the title bar immediately right of the left toolbar buttons; the feature renders in both layouts and history survives switching layouts mid-session.
 - These buttons are visible only when:
   1. `NavigationStack` is enabled.
   2. The user setting to show navigation buttons in the tab bar is enabled.
 - Each button is visibly disabled when there is no valid destination in that direction.
+- The enabled state must be clearly distinguishable from the disabled state at a glance: enabled chevrons use the same prominent icon color as neighboring toolbar icons rather than the muted sub-text color.
+- Buttons show their tooltip (action name plus shortcut) when hovered in both the enabled and disabled states. Both buttons are disabled on every fresh launch, so the disabled tooltip is the primary discovery affordance for new users.
 
 ### Settings
 
@@ -72,6 +91,8 @@ Figma: none provided
 - The setting defaults to on.
 - The setting is visible only when `NavigationStack` is enabled.
 - The setting is searchable from settings search and the command palette.
+- The setting row includes descriptive subtext stating the keyboard shortcuts and clarifying that hiding the buttons does not disable navigation (shortcuts and palette actions keep working).
+- The command palette toggle for this setting is state-aware: it reads `Enable …` when the buttons are hidden and `Disable …` when they are shown.
 
 ### Initial state
 
@@ -104,6 +125,7 @@ Figma: none provided
   3. After scrolling stops for roughly 1.5 seconds, record that anchor as a back-history entry.
   4. Navigating back returns to that anchor position.
 - If the user changes focus before the debounce completes, the pending scroll anchor is flushed immediately before the focus-change entry is recorded.
+- A minimum scroll delta applies: a trivial or net-zero scroll twitch that ends within a few lines of the previous history anchor must not create a near-duplicate entry. Back should never move the viewport by an imperceptible amount.
 
 ### User-driven versus system-driven scrolling
 
@@ -139,6 +161,7 @@ Figma: none provided
   3. the correct pane or panel context
   4. the recorded scroll position, using best-effort restoration if exact restoration is not possible
 - If the restored target is a code editor pane, text input focus must be restored fully so the caret is active immediately and typing works without an extra click.
+- When a code editor scroll position is restored, the caret is co-located with the restored viewport. The first keystroke after navigating back must not yank the viewport away to a stale caret position; restored scroll holds under continued typing.
 
 ### Closed targets and restorable views
 
@@ -158,6 +181,8 @@ Figma: none provided
 - History entries include window identity.
 - Moving focus to a different Warp window records the previously focused context just like pane and tab switches do.
 - Back and forward should work across windows, bringing the correct window to the front and then restoring its tab, pane or panel, and scroll location.
+- Cross-window Go Back must preserve the forward stack. The window-focus change caused by the restore itself is system-driven and must not be recorded as a new navigation (which would clear forward history); Go Forward immediately after a cross-window Go Back returns to the departed window.
+- If a target window was closed but is still restorable through undo-close, Go Back reopens it, reattaches its panes, and restores the recorded tab/pane/scroll — equivalent in capability to `Reopen Closed Session`.
 - If a target window no longer exists and cannot be restored, the entry is consumed safely without surfacing an error.
 
 ### Code review panel behavior
@@ -192,6 +217,15 @@ Figma: none provided
 21. Permanently stale history entries are pruned automatically so dead destinations do not accumulate.
 22. If a saved scroll location is invalid because content changed, Warp clamps to the nearest valid location without crashing or leaving the user in an unusable state.
 23. Code review panel scroll and LSP-driven navigation participate in history and restore correctly.
+24. Go Forward works after a cross-window Go Back: the focus change produced by the restore does not clear the forward stack.
+25. Go Back reopens a closed-but-restorable window with its panes reattached and functional.
+26. After restoring a code editor entry, typing immediately does not move the viewport away from the restored scroll position (caret is co-located).
+27. Navigation shortcuts are delivered to a focused foreground terminal program instead of triggering navigation.
+28. Hovering a disabled back/forward button shows its tooltip with the action name and shortcut.
+29. Enabled and disabled button states are visually distinct; the enabled state matches the prominence of neighboring toolbar icons.
+30. All surfaces use the `Go Back` / `Go Forward` naming; the palette toggle for the buttons setting is state-aware (`Enable …` / `Disable …`).
+31. A net-zero scroll twitch does not create a history entry; Back after such a twitch is not a near-duplicate no-op.
+32. The buttons render and function in vertical-tabs mode, and history survives switching between horizontal and vertical layouts.
 
 ## 8. Validation
 
@@ -209,8 +243,15 @@ Figma: none provided
 - Manual: change content so the original scroll position is no longer exact, then navigate back and confirm best-effort clamped restoration rather than failure.
 - Manual: navigate through the code review panel, including scroll and LSP-driven jumps, and confirm back/forward restoration reopens the panel if needed and restores the recorded location.
 - Manual: create some navigation history, run `Clear Navigation Stack`, and confirm both back and forward become unavailable while the current context stays unchanged.
+- Manual: with two windows, Go Back across the window boundary and immediately Go Forward; confirm forward returns to the departed window.
+- Manual: close a second window, Go Back from the survivor, and confirm the window reopens with working panes (typing works) and correct focus.
+- Manual: in a code editor pane, scroll deep, navigate away, Go Back, then type; confirm the viewport stays at the restored position.
+- Manual: run a foreground program (e.g. `cat`), press the Go Back shortcut, and confirm the program receives the key.
+- Manual: hover both chevrons on a fresh launch (disabled state) and confirm tooltips appear; compare enabled vs disabled brightness.
+- Manual: with the buttons visible, confirm the command palette shows `Disable Navigation Buttons in Tab Bar` (and `Enable …` when hidden).
+- Manual: nudge the scroll wheel up/down within a second, wait for the debounce, and confirm Back does not perform a near-duplicate micro-jump.
 - Regression: verify that Back and Forward both work at runtime when corresponding history exists.
 
 ## 9. Open Questions
 
-None.
+None. See the Deferred subsection of Non-goals for intentionally postponed work (onboarding/changelog affordance, palette search keyword aliases).

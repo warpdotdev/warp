@@ -179,6 +179,28 @@ fn test_flush_if_expired_after_duration() {
 }
 
 #[test]
+fn test_expected_focus_loss_consumed_once_and_cleared_by_push() {
+    let mut stack = new_stack();
+    let window = crate::WindowId::new();
+    let other_window = crate::WindowId::new();
+
+    assert!(!stack.take_expected_focus_loss(window));
+
+    stack.expect_focus_loss(window);
+    assert!(!stack.take_expected_focus_loss(other_window));
+    assert!(stack.take_expected_focus_loss(window));
+    assert!(!stack.take_expected_focus_loss(window));
+
+    stack.expect_focus_loss(window);
+    stack.push(make_entry(0));
+    assert!(!stack.take_expected_focus_loss(window));
+
+    stack.expect_focus_loss(window);
+    stack.clear();
+    assert!(!stack.take_expected_focus_loss(window));
+}
+
+#[test]
 fn test_push_debounced_during_navigation_is_ignored() {
     let mut stack = new_stack();
 

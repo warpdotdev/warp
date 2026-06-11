@@ -12092,9 +12092,11 @@ impl Workspace {
         }
 
         if let Some(workspace) = self.navigation_workspace_for_window(entry.window_id, ctx) {
-            return workspace.read(ctx, |workspace, ctx| {
-                workspace.navigation_entry_can_restore_local(entry, ctx)
-            });
+            if ctx.is_window_open(entry.window_id) {
+                return workspace.read(ctx, |workspace, ctx| {
+                    workspace.navigation_entry_can_restore_local(entry, ctx)
+                });
+            }
         }
 
         UndoCloseStack::handle(ctx)
@@ -12199,17 +12201,25 @@ impl Workspace {
         let current_window = ctx.window_id();
         if entry.window_id != current_window {
             let target_window = entry.window_id;
-            let mut target_workspace = self.navigation_workspace_for_window(target_window, ctx);
+            let mut target_workspace = self
+                .navigation_workspace_for_window(target_window, ctx)
+                .filter(|_| ctx.is_window_open(target_window));
             if target_workspace.is_none() {
                 let closed_window = UndoCloseStack::handle(ctx)
                     .update(ctx, |stack, _| stack.take_closed_window(target_window));
                 if let Some(closed_window) = closed_window {
                     ctx.reopen_closed_window(closed_window);
                     target_workspace = self.navigation_workspace_for_window(target_window, ctx);
+                    if let Some(workspace) = &target_workspace {
+                        workspace.update(ctx, |workspace, ctx| {
+                            workspace.handle_reopen(ctx);
+                        });
+                    }
                 }
             }
 
             if let Some(ws) = target_workspace {
+                nav_handle.update(ctx, |stack, _| stack.expect_focus_loss(current_window));
                 ctx.windows().show_window_and_focus_app(target_window);
                 ws.update(ctx, |workspace, ctx| {
                     workspace.restore_navigation_entry_local(entry, ctx);
@@ -19386,12 +19396,15 @@ impl Workspace {
                     );
                 }
 
-                if this_window_lost_focus {
-                    if FeatureFlag::NavigationStack.is_enabled() {
-                        nav_stack::NavigationStack::handle(ctx)
-                            .update(ctx, |stack, _| stack.flush());
+                if this_window_lost_focus && FeatureFlag::NavigationStack.is_enabled() {
+                    let nav_stack = nav_stack::NavigationStack::handle(ctx);
+                    let suppress_record = nav_stack.update(ctx, |stack, _| {
+                        stack.take_expected_focus_loss(self.window_id)
+                    });
+                    if !suppress_record {
+                        nav_stack.update(ctx, |stack, _| stack.flush());
+                        self.record_navigation_entry(ctx);
                     }
-                    self.record_navigation_entry(ctx);
                 }
                 // Re-render if fullscreen state for active window has changed.
                 if current.is_active_window_fullscreen != previous.is_active_window_fullscreen {
@@ -20831,6 +20844,7 @@ impl Workspace {
                         ),
                         is_active,
                         false,
+                        false,
                     )
                     .finish(),
                 )
@@ -20896,6 +20910,7 @@ impl Workspace {
                         keybinding_name_to_display_string(keybinding_name, ctx),
                         is_active,
                         false,
+                        false,
                     )
                     .finish(),
                 )
@@ -20941,6 +20956,7 @@ impl Workspace {
                         tooltip_text.to_string(),
                         keybinding_name_to_display_string("workspace:toggle_left_panel", ctx),
                         is_active,
+                        false,
                         false,
                     )
                     .finish(),
@@ -21355,10 +21371,11 @@ impl Workspace {
                                 icons::Icon::ChevronLeft,
                                 &self.mouse_states.nav_back_button,
                                 WorkspaceAction::NavigateBack,
-                                "Navigate back".to_string(),
+                                "Go back".to_string(),
                                 keybinding_name_to_display_string("workspace:navigate_back", ctx),
                                 false,
                                 !nav_stack.can_go_back(),
+                                true,
                             )
                             .finish(),
                         )
@@ -21379,13 +21396,14 @@ impl Workspace {
                                 icons::Icon::ChevronRight,
                                 &self.mouse_states.nav_forward_button,
                                 WorkspaceAction::NavigateForward,
-                                "Navigate forward".to_string(),
+                                "Go forward".to_string(),
                                 keybinding_name_to_display_string(
                                     "workspace:navigate_forward",
                                     ctx,
                                 ),
                                 false,
                                 !nav_stack.can_go_forward(),
+                                true,
                             )
                             .finish(),
                         )
@@ -21679,6 +21697,7 @@ impl Workspace {
                 keybinding_name_to_display_string(TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME, ctx),
                 is_inbox_active,
                 false,
+                false,
             )
             .finish();
 
@@ -21962,6 +21981,7 @@ impl Workspace {
                     new_tab_tool_tip_sublabel_text,
                     false,
                     false,
+                    false,
                 )
                 .on_right_click(move |ctx, _, position| {
                     ctx.dispatch_typed_action(WorkspaceAction::ToggleNewSessionMenu {
@@ -22188,6 +22208,7 @@ impl Workspace {
                 self.cached_keybindings[TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME].clone(),
                 false,
                 false,
+                false,
             )
             .finish();
 
@@ -22228,6 +22249,7 @@ impl Workspace {
                 WorkspaceAction::ShowSettings,
                 "Settings".to_string(),
                 self.cached_keybindings[SHOW_SETTINGS_KEYBINDING_NAME].clone(),
+                false,
                 false,
                 false,
             )
@@ -22376,6 +22398,7 @@ impl Workspace {
                 self.cached_keybindings[ASK_AI_ASSISTANT_KEYBINDING_NAME].clone(),
                 false,
                 false,
+                false,
             )
             .finish(),
         )
@@ -22402,6 +22425,11 @@ impl Workspace {
         })
     }
 
+    /// Renders a tab-bar icon button. `emphasized` renders the enabled icon
+    /// with the prominent main text color (matching active toolbar icons)
+    /// instead of the muted sub-text color. The tooltip is attached in both
+    /// the enabled and disabled states so greyed-out buttons remain
+    /// discoverable.
     #[allow(clippy::too_many_arguments)]
     fn render_tab_bar_icon_button(
         &self,
@@ -22413,9 +22441,10 @@ impl Workspace {
         tool_tip_sublabel_text: Option<String>,
         is_active: bool,
         disable: bool,
+        emphasized: bool,
     ) -> Hoverable {
         let theme = appearance.theme();
-        let icon_color = if is_active {
+        let icon_color = if is_active || emphasized {
             theme.main_text_color(theme.background())
         } else {
             theme.sub_text_color(theme.background())
@@ -22446,19 +22475,22 @@ impl Workspace {
             });
         }
 
+        button = button.with_tooltip(self.render_tab_bar_icon_button_tooltip(
+            appearance,
+            tool_tip_label_text,
+            tool_tip_sublabel_text,
+        ));
+
         if disable {
-            button = button.with_style(UiComponentStyles {
-                font_color: Some(theme.disabled_text_color(theme.background()).into()),
-                ..UiComponentStyles::default()
-            });
-            button.build().disable()
+            button = button
+                .with_style(UiComponentStyles {
+                    font_color: Some(theme.disabled_text_color(theme.background()).into()),
+                    ..UiComponentStyles::default()
+                })
+                .with_cursor(None);
+            button.build()
         } else {
             button
-                .with_tooltip(self.render_tab_bar_icon_button_tooltip(
-                    appearance,
-                    tool_tip_label_text,
-                    tool_tip_sublabel_text,
-                ))
                 .build()
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         }
@@ -23474,6 +23506,10 @@ impl Workspace {
             matches!(terminal_settings.spacing_mode.value(), SpacingMode::Compact);
         if is_compact_mode {
             context.set.insert(flags::COMPACT_MODE_CONTEXT_FLAG);
+        }
+
+        if FeatureFlag::NavigationStack.is_enabled() && *tab_settings.show_navigation_buttons {
+            context.set.insert(flags::SHOW_NAVIGATION_BUTTONS_FLAG);
         }
 
         let respect_system_theme = respect_system_theme(theme_settings);

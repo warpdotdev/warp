@@ -5,6 +5,11 @@ use warpui::{navigation, AppContext, EntityId, WindowId};
 use crate::pane_group::PaneId;
 use crate::terminal::block_list_viewport::ScrollPosition;
 
+/// Terminal scroll anchors within this many lines of the previous entry are
+/// treated as near-duplicates and not recorded, so a trivial or net-zero
+/// scroll twitch does not create an imperceptible Back destination.
+const NEAR_DUPLICATE_TERMINAL_SCROLL_THRESHOLD_LINES: f32 = 10.0;
+
 #[derive(Debug, Clone)]
 pub enum ScrollSnapshot {
     Terminal(ScrollPosition),
@@ -50,6 +55,17 @@ impl ScrollSnapshot {
             _ => false,
         }
     }
+
+    /// Whether pushing `self` on top of `existing` would create a
+    /// near-duplicate entry the user cannot meaningfully navigate between.
+    pub fn is_near_duplicate(&self, existing: &Self) -> bool {
+        match (self, existing) {
+            (ScrollSnapshot::Terminal(a), ScrollSnapshot::Terminal(b)) => {
+                a.is_within_lines(b, NEAR_DUPLICATE_TERMINAL_SCROLL_THRESHOLD_LINES)
+            }
+            _ => self.same_position(existing),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +87,7 @@ impl navigation::NavigationEntry for NavigationEntry {
         match (&self.scroll_snapshot, &existing.scroll_snapshot) {
             (None, None) => false,
             (Some(_), None) | (None, Some(_)) => true,
-            (Some(a), Some(b)) => !a.same_position(b),
+            (Some(a), Some(b)) => !a.is_near_duplicate(b),
         }
     }
 }

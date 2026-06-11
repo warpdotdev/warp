@@ -92,6 +92,8 @@ The branch already wires the feature through all intended user entry points:
 
 This means the branch implements one extra user-facing affordance beyond the product spec: a command-palette-accessible `Clear Navigation Stack` action.
 
+Note for OSS checkouts: the default `cargo run` launches the `warp-oss` binary, which applies only `DEBUG_FLAGS` — not `DOGFOOD_FLAGS` — so `FeatureFlag::NavigationStack` is off. Use `cargo run --features navigation_stack` (compile-time enablement via `app/src/features.rs`) or a channel binary that applies dogfood flags (`warp`/`dev`).
+
 ### Recording flow
 
 The workspace owns all record-time decisions. The current branch records history from these paths:
@@ -217,8 +219,24 @@ The branch follows existing Warp patterns for user-facing affordances:
 
 - editable bindings for keyboard shortcuts and command palette discoverability
 - a persisted tab setting for button visibility
-- button rendering inside the existing tab bar layout
+- button rendering inside the existing tab bar layout (added to the shared left-toolbar row in `render_tab_bar_contents` before the vertical-tabs branch, so the buttons render in both horizontal and vertical layouts)
 - feature-flag gating at the binding, setting, and rendering layers
+
+### 4.7 Fixes required by computer-use verification
+
+End-to-end verification of the ported branch surfaced gaps whose required implementations are recorded here.
+
+**Cross-window forward preservation.** `restore_navigation_entry` raises the destination window and then clears `is_navigating`. The departing window's focus-loss `StateEvent` arrives asynchronously after that reset, so `handle_window_state_change` recorded a fresh entry and truncated the forward stack (integration tests deliver the event synchronously inside the guard, masking this). Fix: `NavigationStack` carries an `expected_focus_loss: Option<WindowId>`. The cross-window restore path calls `expect_focus_loss(current_window)` before raising the destination window; `handle_window_state_change` consumes the expectation via `take_expected_focus_loss(window_id)` and skips flush/record for that one focus loss. The expectation is cleared by any subsequent `push` or `clear` so a stale expectation cannot suppress a later legitimate record.
+
+**Closed-window restore.** `navigation_workspace_for_window` can return a workspace whose platform window is already closed (registry staleness in the async world). The restore path then "restores" into the zombie workspace, never reaching the undo-close reopen path, and even when reopening it skipped `Workspace::handle_reopen`, leaving panes detached. Fix: both `navigation_entry_can_restore` and `restore_navigation_entry` treat a registry hit as valid only when `ctx.is_window_open(window_id)`; otherwise they fall through to `UndoCloseStack::take_closed_window` + `ctx.reopen_closed_window`, followed by `handle_reopen` to reattach panes — mirroring `UndoCloseStack::undo_close`.
+
+**Editor caret co-location.** `ScrollPositionSnapshot` already anchors on `first_character_offset`; restoring scroll without moving the caret meant the first caret-relative keystroke autoscrolled back to the stale caret. Fix: `CodeEditorView::restore_scroll_position_with_caret` sets the selection cursor to the snapshot's first character offset and then applies `scroll_to`. The code-pane `restore_scroll` adapter and `CodeDiffView::restore_selected_editor_scroll` use this method.
+
+**Keybinding non-interference.** The `workspace:navigate_back` / `workspace:navigate_forward` bindings add `& !id!("LongRunningCommand")` to their context predicates so a focused foreground program receives Alt+Left/Right. Typing in the input editor intentionally keeps IDE precedence.
+
+**Discoverability.** `render_tab_bar_icon_button` attaches the tooltip in the disabled branch as well, and gains an `emphasized` parameter so the nav chevrons use `main_text_color` when enabled (matching neighboring toolbar icons) instead of the muted sub-text color. Tooltips read "Go back" / "Go forward" to match the palette/binding names. The palette toggle label is made state-aware by inserting `flags::SHOW_NAVIGATION_BUTTONS_FLAG` into the workspace keymap context when the setting is on (the `ToggleSettingActionPair` enable/disable split keys off that context flag). The settings row gains descriptive subtext.
+
+**Minimum scroll delta.** `NavigationEntry::should_push` treats terminal scroll snapshots within 10 lines of the stack top (same `ScrollLines` variant) as duplicates via `ScrollPosition::is_within_lines`, so net-zero scroll twitches do not create near-duplicate anchors. Editor/code-diff/code-review snapshots keep exact comparison.
 
 ## 5. End-to-End Flow
 
@@ -328,3 +346,6 @@ Because automated coverage is currently lighter for some specialized surfaces, m
 - Replace `tab_index`-based identity with a stable tab identifier if future navigation features need stronger reordering guarantees.
 - Add targeted integration coverage for notebook, code diff, and code review restoration.
 - Remove any temporary navigation debug instrumentation before shipping if it is no longer needed for branch debugging.
+- Add an onboarding/changelog affordance introducing the feature (deferred from this release).
+- Add palette search keyword aliases so "navigate" and "history" surface Go Back / Go Forward; requires keymap-level alias support in `BindingDescription`.
+- Consider caret co-location for notebook scroll restoration (currently editor panes and code diffs only).

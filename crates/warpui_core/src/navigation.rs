@@ -4,7 +4,7 @@ use std::time::Duration;
 use instant::Instant;
 
 use crate::r#async::Timer;
-use crate::{Entity, ModelContext, SingletonEntity};
+use crate::{Entity, ModelContext, SingletonEntity, WindowId};
 
 pub const MAX_STACK_SIZE: usize = 100;
 pub const DEFAULT_DEBOUNCE_DURATION: Duration = Duration::from_millis(1500);
@@ -30,6 +30,7 @@ pub struct NavigationStack<E: NavigationEntry> {
     pending: Option<E>,
     debounce_duration: Duration,
     last_debounced_push: Option<Instant>,
+    expected_focus_loss: Option<WindowId>,
 }
 
 impl<E: NavigationEntry> Entity for NavigationStack<E> {
@@ -47,6 +48,7 @@ impl<E: NavigationEntry> Default for NavigationStack<E> {
             pending: None,
             debounce_duration: DEFAULT_DEBOUNCE_DURATION,
             last_debounced_push: None,
+            expected_focus_loss: None,
         }
     }
 }
@@ -60,6 +62,8 @@ impl<E: NavigationEntry> NavigationStack<E> {
         if self.is_navigating {
             return;
         }
+
+        self.expected_focus_loss = None;
 
         if let Some(top) = self.back.last() {
             if !entry.should_push(top) {
@@ -115,6 +119,7 @@ impl<E: NavigationEntry> NavigationStack<E> {
         self.forward.clear();
         self.pending = None;
         self.last_debounced_push = None;
+        self.expected_focus_loss = None;
     }
 
     pub fn retain(&mut self, mut keep: impl FnMut(&E) -> bool) {
@@ -132,6 +137,28 @@ impl<E: NavigationEntry> NavigationStack<E> {
 
     pub fn is_navigating(&self) -> bool {
         self.is_navigating
+    }
+
+    /// Marks that the next focus loss of `window` is caused by a navigation
+    /// restore. The application layer should consume this with
+    /// [`Self::take_expected_focus_loss`] and skip recording a history entry
+    /// for that focus change, since it is system-driven and would otherwise
+    /// clear the forward stack. The expectation is cleared by the next
+    /// [`Self::push`] or [`Self::clear`] so it cannot suppress a later,
+    /// unrelated focus change.
+    pub fn expect_focus_loss(&mut self, window: WindowId) {
+        self.expected_focus_loss = Some(window);
+    }
+
+    /// Consumes a pending focus-loss expectation for `window`. Returns `true`
+    /// when the focus loss was expected (and recording should be skipped).
+    pub fn take_expected_focus_loss(&mut self, window: WindowId) -> bool {
+        if self.expected_focus_loss == Some(window) {
+            self.expected_focus_loss = None;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn push_debounced(&mut self, entry: E, ctx: &mut ModelContext<Self>) {

@@ -937,7 +937,7 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::NavigateBack,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
-        .with_context_predicate(id!("Workspace"))
+        .with_context_predicate(id!("Workspace") & !id!("LongRunningCommand"))
         .with_enabled(|| FeatureFlag::NavigationStack.is_enabled())
         .with_mac_key_binding("ctrl--")
         .with_linux_or_windows_key_binding("alt-left"),
@@ -947,7 +947,7 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::NavigateForward,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
-        .with_context_predicate(id!("Workspace"))
+        .with_context_predicate(id!("Workspace") & !id!("LongRunningCommand"))
         .with_enabled(|| FeatureFlag::NavigationStack.is_enabled())
         .with_mac_key_binding("ctrl-shift--")
         .with_linux_or_windows_key_binding("alt-right"),

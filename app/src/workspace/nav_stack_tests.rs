@@ -1,6 +1,8 @@
 use warpui::navigation::MAX_STACK_SIZE;
+use warpui::units::Lines;
 
 use super::*;
+use crate::terminal::block_list_viewport::ScrollLines;
 
 fn make_entry(tab_index: usize) -> NavigationEntry {
     NavigationEntry {
@@ -113,6 +115,28 @@ fn test_push_deduplicates_consecutive_identical_entries() {
 
     stack.push(entry_a.clone());
     assert_eq!(stack.entry_count(), 3);
+}
+
+#[test]
+fn test_push_skips_near_duplicate_terminal_scroll_entries() {
+    let mut stack = new_stack();
+    let pane = PaneId::dummy_pane_id();
+
+    let entry_at = |scroll_top: f64| NavigationEntry {
+        window_id: WindowId::from_usize(1),
+        tab_index: 0,
+        pane_id: pane,
+        scroll_snapshot: Some(ScrollSnapshot::Terminal(ScrollPosition::FixedAtPosition {
+            scroll_lines: ScrollLines::ScrollTop(Lines::new(scroll_top)),
+        })),
+    };
+
+    stack.push(entry_at(100.0));
+    stack.push(entry_at(106.0));
+    assert_eq!(stack.entry_count(), 1);
+
+    stack.push(entry_at(150.0));
+    assert_eq!(stack.entry_count(), 2);
 }
 
 #[test]

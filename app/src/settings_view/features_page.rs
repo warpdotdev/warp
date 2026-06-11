@@ -7789,7 +7789,12 @@ impl SettingsWidget for NavigationButtonsWidget {
                     ctx.dispatch_typed_action(FeaturesPageAction::ToggleShowNavigationButtons);
                 })
                 .finish(),
-            None,
+            Some(
+                "Show Go Back and Go Forward buttons in the tab bar. Hiding the buttons does \
+                not disable navigation — the keyboard shortcuts and Command Palette actions \
+                still work."
+                    .into(),
+            ),
         )
     }
 }

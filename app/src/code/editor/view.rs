@@ -897,6 +897,24 @@ impl CodeEditorView {
         });
     }
 
+    /// Restores a scroll position and co-locates the selection caret with the
+    /// restored viewport, so the first caret-relative keystroke after a
+    /// navigation restore does not autoscroll away from the restored position.
+    pub fn restore_scroll_position_with_caret(
+        &self,
+        snapshot: warp_editor::render::model::viewport::ScrollPositionSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.model.update(ctx, |model, ctx| {
+            model.selection().update(ctx, |selection_model, ctx| {
+                selection_model.set_cursor(snapshot.first_character_offset(), ctx);
+            });
+            model.render_state().update(ctx, |render_state, _| {
+                render_state.scroll_to(snapshot);
+            });
+        });
+    }
+
     #[allow(clippy::single_range_in_vec_init)]
     fn expand_hidden_section(
         &mut self,

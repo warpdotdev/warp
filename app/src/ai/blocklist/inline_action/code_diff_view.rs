@@ -2171,7 +2171,7 @@ impl CodeDiffView {
         {
             diff_view.update(ctx, |view, ctx| {
                 view.editor().update(ctx, |editor, ctx| {
-                    editor.restore_scroll_position(snapshot, ctx);
+                    editor.restore_scroll_position_with_caret(snapshot, ctx);
                     editor.focus(ctx);
                 });
             });

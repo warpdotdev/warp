@@ -96,7 +96,7 @@ impl ScrollPositionSnapshot {
         }
     }
 
-    #[cfg(test)]
+    /// The offset of the first (top-left) character captured by this snapshot.
     pub fn first_character_offset(self) -> CharOffset {
         self.first_character_offset
     }

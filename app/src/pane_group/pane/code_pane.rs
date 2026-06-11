@@ -283,7 +283,12 @@ impl PaneContent for CodePane {
     ) {
         if let crate::workspace::nav_stack::ScrollSnapshot::Editor(editor_snapshot) = snapshot {
             let code_view = self.file_view(ctx);
-            if let Some(render_state) = code_view.as_ref(ctx).active_editor_render_state(ctx) {
+            if let Some(editor_view) = code_view.as_ref(ctx).active_code_editor_view(ctx) {
+                editor_view.update(ctx, |editor, ctx| {
+                    editor.restore_scroll_position_with_caret(*editor_snapshot, ctx);
+                });
+            } else if let Some(render_state) = code_view.as_ref(ctx).active_editor_render_state(ctx)
+            {
                 render_state.update(ctx, |rs, _| {
                     rs.scroll_to(*editor_snapshot);
                 });
