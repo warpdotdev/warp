@@ -2148,9 +2148,9 @@ pub enum TelemetryEvent {
     /// consent screen).
     SuperGrokSubscriptionConnectInitiated,
 
-    /// Result (success or failure) of the user attempting to connect their
+    /// Outcome (success or failure) of the user attempting to connect their
     /// SuperGrok / xAI subscription via the OAuth flow in AI settings.
-    SuperGrokSubscriptionConnectResult {
+    SuperGrokSubscriptionConnectFinished {
         success: bool,
         /// Human-readable error message on failure; absent on success.
         error: Option<String>,
@@ -3884,10 +3884,12 @@ impl TelemetryEvent {
                 Some(json!({"is_ai_enabled": is_ai_enabled}))
             }
             TelemetryEvent::SuperGrokSubscriptionConnectInitiated => None,
-            TelemetryEvent::SuperGrokSubscriptionConnectResult { success, error } => Some(json!({
-                "success": success,
-                "error": error,
-            })),
+            TelemetryEvent::SuperGrokSubscriptionConnectFinished { success, error } => {
+                Some(json!({
+                    "success": success,
+                    "error": error,
+                }))
+            }
             TelemetryEvent::ToggleActiveAI {
                 is_active_ai_enabled,
             } => Some(json!({"is_active_ai_enabled": is_active_ai_enabled})),
@@ -5129,7 +5131,7 @@ impl TelemetryEvent {
             | TelemetryEvent::ToggleIntelligentAutosuggestionsSetting { .. }
             | TelemetryEvent::ToggleGlobalAI { .. }
             | TelemetryEvent::SuperGrokSubscriptionConnectInitiated
-            | TelemetryEvent::SuperGrokSubscriptionConnectResult { .. }
+            | TelemetryEvent::SuperGrokSubscriptionConnectFinished { .. }
             | TelemetryEvent::ToggleCodebaseContext { .. }
             | TelemetryEvent::ToggleAutoIndexing { .. }
             | TelemetryEvent::ToggleActiveAI { .. }
@@ -5675,7 +5677,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ResourceUsageStats => EnablementState::Always,
             Self::ToggleGlobalAI => EnablementState::Always,
             Self::SuperGrokSubscriptionConnectInitiated
-            | Self::SuperGrokSubscriptionConnectResult => {
+            | Self::SuperGrokSubscriptionConnectFinished => {
                 EnablementState::Flag(FeatureFlag::SuperGrok)
             }
             Self::ToggleActiveAI => EnablementState::Always,
@@ -6267,7 +6269,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::OpenedSharingDialog => "Opened Sharing Dialog",
             Self::ToggleGlobalAI => "Toggle Global AI Enablement",
             Self::SuperGrokSubscriptionConnectInitiated => "SuperGrok.Connect.Initiated",
-            Self::SuperGrokSubscriptionConnectResult => "SuperGrok.Connect.Result",
+            Self::SuperGrokSubscriptionConnectFinished => "SuperGrok.Connect.Finished",
             Self::ToggleActiveAI => "Toggle Active AI Enablement",
             Self::ToggleLigatureRendering => "Toggle Ligature Rendering",
             Self::WorkflowAliasAdded => "Added Workflow Alias",
@@ -7097,8 +7099,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Opened the sharing settings dialog for a session or Warp Drive object"
             }
 			Self::ToggleGlobalAI => "Toggled global AI enablement.",
-            Self::SuperGrokSubscriptionConnectInitiated => "User clicked Connect SuperGrok subscription; the OAuth consent flow was initiated (browser opened).",
-            Self::SuperGrokSubscriptionConnectResult => "Result (success or failure) of connecting a SuperGrok / xAI subscription via OAuth in AI settings.",
+			Self::SuperGrokSubscriptionConnectInitiated => "User clicked Connect SuperGrok subscription; the OAuth consent flow was initiated (browser opened).",
+            Self::SuperGrokSubscriptionConnectFinished => "SuperGrok subscription OAuth connection flow finished (success or failure).",
             Self::ToggleActiveAI => "Toggled active AI enablement.",
             Self::ToggleLigatureRendering => "Toggled ligature rendering",
             Self::WorkflowAliasAdded => "Added an alias to a Warp Drive workflow",
