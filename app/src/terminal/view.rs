@@ -15438,14 +15438,12 @@ impl TerminalView {
                     return;
                 }
 
-                let (query_string, block_command) = if should_collect_ai_ugc_telemetry(
-                    ctx,
-                    PrivacySettings::as_ref(ctx).is_telemetry_enabled,
-                ) {
-                    (Some(suggestion.prompt.to_string()), Some(command))
-                } else {
-                    (None, None)
-                };
+                let (query_string, block_command) =
+                    if should_collect_ai_ugc_telemetry(PrivacySettings::as_ref(ctx), ctx) {
+                        (Some(suggestion.prompt.to_string()), Some(command))
+                    } else {
+                        (None, None)
+                    };
 
                 let banner_id = self.inline_banners_state.next_banner_id();
 

@@ -10,6 +10,7 @@ query GetUserSettings($requestContext: RequestContext!) {
           isCloudConversationStorageEnabled
           isCrashReportingEnabled
           isTelemetryEnabled
+          isUgcCollectionEnabled
         }
       }
     }
@@ -54,4 +55,5 @@ pub struct UserSettings {
     pub is_cloud_conversation_storage_enabled: bool,
     pub is_crash_reporting_enabled: bool,
     pub is_telemetry_enabled: bool,
+    pub is_ugc_collection_enabled: bool,
 }

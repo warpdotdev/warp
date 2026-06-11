@@ -9,6 +9,7 @@ fn snapshot(policy: OrganizationTelemetryPolicy, user_enabled: bool) -> PrivacyS
         organization_telemetry_policy: policy,
         should_collect_ai_ugc_telemetry: true,
         cloud_conversation_storage_enabled: None,
+        ugc_collection_enabled: None,
     }
 }
 

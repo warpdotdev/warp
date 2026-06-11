@@ -21848,6 +21848,10 @@ impl Workspace {
             context.set.insert(flags::TELEMETRY_FLAG);
         }
 
+        if privacy_settings.is_ugc_collection_enabled {
+            context.set.insert(flags::UGC_COLLECTION_FLAG);
+        }
+
         let cloud_preferences_settings = CloudPreferencesSettings::as_ref(app);
         if *cloud_preferences_settings.settings_sync_enabled.value() {
             context.set.insert(flags::SETTINGS_SYNC_FLAG);

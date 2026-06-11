@@ -34,6 +34,7 @@ use warp_graphql::workspace::{
     HostEnablementSetting as GqlHostEnablementSetting,
     InviteLinkDomainRestriction as GqlInviteLinkDomainRestriction,
     MembershipRole as GqlMembershipRole, Team as GqlTeam, TeamMember as GqlTeamMember,
+    TelemetryEnabled as GqlTelemetryEnabled,
     UgcCollectionEnablementSetting as GqlUgcCollectionEnablementSetting, Workspace as GqlWorkspace,
     WorkspaceMember as GqlWorkspaceMember, WorkspaceMemberUsageInfo as GqlWorkspaceMemberUsageInfo,
     WorkspaceSettings as GqlWorkspaceSettings,
@@ -88,22 +89,38 @@ impl From<GqlTeamMember> for TeamMember {
 }
 
 pub(super) fn organization_telemetry_policy(
+    setting: GqlTelemetryEnabled,
     force_enabled: bool,
-    force_disabled: bool,
 ) -> OrganizationTelemetryPolicy {
     if !FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() {
-        return if force_enabled {
+        // Preserve legacy behavior while the enterprise telemetry policy rolls out: only an
+        // org-enforced enable (via either the new enum or the deprecated boolean) is honored;
+        // everything else is treated as unmanaged.
+        return if force_enabled || matches!(setting, GqlTelemetryEnabled::Enable) {
             OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled)
         } else {
             OrganizationTelemetryPolicy::Unmanaged
         };
     }
-    if force_disabled {
-        OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled)
-    } else if force_enabled {
-        OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled)
-    } else {
-        OrganizationTelemetryPolicy::Unmanaged
+    match setting {
+        GqlTelemetryEnabled::Enable => {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Enabled)
+        }
+        GqlTelemetryEnabled::Disable => {
+            OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled)
+        }
+        GqlTelemetryEnabled::RespectUserSetting => OrganizationTelemetryPolicy::Unmanaged,
+        GqlTelemetryEnabled::Other(value) => {
+            report_error!(
+                anyhow!(
+                    "Invalid TelemetryEnabled '{value}'. Make sure to update client GraphQL types!"
+                ),
+                warp_core::errors::ReportErrorLogMode::OncePerRun
+            );
+            // Fail closed: keep telemetry disabled until the client understands the
+            // organization's policy.
+            OrganizationTelemetryPolicy::Unknown
+        }
     }
 }
 
@@ -819,8 +836,8 @@ impl From<warp_graphql::workspace::LlmSettings> for LlmSettings {
 impl From<GqlWorkspaceSettings> for WorkspaceSettings {
     fn from(gql_workspace_settings: GqlWorkspaceSettings) -> WorkspaceSettings {
         let telemetry_policy = organization_telemetry_policy(
+            gql_workspace_settings.telemetry_settings.setting.clone(),
             gql_workspace_settings.telemetry_settings.force_enabled,
-            gql_workspace_settings.telemetry_settings.force_disabled,
         );
         Self {
             llm_settings: gql_workspace_settings.llm_settings.into(),

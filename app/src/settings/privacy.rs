@@ -121,6 +121,16 @@ define_settings_group!(WarpDrivePrivacySettings, settings: [
         toml_path: "agents.cloud_conversation_storage_enabled",
         description: "Whether conversations are stored in the cloud.",
     },
+    is_ugc_collection_enabled: IsUgcCollectionEnabled {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        private: false,
+        storage_key: "UgcCollectionEnabled",
+        toml_path: "privacy.ugc_collection_enabled",
+        description: "Whether user-generated content, such as AI queries and console input/output, may be collected.",
+    },
 ]);
 
 maybe_define_setting!(CustomSecretRegexList, group: PrivacySettings, {
@@ -149,6 +159,7 @@ pub struct PrivacySettings {
     pub is_telemetry_enabled: bool,
     pub is_crash_reporting_enabled: bool,
     pub is_cloud_conversation_storage_enabled: bool,
+    pub is_ugc_collection_enabled: bool,
     pub has_initialized_default_secret_regexes: HasInitializedDefaultSecretRegexes,
     /// List of user defined secret regexes.
     /// Enterprise-level secret regexes will always take precedence over user-level secrets,
@@ -177,11 +188,18 @@ pub struct PrivacySettingsSnapshot {
     // the default value won't override a value that the user previously set on a different device.
     // This is set to a non-option once the user manually changes this setting.
     cloud_conversation_storage_enabled: Option<bool>,
+    // Same rationale as `cloud_conversation_storage_enabled`: only a disabled value is
+    // propagated so the default doesn't clobber a preference set on a different device.
+    ugc_collection_enabled: Option<bool>,
 }
 
 impl PrivacySettingsSnapshot {
     pub fn cloud_conversation_storage_enabled(&self) -> Option<bool> {
         self.cloud_conversation_storage_enabled
+    }
+
+    pub fn ugc_collection_enabled(&self) -> Option<bool> {
+        self.ugc_collection_enabled
     }
 
     pub fn is_telemetry_enabled(&self) -> bool {
@@ -233,6 +251,7 @@ impl PrivacySettingsSnapshot {
     ) -> Self {
         Self {
             cloud_conversation_storage_enabled: None,
+            ugc_collection_enabled: None,
             is_telemetry_enabled: true,
             is_crash_reporting_enabled: true,
             organization_telemetry_policy,
@@ -274,6 +293,7 @@ impl PrivacySettings {
         let is_cloud_conversation_storage_enabled = *warp_drive_privacy
             .is_cloud_conversation_storage_enabled
             .value();
+        let is_ugc_collection_enabled = *warp_drive_privacy.is_ugc_collection_enabled.value();
 
         // Listen for changes to the cloud model and update ourselves when they happen.
         ctx.subscribe_to_model(&WarpDrivePrivacySettings::handle(ctx), |me, event, ctx| {
@@ -301,6 +321,12 @@ impl PrivacySettings {
                         ctx,
                     );
                 }
+                WarpDrivePrivacySettingsChangedEvent::IsUgcCollectionEnabled { .. } => {
+                    me.set_is_ugc_collection_enabled(
+                        *privacy_settings.is_ugc_collection_enabled.value(),
+                        ctx,
+                    );
+                }
             }
         });
 
@@ -321,6 +347,7 @@ impl PrivacySettings {
             is_crash_reporting_enabled,
             is_telemetry_enabled,
             is_cloud_conversation_storage_enabled,
+            is_ugc_collection_enabled,
             user_secret_regex_list,
             has_initialized_default_secret_regexes,
             organization_telemetry_policy,
@@ -429,6 +456,7 @@ impl PrivacySettings {
         self.is_telemetry_enabled = true;
         self.is_crash_reporting_enabled = true;
         self.is_cloud_conversation_storage_enabled = true;
+        self.is_ugc_collection_enabled = true;
         self.set_organization_telemetry_policy(OrganizationTelemetryPolicy::Unmanaged, ctx);
         self.is_enterprise_secret_redaction_enabled = false;
     }
@@ -460,6 +488,7 @@ impl PrivacySettings {
                 if !self.is_telemetry_enabled
                     || !self.is_crash_reporting_enabled
                     || !self.is_cloud_conversation_storage_enabled
+                    || !self.is_ugc_collection_enabled
                 {
                     self.update_server_with_local_settings(ctx);
                 }
@@ -510,6 +539,10 @@ impl PrivacySettings {
                 ctx,
             );
         }
+
+        if self.is_ugc_collection_enabled && !fetched_settings.is_ugc_collection_enabled {
+            self.set_is_ugc_collection_enabled(fetched_settings.is_ugc_collection_enabled, ctx);
+        }
     }
 
     /// Constructor for tests only.
@@ -521,6 +554,7 @@ impl PrivacySettings {
             is_crash_reporting_enabled: true,
             is_telemetry_enabled: true,
             is_cloud_conversation_storage_enabled: true,
+            is_ugc_collection_enabled: true,
             user_secret_regex_list: CustomSecretRegexList::new(None),
             has_initialized_default_secret_regexes: HasInitializedDefaultSecretRegexes::new(None),
             organization_telemetry_policy: OrganizationTelemetryPolicy::Unmanaged,
@@ -537,13 +571,11 @@ impl PrivacySettings {
         PrivacySettingsSnapshot {
             cloud_conversation_storage_enabled: (!self.is_cloud_conversation_storage_enabled)
                 .then_some(false),
+            ugc_collection_enabled: (!self.is_ugc_collection_enabled).then_some(false),
             is_telemetry_enabled: self.is_telemetry_enabled,
             is_crash_reporting_enabled: self.is_crash_reporting_enabled,
             organization_telemetry_policy: self.organization_telemetry_policy,
-            should_collect_ai_ugc_telemetry: should_collect_ai_ugc_telemetry(
-                app,
-                self.is_telemetry_enabled,
-            ),
+            should_collect_ai_ugc_telemetry: should_collect_ai_ugc_telemetry(self, app),
         }
     }
 
@@ -610,6 +642,40 @@ impl PrivacySettings {
                 );
             }
             ctx.emit(PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled {
+                old_value,
+                new_value,
+            });
+            ctx.notify();
+        }
+    }
+
+    /// Sets `is_ugc_collection_enabled` to the given value.
+    ///
+    /// Additionally, this writes the given value to the user's local defaults, and additionally
+    /// sends a request to update the user's `is_ugc_collection_enabled` value stored server-side.
+    /// Finally, emits a `PrivacySettingsEvent::UpdateIsUgcCollectionEnabled` event.
+    pub fn set_is_ugc_collection_enabled(
+        &mut self,
+        new_value: bool,
+        ctx: &mut ModelContext<PrivacySettings>,
+    ) {
+        let old_value = self.is_ugc_collection_enabled;
+        if new_value != old_value {
+            self.is_ugc_collection_enabled = new_value;
+
+            WarpDrivePrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
+                log::info!("Setting is_ugc_collection_enabled to {new_value}");
+                let _ = settings.is_ugc_collection_enabled.set_value(new_value, ctx);
+            });
+
+            if self.auth_state.is_logged_in() {
+                let auth_client = self.auth_client.clone();
+                let _ = ctx.spawn(
+                    async move { auth_client.set_is_ugc_collection_enabled(new_value).await },
+                    |_, _, _| (),
+                );
+            }
+            ctx.emit(PrivacySettingsChangedEvent::UpdateIsUgcCollectionEnabled {
                 old_value,
                 new_value,
             });
@@ -748,6 +814,7 @@ impl PrivacySettings {
                             crash_reporting_enabled: Some(snapshot.is_crash_reporting_enabled()),
                             cloud_conversation_storage_enabled: snapshot
                                 .cloud_conversation_storage_enabled(),
+                            ugc_collection_enabled: snapshot.ugc_collection_enabled(),
                         })
                         .await;
                     if let Err(err) = result {
@@ -811,20 +878,32 @@ impl PrivacySettings {
                     .as_bool()
                     .unwrap_or_default()
             });
+        let cloud_ugc_collection_value = cloud_prefs
+            .get(IsUgcCollectionEnabled::storage_key())
+            .map(|pref| {
+                pref.model()
+                    .string_model
+                    .value
+                    .as_bool()
+                    .unwrap_or_default()
+            });
 
         match (
             cloud_telemetry_value,
             cloud_crash_reporting_value,
             cloud_conversation_storage_value,
+            cloud_ugc_collection_value,
         ) {
             (
                 Some(is_telemetry_enabled),
                 Some(is_crash_reporting_enabled),
                 Some(is_cloud_conversation_storage_enabled),
+                Some(is_ugc_collection_enabled),
             ) => {
                 log::info!(
                     "Warp Drive privacy preferences are set, using those for telemetry={is_telemetry_enabled}, \
-                    crash_reporting={is_crash_reporting_enabled}, cloud_conversation_storage={is_cloud_conversation_storage_enabled}"
+                    crash_reporting={is_crash_reporting_enabled}, cloud_conversation_storage={is_cloud_conversation_storage_enabled}, \
+                    ugc_collection={is_ugc_collection_enabled}"
                 );
                 self.set_is_telemetry_enabled(is_telemetry_enabled, ctx);
                 self.set_is_crash_reporting_enabled(is_crash_reporting_enabled, ctx);
@@ -832,19 +911,21 @@ impl PrivacySettings {
                     is_cloud_conversation_storage_enabled,
                     ctx,
                 );
+                self.set_is_ugc_collection_enabled(is_ugc_collection_enabled, ctx);
             }
             _ => {
                 log::info!(
                     "Warp Drive privacy preferences are not set, syncing local PrivacySettings values to \
                     WarpDrivePrivacySettings and cloud. telemetry={}, crash_reporting={}, \
-                    cloud_conversation_storage={}",
+                    cloud_conversation_storage={}, ugc_collection={}",
                     self.is_telemetry_enabled,
                     self.is_crash_reporting_enabled,
-                    self.is_cloud_conversation_storage_enabled
+                    self.is_cloud_conversation_storage_enabled,
+                    self.is_ugc_collection_enabled
                 );
                 // First, ensure WarpDrivePrivacySettings (the define_settings_group model)
                 // reflects the actual PrivacySettings in-memory values. These may differ
-                // because WarpDrivePrivacySettings defaults to `true` for all three settings,
+                // because WarpDrivePrivacySettings defaults to `true` for all of these settings,
                 // while the user may have changed them to `false` via PrivacySettings before
                 // signing up. Without this step, maybe_sync_local_prefs_to_cloud would read
                 // the stale WarpDrivePrivacySettings defaults and push those to the cloud.
@@ -858,6 +939,9 @@ impl PrivacySettings {
                     report_if_error!(settings
                         .is_cloud_conversation_storage_enabled
                         .set_value(self.is_cloud_conversation_storage_enabled, ctx));
+                    report_if_error!(settings
+                        .is_ugc_collection_enabled
+                        .set_value(self.is_ugc_collection_enabled, ctx));
                 });
                 CloudPreferencesSyncer::handle(ctx).update(ctx, |syncer, ctx| {
                     syncer.maybe_sync_local_prefs_to_cloud(
@@ -865,6 +949,7 @@ impl PrivacySettings {
                             IsTelemetryEnabled::storage_key().to_string(),
                             IsCrashReportingEnabled::storage_key().to_string(),
                             IsCloudConversationStorageEnabled::storage_key().to_string(),
+                            IsUgcCollectionEnabled::storage_key().to_string(),
                         ],
                         ctx,
                     );
@@ -886,6 +971,10 @@ pub enum PrivacySettingsChangedEvent {
         new_value: bool,
     },
     UpdateIsCloudConversationStorageEnabled {
+        old_value: bool,
+        new_value: bool,
+    },
+    UpdateIsUgcCollectionEnabled {
         old_value: bool,
         new_value: bool,
     },
