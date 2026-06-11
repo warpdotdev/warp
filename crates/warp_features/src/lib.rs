@@ -880,6 +880,9 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+    /// Shows a warning in the agent view when the active conversation's
+    /// provider-side prompt cache has expired.
+    PromptCacheExpiryWarning,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -946,6 +949,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::PromptCacheExpiryWarning,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

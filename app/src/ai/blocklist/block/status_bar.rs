@@ -987,6 +987,7 @@ fn latest_model_used_before_exchange<V: View>(
                 model_id: model_info.model_id.to_string(),
                 model_display_name: model_info.display_name.clone(),
                 is_fallback: model_info.is_fallback,
+                ..Default::default()
             })
         })
 }

@@ -1885,6 +1885,10 @@ fn create_exchange_from_messages(
             model_id: model.model_id.clone().into(),
             display_name: model.model_display_name.clone(),
             is_fallback: model.is_fallback,
+            prompt_cache_expires_at: model
+                .prompt_cache_expires_at
+                .as_ref()
+                .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)),
         }),
         request_cost: None,
     };
