@@ -989,6 +989,8 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height: screenshot.height as i32,
                                 }),
                                 platform: convert_platform(platform).into(),
+                                // Window targeting metadata is not yet captured locally.
+                                windows: vec![],
                             },
                         )),
                     },
@@ -1033,6 +1035,9 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                                     height: s.height as i32,
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
+                                // Window targeting metadata is not yet captured locally.
+                                captured_window: None,
+                                windows: vec![],
                             },
                         )),
                     },
@@ -1448,6 +1453,22 @@ impl TryFrom<InsertReviewCommentsResult> for api::request::input::tool_call_resu
                 ),
             ),
             InsertReviewCommentsResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
+        }
+    }
+}
+
+impl TryFrom<WaitForEventsResult> for api::request::input::tool_call_result::Result {
+    type Error = ConvertToAPITypeError;
+
+    /// Completed → wire form; Cancelled → drop (mirrors RunAgents).
+    fn try_from(result: WaitForEventsResult) -> Result<Self, Self::Error> {
+        match result {
+            WaitForEventsResult::Completed => Ok(
+                api::request::input::tool_call_result::Result::WaitForEvents(
+                    api::WaitForEventsResult {},
+                ),
+            ),
+            WaitForEventsResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
         }
     }
 }

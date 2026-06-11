@@ -447,6 +447,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TabConfigs,
         #[cfg(feature = "grouped_tabs")]
         FeatureFlag::GroupedTabs,
+        #[cfg(feature = "pinned_tabs")]
+        FeatureFlag::PinnedTabs,
         #[cfg(feature = "warp_control_cli")]
         FeatureFlag::WarpControlCli,
         #[cfg(feature = "agent_harness")]
@@ -497,6 +499,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::RemoteCodeReview,
         #[cfg(feature = "custom_inference_endpoints")]
         FeatureFlag::CustomInferenceEndpoints,
+        #[cfg(feature = "supergrok")]
+        FeatureFlag::SuperGrok,
     ]);
 
     flags

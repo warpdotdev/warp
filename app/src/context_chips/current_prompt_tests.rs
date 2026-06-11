@@ -20,6 +20,8 @@ use crate::auth::AuthStateProvider;
 use crate::code_review::diff_state::DiffStats;
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::{GitRepoStatusModel, GitStatusMetadata};
+#[cfg(feature = "local_fs")]
+use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::context_chips::context_chip::{Environment, PromptGenerator};
 use crate::context_chips::prompt::Prompt;
 use crate::context_chips::{ChipAvailability, ChipDisabledReason, ContextChipKind};
@@ -674,16 +676,21 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
                 }),
             )
         });
+        let github_repo_model = {
+            let git_status = git_status.clone();
+            app.add_model(move |_| GitHubRepoModel::new_for_test(git_status))
+        };
 
         let sessions = app.add_model(|_| Sessions::new_for_test());
         let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
 
         current_prompt.update(&mut app, |cp, ctx| {
             cp.set_git_repo_status(Some(git_status.downgrade()), ctx);
+            cp.set_github_repo_model(Some(github_repo_model.downgrade()), ctx);
             cp.update_states_with_new_context(ctx);
         });
 
-        git_status.update(&mut app, |model, ctx| {
+        github_repo_model.update(&mut app, |model, ctx| {
             model.set_pr_info_for_test(
                 Some(PrInfo {
                     number: 123,
@@ -708,15 +715,9 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
             );
         });
 
-        git_status.update(&mut app, |model, ctx| {
-            model.set_metadata_for_test(
-                Some(GitStatusMetadata {
-                    current_branch_name: "feature-b".to_string(),
-                    main_branch_name: "main".to_string(),
-                    stats_against_head: DiffStats::default(),
-                }),
-                ctx,
-            );
+        // Clearing the model's PR info propagates to the chip.
+        github_repo_model.update(&mut app, |model, ctx| {
+            model.set_pr_info_for_test(None, ctx);
         });
 
         app.read(|ctx| {
@@ -725,8 +726,53 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
                 .latest_chip_value(&ContextChipKind::GithubPullRequest);
             assert_eq!(
                 value, None,
-                "PR chip should clear when switching to a branch without cached PR info"
+                "PR chip should clear when the model's cached PR info is cleared"
             );
+        });
+
+        github_repo_model.update(&mut app, |model, ctx| {
+            model.set_pr_info_for_test(
+                Some(PrInfo {
+                    number: 456,
+                    url: "https://github.com/warp/warp/pull/456".to_string(),
+                    state: "OPEN".to_string(),
+                    draft: false,
+                    base_branch: "main".to_string(),
+                }),
+                ctx,
+            );
+        });
+
+        current_prompt.update(&mut app, |cp, ctx| {
+            {
+                let state = cp
+                    .states
+                    .get_mut(&ContextChipKind::GithubPullRequest)
+                    .expect("expected github PR chip state");
+                state.last_on_click_values = Some(vec!["stale".to_string()]);
+                state.last_fingerprint = Some(123);
+                state.last_failure_fingerprint = Some(456);
+                state.update_status = ChipUpdateStatus::Cached;
+                state.generator_handle = Some(ctx.spawn(
+                    async {
+                        async_io::Timer::after(std::time::Duration::from_secs(60)).await;
+                    },
+                    |_, _, _| {},
+                ));
+            }
+
+            cp.set_github_repo_model(None, ctx);
+
+            let state = cp
+                .states
+                .get(&ContextChipKind::GithubPullRequest)
+                .expect("expected github PR chip state");
+            assert!(state.last_computed_value.is_none());
+            assert!(state.last_on_click_values.is_none());
+            assert!(state.last_fingerprint.is_none());
+            assert!(state.last_failure_fingerprint.is_none());
+            assert_eq!(state.update_status, ChipUpdateStatus::Idle);
+            assert!(state.generator_handle.is_none());
         });
     });
 }

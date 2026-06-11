@@ -74,6 +74,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 titlecase = "1.0"
 tokio.workspace = true
+tracing.workspace = true
 trait-set = "0.3.0"
 vec1.workspace = true
 warp_util.workspace = true

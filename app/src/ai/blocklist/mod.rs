@@ -55,8 +55,9 @@ pub(crate) use controller::{
     SlashCommandRequest,
 };
 pub(crate) use history_model::{
-    AIQueryHistory, AIQueryHistoryOutputStatus, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    ConversationStatusUpdate, FORK_PREFIX, PRE_REWIND_PREFIX,
+    AIQueryHistory, AIQueryHistoryOutputStatus, BeginConversationRenameError,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FORK_PREFIX,
+    PRE_REWIND_PREFIX,
 };
 pub(crate) use input_model::{
     BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,

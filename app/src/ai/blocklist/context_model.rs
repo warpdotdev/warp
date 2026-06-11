@@ -9,9 +9,9 @@ use ai::project_context::model::ProjectContextModel;
 use parking_lot::FairMutex;
 use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{
-    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle,
-};
+#[cfg(feature = "local_fs")]
+use warpui::WeakModelHandle;
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::agent_view::{AgentViewController, AgentViewEntryOrigin, EnterAgentViewError};
 use super::block::DirectoryContext;
@@ -28,12 +28,14 @@ use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::outline::RepoOutlines;
-use crate::code_review::git_status_update::GitRepoStatusModel;
+#[cfg(feature = "local_fs")]
+use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::terminal::event::{BlockCompletedEvent, BlockType};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::TerminalModel;
+#[cfg(any(feature = "local_fs", test))]
 use crate::util::git::{PrInfo, RepositoryInfo};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -103,7 +105,8 @@ impl PendingQueryState {
 pub struct BlocklistAIContextModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     directory_context: DirectoryContext,
-    git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
+    #[cfg(feature = "local_fs")]
+    github_repo_model: Option<WeakModelHandle<GitHubRepoModel>>,
 
     /// `BlockId`s corresponding to blocks to be included as context with the next AI query.
     pending_context_block_ids: HashSet<BlockId>,
@@ -282,7 +285,8 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
-            git_repo_status: None,
+            #[cfg(feature = "local_fs")]
+            github_repo_model: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -310,7 +314,8 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
-            git_repo_status: None,
+            #[cfg(feature = "local_fs")]
+            github_repo_model: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -984,19 +989,26 @@ impl BlocklistAIContextModel {
         }
     }
 
-    pub fn set_git_repo_status(&mut self, handle: Option<WeakModelHandle<GitRepoStatusModel>>) {
-        self.git_repo_status = handle;
+    #[cfg(feature = "local_fs")]
+    pub fn set_github_repo_model(&mut self, handle: Option<WeakModelHandle<GitHubRepoModel>>) {
+        self.github_repo_model = handle;
     }
 
     /// Builds an `AIAgentContext::Repository` from cached git remote metadata, if available.
+    #[cfg(feature = "local_fs")]
     fn repository_context(&self, app: &AppContext) -> Option<AIAgentContext> {
-        let handle = self.git_repo_status.as_ref()?.upgrade(app)?;
+        let handle = self.github_repo_model.as_ref()?.upgrade(app)?;
         let repository_info = handle.as_ref(app).repository_info()?;
         Some(Self::repository_context_from_repository_info(
             repository_info,
         ))
     }
+    #[cfg(not(feature = "local_fs"))]
+    fn repository_context(&self, _app: &AppContext) -> Option<AIAgentContext> {
+        None
+    }
 
+    #[cfg(any(feature = "local_fs", test))]
     fn repository_context_from_repository_info(repository_info: &RepositoryInfo) -> AIAgentContext {
         AIAgentContext::Repository {
             name: repository_info.name.clone(),
@@ -1004,12 +1016,18 @@ impl BlocklistAIContextModel {
         }
     }
 
+    #[cfg(feature = "local_fs")]
     fn pull_request_context(&self, app: &AppContext) -> Option<AIAgentContext> {
-        let handle = self.git_repo_status.as_ref()?.upgrade(app)?;
+        let handle = self.github_repo_model.as_ref()?.upgrade(app)?;
         let pr_info = handle.as_ref(app).pr_info()?;
         Self::pull_request_context_from_pr_info(pr_info)
     }
+    #[cfg(not(feature = "local_fs"))]
+    fn pull_request_context(&self, _app: &AppContext) -> Option<AIAgentContext> {
+        None
+    }
 
+    #[cfg(any(feature = "local_fs", test))]
     fn pull_request_context_from_pr_info(pr_info: &PrInfo) -> Option<AIAgentContext> {
         Some(AIAgentContext::PullRequest {
             number: i32::try_from(pr_info.number).ok()?,

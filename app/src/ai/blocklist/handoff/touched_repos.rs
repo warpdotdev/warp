@@ -381,7 +381,8 @@ fn extract_action_paths(
         | AIAgentActionType::SendMessageToAgent { .. }
         | AIAgentActionType::TransferShellCommandControlToUser { .. }
         | AIAgentActionType::AskUserQuestion { .. }
-        | AIAgentActionType::RunAgents(_) => {}
+        | AIAgentActionType::RunAgents(_)
+        | AIAgentActionType::WaitForEvents { .. } => {}
     }
 }
 

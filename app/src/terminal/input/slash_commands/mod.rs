@@ -35,8 +35,8 @@ use crate::ai::blocklist::agent_view::{
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::blocklist::handoff::PendingCloudLaunch;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, InputTypeAutoDetectionSource, QueuedQuery, QueuedQueryModel,
-    QueuedQueryOrigin, SlashCommandRequest,
+    BeginConversationRenameError, BlocklistAIHistoryModel, InputTypeAutoDetectionSource,
+    PendingAttachment, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, SlashCommandRequest,
 };
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -44,6 +44,7 @@ use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND
 use crate::search::slash_command_menu::static_commands::Availability;
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::SlashCommandAcceptedDetails;
 use crate::settings::AISettings;
 use crate::tab::SelectedTabColor;
@@ -147,6 +148,8 @@ fn open_file_command_path(
 
     (file_path, parsed_path.line_and_column_num)
 }
+
+const CONVERSATION_TITLE_MAX_CHARS: usize = 500;
 
 impl Input {
     fn is_slash_command_available(&self, command: &StaticCommand, ctx: &AppContext) -> bool {
@@ -503,6 +506,115 @@ impl Input {
                 };
 
                 ctx.dispatch_typed_action(&WorkspaceAction::SetActiveTabName(name.to_owned()));
+            }
+            rename_conversation if command.name == commands::RENAME_CONVERSATION.name => {
+                let Some(title) = argument
+                    .map(|title| title.trim())
+                    .filter(|title| !title.is_empty())
+                else {
+                    show_error_toast(
+                        "Please provide a title after /rename-conversation".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+
+                if title.chars().count() > CONVERSATION_TITLE_MAX_CHARS {
+                    show_error_toast(
+                        format!(
+                            "Conversation title must be {CONVERSATION_TITLE_MAX_CHARS} characters or fewer",
+                        ),
+                        ctx,
+                    );
+                    return true;
+                }
+                let title = title.to_owned();
+
+                let Some(conversation_id) = self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                else {
+                    show_error_toast(
+                        "/rename-conversation requires an active conversation".to_owned(),
+                        ctx,
+                    );
+                    return true;
+                };
+
+                let history = BlocklistAIHistoryModel::handle(ctx);
+                let server_conversation_id = match history.update(ctx, |history, ctx| {
+                    history.begin_conversation_rename(conversation_id, title.clone(), ctx)
+                }) {
+                    Ok(server_conversation_id) => server_conversation_id,
+                    Err(BeginConversationRenameError::MissingServerConversationToken) => {
+                        show_error_toast(
+                            "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again."
+                                .to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
+                    Err(BeginConversationRenameError::RenameInProgress) => {
+                        show_error_toast(
+                            "A rename is already in progress for this conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
+                    Err(BeginConversationRenameError::ConversationNotFound) => {
+                        show_error_toast(
+                            "/rename-conversation requires an active conversation".to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
+                    Err(BeginConversationRenameError::ConversationNotReady) => {
+                        show_error_toast(
+                            "Your conversation is still syncing. Try renaming it again in a moment."
+                                .to_owned(),
+                            ctx,
+                        );
+                        return true;
+                    }
+                };
+
+                let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
+                ctx.spawn(
+                    async move {
+                        server_api
+                            .rename_conversation(server_conversation_id, title)
+                            .await
+                    },
+                    move |_input, result, ctx| match result {
+                        Ok(response) => {
+                            let title = response.title;
+                            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                                history.complete_conversation_rename(
+                                    conversation_id,
+                                    title.clone(),
+                                    ctx,
+                                );
+                            });
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::success(format!(
+                                        "Conversation renamed to {title}",
+                                    )),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
+                        }
+                        Err(e) => {
+                            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                                history.fail_conversation_rename(conversation_id, ctx);
+                            });
+                            show_error_toast(format!("Failed to rename conversation: {e}"), ctx);
+                        }
+                    },
+                );
             }
             set_tab_color if command.name == commands::SET_TAB_COLOR.name => {
                 let supported_options = || {
@@ -975,12 +1087,20 @@ impl Input {
                     ForkedConversationDestination::SplitPane
                 };
 
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the forked pane and no longer linger on the original input.
+                // Only drain them when a non-empty prompt will actually be sent; the fork drops
+                // attachments when there is no initial prompt, which would silently discard them.
+                let initial_attachments =
+                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
+
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
                     fork_from_exchange: None,
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
@@ -1021,12 +1141,21 @@ impl Input {
                     ctx
                 );
 
+                // Move any pending attachments out of the source input so they travel with the
+                // initial prompt into the continued local pane and no longer linger on the
+                // original input. Only drain them when a non-empty prompt will actually be sent;
+                // the fork drops attachments when there is no initial prompt, which would
+                // silently discard them.
+                let initial_attachments =
+                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
+
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {
                     conversation_id,
                     fork_from_exchange: None,
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
@@ -1055,6 +1184,7 @@ impl Input {
                     summarize_after_fork: true,
                     summarization_prompt: None,
                     initial_prompt: argument.cloned(),
+                    initial_attachments: vec![],
                     destination,
                 });
             }
@@ -1343,6 +1473,23 @@ impl Input {
             | SlashCommandEntryState::Composing { .. }
             | SlashCommandEntryState::DisabledUntilEmptyBuffer => false,
         }
+    }
+
+    /// Drains pending attachments from the input's context model, but only when `argument`
+    /// contains a non-empty prompt. Forked conversations drop attachments when there is no
+    /// initial prompt to send, so draining them unconditionally would silently discard them;
+    /// leaving them staged in the source input instead loses nothing.
+    fn maybe_take_attachments_for_initial_prompt(
+        &mut self,
+        argument: Option<&String>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<PendingAttachment> {
+        if argument.is_none_or(|argument| argument.trim().is_empty()) {
+            return Vec::new();
+        }
+        self.ai_context_model.update(ctx, |context_model, ctx| {
+            context_model.take_pending_attachments(ctx)
+        })
     }
 }
 
