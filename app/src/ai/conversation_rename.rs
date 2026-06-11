@@ -1,7 +1,6 @@
 use warpui::{SingletonEntity, View, ViewContext};
 
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::{BeginConversationRenameError, BlocklistAIHistoryModel};
 use crate::server::server_api::ServerApiProvider;
 use crate::view_components::DismissibleToast;
@@ -10,78 +9,26 @@ use crate::workspace::ToastStack;
 pub(crate) const CONVERSATION_TITLE_MAX_CHARS: usize = 500;
 
 /// Renames a conversation locally and triggers a conversation rename on the server.
+///
+/// Renaming is only exposed for open conversations, so the conversation is expected
+/// to already be loaded in the history model.
 pub(crate) fn rename_conversation<T: View>(
     conversation_id: AIConversationId,
     title: String,
     conversation_not_found_message: &'static str,
     ctx: &mut ViewContext<T>,
-) -> bool {
+) {
     let title = match validate_conversation_title(title) {
         Ok(title) => title,
         Err(message) => {
-            let window_id = ctx.window_id();
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
-            });
-            return true;
+            show_error_toast(message, ctx);
+            return;
         }
     };
     if conversation_already_has_title(conversation_id, &title, ctx) {
-        return true;
+        return;
     }
-
-    // `load_conversation_data` resolves immediately when the conversation is already in
-    // memory, so loaded and unloaded conversations share this single load-then-rename path.
-    let history = BlocklistAIHistoryModel::handle(ctx);
-    let future = history
-        .as_ref(ctx)
-        .load_conversation_data(conversation_id, ctx);
-    ctx.spawn(future, move |_, conversation, ctx| {
-        match conversation {
-            Some(CloudConversationData::Oz(conversation)) => {
-                history.update(ctx, |history, _| {
-                    // The load resolves with a clone when the conversation is already in
-                    // memory; re-registering it would overwrite newer in-memory state.
-                    if history.conversation(&conversation_id).is_none() {
-                        history.register_loaded_conversation(*conversation);
-                    }
-                });
-            }
-            Some(CloudConversationData::CLIAgent(_)) => {
-                let window_id = ctx.window_id();
-                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Conversations created by CLI agents like Claude Code can't be renamed"
-                                .to_owned(),
-                        ),
-                        window_id,
-                        ctx,
-                    );
-                });
-                return;
-            }
-            None => {
-                let window_id = ctx.window_id();
-                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::error(
-                            "Failed to load conversation for renaming".to_owned(),
-                        ),
-                        window_id,
-                        ctx,
-                    );
-                });
-                return;
-            }
-        }
-        if conversation_already_has_title(conversation_id, &title, ctx) {
-            return;
-        }
-        begin_conversation_rename(conversation_id, title, conversation_not_found_message, ctx);
-    });
-
-    true
+    begin_conversation_rename(conversation_id, title, conversation_not_found_message, ctx);
 }
 
 /// Returns whether the conversation's current local title already matches `title`,
@@ -91,15 +38,9 @@ fn conversation_already_has_title<T: View>(
     title: &str,
     ctx: &ViewContext<T>,
 ) -> bool {
-    let history = BlocklistAIHistoryModel::as_ref(ctx);
-    history
+    BlocklistAIHistoryModel::as_ref(ctx)
         .conversation(&conversation_id)
         .and_then(|conversation| conversation.title())
-        .or_else(|| {
-            history
-                .get_conversation_metadata(&conversation_id)
-                .map(|metadata| metadata.title.clone())
-        })
         .is_some_and(|current_title| current_title == title)
 }
 
@@ -147,14 +88,7 @@ fn begin_conversation_rename<T: View>(
                     "Your conversation is still syncing. Try renaming it again in a moment."
                 }
             };
-            let window_id = ctx.window_id();
-            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                toast_stack.add_ephemeral_toast(
-                    DismissibleToast::error(message.to_owned()),
-                    window_id,
-                    ctx,
-                );
-            });
+            show_error_toast(message.to_owned(), ctx);
             return;
         }
     };
@@ -186,15 +120,17 @@ fn begin_conversation_rename<T: View>(
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                         history.fail_conversation_rename(conversation_id, ctx);
                     });
-                    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(format!("Failed to rename conversation: {e}")),
-                            window_id,
-                            ctx,
-                        );
-                    });
+                    show_error_toast(format!("Failed to rename conversation: {e}"), ctx);
                 }
             }
         },
     );
+}
+
+/// Shows an ephemeral error toast in the current window.
+fn show_error_toast<T: View>(message: String, ctx: &mut ViewContext<T>) {
+    let window_id = ctx.window_id();
+    ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+        toast_stack.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
+    });
 }

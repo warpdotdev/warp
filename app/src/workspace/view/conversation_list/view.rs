@@ -94,7 +94,11 @@ pub enum ConversationSection {
 #[derive(Clone, Debug)]
 enum ListItem {
     SectionHeader(ConversationSection),
-    Conversation(ConversationEntry),
+    Conversation {
+        entry: ConversationEntry,
+        /// The section the conversation is rendered under.
+        section: ConversationSection,
+    },
     /// The "+ New conversation" item at the end of the active section.
     StartNewConversation,
     ToggleViewAllButton,
@@ -343,7 +347,6 @@ impl ConversationListView {
         let mut active_items = Vec::new();
         let mut past_items = Vec::new();
         for entry in model.filtered_items() {
-            let list_item = ListItem::Conversation(entry.clone());
             let local_conversation_entry_id = model
                 .get_item_by_id(&entry.id, ctx)
                 .and_then(|entry| entry.identity.local_conversation_id)
@@ -351,9 +354,15 @@ impl ConversationListView {
             let is_active = active_ids.contains(&entry.id)
                 || local_conversation_entry_id.is_some_and(|id| active_ids.contains(&id));
             if is_active {
-                active_items.push(list_item);
+                active_items.push(ListItem::Conversation {
+                    entry: entry.clone(),
+                    section: ConversationSection::Active,
+                });
             } else {
-                past_items.push(list_item);
+                past_items.push(ListItem::Conversation {
+                    entry: entry.clone(),
+                    section: ConversationSection::Past,
+                });
             }
         }
 
@@ -361,21 +370,24 @@ impl ConversationListView {
         // add it as a regular conversation entry so it participates in the sort.
         if let Some(new_conv_id) = focused_new_conversation {
             let conv_id = AgentConversationEntryId::Conversation(new_conv_id);
-            let already_in_list = active_items
-                .iter()
-                .any(|item| matches!(item, ListItem::Conversation(entry) if entry.id == conv_id));
+            let already_in_list = active_items.iter().any(
+                |item| matches!(item, ListItem::Conversation { entry, .. } if entry.id == conv_id),
+            );
             if !already_in_list {
-                active_items.push(ListItem::Conversation(ConversationEntry {
-                    id: conv_id,
-                    highlight_indices: vec![],
-                }));
+                active_items.push(ListItem::Conversation {
+                    entry: ConversationEntry {
+                        id: conv_id,
+                        highlight_indices: vec![],
+                    },
+                    section: ConversationSection::Active,
+                });
             }
         }
 
         // Sort active items by last opened time (most recently opened first).
         active_items.sort_by(|a, b| {
             let get_time = |item: &ListItem| match item {
-                ListItem::Conversation(entry) => {
+                ListItem::Conversation { entry, .. } => {
                     let entry_time = active_views_model
                         .get_last_opened_time(&ConversationOrTaskId::from(entry.id));
                     let local_time = model
@@ -449,10 +461,23 @@ impl ConversationListView {
         conversation_id: AgentConversationEntryId,
     ) -> Option<usize> {
         self.list_items.iter().position(|item| match item {
-            ListItem::Conversation(entry) => entry.id == conversation_id,
+            ListItem::Conversation { entry, .. } => entry.id == conversation_id,
             ListItem::SectionHeader(_)
             | ListItem::StartNewConversation
             | ListItem::ToggleViewAllButton => false,
+        })
+    }
+
+    /// Whether the given entry is currently shown in the Active section.
+    fn is_in_active_section(&self, conversation_id: AgentConversationEntryId) -> bool {
+        self.list_items.iter().any(|item| {
+            matches!(
+                item,
+                ListItem::Conversation {
+                    entry,
+                    section: ConversationSection::Active,
+                } if entry.id == conversation_id
+            )
         })
     }
 
@@ -502,7 +527,7 @@ impl ConversationListView {
 
     fn is_selectable(&self, index: usize) -> bool {
         self.get_list_item(index).is_some_and(|item| match item {
-            ListItem::Conversation(_) | ListItem::StartNewConversation => true,
+            ListItem::Conversation { .. } | ListItem::StartNewConversation => true,
             ListItem::SectionHeader(_) | ListItem::ToggleViewAllButton => false,
         })
     }
@@ -626,7 +651,7 @@ impl ConversationListView {
             ListItem::StartNewConversation => {
                 ctx.emit(Event::NewConversationInNewTab);
             }
-            ListItem::Conversation(entry) => {
+            ListItem::Conversation { entry, .. } => {
                 if let Some(action) = AgentConversationsModel::resolve_open_action(
                     AgentConversationNavigationSubject::Entry(entry.id),
                     None,
@@ -670,6 +695,11 @@ impl ConversationListView {
     }
 
     fn start_rename(&mut self, id: AgentConversationEntryId, ctx: &mut ViewContext<Self>) {
+        // Renaming is only supported for open conversations (the Active section), since
+        // closed conversations may not be loaded in the history model.
+        if !self.is_in_active_section(id) {
+            return;
+        }
         let Some(entry) = self.view_model.as_ref(ctx).get_item_by_id(&id, ctx) else {
             return;
         };
@@ -1334,7 +1364,7 @@ impl View for ConversationListView {
                                         app,
                                     ))
                                 }
-                                ListItem::Conversation(entry) => {
+                                ListItem::Conversation { entry, section } => {
                                     let conversation = model.get_item_by_id(&entry.id, app)?;
                                     let local_conversation_entry_id = conversation
                                         .identity
@@ -1353,8 +1383,10 @@ impl View for ConversationListView {
                                     };
                                     let local_conversation_id =
                                         conversation.identity.local_conversation_id;
-                                    let is_renaming =
-                                        local_conversation_id == renaming_conversation_id;
+                                    let is_renaming = renaming_conversation_id.is_some()
+                                        && local_conversation_id == renaming_conversation_id;
+                                    let can_rename = *section == ConversationSection::Active
+                                        && local_conversation_id.is_some();
 
                                     let overflow_menu_display = match overflow_menu_state {
                                         Some(s) if s.conversation_id == entry.id => {
@@ -1380,7 +1412,7 @@ impl View for ConversationListView {
                                             overflow_menu_display,
                                             conversation_id: entry.id,
                                             is_renaming,
-                                            can_rename: local_conversation_id.is_some(),
+                                            can_rename,
                                             rename_editor: is_renaming.then_some(&rename_editor),
                                             sharing_dialog: &sharing_dialog,
                                             is_share_dialog_open,
