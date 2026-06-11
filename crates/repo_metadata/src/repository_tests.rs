@@ -189,6 +189,25 @@ fn merge_repository_updates_preserves_remote_ref_updates() {
 }
 
 #[test]
+fn merge_repository_updates_preserves_exclude_rule_updates() {
+    let mut acc = RepositoryUpdate {
+        added: [TargetFile::new(PathBuf::from("/repo/file.txt"), false)].into(),
+        ..Default::default()
+    };
+    let incoming = RepositoryUpdate {
+        exclude_rules_updated: true,
+        ..Default::default()
+    };
+
+    merge_repository_updates(&mut acc, &incoming);
+
+    assert!(acc.exclude_rules_updated);
+    assert!(acc
+        .added
+        .contains(&TargetFile::new(PathBuf::from("/repo/file.txt"), false)));
+}
+
+#[test]
 fn tracked_remote_ref_change_notifies_subscribers() {
     VirtualFS::test("tracked_remote_ref_change_notifies", |dirs, mut vfs| {
         stub_git_repository(&mut vfs, "repo");

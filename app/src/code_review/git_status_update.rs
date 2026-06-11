@@ -310,7 +310,11 @@ impl GitRepoStatusModel {
         if update.is_empty() {
             return false;
         }
-        if update.commit_updated || update.index_lock_detected || update.remote_ref_updated {
+        if update.commit_updated
+            || update.index_lock_detected
+            || update.remote_ref_updated
+            || update.exclude_rules_updated
+        {
             return true;
         }
         // Check if any non-ignored file was touched.

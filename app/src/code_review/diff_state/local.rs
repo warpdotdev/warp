@@ -1042,6 +1042,7 @@ impl LocalDiffStateModel {
             commit_updated,
             index_lock_detected,
             remote_ref_updated,
+            exclude_rules_updated,
         } = update;
 
         // When the code review pane is closed (metadata_refresh_enabled ==
@@ -1052,7 +1053,7 @@ impl LocalDiffStateModel {
             return false;
         }
 
-        if commit_updated || remote_ref_updated {
+        if commit_updated || remote_ref_updated || exclude_rules_updated {
             self.load_diffs_for_current_repo(false, false, ctx);
             // Don't emit MetadataRefreshed here — metadata hasn't been
             // recomputed yet. NewDiffsComputed handles the immediate UI

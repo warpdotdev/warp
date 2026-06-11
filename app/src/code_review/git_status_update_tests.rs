@@ -28,4 +28,12 @@ fn should_refresh_metadata_ignores_ignored_file_updates() {
     assert!(GitRepoStatusModel::should_refresh_metadata(
         &remote_ref_update
     ));
+
+    let exclude_rules_update = RepositoryUpdate {
+        exclude_rules_updated: true,
+        ..Default::default()
+    };
+    assert!(GitRepoStatusModel::should_refresh_metadata(
+        &exclude_rules_update
+    ));
 }

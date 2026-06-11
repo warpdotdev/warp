@@ -48,6 +48,100 @@ fn test_add_repository_success() {
 }
 
 #[test]
+fn test_git_exclude_file_sets_exclude_rules_updated() {
+    VirtualFS::test("git_exclude_file_update", |dirs, mut vfs| {
+        stub_git_repository(&mut vfs, "test_repo");
+        vfs.mkdir("test_repo/.git/info");
+        vfs.with_files(vec![Stub::FileWithContent(
+            "test_repo/.git/info/exclude",
+            "",
+        )]);
+
+        let repo_path = dirs.tests().join("test_repo");
+        let exclude_path = repo_path.join(".git/info/exclude");
+        App::test((), |mut app| async move {
+            let watcher_handle = app.add_singleton_model(DirectoryWatcher::new);
+
+            let repo_handle = watcher_handle
+                .update(&mut app, |watcher, ctx| {
+                    watcher.add_directory(
+                        StandardizedPath::from_local_canonicalized(&repo_path).unwrap(),
+                        ctx,
+                    )
+                })
+                .unwrap();
+
+            let (scan_tx, mut scan_rx) = mpsc::unbounded::<()>();
+            let (update_tx, mut update_rx) = mpsc::unbounded::<RepositoryUpdate>();
+            let active_scans = Arc::new(AtomicUsize::new(0));
+
+            let subscriber =
+                TestSubscriber::new(scan_tx.clone(), update_tx.clone(), active_scans.clone());
+
+            let start = repo_handle.update(&mut app, |repo, ctx| {
+                repo.start_watching(Box::new(subscriber), ctx)
+            });
+            start
+                .registration_future
+                .await
+                .expect("Failed to add subscriber");
+
+            futures::select! {
+                scan = scan_rx.next().fuse() => {
+                    scan.expect("Scan channel closed while waiting for initial repository scan");
+                }
+                _ = futures::FutureExt::fuse(Timer::after(Duration::from_secs(5))) => {
+                    panic!("Timed out waiting for initial repository scan");
+                }
+            }
+
+            std::fs::write(&exclude_path, "worktree-dir/\n")
+                .expect("Updating .git/info/exclude failed");
+
+            let update_timeout = Duration::from_secs(5);
+            let timeout = futures::FutureExt::fuse(Timer::after(update_timeout));
+            futures::pin_mut!(timeout);
+            let mut updates = Vec::new();
+
+            loop {
+                if updates
+                    .iter()
+                    .any(|update: &RepositoryUpdate| update.exclude_rules_updated)
+                {
+                    break;
+                }
+                futures::select! {
+                    update = update_rx.next().fuse() => {
+                        match update {
+                            Some(update) => updates.push(update),
+                            None => {
+                                panic!(
+                                    "Update channel closed while waiting for watcher updates after modifying .git/info/exclude. Received {} update(s): {updates:#?}",
+                                    updates.len()
+                                );
+                            }
+                        }
+                    }
+                    _ = timeout => {
+                        panic!(
+                            "Timed out after {update_timeout:?} waiting for watcher updates after modifying .git/info/exclude. Received {} update(s): {updates:#?}",
+                            updates.len()
+                        );
+                    }
+                }
+            }
+
+            assert!(
+                updates
+                    .iter()
+                    .any(|update| update.exclude_rules_updated && !update.is_empty()),
+                "Update should not be empty when exclude_rules_updated is true"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_existing_directory_registration_is_enriched_with_external_git_directory() {
     VirtualFS::test(
         "enrich_existing_directory_with_external_git_directory",
@@ -527,6 +621,7 @@ fn test_remote_tracking_ref_routes_only_to_repos_tracking_that_ref() {
 fn test_common_config_routes_to_repos_sharing_common_git_dir() {
     VirtualFS::test("common_config_routes", |dirs, mut vfs| {
         stub_git_repository(&mut vfs, "repo");
+        vfs.mkdir("repo/.git/info");
         vfs.mkdir("repo/.git/worktrees");
         vfs.mkdir("repo/.git/worktrees/wt");
         vfs.mkdir("wt");
@@ -539,6 +634,7 @@ fn test_common_config_routes_to_repos_sharing_common_git_dir() {
         let worktree_path = dirs.tests().join("wt");
         let external_git_dir = dirs.tests().join("repo/.git/worktrees/wt");
         let common_config_path = dirs.tests().join("repo/.git/config");
+        let common_exclude_path = dirs.tests().join("repo/.git/info/exclude");
 
         App::test((), |mut app| async move {
             let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
@@ -565,6 +661,13 @@ fn test_common_config_routes_to_repos_sharing_common_git_dir() {
 
             let affected = watcher_handle.update(&mut app, |watcher, ctx| {
                 watcher.find_repos_for_git_event(&common_config_path, ctx)
+            });
+            assert_eq!(affected.len(), 2);
+            assert!(affected.contains(&main_repo_handle));
+            assert!(affected.contains(&worktree_repo_handle));
+
+            let affected = watcher_handle.update(&mut app, |watcher, ctx| {
+                watcher.find_repos_for_git_event(&common_exclude_path, ctx)
             });
             assert_eq!(affected.len(), 2);
             assert!(affected.contains(&main_repo_handle));
