@@ -405,10 +405,11 @@ fn render_pane_row_element(
         rename_editor: _,
         is_pane_being_renamed,
         pane_rename_editor: _,
-        pin_visible,
+        is_pinned,
+        container_is_hovered,
     } = props;
     let is_selected = is_active_tab && is_focused;
-    let show_pin = FeatureFlag::PinnedTabs.is_enabled() && pin_visible;
+    let show_pin = FeatureFlag::PinnedTabs.is_enabled() && is_pinned && !container_is_hovered;
     let mut row = Hoverable::new(mouse_state, move |state| {
         // Hovered or selected rows always fully round; otherwise derive the
         // resting radius from the row's stack position.
@@ -837,8 +838,11 @@ struct PaneProps<'a> {
     rename_editor: Option<ViewHandle<EditorView>>,
     is_pane_being_renamed: bool,
     pane_rename_editor: Option<ViewHandle<EditorView>>,
-    /// Whether the pin overlay should be drawn on this row.
-    pin_visible: bool,
+    /// Whether the tab this pane belongs to is pinned.
+    is_pinned: bool,
+    /// True when the tab container containing this pane is hovered.
+    /// The pin icon is hidden when a tab is hovered.
+    container_is_hovered: bool,
 }
 
 struct PaneRowState {
@@ -1214,6 +1218,7 @@ impl VerticalTabsPanelState {
                                 false,
                                 None,
                                 tab.pinned,
+                                false,
                                 app,
                             )
                             .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
@@ -1784,6 +1789,7 @@ fn render_groups(
                                     false,
                                     None,
                                     tab.pinned,
+                                    false,
                                     app,
                                 )
                                 .is_some_and(|props| {
@@ -1814,6 +1820,7 @@ fn render_groups(
                                 false,
                                 None,
                                 tab.pinned,
+                                false,
                                 app,
                             )
                             .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
@@ -2142,7 +2149,8 @@ fn render_tab_group_internal(
                     (!uses_outer_group_container).then_some(rename_editor.clone()),
                     false,
                     None,
-                    tab.pinned && !group_state.is_hovered(),
+                    tab.pinned,
+                    group_state.is_hovered(),
                     app,
                 ) else {
                     return Empty::new().finish();
@@ -2199,7 +2207,8 @@ fn render_tab_group_internal(
                     (!uses_outer_group_container).then_some(rename_editor.clone()),
                     is_pane_being_renamed,
                     is_pane_being_renamed.then_some(workspace.pane_rename_editor.clone()),
-                    tab.pinned && !group_state.is_hovered(),
+                    tab.pinned,
+                    group_state.is_hovered(),
                     app,
                 ) else {
                     continue;
@@ -3582,7 +3591,8 @@ impl<'a> PaneProps<'a> {
         rename_editor: Option<ViewHandle<EditorView>>,
         is_pane_being_renamed: bool,
         pane_rename_editor: Option<ViewHandle<EditorView>>,
-        pin_visible: bool,
+        is_pinned: bool,
+        container_is_hovered: bool,
         app: &AppContext,
     ) -> Option<Self> {
         let pane = pane_group.pane_by_id(pane_id)?;
@@ -3635,7 +3645,8 @@ impl<'a> PaneProps<'a> {
             rename_editor,
             is_pane_being_renamed,
             pane_rename_editor,
-            pin_visible,
+            is_pinned,
+            container_is_hovered,
         })
     }
 
@@ -6405,6 +6416,7 @@ fn detail_pane_props<'a>(
         None,
         false,
         None,
+        false,
         false,
         app,
     )

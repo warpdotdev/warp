@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use itertools::{Either, Itertools};
 use warp_core::features::FeatureFlag;
@@ -466,6 +466,25 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// True when `tab` is positioned in the pinned region of the tab list —
+    /// either because its own `pinned` flag is set (ungrouped pinned tab) or
+    /// because it belongs to a pinned group.
+    fn is_tab_effectively_pinned(&self, tab: &TabData) -> bool {
+        tab.pinned
+            || tab
+                .group_id
+                .is_some_and(|gid| self.tab_groups.get(&gid).is_some_and(|g| g.pinned))
+    }
+
+    /// Index where the unpinned region begins: the count of leading tabs that
+    /// belong to the pinned region.
+    fn pinned_boundary_index(&self) -> usize {
+        self.tabs
+            .iter()
+            .take_while(|tab| self.is_tab_effectively_pinned(tab))
+            .count()
+    }
+
     /// Pins the tab. Grouped tabs are extracted from their group first
     /// regardless of whether that group itself is pinned — tab pinning and
     /// group pinning are independent concepts.
@@ -484,7 +503,7 @@ impl Workspace {
         let previous_group_id = tab.group_id;
 
         // Identify where this newly pinned tab should land (after the last pinned item).
-        let target = pinned_boundary_index(&self.tabs, &self.tab_groups);
+        let target = self.pinned_boundary_index();
 
         self.tabs[tab_index].group_id = None;
         self.tabs[tab_index].pinned = true;
@@ -513,7 +532,7 @@ impl Workspace {
         }
 
         // This tab should land right after all pinned items.
-        let target = pinned_boundary_index(&self.tabs, &self.tab_groups);
+        let target = self.pinned_boundary_index();
 
         self.tabs[tab_index].pinned = false;
         self.move_tab_to_index(tab_index, target, ctx);
@@ -540,7 +559,7 @@ impl Workspace {
             return;
         }
 
-        let target = pinned_boundary_index(&self.tabs, &self.tab_groups);
+        let target = self.pinned_boundary_index();
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.pinned = true;
         }
@@ -565,7 +584,7 @@ impl Workspace {
             return;
         }
 
-        let target = pinned_boundary_index(&self.tabs, &self.tab_groups);
+        let target = self.pinned_boundary_index();
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.pinned = false;
         }
@@ -626,28 +645,4 @@ impl Workspace {
             })
             .collect()
     }
-}
-
-/// True when `tab` is positioned in the pinned region of the tab list —
-/// either because its own `pinned` flag is set (ungrouped pinned tab) or
-/// because it belongs to a pinned group.
-pub(crate) fn is_tab_effectively_pinned(
-    tab: &TabData,
-    tab_groups: &HashMap<TabGroupId, TabGroup>,
-) -> bool {
-    tab.pinned
-        || tab
-            .group_id
-            .is_some_and(|gid| tab_groups.get(&gid).is_some_and(|g| g.pinned))
-}
-
-/// Index where the unpinned region begins: the count of leading tabs that
-/// belong to the pinned region.
-pub(crate) fn pinned_boundary_index(
-    tabs: &[TabData],
-    tab_groups: &HashMap<TabGroupId, TabGroup>,
-) -> usize {
-    tabs.iter()
-        .take_while(|tab| is_tab_effectively_pinned(tab, tab_groups))
-        .count()
 }
