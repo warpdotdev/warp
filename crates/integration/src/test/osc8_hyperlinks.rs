@@ -5,13 +5,17 @@
 //! - the printed link's *visible* text shows up in the block output and the
 //!   raw escape bytes do not
 //! - copying a block yields the visible text only (no `\e]8;…` reconstruction)
+//! - opening a hyperlink (the click path) calls `open_url` with its URI
 //! - plain-text URLs still work via the auto-detect path (no regression)
 //!
-//! Cmd-click → `open_url` coverage previously relied on a per-cell position
-//! cache stamped during grid rendering. That cache was removed (too risky to
-//! add to the render hot path), so synthetic-click tests are not included
-//! here; click behavior needs a different test mechanism.
+//! The open test drives the `OpenGridLink` action directly (the action a
+//! Cmd-click dispatches) rather than synthesizing a pixel-perfect click: the
+//! cell's screen position is no longer cached during grid rendering, so the
+//! hyperlink is located through the model's `hyperlink_at_point` lookup.
 
+use std::sync::OnceLock;
+
+use parking_lot::Mutex;
 use warp::features::FeatureFlag;
 use warp::integration_testing::{
     step::new_step_with_default_assertions,
@@ -22,6 +26,10 @@ use warp::integration_testing::{
     },
     view_getters::single_terminal_view,
 };
+use warp::terminal::block_list_element::GridType;
+use warp::terminal::model::index::Point;
+use warp::terminal::model::terminal_model::{WithinBlock, WithinModel};
+use warp::terminal::view::{GridHighlightedLink, TerminalAction};
 use warpui::async_assert;
 
 use super::new_builder;
@@ -99,7 +107,77 @@ pub fn test_osc8_copy_block_yields_visible_text_only() -> Builder {
         )
 }
 
-/// 3. Plain-text URL auto-detection still works with `OscHyperlinks`
+/// Process-wide buffer of URLs the app would have opened. Populated by the
+/// `before_open_url` callback installed below; `open_url` itself is a no-op in
+/// the test platform delegate, so nothing launches a real browser.
+fn captured_urls() -> &'static Mutex<Vec<String>> {
+    static CAPTURED: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    CAPTURED.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 3. Opening an OSC 8 hyperlink calls `open_url` with its URI.
+///
+/// This exercises the click path end to end (PTY → parser → cell → registry →
+/// model lookup → open) without a synthetic pixel click: we install a capture
+/// on `before_open_url`, locate the hyperlink via `hyperlink_at_point`, and
+/// dispatch the same `OpenGridLink` action a Cmd-click would.
+pub fn test_osc8_open_link_action_opens_url() -> Builder {
+    osc8_prelude()
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            osc8_printf(HTTPS_URL, VISIBLE_TEXT),
+            ExpectedExitStatus::Success,
+            ExactLine::from(VISIBLE_TEXT),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Dispatch OpenGridLink for the OSC 8 hyperlink")
+                .with_action(|app, _window_id, _| {
+                    captured_urls().lock().clear();
+                    app.update(|ctx| {
+                        ctx.set_before_open_url(|url, _ctx| {
+                            captured_urls().lock().push(url.to_owned());
+                            url.to_owned()
+                        });
+                    });
+                })
+                .with_action(|app, window_id, _| {
+                    let view = single_terminal_view(app, window_id);
+                    let view_id = view.id();
+                    let link_and_uri = view.read(app, |view, _ctx| {
+                        let model = view.model.lock();
+                        let block_index = model.block_list().last_non_hidden_block()?.index();
+                        // The hyperlink wraps the first cell of the printf
+                        // output (block output grid, row 0, col 0).
+                        let point = WithinModel::BlockList(WithinBlock::new(
+                            Point::new(0, 0),
+                            block_index,
+                            GridType::Output,
+                        ));
+                        model.hyperlink_at_point(&point)
+                    });
+                    let (link, uri) = link_and_uri
+                        .expect("OSC 8 hyperlink should resolve at the first output cell");
+                    assert_eq!(uri, HTTPS_URL, "looked-up URI should match the printed one");
+                    app.dispatch_typed_action(
+                        window_id,
+                        &[view_id],
+                        &TerminalAction::OpenGridLink(GridHighlightedLink::Hyperlink {
+                            link,
+                            uri,
+                        }),
+                    );
+                })
+                .add_assertion(|_app, _window_id| {
+                    let urls = captured_urls().lock();
+                    async_assert!(
+                        urls.iter().any(|u| u == HTTPS_URL),
+                        "expected open_url to be called with {HTTPS_URL:?}, captured: {urls:?}"
+                    )
+                }),
+        )
+}
+
+/// 4. Plain-text URL auto-detection still works with `OscHyperlinks`
 ///    enabled — i.e. plain URLs without OSC 8 wrappers continue to be
 ///    captured by the model's auto-detect link table.
 ///
