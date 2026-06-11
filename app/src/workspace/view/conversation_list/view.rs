@@ -695,17 +695,22 @@ impl ConversationListView {
     }
 
     fn start_rename(&mut self, id: AgentConversationEntryId, ctx: &mut ViewContext<Self>) {
-        // Renaming is only supported for open conversations (the Active section), since
-        // closed conversations may not be loaded in the history model.
-        if !self.is_in_active_section(id) {
-            return;
-        }
         let Some(entry) = self.view_model.as_ref(ctx).get_item_by_id(&id, ctx) else {
             return;
         };
         let Some(conversation_id) = entry.identity.local_conversation_id else {
             return;
         };
+
+        // Renaming requires the conversation to be loaded in the history model, which holds
+        // for active conversations and any conversation open in an agent view (an open
+        // conversation stays in the Past section until a prompt is sent).
+        let is_open = ActiveAgentViewsModel::as_ref(ctx)
+            .get_terminal_view_id_for_conversation(conversation_id, ctx)
+            .is_some();
+        if !self.is_in_active_section(id) && !is_open {
+            return;
+        }
 
         self.overflow_menu_state = None;
         self.renaming_conversation_id = Some(conversation_id);
@@ -1325,6 +1330,8 @@ impl View for ConversationListView {
             let sharing_dialog = self.sharing_dialog.clone();
             let rename_editor = self.rename_editor.clone();
             let renaming_conversation_id = self.renaming_conversation_id;
+            let open_conversation_ids =
+                ActiveAgentViewsModel::as_ref(app).get_all_open_conversation_ids(app);
             let share_dialog_open_for = self.share_dialog_open_for;
             let list_position_id = self.get_position_id();
             let tooltip_opens_right = TabSettings::as_ref(app)
@@ -1385,8 +1392,14 @@ impl View for ConversationListView {
                                         conversation.identity.local_conversation_id;
                                     let is_renaming = renaming_conversation_id.is_some()
                                         && local_conversation_id == renaming_conversation_id;
-                                    let can_rename = *section == ConversationSection::Active
-                                        && local_conversation_id.is_some();
+                                    // Renaming is allowed for active conversations and for open
+                                    // ones (an open conversation stays in the Past section until
+                                    // a prompt is sent).
+                                    let can_rename = local_conversation_id.is_some_and(|id| {
+                                        *section == ConversationSection::Active
+                                            || open_conversation_ids
+                                                .contains(&ConversationOrTaskId::ConversationId(id))
+                                    });
 
                                     let overflow_menu_display = match overflow_menu_state {
                                         Some(s) if s.conversation_id == entry.id => {
