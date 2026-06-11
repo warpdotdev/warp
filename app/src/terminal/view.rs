@@ -5022,7 +5022,7 @@ impl TerminalView {
     fn git_status_metadata<'a>(&'a self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
         self.git_repo_status
             .as_ref()
-            .and_then(|h| h.as_ref(ctx).metadata())
+            .and_then(|h| h.as_ref(ctx).metadata(ctx))
     }
 
     #[cfg(feature = "local_fs")]
@@ -5072,8 +5072,7 @@ impl TerminalView {
 
     #[cfg(feature = "local_fs")]
     fn needs_git_status_for_agent_context(&self, ctx: &AppContext) -> bool {
-        self.current_local_repo_path().is_some()
-            && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+        self.current_repo_path.is_some() && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
     }
 
     /// Returns whether this terminal view should subscribe to git status updates.
@@ -5111,8 +5110,7 @@ impl TerminalView {
 
     #[cfg(feature = "local_fs")]
     fn needs_pr_info_for_agent_context(&self, ctx: &AppContext) -> bool {
-        self.current_local_repo_path().is_some()
-            && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
+        self.current_repo_path.is_some() && self.ai_input_model.as_ref(ctx).is_ai_input_enabled()
     }
 
     /// Whether this terminal needs PR info from the git status model.
@@ -5135,12 +5133,14 @@ impl TerminalView {
     fn sync_pr_info_subscription(&mut self, ctx: &mut ViewContext<Self>) {
         let needs_pr_info = self.needs_pr_info(ctx);
         if needs_pr_info && self.github_repo_model.is_none() {
-            let Some(repo_path) = self.current_local_repo_path().map(Path::to_path_buf) else {
+            // Acquire a GitHub-info handle for the current repo. The factory
+            // dispatches on the `LocalOrRemotePath` to a local `gh`-driven model
+            // or a remote push receiver, both wired up identically.
+            let Some(repo) = self.current_repo_path.clone() else {
                 return;
             };
-            let result = GitStatusUpdateModel::handle(ctx).update(ctx, |model, ctx| {
-                model.subscribe_github_repo(&repo_path, ctx)
-            });
+            let result = GitRepoModels::handle(ctx)
+                .update(ctx, |model, ctx| model.subscribe_github_repo(&repo, ctx));
             match result {
                 Ok(handle) => {
                     let weak_for_prompt = handle.downgrade();
@@ -5198,40 +5198,59 @@ impl TerminalView {
     #[cfg(feature = "local_fs")]
     fn update_git_status_subscription(&mut self, ctx: &mut ViewContext<Self>) {
         let should_subscribe = self.should_subscribe_to_git_status(ctx);
-        if should_subscribe {
-            // Subscribe if we have a repo path but no active subscription.
+        if !should_subscribe {
             if self.git_repo_status.is_some() {
-                self.sync_pr_info_subscription(ctx);
-            } else if let Some(repo_path) = self.current_local_repo_path().map(Path::to_path_buf) {
-                let result = GitStatusUpdateModel::handle(ctx)
-                    .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
-                match result {
-                    Ok(handle) => {
-                        ctx.subscribe_to_model(&handle, |me, _, _, ctx| {
-                            me.handle_git_repo_status_event(ctx);
-                        });
-                        let weak_for_prompt = handle.downgrade();
-                        self.git_repo_status = Some(handle);
-                        self.current_prompt.update(ctx, |prompt_type, ctx| {
-                            if let PromptType::Dynamic { prompt } = prompt_type {
-                                prompt.update(ctx, |current_prompt, ctx| {
-                                    current_prompt.set_git_repo_status(Some(weak_for_prompt), ctx);
-                                });
-                            }
-                        });
-                        // Acquire a GitHub-info handle if the terminal's
-                        // prompt/footer chips or agent context need PR or
-                        // repository info.
-                        self.sync_pr_info_subscription(ctx);
-                    }
-                    Err(err) => {
-                        log::warn!("GitStatusUpdateModel subscribe failed: {err}");
-                    }
-                }
+                self.clear_git_repo_status_subscription(ctx);
             }
-        } else if self.git_repo_status.is_some() {
-            self.clear_git_repo_status_subscription(ctx);
+            return;
         }
+
+        // Already subscribed — keep the PR-info (GitHub) subscription in sync.
+        if self.git_repo_status.is_some() {
+            self.sync_pr_info_subscription(ctx);
+            return;
+        }
+
+        // No active subscription: create one for the current repo. The factory
+        // dispatches on the `LocalOrRemotePath` to a local watcher-backed model
+        // or a remote push receiver, both wired up identically.
+        let Some(repo) = self.current_repo_path.clone() else {
+            return;
+        };
+        let result =
+            GitRepoModels::handle(ctx).update(ctx, |model, ctx| model.subscribe(&repo, ctx));
+        match result {
+            Ok(handle) => self.wire_git_repo_status_handle(handle, ctx),
+            Err(err) => log::warn!("GitRepoModels subscribe failed: {err}"),
+        }
+    }
+
+    /// Wires a freshly-obtained per-repo `GitRepoStatusModel` handle (local or
+    /// remote) into this view: subscribes for events, feeds the prompt and AI
+    /// context models, stores the handle, and syncs the PR-info consumer slot.
+    #[cfg(feature = "local_fs")]
+    fn wire_git_repo_status_handle(
+        &mut self,
+        handle: ModelHandle<GitRepoStatusModel>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.subscribe_to_model(&handle, |me, _, _, ctx| {
+            me.handle_git_repo_status_event(ctx);
+        });
+        let weak_for_prompt = handle.downgrade();
+        self.git_repo_status = Some(handle);
+        self.current_prompt.update(ctx, |prompt_type, ctx| {
+            if let PromptType::Dynamic { prompt } = prompt_type {
+                prompt.update(ctx, |current_prompt, ctx| {
+                    current_prompt.set_git_repo_status(Some(weak_for_prompt), ctx);
+                });
+            }
+        });
+        // Acquire a GitHub-info handle if the terminal's prompt/footer chips or
+        // agent context need PR or repository info. The AI context model reads
+        // PR / repository info from that GitHub-info handle, so it is wired up
+        // by `sync_pr_info_subscription` rather than here.
+        self.sync_pr_info_subscription(ctx);
     }
 
     fn handle_ai_controller_event(
@@ -11686,6 +11705,20 @@ impl TerminalView {
                                     ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
                                         remote_path: remote_path.clone(),
                                     }));
+
+                                    // Wire up the remote git-status chips when the
+                                    // remote repo changed (mirrors the local branch).
+                                    #[cfg(feature = "local_fs")]
+                                    {
+                                        let changed = !matches!(
+                                            old_repo_path.as_ref(),
+                                            Some(LocalOrRemotePath::Remote(rp)) if rp == remote_path
+                                        );
+                                        if changed {
+                                            me.clear_git_repo_status_subscription(ctx);
+                                            me.update_git_status_subscription(ctx);
+                                        }
+                                    }
                                 }
                                 Some(LocalOrRemotePath::Local(repo_path)) => {
                                     #[cfg(feature = "local_fs")]

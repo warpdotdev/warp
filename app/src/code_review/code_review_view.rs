@@ -6325,16 +6325,14 @@ impl CodeReviewView {
 
     /// Returns PR info for the current branch.
     ///
-    /// Routed by repo location: local repos read from the per-repo
-    /// `GitHubRepoModel`, while remote repos read from the diff model.
+    /// Local and remote repos both read from the per-repo `GitHubRepoModel`.
+    /// The model dispatches to a local `gh`-driven backend or a remote
+    /// GitHub PR-info push receiver.
     fn pr_info(&self, ctx: &AppContext) -> Option<PrInfo> {
-        if self.repo_path().is_some_and(LocalOrRemotePath::is_remote) {
-            return self.diff_state_model.as_ref(ctx).pr_info(ctx);
-        }
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
                 let github_repo_model = self.github_repo_model.as_ref()?;
-                github_repo_model.as_ref(ctx).pr_info().cloned()
+                github_repo_model.as_ref(ctx).pr_info(ctx).cloned()
             } else {
                 None
             }
@@ -6347,7 +6345,7 @@ impl CodeReviewView {
         {
             self.github_repo_model
                 .as_ref()
-                .map(|h| h.as_ref(ctx).is_refreshing_pr_info())
+                .map(|h| h.as_ref(ctx).is_refreshing_pr_info(ctx))
                 .unwrap_or(false)
         }
 
@@ -6374,11 +6372,7 @@ impl CodeReviewView {
     /// Subscribes to the per-repo git status model.
     #[cfg(feature = "local_fs")]
     fn subscribe_to_git_repo_status_model(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(repo_path) = self
-            .repo_path()
-            .and_then(LocalOrRemotePath::to_local_path)
-            .map(Path::to_path_buf)
-        else {
+        let Some(repo) = self.repo_path().cloned() else {
             return;
         };
         let result =
@@ -6401,11 +6395,7 @@ impl CodeReviewView {
     /// Subscribes to the per-repo GitHub-info model.
     #[cfg(feature = "local_fs")]
     fn subscribe_to_github_repo_model(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(repo_path) = self
-            .repo_path()
-            .and_then(LocalOrRemotePath::to_local_path)
-            .map(Path::to_path_buf)
-        else {
+        let Some(repo) = self.repo_path().cloned() else {
             return;
         };
 
