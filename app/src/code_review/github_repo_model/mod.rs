@@ -17,6 +17,7 @@ use crate::code_review::git_repo_model::GitRepoStatusModel;
 #[cfg(feature = "local_fs")]
 use crate::util::git::{PrInfo, RepositoryInfo};
 
+#[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 #[derive(Debug)]
 pub enum GitHubRepoEvent {
     /// Emitted when `pr_info` changes value (fetch result differs from

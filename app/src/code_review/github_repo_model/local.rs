@@ -258,19 +258,19 @@ impl LocalGitHubRepoModel {
 
     fn handle_repository_info_result(
         &mut self,
-        result: anyhow::Result<RepositoryInfo>,
+        result: anyhow::Result<Option<RepositoryInfo>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let repository_info = match result {
-            Ok(repository_info) => Some(repository_info),
+        match result {
+            Ok(repository_info) => {
+                if self.repository_info != repository_info {
+                    self.repository_info = repository_info;
+                    ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
+                }
+            }
             Err(err) => {
                 log::debug!("GitHubRepoModel: repository info load failed: {err}");
-                None
             }
-        };
-        if self.repository_info != repository_info {
-            self.repository_info = repository_info;
-            ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
         }
     }
 

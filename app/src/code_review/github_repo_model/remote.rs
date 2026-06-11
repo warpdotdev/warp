@@ -188,16 +188,19 @@ impl RemoteGitHubRepoModel {
         result: &Result<Option<proto::RepositoryInfo>, String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let repository_info = match result {
-            Ok(repository_info) => repository_info.as_ref().map(RepositoryInfo::from),
+        let mut repo_changed = false;
+        match result {
+            Ok(repository_info) => {
+                let repository_info = repository_info.as_ref().map(RepositoryInfo::from);
+                repo_changed = self.repository_info != repository_info;
+                self.repository_info = repository_info;
+            }
             Err(error) => {
                 log::debug!("RemoteGitHubRepoModel: repository info load failed: {error}");
-                None
             }
-        };
+        }
         self.refreshing_repository_info = false;
-        if self.repository_info != repository_info {
-            self.repository_info = repository_info;
+        if repo_changed {
             ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
         }
     }

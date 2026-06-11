@@ -57,11 +57,11 @@ use super::proto::{
     GitOpError, GitPushRequest, GitPushResponse, GitStatusPush, IndexCodebase, Initialize,
     InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
-    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
-    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
-    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
-    TextEdit, UpdateGitStatus, UploadHandoffSnapshot, WriteFile, WriteFileResponse,
-    WriteFileSuccess,
+    RepositoryInfo, ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess,
+    ResyncCodebase, RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse,
+    RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage,
+    SessionBootstrapped, TextEdit, UpdateGitStatus, UploadHandoffSnapshot, WriteFile,
+    WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -882,7 +882,7 @@ impl ServerModel {
                         self.handle_unsubscribe_diff_state(m, conn_id, ctx);
                     }
                     Some(notification::Message::UpdateGitStatus(m)) => {
-                        self.handle_update_git_status(m, ctx);
+                        self.handle_update_git_status(m, conn_id, ctx);
                     }
                     None => {
                         log::warn!("Notification with no inner message (request_id={request_id})");
@@ -3327,7 +3327,12 @@ impl ServerModel {
     }
 
     /// Handles `UpdateGitStatus` notification (fire-and-forget).
-    fn handle_update_git_status(&mut self, msg: UpdateGitStatus, ctx: &mut ModelContext<Self>) {
+    fn handle_update_git_status(
+        &mut self,
+        msg: UpdateGitStatus,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
             Ok(p) => p,
             Err(e) => {
@@ -3336,6 +3341,7 @@ impl ServerModel {
             }
         };
 
+        self.subscribe_connection(conn_id, &std_path);
         self.subscribe_to_git_status_updates(&std_path, ctx);
         self.push_git_status(&std_path, ctx);
     }
@@ -3453,7 +3459,7 @@ impl ServerModel {
             move |me, result, _ctx| {
                 let response = match result {
                     Ok(repository_info) => GetGitHubRepoInfoResponse {
-                        repository_info: Some(super::proto::RepositoryInfo::from(&repository_info)),
+                        repository_info: repository_info.as_ref().map(RepositoryInfo::from),
                         error: None,
                     },
                     Err(e) => GetGitHubRepoInfoResponse {
