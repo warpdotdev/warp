@@ -56,7 +56,7 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 
 4. Opening a URL in a new Warp tab creates a Warp tab whose primary content is the Browser Pane. It does not create an internal browser tab strip inside the pane.
 
-5. Browser Pane supports the same pane-level lifecycle users expect from other pane types: focus, resize, close, and session restore where Warp already restores pane state.
+5. Browser Pane supports the same live pane-level lifecycle users expect from other pane types: focus, resize, close, and in-process navigation state. Browser Pane is not persisted across app/session restore in v1.
 
 6. Warp provides a command-palette action that lets the user type or paste a URL or search query before opening a Browser Pane.
 
@@ -82,7 +82,7 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 
 17. The address/search field accepts a typed or pasted `http` or `https` URL and navigates the Browser Pane to that URL.
 
-18. If the address/search field input is not a URL, Browser Pane treats it as a search query and opens a search-results page. V1 uses Google search by default if Warp does not already expose a browser/search-engine setting.
+18. If the address/search field input is not a URL, Browser Pane treats it as a search query and opens a search-results page. V1 uses Google search by default if Warp does not already expose a browser/search-engine setting. Because this sends the raw search query to a third-party provider, the address/search surface or adjacent product copy must make that data flow clear before the user submits a search.
 
 19. The toolbar does not include bookmarks, extensions, downloads management, browser profiles, developer tools, automation controls, or an internal tab strip in v1.
 
@@ -98,11 +98,11 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 
 25. Stopping the terminal process that produced the URL does not close the Browser Pane. The pane remains open and shows the appropriate reload or connection-failed state.
 
-26. Links clicked inside the rendered web page navigate within the Browser Pane according to normal embedded-browser behavior, unless the browser engine or page policy requires opening externally.
+26. Links clicked inside the rendered web page navigate within the Browser Pane for allowed `http` and `https` targets, unless the browser engine, external-protocol policy, or private-network policy requires blocking, user confirmation, or opening externally.
 
-27. Browser Pane restore is per pane. If Warp restores the Browser Pane after app/session restore, it restores the last full URL or search-result URL for that pane, including path, query string, and fragment, so dev-preview pages reload exactly. Search-result restore may therefore persist the raw search query locally inside Warp's app/session restore state. V1 does not need a separate workspace-level "last Browser Pane URL" memory.
+27. Browser Pane is live-session only in v1. Warp does not persist Browser Pane URLs or Browser Pane snapshots into app/session restore state, and it does not restore Browser Panes after restart, update, crash recovery, or app/session restore. When Warp restores a pane tree that previously contained Browser Panes, those Browser Panes are omitted rather than restored with a stale, redacted, or full URL. V1 does not include separate workspace-level Browser Pane URL memory.
 
-28. Browser Pane does not emit page content, screenshots, cookies, credentials, request bodies, raw search queries, or full URLs with query strings into telemetry. Exact URL persistence is limited to local app/session restore state.
+28. Browser Pane does not emit page content, screenshots, cookies, credentials, request bodies, raw search queries, or full URLs with query strings into telemetry. Browser Pane also does not persist full URLs, query strings, fragments, raw search queries, or page titles into app/session restore state in v1.
 
 29. Telemetry is limited to coarse product events such as Browser Pane opened, opened externally, reload clicked, search submitted, or load failed, without sensitive URL/query/content payloads.
 
@@ -112,7 +112,7 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 
 32. Browser Pane supports keyboard-first routes for opening a Browser Pane, focusing the address/search field, navigating back/forward, reloading, and returning focus to the terminal pane.
 
-33. Non-`http`/`https` links are not loaded directly inside Browser Pane in v1. They are routed to the system/default handler or shown as unsupported with an external-open affordance.
+33. Non-`http`/`https` links are not loaded directly inside Browser Pane in v1. Page-controlled non-`http`/`https` navigations are blocked by default and shown as unsupported with an explicit `Open externally` affordance. Browser Pane must not automatically dispatch `file:`, app-private schemes, shell-like schemes, or unknown custom protocols to the system/default handler from page content.
 
 34. Browser Pane uses the platform webview runtime available to Warp. V1 does not bundle Chromium or a pinned webview runtime by default.
 
@@ -121,6 +121,10 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 36. In managed enterprise environments, Warp can document the required platform webview runtime and expose a support/deployment escalation path for pinned-runtime packaging where the platform allows it. A pinned runtime is an enterprise deployment hatch, not a default user-facing mode.
 
 37. If an enterprise-pinned runtime is used, Browser Pane behavior remains the same from the user's perspective: same toolbar, same pane lifecycle, same privacy boundaries, and no additional browser product features.
+
+38. Web content rendered in Browser Pane is untrusted. V1 does not expose page-to-Warp native bridges, JavaScript bridges, native message handlers, injected objects, custom URL scheme callbacks, IPC routes, terminal or AI context, filesystem access, credential access, or privileged Warp app actions to page content.
+
+39. Remote web content loaded in Browser Pane must not silently pivot into local or private-network services. User-entered or explicitly opened loopback preview URLs are allowed, but a non-local page attempting to navigate to loopback, localhost, RFC1918/private IPv4 ranges, IPv6 local/private ranges, or other private-network targets must be blocked, user-gated, or opened externally according to the v1 platform policy.
 
 ## Success Criteria
 
@@ -138,13 +142,17 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 
 7. A failed local server connection produces a useful in-pane error state with retry and open externally options.
 
-8. Browser Pane restores its last full URL or search-result URL, including query string and fragment, when the pane is restored through Warp's normal app/session restore path.
+8. Browser Pane does not restore across Warp restart, update, crash recovery, or app/session restore in v1, and no full URL, query string, fragment, raw search query, or page title is written to app/session restore state.
 
 9. General browsing features such as bookmarks, downloads management, browser extensions, browser profiles, developer tools, automation controls, cloud browsers, and internal browser tabs are absent from v1.
 
 10. Browser Pane unavailable states are recoverable: users can still open links externally, and enterprise admins have a documented runtime requirement or escalation path.
 
-11. No sensitive page content, screenshots, cookies, credentials, request bodies, or full URLs with query strings are emitted in telemetry.
+11. No sensitive page content, screenshots, cookies, credentials, request bodies, raw search queries, or full URLs with query strings are emitted in telemetry.
+
+12. Web pages loaded in Browser Pane cannot call into Warp-native APIs or access Warp app state beyond ordinary embedded-browser navigation and rendering behavior.
+
+13. Page-controlled non-`http`/`https` protocol attempts and remote-to-local/private-network transitions fail closed unless the user explicitly chooses an external or gated route.
 
 ## Follow-ups
 
@@ -156,6 +164,7 @@ Issue #2164 asks for an in-app browser for docs lookup and web search. Later dup
 - Browser search-engine preference and search suggestions.
 - Enterprise pinned-runtime packaging for environments that cannot use the default platform webview runtime.
 - Private-network URL classification beyond loopback literals.
+- Sanitized, redacted, opt-in, or TTL-limited Browser Pane restore after a separate privacy/security review.
 - Workspace-level Browser Pane URL memory.
 - Full developer tools or deeper inspection surfaces.
 - Browser recording, headless/cloud execution, and Playwright-compatible test generation.

@@ -12,8 +12,8 @@ Warp already has the right product surface for this feature: typed panes inside 
 - `app/src/pane_group/pane/mod.rs:1` documents the pane contract: each pane has a `BackingView` for rendering/interactions and a `PaneContent` wrapper for pane-group lifecycle.
 - `app/src/pane_group/pane/mod.rs:137` defines `IPaneType`; a Browser Pane needs its own pane type so focus, titles, drag/drop, and snapshot plumbing stay type-safe.
 - `app/src/pane_group/pane/file_pane.rs:20` is the closest local example of a pane wrapper around a child view. It wraps `FileNotebookView` in `PaneView`, forwards pane events, snapshots the pane, and delegates focus.
-- `app/src/app_state.rs:119` defines `LeafContents`, the persisted pane-content snapshot enum. Browser Pane needs a minimal snapshot that stores only the last full URL.
-- `app/src/persistence/sqlite.rs:1117` maps persisted `LeafContents` variants to pane kinds before writing pane-specific rows, and `app/src/persistence/sqlite.rs:2463` maps those pane kinds back to snapshots during restore. Browser Pane persistence needs coverage in both directions, not just a new `LeafContents` variant.
+- `app/src/app_state.rs:119` defines `LeafContents`, the pane-content snapshot enum used by app-state persistence. `LeafContents::is_persisted` already allows pane types such as `NetworkLog` and `EnvironmentManagement` to be skipped entirely during save traversal when their state should not be written to SQLite.
+- `app/src/persistence/sqlite.rs:994` skips non-persisted leaf contents before inserting `pane_nodes`, avoiding orphan pane rows that would break tab restoration. Browser Pane should use this non-persisted pattern in v1 rather than adding URL persistence.
 - `app/src/util/openable_file_type.rs:24` defines `EditorLayout::{SplitPane, NewTab}` and `FileTarget::{MarkdownViewer, CodeEditor, ...}`. Browser Pane should mirror the same split/new-tab concept without overloading file-target semantics.
 - `app/src/workspace/view.rs:5893` routes `FileTarget::MarkdownViewer(layout)` to `open_file_notebook`.
 - `app/src/workspace/view.rs:7375` implements `open_file_notebook`: `EditorLayout::NewTab` calls `add_tab_from_existing_pane`, while `EditorLayout::SplitPane` calls `pane_group.add_pane_with_direction(Direction::Right, ..., focus_new_pane = true)`.
@@ -26,7 +26,7 @@ Warp already has the right product surface for this feature: typed panes inside 
 - `app/src/search/command_palette/mixer.rs:18` defines `CommandPaletteItemAction`; URL/search opening from command palette needs either a new action variant or a binding that launches a URL/search prompt.
 - `app/src/search/command_palette/mixer.rs:86` maps `CommandPaletteItemAction` values to `ItemSummary`; browser URL/search actions should map to `ItemSummary::NoOp`.
 - `app/src/search/command_palette/view.rs:722` dispatches command-palette actions and is the place to route a command-palette browser result into workspace/browser-pane opening.
-- cmux is a useful local-dev-browser precedent. Its `SessionBrowserPanelSnapshot` stores `urlString`, `backHistoryURLStrings`, and `forwardHistoryURLStrings`, `Workspace` snapshots the browser panel with `preferredURLStringForSessionSnapshot()`, and `BrowserPanel` serializes/restores URL strings using the full `absoluteString`. Warp v1 does not need cmux's full browser history restore, but it should preserve the current full URL for exact dev-preview reloads.
+- cmux is a useful local-dev-browser precedent for live in-app preview ergonomics, but Warp v1 intentionally does not adopt cmux-style browser URL session snapshots. Browser Pane keeps URL state while the pane is alive and omits Browser Pane URLs from durable Warp app/session restore state.
 
 There is no general-purpose Browser Pane in the app today. The implementation should add one as a new pane type instead of trying to route web URLs through the Markdown/file viewer. Markdown viewing remains native rich-text/file viewing; Browser Pane handles `http` and `https` content plus plain search queries that are converted into search-result URLs.
 
@@ -37,11 +37,11 @@ There is no general-purpose Browser Pane in the app today. The implementation sh
 The implementation should land in small reviewable slices behind `FeatureFlag::BrowserPane`:
 
 1. Add browser input/layout parsing types, loopback classification, URL/search conversion, and telemetry redaction helpers with unit tests.
-2. Add the Browser Pane shell, pane type, pane snapshot type, and a test/dummy `BrowserSurface` so pane creation, split/new-tab layout, focus, title, and restore plumbing can be reviewed without platform webview complexity.
+2. Add the Browser Pane shell, pane type, non-persisted pane snapshot marker, and a test/dummy `BrowserSurface` so pane creation, split/new-tab layout, focus, and title plumbing can be reviewed without platform webview complexity.
 3. Spike the native desktop webview path on macOS first because WKWebView is the most constrained system-webview baseline for Warp's current desktop app model. The spike should prove child-view embedding, URL navigation, back/forward/reload, load-state callbacks, focus handoff, nonpersistent storage, and download blocking. If the spike cannot satisfy a required v1 behavior, update this spec before widening implementation.
 4. Add the terminal and rich-content URL context-menu routes through the existing terminal event -> pane-group event -> workspace bridge, keeping primary-click URL behavior unchanged.
 5. Add the command-palette route, preferring an explicit URL/search prompt if inline query-dependent results would appear for ordinary command searches or pollute palette ranking.
-6. Add SQLite/app-state persistence and restore with feature-flag-disabled and invalid-URL skip behavior.
+6. Add app-state non-persistence handling so Browser Pane leaves are skipped during SQLite save/restore without dropping the surrounding tab.
 7. Add Windows and Linux `BrowserSurface` implementations or hide Browser Pane on unsupported targets with a documented unavailable state and follow-up.
 8. Complete accessibility, keyboard, telemetry, privacy, and manual validation before the feature is promoted beyond the initial flag.
 
@@ -53,7 +53,7 @@ All new user-visible routes should check the same flag:
 
 - URL context-menu items.
 - Command-palette result or URL/search prompt entrypoint.
-- Browser Pane restoration from app state.
+- Browser Pane app-state non-persistence handling.
 - Any toolbar controls specific to Browser Pane.
 
 When the flag is disabled, primary-click URL behavior and existing context menus remain unchanged.
@@ -69,10 +69,11 @@ Add a small browser-pane module, for example `app/src/browser_pane/`, with share
   - Stores a parsed `url::Url`.
   - Accepts only `http` and `https`.
   - Normalizes display without dropping the user's entered URL.
-  - Preserves path, query string, and fragment for navigation and local app/session restore.
+  - Preserves path, query string, and fragment only for live navigation, display, copy URL, and reload while the pane exists. V1 does not write Browser Pane URLs into app/session restore state.
 - `BrowserPaneInput`
   - Represents either a direct URL or a plain search query.
   - Converts search queries to `https://www.google.com/search?q={query}` in v1 unless Warp already has a browser/search-engine setting by implementation time.
+  - Requires the user-facing search surface to disclose that search query text is sent to the configured third-party search provider before submission.
   - Rejects or externally routes unsupported non-`http`/`https` schemes instead of loading them in Browser Pane.
 - `BrowserPaneUrlKind`
   - `LoopbackPreview`
@@ -103,7 +104,7 @@ The wrapper should be structurally similar to `FilePane`:
 - `BrowserPane::from_view(view, ctx)` wraps it in `PaneView<BrowserPaneView>`.
 - `PaneId::from_browser_pane_ctx` and `PaneId::from_browser_pane_view` create typed pane IDs.
 - `IPaneType::Browser` renders as "Browser".
-- `PaneContent::snapshot` returns `LeafContents::Browser(BrowserPaneSnapshot { url })`.
+- `PaneContent::snapshot` returns a non-persisted Browser Pane marker without URL, query, fragment, title, page content, or browser history. `LeafContents::is_persisted` must return `false` for Browser Pane in v1 so `save_app_state` skips it entirely.
 - `PaneContent::focus` focuses the browser toolbar or web content according to current browser focus state.
 - `PaneContent::attach` subscribes to `BrowserPaneViewEvent::Pane` and title/load-state events, then forwards `PaneEvent` and `PaneTitleUpdated` to the pane group.
 
@@ -162,10 +163,28 @@ Add `BrowserSurface` rather than leaking webview-engine APIs through the pane:
   - `title()`
   - load-state callbacks
   - policy callback for external navigation or blocked embedding
+  - policy callback for permission prompts and privileged web APIs
 
 The implementation can use direct platform bindings or a small Rust webview wrapper, but that choice should stay behind `BrowserSurface`. Start with a macOS WKWebView spike because it is the clearest system-webview baseline for Warp's current native desktop app model. Before widening to Windows or Linux, the spike should prove child-view embedding, URL/search navigation, local HTTP preview loading, basic navigation controls, load/error callbacks, focus handoff, nonpersistent storage, and download blocking. If one target cannot support embedded browsing in the first pass, hide Browser Pane on that target behind the feature flag, show the unavailable state from the product spec, and document the platform gap in the PR.
 
 Do not build developer tools, request interception, console log streaming, agent-readable screenshots, agent-controllable actions, browser recording, Playwright-compatible automation, cloud/headless browser execution, scheduled browser jobs, multi-page research canvases, or AI synthesis surfaces into this abstraction for v1.
+
+Web content isolation is a hard v1 boundary. Browser Pane must treat page content as untrusted and must not expose page-to-Warp native bridges, JavaScript bridges, native message handlers, injected objects, custom URL scheme callbacks, IPC routes, terminal or AI context, filesystem access, credential access, or privileged Warp app actions to page content. The toolbar and pane model may consume engine-reported state such as current URL, title, load state, and navigation availability through `BrowserSurface`, but page JavaScript cannot call Warp-owned APIs. Any future page-to-Warp bridge requires a separate follow-up spec with origin scoping, explicit user gating where appropriate, security review, and tests.
+
+Privileged browser capability policy:
+
+| Capability | V1 policy |
+| --- | --- |
+| Camera | Deny inside Browser Pane and offer `Open externally` when the page needs it. |
+| Microphone | Deny inside Browser Pane and offer `Open externally` when the page needs it. |
+| Geolocation | Deny inside Browser Pane and offer `Open externally` when the page needs it. |
+| Notifications | Deny inside Browser Pane. Browser Pane does not create Warp notifications for page notification requests in v1. |
+| Clipboard API | Deny script-initiated privileged clipboard reads and writes from page content. The toolbar `Copy URL` action is Warp-owned and remains allowed. Normal text editing shortcuts in focused browser text fields may use the platform text-input path, but must not grant broad page clipboard API access. |
+| File picker / file upload | Deny inside Browser Pane and offer `Open externally` when the page needs local file access. |
+| Popups / new windows | Block in-pane popup creation and route the target URL to `Open externally` when the target is available. |
+| Downloads | Block or route externally rather than silently writing files. |
+
+The implementation must intercept or configure each platform webview so Browser Pane does not inherit permissive platform defaults for these prompts and APIs. If a platform cannot enforce the v1 policy for a capability, Browser Pane should hide that platform path or route the affected navigation externally until enforcement is available.
 
 ### 5. Add workspace opening APIs
 
@@ -228,37 +247,30 @@ Preferred implementation:
 
 The command palette should not show a Browser Pane search result for every generic command query. If inline query-dependent results are used, gate them to explicit URL-looking inputs, explicit search prefixes, or another ranking rule that avoids competing with normal command results. The product invariant is the same: a user can paste/type an `http` or `https` URL or search query and open it in Browser Pane.
 
-### 8. Persist pane restore state
+### 8. Do not persist pane restore state
 
-Add:
+Browser Pane is live-session only in v1. Do not add durable Browser Pane URL persistence:
 
-- `LeafContents::Browser(BrowserPaneSnapshot)`
-- `BrowserPaneSnapshot { url: String }`
+- Do not add `BrowserPaneSnapshot { url }`.
+- Do not add a Browser Pane SQLite table, migration, or persisted URL field.
+- Do not write Browser Pane full URLs, query strings, fragments, raw search queries, page titles, page content, screenshots, scroll position, cookies, credentials, request bodies, form values, browser history stack, automation state, or per-page storage into app/session restore state.
+- Do not restore Browser Pane after restart, update, crash recovery, or app/session restore.
 
-Browser Pane should be persisted by `LeafContents::is_persisted` when the feature flag is enabled. The implementation should add:
+Implementation should follow the existing non-persisted pane pattern:
 
-- A Browser Pane kind constant for SQLite pane leaves.
-- A pane-specific table or compatible persisted field that stores only the last full URL or search-result URL.
-- `save_pane_state` coverage that writes the Browser Pane kind and URL snapshot.
-- `read_node` coverage that reconstructs `LeafContents::Browser(BrowserPaneSnapshot { url })`.
-- A migration for any new schema used to store Browser Pane snapshots.
-
-Restoration should:
-
-1. Parse and validate the stored URL.
-2. Recreate `BrowserPane`.
-3. Restore the last full URL or search-result URL only, including path, query string, and fragment.
-4. If the URL is invalid or the feature flag is disabled, skip restoring that pane with a warning rather than failing the whole tab.
-
-Do not persist page content, screenshots, scroll position, cookies, credentials, request bodies, form values, browser history stack, automation state, or per-page storage in app-state snapshots.
+1. Add a Browser Pane `LeafContents` marker only if needed by the pane snapshot contract, but keep it free of URL/title/content payloads.
+2. Make `LeafContents::is_persisted` return `false` for Browser Pane in v1.
+3. Rely on the existing `save_app_state` traversal skip for non-persisted leaf contents so no `pane_nodes` or `pane_leaves` rows are inserted for Browser Panes.
+4. Verify restoring a tab that previously contained a Browser Pane omits that Browser Pane without dropping the surrounding tab or adjacent persisted panes.
+5. If the feature flag is disabled, Browser Pane entrypoints remain hidden and no app-state restore path attempts to recreate Browser Pane.
 
 Browser-engine storage must be bounded:
 
-- App-state/SQLite persistence stores only `BrowserPaneSnapshot { url }`, where `url` is the current full `http`/`https` URL or search-result URL, including path, query string, and fragment. Search-result URLs may include the raw search query, so this data is allowed only in local app/session restore state and never in telemetry. This is intentional for a developer browser so local previews reload exactly, and matches cmux's browser-session precedent of restoring browser URL strings from app-owned session state.
+- Browser-engine storage is separate from Warp app-state restore. Prefer private/ephemeral browser-engine storage and do not use the user's default external-browser profile.
 - macOS should configure WKWebView with a nonpersistent `WKWebsiteDataStore`, which Apple documents as in-memory website data that is not written to disk.
 - Windows should create Browser Pane webviews with a dedicated WebView2 profile/user-data scope and private mode when available; WebView2 exposes profile metadata including `IsInPrivateModeEnabled`, profile path, and browsing-data clearing APIs.
 - Linux should use an ephemeral WebKitGTK context or website data manager when available; WebKitGTK documents ephemeral contexts/managers whose webviews do not store website data in client storage.
-- If any supported platform cannot provide a private/ephemeral mode, the implementation must isolate Browser Pane data in a Browser Pane-specific user-data directory under Warp app data and clear cookies/cache/storage on pane close and app shutdown. It must not use the user's default external-browser profile.
+- If any supported platform cannot provide a private/ephemeral mode, the implementation must isolate Browser Pane data in a Browser Pane-specific user-data directory under Warp app data and clear cookies/cache/storage on pane close, app shutdown, and the next Warp startup before any Browser Pane navigation. Startup cleanup is required so cookies/cache/storage do not persist after crashes, forced quits, or unclean shutdowns. The fallback should also use an explicit short TTL for Browser Pane-specific storage as a defense in depth. It must not use the user's default external-browser profile.
 - Downloads are out of v1. If the engine tries to start a download, Browser Pane should block it or route externally rather than silently writing files.
 
 ### 9. Telemetry and privacy
@@ -273,7 +285,7 @@ Add coarse telemetry events only:
 
 Allowed metadata:
 
-- Open source: terminal context menu, rich-content context menu, command palette, restore.
+- Open source: terminal context menu, rich-content context menu, command palette.
 - Layout: split pane or new Warp tab.
 - URL kind: loopback preview or web.
 - Input kind: direct URL or search query.
@@ -308,7 +320,13 @@ Every failure state keeps the URL visible and offers:
 - Open externally.
 - Copy URL.
 
-Non-`http`/`https` links clicked inside page content should not load directly in Browser Pane in v1. Route them to the system/default handler or show unsupported with `Open externally`.
+Non-`http`/`https` links clicked inside page content should not load directly in Browser Pane in v1. Page-controlled custom protocol attempts should be blocked by default and shown as unsupported with an explicit `Open externally` affordance. Browser Pane must not automatically dispatch `file:`, app-private schemes, shell-like schemes, or unknown custom protocols to the system/default handler.
+
+Private-network policy:
+
+- User-entered or explicitly opened loopback preview URLs remain allowed.
+- A non-local page attempting to navigate to loopback, localhost, RFC1918/private IPv4 ranges, IPv6 local/private ranges, or other private-network targets must be blocked, user-gated, or opened externally.
+- The platform spike must validate whether the chosen webview enforces private-network protections for page-initiated navigation and subresource requests. If a platform cannot enforce the v1 policy, the implementation must hide arbitrary remote browsing on that platform, route affected transitions externally, or update the spec before widening support.
 
 Plain search query input should navigate to the v1 search URL rather than producing an invalid URL error.
 
@@ -341,7 +359,12 @@ Add focused unit tests for:
 - Loopback classification returns true for `localhost`, `127.0.0.1`, `[::1]`, and loopback IP literals.
 - Loopback classification returns false for non-loopback hosts and does not perform DNS.
 - URL telemetry redaction strips query, fragment, raw search query, page title, and full URL.
-- Browser Pane snapshot restore accepts valid `http`/`https` URLs and search-result URLs, preserves query strings and fragments, and rejects unsupported schemes without panicking.
+- Browser Pane app-state snapshots, if a marker is needed by the pane contract, contain no URL, query, fragment, raw search query, page title, content, or browser history payload.
+- `LeafContents::is_persisted` returns `false` for Browser Pane in v1, and save traversal skips Browser Pane leaves without creating orphan pane rows.
+- Browser Pane storage cleanup removes Browser Pane-specific fallback storage on startup before navigation when an ephemeral/private engine mode is unavailable.
+- Browser Pane webview setup does not register JavaScript bridges, native message handlers, injected objects, custom URL scheme callbacks, or other page-callable Warp APIs.
+- External protocol policy blocks page-controlled `file:`, app-private, shell-like, and unknown custom schemes unless the user explicitly chooses an external route.
+- Private-network policy blocks, user-gates, or externally routes non-local page transitions to loopback, localhost, RFC1918/private IPv4 ranges, IPv6 local/private ranges, and other private-network targets.
 - Command-palette URL/search route opens the URL/search prompt, or creates a narrowly gated inline result only for explicit URL/search inputs.
 
 ### Pane and workspace tests
@@ -350,9 +373,9 @@ Add the smallest available pane/workspace tests covering:
 
 - `WorkspaceAction::OpenBrowserPaneFromInput` with `SplitPane` adds a right split to the active tab and focuses it.
 - `WorkspaceAction::OpenBrowserPaneFromInput` with `NewTab` creates a new Warp tab, respecting the existing new-tab placement setting.
-- Restoring `LeafContents::Browser` recreates a Browser Pane with the last full URL or search-result URL when the flag is enabled.
-- Restoring `LeafContents::Browser` is skipped gracefully when the flag is disabled.
-- Persisting and reading Browser Pane snapshots round-trips the full URL through SQLite without dropping the surrounding tab.
+- Saving app state skips Browser Pane leaves entirely and does not write Browser Pane `pane_nodes`, `pane_leaves`, URLs, or titles to SQLite.
+- Restoring a tab that previously contained Browser Pane omits the Browser Pane without dropping the surrounding tab or adjacent persisted panes.
+- Feature-flag-disabled restore paths do not attempt to recreate Browser Pane.
 - Closing a Browser Pane does not affect terminal sessions or terminal processes.
 
 ### Terminal and command-palette tests
@@ -365,6 +388,8 @@ Add UI/action tests where existing harnesses make them cheap:
 - Rich-content URL context menu gets the same Browser Pane actions.
 - Submitting the command-palette URL/search route dispatches `OpenBrowserPaneFromInput` with split-pane layout.
 - Browser keyboard actions focus the address/search field, navigate back/forward, reload, and return focus to the terminal.
+- Browser capability policy tests or platform spike validation confirm camera, microphone, geolocation, notifications, privileged clipboard APIs, file picker/upload, popups/new windows, and downloads follow the v1 deny, block, or external-route policy.
+- Browser content isolation tests or platform spike validation confirm page JavaScript cannot invoke Warp-native APIs, read terminal or AI context, access credentials or filesystem data, or trigger privileged Warp actions.
 
 ### Manual validation
 
@@ -378,10 +403,12 @@ Run Warp locally with `FeatureFlag::BrowserPane` enabled and validate:
 6. Right-click the same URL and choose `Open in new tab`. Confirm Warp creates a new Warp tab without an internal browser tab strip.
 7. Primary-click the URL. Confirm it still opens externally as it does today.
 8. Paste an `https` URL into the command palette route. Confirm it opens a Browser Pane.
-9. Type a docs/search query into the command palette route or Browser Pane address/search field. Confirm it opens a search-results page.
+9. Type a docs/search query into the command palette route or Browser Pane address/search field. Confirm the surface discloses that the query is sent to the configured third-party search provider before submission, then opens a search-results page.
 10. Use keyboard routes to focus the address/search field, navigate back/forward, reload, and return focus to the terminal.
 11. Try a non-`http` URL. Confirm it does not load directly in Browser Pane.
-12. Quit and restore Warp. Confirm restored Browser Panes reload their last full URL or search-result URL, including query string and fragment, and do not restore page content or browser history stack.
+12. Try page-controlled `file:`, custom protocol, and popup/new-window URLs. Confirm Browser Pane blocks automatic dispatch and only offers an explicit external route where appropriate.
+13. From a non-local page, try navigating to `localhost`, `127.0.0.1`, `[::1]`, RFC1918/private IPv4, and IPv6 local/private targets. Confirm the transition is blocked, user-gated, or opened externally according to the platform policy.
+14. Quit and restore Warp. Confirm Browser Panes are not restored, no Browser Pane URL or title is written to app/session restore state, and adjacent persisted panes/tabs restore without being dropped.
 
 ### Behavior-to-verification mapping
 
@@ -389,22 +416,24 @@ Run Warp locally with `FeatureFlag::BrowserPane` enabled and validate:
 | --- | --- |
 | #1 | Unit-test `BrowserPaneUrl`/`BrowserPaneInput` for supported `http`/`https` URLs and search queries; manually open both URL and search-query inputs. |
 | #2, #3, #4, #12, #13 | Workspace tests cover `SplitPane` and `NewTab`; manual validation confirms split-right local preview, new Warp tab, and no internal browser tab strip. |
-| #5 | Pane/workspace restore tests cover focus, resize/close lifecycle through the pane group, and Browser Pane restore through `LeafContents::Browser`. |
+| #5 | Pane/workspace tests cover focus, resize/close lifecycle through the pane group, live in-process Browser Pane navigation state, and non-persistence across app/session restore. |
 | #6 | Command-palette test accepts a typed/pasted URL or search query and dispatches `OpenBrowserPaneFromInput`. |
 | #7, #8 | Terminal and rich-content context-menu tests assert `Open in new pane`, `Open in new tab`, `Copy URL`, and `Open externally`, with the split/new-tab actions carrying the expected layout. |
 | #9, #11 | Terminal URL primary-click regression test still calls the existing external URL path for normal and loopback-preview URLs. |
 | #10 | Unit tests cover syntactic loopback classification for `localhost`, `127.0.0.1`, `[::1]`, other loopback literals, non-loopback hosts, and no DNS lookup. |
 | #14, #15, #16, #19 | Browser Pane view tests or visual/manual validation cover pane chrome, toolbar controls, URL visibility on failure, and absence of bookmarks/extensions/downloads/profiles/devtools/automation/tab strip. |
-| #17, #18 | Unit tests cover address/search parsing; manual validation confirms direct URL navigation and search-result navigation. |
-| #20, #21, #22 | Browser surface/load-state tests cover loading, loaded, failed load, connection refused, unsupported scheme, certificate/security warning, blocked embedding, retry, copy URL, and open externally; manual validation covers stopped local server retry. |
+| #17, #18 | Unit tests cover address/search parsing; manual validation confirms direct URL navigation, search-provider disclosure before search submission, and search-result navigation. |
+| #20, #21, #22 | Browser surface/load-state and capability-policy tests cover loading, loaded, failed load, connection refused, unsupported scheme, certificate/security warning, blocked embedding, permission/API requests, retry, copy URL, and open externally; manual validation covers stopped local server retry. |
 | #23 | UI/action tests and manual keyboard validation cover reload/stop from toolbar and keyboard route. |
 | #24, #25 | Pane/workspace tests and manual validation confirm closing Browser Pane or stopping the producing terminal process does not terminate the other surface. |
-| #26, #33 | Browser navigation policy tests cover in-pane `http`/`https` link navigation and system/default-handler or unsupported-state handling for non-`http`/`https` links. |
-| #27 | SQLite/app-state round-trip tests persist and restore the current full URL, including path, query string, and fragment, without restoring page content or history stack. |
+| #26, #33 | Browser navigation policy tests cover in-pane `http`/`https` link navigation, block-by-default handling for page-controlled non-`http`/`https` protocols, and explicit external-open affordances where allowed. |
+| #27 | App-state tests verify Browser Pane leaves are non-persisted, no URL/title/query/fragment snapshot is written to SQLite, and tabs containing Browser Panes restore without dropping adjacent persisted panes; fallback-storage tests verify startup cleanup before navigation when ephemeral/private storage is unavailable. |
 | #28, #29 | Telemetry unit/review tests assert coarse events only and reject full URL, query string, fragment, raw search query, page title, page text, screenshots, cookies/credentials, and request/response bodies. |
 | #30, #31, #32 | Accessibility and keyboard manual validation cover toolbar accessible names, meaningful pane title, visible focus, browser-content focus boundaries, back/forward/reload shortcuts, address-field focus, and terminal focus return. |
 | #34, #35 | Platform/runtime checks verify Browser Pane uses the platform webview runtime, hides or shows an unavailable state when the runtime is missing/blocked/unsupported, and leaves primary-click URL behavior unchanged. |
 | #36, #37 | Release/docs review verifies enterprise runtime requirements and pinned-runtime escalation guidance; manual/platform validation confirms pinned-runtime deployments keep the same user-visible Browser Pane behavior. |
+| #38 | Browser content isolation tests or platform spike validation confirm Browser Pane does not expose page-callable native bridges, message handlers, custom URL scheme callbacks, IPC routes, terminal or AI context, filesystem access, credential access, or privileged Warp app actions. |
+| #39 | Browser navigation and platform-spike validation cover non-local page attempts to reach loopback, localhost, RFC1918/private IPv4 ranges, IPv6 local/private ranges, and other private-network targets. |
 
 ### Commands
 
@@ -440,7 +469,7 @@ Mitigation: Keep v1 to local preview and quick lookup ergonomics: pane lifecycle
 
 Risk: URLs can contain credentials, tokens, local service paths, query strings, or page content.
 
-Mitigation: Store only the last full URL or search-result URL in local pane restore state, prefer ephemeral browser-engine storage, avoid full URL/search telemetry, and never emit page content, screenshots, cookies, credentials, request bodies, raw search queries, or query strings.
+Mitigation: Do not persist Browser Pane URLs or titles in Warp app/session restore state in v1. Keep URL state in memory while the pane is alive, prefer ephemeral browser-engine storage, avoid full URL/search telemetry, and never emit page content, screenshots, cookies, credentials, request bodies, raw search queries, query strings, or fragments.
 
 ### Focus conflicts with terminal input
 
@@ -448,11 +477,17 @@ Risk: Browser content can capture keyboard shortcuts users expect to apply to te
 
 Mitigation: Keep pane-level navigation shortcuts owned by Warp chrome, expose clear focus state, support explicit browser keyboard routes, and apply page-level shortcuts only while browser content is focused.
 
-### Restore failures causing tab loss
+### Non-persisted restore behavior causing tab loss
 
-Risk: A bad persisted URL or disabled feature could fail pane restoration and drop a tab.
+Risk: A non-persisted Browser Pane leaf could create orphan app-state rows or otherwise cause the surrounding tab to disappear on restore.
 
-Mitigation: Treat Browser Pane restore as best-effort. Invalid or disabled Browser Pane snapshots should be skipped with a warning, following the app-state pattern that avoids failing the surrounding tab for non-restorable panes.
+Mitigation: Follow the existing `LeafContents::is_persisted == false` save traversal pattern used by non-restorable panes so Browser Pane leaves are skipped before `pane_nodes` insertion. Add app-state tests that tabs containing Browser Panes restore adjacent persisted panes without trying to recreate Browser Pane.
+
+### Remote page access to local services
+
+Risk: A remote page loaded in Browser Pane could attempt to navigate to or interact with localhost/private-network services available to the user.
+
+Mitigation: Allow explicitly opened loopback previews, but block, user-gate, or externally route non-local page transitions to loopback and private-network targets. Require platform-spike validation of private-network behavior before widening support.
 
 ## Follow-ups
 
@@ -463,6 +498,7 @@ Mitigation: Treat Browser Pane restore as best-effort. Invalid or disabled Brows
 - User setting for primary-click local-preview URLs to open in Browser Pane.
 - Browser search-engine preference and search suggestions.
 - Private-network URL classification beyond loopback literals.
+- Sanitized, redacted, opt-in, or TTL-limited Browser Pane restore after separate privacy/security review.
 - Workspace-level Browser Pane URL memory.
 - Full developer tools.
 - Browser recording, headless/cloud execution, and Playwright-compatible test generation.
