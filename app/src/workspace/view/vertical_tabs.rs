@@ -5210,9 +5210,11 @@ fn compute_tab_group_color_mode(
                     .as_ref(app)
                     .local_path(app)
                     .as_deref()
+                    // TODO(andy): avoid canonicalizing on a render code path
+                    .and_then(|file_path| dunce::canonicalize(file_path).ok())
                     .and_then(|file_path| {
                         dir_colors
-                            .color_for_directory(file_path)
+                            .color_for_directory(&file_path)
                             .and_then(|c| c.ansi_color())
                     })
             } else {
