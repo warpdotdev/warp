@@ -247,7 +247,7 @@ impl<T: ModeProvider> ToEscapeSequence<T> for KeystrokeWithDetails<'_> {
             .or_else(|| keystroke_to_c0_control_code(keystroke, mode_provider))
             .or_else(|| cursor_movement_keystroke_to_escape_sequence(keystroke, mode_provider))
             .or_else(|| meta_keystroke_to_escape_sequence(keystroke, mode_provider))
-            .or_else(|| special_key_keystroke_to_escape_sequence(keystroke))
+            .or_else(|| backspace_keystroke_to_escape_sequence(keystroke))
     }
 }
 
@@ -594,10 +594,10 @@ fn meta_keystroke_to_escape_sequence(
     }
 }
 
-/// Returns the byte sequence for special keys not handled by the encoders above.
+/// Returns DEL (0x7f) for an unmodified or Shift-only Backspace.
 /// Guards against winit on Windows reporting `\x08` (Ctrl+H) for Shift+Backspace,
 /// which readline-style TUIs interpret as `backward-kill-word`. See GH#11342.
-fn special_key_keystroke_to_escape_sequence(keystroke: &Keystroke) -> Option<Vec<u8>> {
+fn backspace_keystroke_to_escape_sequence(keystroke: &Keystroke) -> Option<Vec<u8>> {
     if keystroke.ctrl || keystroke.alt || keystroke.meta || keystroke.cmd {
         return None;
     }
