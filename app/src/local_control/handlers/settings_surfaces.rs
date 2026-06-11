@@ -1,4 +1,8 @@
-use ::local_control::protocol::{BindingNameParams, KeyParams, NamespaceParams};
+use ::local_control::protocol::{
+    AppearanceStateResult, BindingNameParams, KeyParams, KeybindingGetResult, KeybindingListResult,
+    KeybindingSummary, NamespaceParams, SettingGetResult, SettingListResult, SettingSummary,
+    ThemeListResult, ThemeStateResult, ThemeSummary,
+};
 use ::local_control::{ControlError, ErrorCode};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -27,71 +31,6 @@ pub(super) const ALLOWLISTED_SETTING_KEYS: &[&str] = &[
     "terminal.input.error_underlining_enabled",
     "terminal.input.syntax_highlighting",
 ];
-
-#[derive(Serialize)]
-struct SettingSummary {
-    key: String,
-    value: Value,
-    value_type: String,
-}
-
-#[derive(Serialize)]
-struct ThemeSummary {
-    name: String,
-    is_current: bool,
-}
-
-#[derive(Serialize)]
-struct ThemeListResult {
-    themes: Vec<ThemeSummary>,
-}
-
-#[derive(Serialize)]
-struct ThemeStateResult {
-    name: String,
-    follow_system_theme: bool,
-    light_theme: Option<String>,
-    dark_theme: Option<String>,
-}
-
-#[derive(Serialize)]
-struct AppearanceStateResult {
-    theme: Option<String>,
-    follow_system_theme: bool,
-    light_theme: Option<String>,
-    dark_theme: Option<String>,
-    font_size: Option<u32>,
-    ui_zoom_percent: Option<u32>,
-}
-
-#[derive(Serialize)]
-struct SettingListResult {
-    settings: Vec<SettingSummary>,
-}
-
-#[derive(Serialize)]
-struct SettingGetResult {
-    setting: SettingSummary,
-}
-
-#[derive(Serialize)]
-struct KeybindingSummary {
-    name: String,
-    description: String,
-    group: Option<String>,
-    keystroke: Option<String>,
-    normalized_keystroke: Option<String>,
-}
-
-#[derive(Serialize)]
-struct KeybindingListResult {
-    keybindings: Vec<KeybindingSummary>,
-}
-
-#[derive(Serialize)]
-struct KeybindingGetResult {
-    keybinding: KeybindingSummary,
-}
 
 pub(crate) fn theme_list(
     ctx: &mut ModelContext<LocalControlBridge>,
@@ -219,14 +158,14 @@ fn setting_get_result(
     })
 }
 
-fn rejected_setting_key(key: &str) -> ControlError {
+pub(super) fn rejected_setting_key(key: &str) -> ControlError {
     ControlError::new(
         ErrorCode::NotAllowlisted,
         format!("{key} is not an allowlisted local-control setting"),
     )
 }
 
-fn setting_summary_for_key(
+pub(super) fn setting_summary_for_key(
     key: &str,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<SettingSummary, ControlError> {
@@ -305,7 +244,7 @@ fn setting_summary(key: &str, value: Value, value_type: &str) -> SettingSummary 
     }
 }
 
-fn public_theme_name(theme: &ThemeKind) -> String {
+pub(super) fn public_theme_name(theme: &ThemeKind) -> String {
     match theme {
         ThemeKind::Custom(custom) | ThemeKind::CustomBase16(custom) => custom.name(),
         ThemeKind::InMemory(_) => "In-memory theme".to_owned(),

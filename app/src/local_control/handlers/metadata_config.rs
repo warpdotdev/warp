@@ -9,32 +9,24 @@ use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
 use serde_json::json;
 use settings::Setting as _;
 use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::{ModelContext, SingletonEntity as _, ViewHandle, WindowId};
+use warpui::{ModelContext, SingletonEntity as _, WindowId};
 
-use super::settings_surfaces::ALLOWLISTED_SETTING_KEYS;
+use super::metadata::{
+    pane_entries_for_tabs, tab_entries_for_windows, PaneEntry, TabEntry, WindowEntry,
+};
+use super::settings_surfaces::{
+    public_theme_name, rejected_setting_key, setting_summary_for_key, ALLOWLISTED_SETTING_KEYS,
+};
+use crate::local_control::handlers::ack;
+use crate::local_control::resolver::{require_active_window_id_for_action, workspace_for_window};
 use crate::local_control::LocalControlBridge;
-use crate::pane_group::{PaneGroup, PaneId};
+use crate::pane_group::PaneId;
 use crate::settings::{AccessibilitySettings, FontSettings, InputSettings, ThemeSettings};
 use crate::tab::SelectedTabColor;
 use crate::themes::theme::{SelectedSystemThemes, ThemeKind};
 use crate::user_config::WarpConfig;
 use crate::window_settings::ZoomLevel;
-use crate::workspace::Workspace;
 use crate::WindowSettings;
-
-#[derive(Clone)]
-struct TabEntry {
-    window_id: WindowId,
-    index: usize,
-    pane_group: ViewHandle<PaneGroup>,
-}
-
-#[derive(Clone)]
-struct PaneEntry {
-    tab_id: String,
-    pane_group: ViewHandle<PaneGroup>,
-    pane_id: PaneId,
-}
 
 pub(crate) fn tab_rename(
     instance_id: &Option<InstanceId>,
@@ -139,6 +131,7 @@ pub(crate) fn pane_reset_name(
 }
 
 pub(crate) fn theme_set(
+    instance_id: &Option<InstanceId>,
     action_kind: ActionKind,
     action: &::local_control::Action,
     ctx: &mut ModelContext<LocalControlBridge>,
@@ -155,10 +148,11 @@ pub(crate) fn theme_set(
             ));
         }
     }
-    Ok(acknowledgement(action_kind))
+    Ok(ack(instance_id, action_kind))
 }
 
 pub(crate) fn appearance_mutation(
+    instance_id: &Option<InstanceId>,
     action_kind: ActionKind,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<serde_json::Value, ControlError> {
@@ -180,7 +174,7 @@ pub(crate) fn appearance_mutation(
             ));
         }
     }
-    Ok(acknowledgement(action_kind))
+    Ok(ack(instance_id, action_kind))
 }
 
 pub(crate) fn setting_set(
@@ -201,7 +195,7 @@ pub(crate) fn setting_toggle(
 ) -> Result<serde_json::Value, ControlError> {
     let key = key_value_key(action)?;
     let current = setting_summary_for_key(&key, ctx)?;
-    let Some(value) = current["value"].as_bool() else {
+    let Some(value) = current.value.as_bool() else {
         return Err(ControlError::new(
             ErrorCode::InvalidParams,
             format!("{key} is not a boolean setting and cannot be toggled"),
@@ -303,7 +297,13 @@ fn select_single_pane_entry(
         ));
     }
     let tab = select_single_tab_entry_for_pane(target, action, ctx)?;
-    let entries = pane_entries_for_tab(tab, ctx)?;
+    let entries = pane_entries_for_tabs(vec![tab], ctx);
+    if entries.is_empty() {
+        return Err(ControlError::new(
+            ErrorCode::MissingTarget,
+            "target tab has no visible panes",
+        ));
+    }
     let selected = match target.pane.as_ref() {
         None | Some(PaneTarget::Active) => {
             let focused = entries
@@ -330,8 +330,7 @@ fn select_single_pane_entry(
             .collect::<Vec<_>>(),
         Some(PaneTarget::Index { index }) => entries
             .into_iter()
-            .enumerate()
-            .filter_map(|(entry_index, entry)| (entry_index as u32 == *index).then_some(entry))
+            .filter(|entry| entry.index as u32 == *index)
             .collect::<Vec<_>>(),
     };
     match selected.as_slice() {
@@ -371,20 +370,16 @@ fn select_tab_entries(
     action: ActionKind,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<Vec<TabEntry>, ControlError> {
-    let window_ids = select_window_ids(target, action, ctx)?;
-    let entries = tab_entries_for_windows(window_ids, ctx);
+    let windows = select_window_ids(target, action, ctx)?
+        .into_iter()
+        .enumerate()
+        .map(|(index, window_id)| WindowEntry { window_id, index })
+        .collect::<Vec<_>>();
+    let entries = tab_entries_for_windows(windows, action, ctx)?;
     match target.tab.as_ref() {
         None | Some(TabTarget::Active) => Ok(entries
             .into_iter()
-            .filter(|entry| {
-                workspace_for_window(entry.window_id, action, ctx)
-                    .map(|workspace| {
-                        workspace.read(ctx, |workspace, _| {
-                            entry.index == workspace.active_tab_index()
-                        })
-                    })
-                    .unwrap_or(false)
-            })
+            .filter(|entry| entry.index == entry.workspace_active_tab_index)
             .collect()),
         Some(TabTarget::Id { id }) => Ok(entries
             .into_iter()
@@ -411,7 +406,10 @@ fn select_window_ids(
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Result<Vec<WindowId>, ControlError> {
     match target.window.as_ref() {
-        None | Some(WindowTarget::Active) => Ok(vec![active_window_id(action, ctx)?]),
+        None | Some(WindowTarget::Active) => Ok(vec![require_active_window_id_for_action(
+            ctx.windows().active_window(),
+            action,
+        )?]),
         Some(WindowTarget::Id { id }) => ctx
             .window_ids()
             .find(|window_id| window_id.to_string() == id.0)
@@ -430,86 +428,6 @@ fn select_window_ids(
             ),
         )),
     }
-}
-
-fn tab_entries_for_windows(
-    window_ids: Vec<WindowId>,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Vec<TabEntry> {
-    window_ids
-        .into_iter()
-        .filter_map(|window_id| {
-            let workspace = ctx
-                .views_of_type::<Workspace>(window_id)
-                .and_then(|workspaces| workspaces.into_iter().next())?;
-            Some(workspace.read(ctx, |workspace, _| {
-                workspace
-                    .tab_views()
-                    .enumerate()
-                    .map(|(index, pane_group)| TabEntry {
-                        window_id,
-                        index,
-                        pane_group: pane_group.clone(),
-                    })
-                    .collect::<Vec<_>>()
-            }))
-        })
-        .flatten()
-        .collect()
-}
-
-fn pane_entries_for_tab(
-    tab: TabEntry,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<Vec<PaneEntry>, ControlError> {
-    let tab_id = tab.pane_group.id().to_string();
-    let pane_ids = tab
-        .pane_group
-        .read(ctx, |pane_group, _| pane_group.visible_pane_ids());
-    if pane_ids.is_empty() {
-        return Err(ControlError::new(
-            ErrorCode::MissingTarget,
-            "target tab has no visible panes",
-        ));
-    }
-    Ok(pane_ids
-        .into_iter()
-        .map(|pane_id| PaneEntry {
-            tab_id: tab_id.clone(),
-            pane_group: tab.pane_group.clone(),
-            pane_id,
-        })
-        .collect())
-}
-
-fn active_window_id(
-    action: ActionKind,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<WindowId, ControlError> {
-    ctx.windows().active_window().ok_or_else(|| {
-        ControlError::new(
-            ErrorCode::MissingTarget,
-            format!("{} requires an active Warp window", action.as_str()),
-        )
-    })
-}
-
-fn workspace_for_window(
-    window_id: WindowId,
-    action: ActionKind,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<ViewHandle<Workspace>, ControlError> {
-    ctx.views_of_type::<Workspace>(window_id)
-        .and_then(|workspaces| workspaces.into_iter().next())
-        .ok_or_else(|| {
-            ControlError::new(
-                ErrorCode::MissingTarget,
-                format!(
-                    "{} requires a workspace in the target window",
-                    action.as_str()
-                ),
-            )
-        })
 }
 
 fn set_tab_color(
@@ -742,87 +660,6 @@ fn set_allowlisted_setting(
     }
 }
 
-fn setting_summary_for_key(
-    key: &str,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<serde_json::Value, ControlError> {
-    if !ALLOWLISTED_SETTING_KEYS.contains(&key) {
-        return Err(rejected_setting_key(key));
-    }
-    let theme_settings = ThemeSettings::as_ref(ctx);
-    let font_settings = FontSettings::as_ref(ctx);
-    let input_settings = InputSettings::as_ref(ctx);
-    let accessibility_settings = AccessibilitySettings::as_ref(ctx);
-    let window_settings = WindowSettings::as_ref(ctx);
-    match key {
-        "appearance.themes.theme" => Ok(setting_summary(
-            key,
-            json!(public_theme_name(theme_settings.theme_kind.value())),
-            "string",
-        )),
-        "appearance.themes.system_theme" => Ok(setting_summary(
-            key,
-            json!(*theme_settings.use_system_theme.value()),
-            "bool",
-        )),
-        "appearance.themes.light_theme" => Ok(setting_summary(
-            key,
-            json!(public_theme_name(
-                &theme_settings.selected_system_themes.value().light
-            )),
-            "string",
-        )),
-        "appearance.themes.dark_theme" => Ok(setting_summary(
-            key,
-            json!(public_theme_name(
-                &theme_settings.selected_system_themes.value().dark
-            )),
-            "string",
-        )),
-        "appearance.text.font_name" => Ok(setting_summary(
-            key,
-            json!(font_settings.monospace_font_name.value()),
-            "string",
-        )),
-        "appearance.text.font_size" => Ok(setting_summary(
-            key,
-            json!(*font_settings.monospace_font_size.value()),
-            "number",
-        )),
-        "appearance.window.zoom_level" => Ok(setting_summary(
-            key,
-            json!(*window_settings.zoom_level.value()),
-            "number",
-        )),
-        "terminal.input.syntax_highlighting" => Ok(setting_summary(
-            key,
-            json!(*input_settings.syntax_highlighting.value()),
-            "bool",
-        )),
-        "terminal.input.error_underlining_enabled" => Ok(setting_summary(
-            key,
-            json!(*input_settings.error_underlining.value()),
-            "bool",
-        )),
-        "accessibility.accessibility_verbosity" => Ok(setting_summary(
-            key,
-            json!(format!(
-                "{:?}",
-                accessibility_settings.a11y_verbosity.value()
-            )),
-            "string",
-        )),
-        _ => Err(rejected_setting_key(key)),
-    }
-}
-
-fn rejected_setting_key(key: &str) -> ControlError {
-    ControlError::new(
-        ErrorCode::NotAllowlisted,
-        format!("{key} is not an allowlisted local-control setting"),
-    )
-}
-
 fn theme_kind_for_name(
     name: &str,
     ctx: &ModelContext<LocalControlBridge>,
@@ -842,14 +679,6 @@ fn theme_kind_for_name(
             ErrorCode::InvalidParams,
             format!("{name} matches multiple themes"),
         )),
-    }
-}
-
-fn public_theme_name(theme: &ThemeKind) -> String {
-    match theme {
-        ThemeKind::Custom(custom) | ThemeKind::CustomBase16(custom) => custom.name(),
-        ThemeKind::InMemory(_) => "In-memory theme".to_owned(),
-        _ => theme.to_string(),
     }
 }
 
@@ -926,27 +755,12 @@ fn accessibility_verbosity_value(
     }
 }
 
-fn setting_summary(key: &str, value: serde_json::Value, value_type: &str) -> serde_json::Value {
-    json!({
-        "key": key,
-        "value": value,
-        "value_type": value_type,
-    })
-}
-
 fn settings_write_error(action: ActionKind, err: anyhow::Error) -> ControlError {
     ControlError::with_details(
         ErrorCode::Internal,
         format!("{} failed to update app settings", action.as_str()),
         err.to_string(),
     )
-}
-
-fn acknowledgement(action: ActionKind) -> serde_json::Value {
-    json!({
-        "action": action.as_str(),
-        "ok": true,
-    })
 }
 
 fn tab_mutation_result(

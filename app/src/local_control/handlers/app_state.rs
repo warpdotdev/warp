@@ -8,25 +8,30 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use ::local_control::protocol::{
-    Direction as ControlDirection, DirectionParams, FileOpenParams, PageQueryParams, PaneTarget,
-    QueryParams, ResizeParams, SessionTarget, TabActivateParams, TabActivationMode,
-    TabCreateParams, TabTarget, TabType, TargetSelector, TextParams,
+    Direction as ControlDirection, DirectionParams, FileOpenParams, PageQueryParams, QueryParams,
+    ResizeParams, TabActivateParams, TabActivationMode, TabCreateParams, TabTarget, TabType,
+    TargetSelector, TextParams,
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
 use serde_json::json;
 use warp_util::path::LineAndColumnArg;
 #[cfg(feature = "local_fs")]
 use warpui::SingletonEntity;
-use warpui::{AppContext, ModelContext, TypedActionView, ViewHandle};
+use warpui::{AppContext, ModelContext, TypedActionView};
 
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+use crate::local_control::handlers::ack;
 use crate::local_control::handlers::layout::{create_tab, resolve_shell};
 use crate::local_control::handlers::metadata::{surface_unavailable_reason, SurfaceDestination};
-use crate::local_control::resolver::target_window_id_for_target;
+use crate::local_control::resolver::{
+    activate_target, active_target_pane_group, decode_params, focus_explicit_pane_target,
+    input_target_pane_id, reject_target_families, tab_index_from_target, target_pane_group,
+    target_pane_id, target_session_pane_id, target_window_id_for_target, target_workspace,
+};
 use crate::local_control::LocalControlBridge;
 use crate::palette::PaletteMode;
-use crate::pane_group::{ActivationReason, Direction, PaneGroup, PaneGroupAction, PaneId};
+use crate::pane_group::{ActivationReason, Direction, PaneGroupAction};
 use crate::server::telemetry::PaletteSource;
 use crate::settings_view::SettingsSection;
 #[cfg(feature = "local_fs")]
@@ -35,7 +40,7 @@ use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::{resolve_file_target_to_open_in_warp, EditorLayout};
 #[cfg(feature = "local_fs")]
 use crate::workspace::PaneViewLocator;
-use crate::workspace::{CommandSearchOptions, InitContent, Workspace, WorkspaceAction};
+use crate::workspace::{CommandSearchOptions, InitContent, WorkspaceAction};
 
 const MAX_PANE_RESIZE_STEPS: u32 = 1_000;
 
@@ -199,20 +204,6 @@ pub(crate) fn handle(
             format!("{} is not a safe app-state handler action", action.as_str()),
         )),
     }
-}
-
-fn reject_target_families(
-    action: ActionKind,
-    rejected: bool,
-    families: &str,
-) -> Result<(), ControlError> {
-    if rejected {
-        return Err(ControlError::new(
-            ErrorCode::InvalidSelector,
-            format!("{} does not accept {families}", action.as_str()),
-        ));
-    }
-    Ok(())
 }
 
 fn focus_window(
@@ -798,310 +789,11 @@ fn file_open(
     ))
 }
 
-fn target_workspace(
-    action: ActionKind,
-    target: &TargetSelector,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<ViewHandle<Workspace>, ControlError> {
-    let window_id = target_window_id_for_target(ctx, target, action)?;
-    ctx.views_of_type::<Workspace>(window_id)
-        .and_then(|workspaces| workspaces.into_iter().next())
-        .ok_or_else(|| {
-            ControlError::new(
-                ErrorCode::MissingTarget,
-                format!(
-                    "{} requires a workspace in the target window",
-                    action.as_str()
-                ),
-            )
-        })
-}
-
-fn target_pane_group(
-    action: ActionKind,
-    target: &TargetSelector,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<ViewHandle<PaneGroup>, ControlError> {
-    let workspace = target_workspace(action, target, ctx)?;
-    workspace.read(ctx, |workspace, ctx| {
-        let tab_index = tab_index_from_target(target, workspace, ctx)?;
-        workspace
-            .tab_views()
-            .nth(tab_index)
-            .cloned()
-            .ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::StaleTarget,
-                    format!("{} cannot resolve the requested tab", action.as_str()),
-                )
-            })
-    })
-}
-
-fn active_target_pane_group(
-    action: ActionKind,
-    target: &TargetSelector,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<ViewHandle<PaneGroup>, ControlError> {
-    reject_target_families(
-        action,
-        action != ActionKind::SessionActivate && target.session.is_some(),
-        "session selectors",
-    )?;
-    let workspace = target_workspace(action, target, ctx)?;
-    if target.tab.is_some() {
-        workspace.update(ctx, |workspace, ctx| {
-            let tab_index = tab_index_from_target(target, workspace, ctx)?;
-            workspace.handle_action(&WorkspaceAction::ActivateTab(tab_index), ctx);
-            Ok::<_, ControlError>(())
-        })?;
-    }
-    target_pane_group(action, target, ctx)
-}
-
-fn activate_target(
-    workspace: &ViewHandle<Workspace>,
-    action: ActionKind,
-    target: &TargetSelector,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<(), ControlError> {
-    if target.tab.is_some() {
-        workspace.update(ctx, |workspace, ctx| {
-            let tab_index = tab_index_from_target(target, workspace, ctx)?;
-            workspace.handle_action(&WorkspaceAction::ActivateTab(tab_index), ctx);
-            Ok::<_, ControlError>(())
-        })?;
-    }
-    if target.session.is_some() {
-        let pane_group = target_pane_group(action, target, ctx)?;
-        let pane_id = target_session_pane_id(action, target, &pane_group, ctx)?;
-        pane_group.update(ctx, |pane_group, ctx| {
-            pane_group.handle_action(
-                &PaneGroupAction::Activate(pane_id, ActivationReason::Click),
-                ctx,
-            );
-        });
-    } else if target.pane.is_some() {
-        let pane_group = target_pane_group(action, target, ctx)?;
-        focus_explicit_pane_target(action, target, &pane_group, ctx)?;
-    }
-    Ok(())
-}
-
-fn focus_explicit_pane_target(
-    action: ActionKind,
-    target: &TargetSelector,
-    pane_group: &ViewHandle<PaneGroup>,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<(), ControlError> {
-    if target.pane.is_none() {
-        return Ok(());
-    }
-    let pane_id = target_pane_id(action, target, pane_group, ctx)?;
-    pane_group.update(ctx, |pane_group, ctx| {
-        pane_group.handle_action(
-            &PaneGroupAction::Activate(pane_id, ActivationReason::Click),
-            ctx,
-        );
-    });
-    Ok(())
-}
-
-fn target_pane_id(
-    action: ActionKind,
-    target: &TargetSelector,
-    pane_group: &ViewHandle<PaneGroup>,
-    ctx: &AppContext,
-) -> Result<PaneId, ControlError> {
-    pane_group.read(ctx, |pane_group, ctx| match target.pane.as_ref() {
-        None | Some(PaneTarget::Active) => Ok(pane_group.focused_pane_id(ctx)),
-        Some(PaneTarget::Index { index }) => {
-            let pane_index = usize::try_from(*index).map_err(|err| {
-                ControlError::with_details(
-                    ErrorCode::InvalidSelector,
-                    "pane index is out of range",
-                    err.to_string(),
-                )
-            })?;
-            pane_group.pane_id_from_index(pane_index).ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::MissingTarget,
-                    format!(
-                        "{} cannot resolve the requested pane index",
-                        action.as_str()
-                    ),
-                )
-            })
-        }
-        Some(PaneTarget::Id { id }) => pane_group
-            .visible_pane_ids()
-            .into_iter()
-            .find(|pane_id| pane_id.to_string() == id.0)
-            .ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::StaleTarget,
-                    format!("{} cannot resolve the requested pane id", action.as_str()),
-                )
-            }),
-    })
-}
-
-fn tab_index_from_target(
-    target: &TargetSelector,
-    workspace: &Workspace,
-    ctx: &AppContext,
-) -> Result<usize, ControlError> {
-    match target.tab.as_ref() {
-        Some(TabTarget::Index { index }) => usize::try_from(*index)
-            .ok()
-            .filter(|index| *index < workspace.tab_count())
-            .ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::MissingTarget,
-                    "tab selector index did not match a visible tab",
-                )
-            }),
-        Some(TabTarget::Active) | None => Ok(workspace.active_tab_index()),
-        Some(TabTarget::Id { id }) => workspace
-            .tab_views()
-            .enumerate()
-            .find_map(|(index, pane_group)| (pane_group.id().to_string() == id.0).then_some(index))
-            .ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::StaleTarget,
-                    "tab selector id did not match a visible tab",
-                )
-            }),
-        Some(TabTarget::Title { title }) => {
-            let matching = workspace
-                .tab_views()
-                .enumerate()
-                .filter_map(|(index, pane_group)| {
-                    (pane_group.as_ref(ctx).display_title(ctx) == *title).then_some(index)
-                })
-                .collect::<Vec<_>>();
-            match matching.as_slice() {
-                [index] => Ok(*index),
-                [] => Err(ControlError::new(
-                    ErrorCode::MissingTarget,
-                    "tab selector title did not match a visible tab",
-                )),
-                _ => Err(ControlError::new(
-                    ErrorCode::AmbiguousTarget,
-                    "tab selector title matched multiple visible tabs",
-                )),
-            }
-        }
-    }
-}
-
-fn decode_params<T: serde::de::DeserializeOwned>(
-    params: &serde_json::Value,
-) -> Result<T, ControlError> {
-    serde_json::from_value(params.clone()).map_err(|err| {
-        ControlError::with_details(
-            ErrorCode::InvalidParams,
-            "failed to decode action parameters",
-            err.to_string(),
-        )
-    })
-}
-
 fn direction_param(params: &serde_json::Value) -> Result<ControlDirection, ControlError> {
     Ok(decode_params::<DirectionParams>(params)?.direction)
 }
 fn text_param(params: &serde_json::Value) -> Result<String, ControlError> {
     Ok(decode_params::<TextParams>(params)?.text)
-}
-
-fn input_target_pane_id(
-    action: ActionKind,
-    target: &TargetSelector,
-    pane_group: &ViewHandle<PaneGroup>,
-    ctx: &AppContext,
-) -> Result<PaneId, ControlError> {
-    if target.session.is_some() {
-        return target_session_pane_id(action, target, pane_group, ctx);
-    }
-    if target.pane.is_some() {
-        return target_pane_id(action, target, pane_group, ctx);
-    }
-    pane_group
-        .read(ctx, |pane_group, ctx| {
-            pane_group.active_session_id(ctx).map(PaneId::from)
-        })
-        .ok_or_else(|| {
-            ControlError::new(
-                ErrorCode::MissingTarget,
-                format!("{} requires an active terminal session", action.as_str()),
-            )
-        })
-}
-
-fn target_session_pane_id(
-    action: ActionKind,
-    target: &TargetSelector,
-    pane_group: &ViewHandle<PaneGroup>,
-    ctx: &AppContext,
-) -> Result<PaneId, ControlError> {
-    if target.session.is_none() && target.pane.is_some() {
-        let pane_id = target_pane_id(action, target, pane_group, ctx)?;
-        let has_terminal = pane_group.read(ctx, |pane_group, ctx| {
-            pane_group
-                .terminal_view_from_pane_id(pane_id, ctx)
-                .is_some()
-        });
-        if has_terminal {
-            return Ok(pane_id);
-        }
-        return Err(ControlError::new(
-            ErrorCode::MissingTarget,
-            format!("{} requires a terminal session target", action.as_str()),
-        ));
-    }
-    let session_pane_id =
-        pane_group.read(ctx, |pane_group, ctx| match target.session.as_ref() {
-            None | Some(SessionTarget::Active) => pane_group
-                .active_session_id(ctx)
-                .map(PaneId::from)
-                .ok_or_else(|| {
-                    ControlError::new(
-                        ErrorCode::MissingTarget,
-                        format!("{} requires an active terminal session", action.as_str()),
-                    )
-                }),
-            Some(SessionTarget::Id { id }) => pane_group
-                .visible_pane_ids()
-                .into_iter()
-                .find(|pane_id| pane_id.to_string() == id.0)
-                .filter(|pane_id| {
-                    pane_group
-                        .terminal_view_from_pane_id(*pane_id, ctx)
-                        .is_some()
-                })
-                .ok_or_else(|| {
-                    ControlError::new(
-                        ErrorCode::StaleTarget,
-                        format!(
-                            "{} cannot resolve the requested session id",
-                            action.as_str()
-                        ),
-                    )
-                }),
-        })?;
-    if target.pane.is_some() {
-        let pane_id = target_pane_id(action, target, pane_group, ctx)?;
-        if pane_id != session_pane_id {
-            return Err(ControlError::new(
-                ErrorCode::TargetStateConflict,
-                format!(
-                    "{} pane and session selectors resolve different targets",
-                    action.as_str()
-                ),
-            ));
-        }
-    }
-    Ok(session_pane_id)
 }
 fn invalid_params<T>(action: ActionKind) -> Result<T, ControlError> {
     Err(ControlError::new(
@@ -1158,12 +850,4 @@ fn line_and_column(params: &FileOpenParams) -> Result<Option<LineAndColumnArg>, 
         line_num,
         column_num,
     }))
-}
-
-fn ack(instance_id: &Option<InstanceId>, action: ActionKind) -> serde_json::Value {
-    json!({
-        "action": action.as_str(),
-        "ok": true,
-        "instance_id": instance_id.as_ref().map(|id| id.0.as_str()),
-    })
 }

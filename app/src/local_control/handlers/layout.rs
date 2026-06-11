@@ -9,13 +9,15 @@ use serde::Serialize;
 use warpui::SingletonEntity;
 use warpui::{ModelContext, TypedActionView};
 
-use crate::local_control::resolver::{target_window_id_for_target, validate_tab_create_target};
+use crate::local_control::resolver::{
+    decode_params, target_window_id_for_target, validate_tab_create_target, workspace_for_window,
+};
 use crate::local_control::LocalControlBridge;
 use crate::server::telemetry::AddTabWithShellSource;
 use crate::terminal::available_shells::AvailableShell;
 #[cfg(feature = "local_tty")]
 use crate::terminal::available_shells::AvailableShells;
-use crate::workspace::{Workspace, WorkspaceAction};
+use crate::workspace::WorkspaceAction;
 #[derive(Serialize)]
 struct TabCreateResponse<'a> {
     action: &'static str,
@@ -47,15 +49,7 @@ pub(crate) fn create_tab(
 ) -> Result<serde_json::Value, ControlError> {
     validate_tab_create_target(target)?;
     let window_id = target_window_id_for_target(ctx, target, ActionKind::TabCreate)?;
-    let workspace = ctx
-        .views_of_type::<Workspace>(window_id)
-        .and_then(|workspaces| workspaces.into_iter().next())
-        .ok_or_else(|| {
-            ControlError::new(
-                ErrorCode::MissingTarget,
-                "tab.create requires a workspace in the target window",
-            )
-        })?;
+    let workspace = workspace_for_window(window_id, ActionKind::TabCreate, ctx)?;
     let action = tab_create_action(params, ctx)?;
     let (tab_id, previous_tab_count, tab_count, active_tab_index) =
         workspace.update(ctx, |workspace, ctx| {
@@ -105,7 +99,7 @@ fn tab_create_action(
     params: &serde_json::Value,
     ctx: &ModelContext<LocalControlBridge>,
 ) -> Result<WorkspaceAction, ControlError> {
-    let params = tab_create_params(params)?;
+    let params = decode_params::<TabCreateParams>(params)?;
     if let Some(shell_name) = params.shell.as_deref() {
         if matches!(params.tab_type, Some(TabType::Agent | TabType::CloudAgent)) {
             return Err(ControlError::new(
@@ -129,16 +123,6 @@ fn tab_create_action(
             "tab.create does not support cloud-agent tabs",
         )),
     }
-}
-
-fn tab_create_params(params: &serde_json::Value) -> Result<TabCreateParams, ControlError> {
-    serde_json::from_value(params.clone()).map_err(|err| {
-        ControlError::with_details(
-            ErrorCode::InvalidParams,
-            "failed to decode tab.create parameters",
-            err.to_string(),
-        )
-    })
 }
 
 #[cfg_attr(not(feature = "local_tty"), allow(unused_variables))]

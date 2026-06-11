@@ -3,8 +3,8 @@
 #[path = "metadata_tests.rs"]
 mod tests;
 use ::local_control::protocol::{
-    ActionNameParams, PaneTarget, SessionTarget, SurfaceListResult, SurfaceSummary, TabTarget,
-    TargetSelector, WindowTarget,
+    ActionNameParams, ActiveTargetChain, PaneTarget, SessionTarget, SurfaceListResult,
+    SurfaceSummary, TabTarget, TargetSelector, WindowTarget,
 };
 use ::local_control::{
     Action, ActionKind, ActionMetadata, ControlError, ErrorCode, InstanceId, PROTOCOL_VERSION,
@@ -17,7 +17,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity, ViewHandle, WindowId};
 
 use crate::drive::settings::WarpDriveSettings;
 use crate::features::FeatureFlag;
-use crate::local_control::resolver::require_active_window_id_for_action;
+use crate::local_control::resolver::{reject_target_families, require_active_window_id_for_action};
 use crate::local_control::LocalControlBridge;
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::settings::{AISettings, CodeSettings};
@@ -92,39 +92,30 @@ struct VersionResponse<'a> {
     app_id: String,
 }
 
-#[derive(Serialize)]
-struct ActiveTargetChain {
-    instance_id: Option<String>,
-    window_id: Option<String>,
-    tab_id: Option<String>,
-    pane_id: Option<String>,
-    session_id: Option<String>,
-}
-
 #[derive(Clone, Copy)]
-struct WindowEntry {
-    window_id: WindowId,
-    index: usize,
+pub(super) struct WindowEntry {
+    pub(super) window_id: WindowId,
+    pub(super) index: usize,
 }
 
 #[derive(Clone)]
-struct TabEntry {
-    window_id: WindowId,
-    window_index: usize,
-    index: usize,
-    workspace_active_tab_index: usize,
-    pane_group: ViewHandle<PaneGroup>,
+pub(super) struct TabEntry {
+    pub(super) window_id: WindowId,
+    pub(super) window_index: usize,
+    pub(super) index: usize,
+    pub(super) workspace_active_tab_index: usize,
+    pub(super) pane_group: ViewHandle<PaneGroup>,
 }
 
 #[derive(Clone)]
-struct PaneEntry {
-    window_id: WindowId,
-    window_index: usize,
-    tab_id: String,
-    tab_index: usize,
-    index: usize,
-    pane_group: ViewHandle<PaneGroup>,
-    pane_id: PaneId,
+pub(super) struct PaneEntry {
+    pub(super) window_id: WindowId,
+    pub(super) window_index: usize,
+    pub(super) tab_id: String,
+    pub(super) tab_index: usize,
+    pub(super) index: usize,
+    pub(super) pane_group: ViewHandle<PaneGroup>,
+    pub(super) pane_id: PaneId,
 }
 
 struct SessionEntry {
@@ -832,7 +823,7 @@ fn window_entries(ctx: &mut ModelContext<LocalControlBridge>) -> Vec<WindowEntry
         .collect()
 }
 
-fn tab_entries_for_windows(
+pub(super) fn tab_entries_for_windows(
     windows: Vec<WindowEntry>,
     action: ActionKind,
     ctx: &mut ModelContext<LocalControlBridge>,
@@ -859,7 +850,7 @@ fn tab_entries_for_windows(
     Ok(entries)
 }
 
-fn pane_entries_for_tabs(
+pub(super) fn pane_entries_for_tabs(
     tabs: Vec<TabEntry>,
     ctx: &mut ModelContext<LocalControlBridge>,
 ) -> Vec<PaneEntry> {
@@ -999,18 +990,4 @@ fn single_entry(value: Option<&Value>, action: ActionKind) -> Result<Value, Cont
             format!("{} resolved multiple targets", action.as_str()),
         )),
     }
-}
-
-fn reject_target_families(
-    action: ActionKind,
-    rejected: bool,
-    families: &str,
-) -> Result<(), ControlError> {
-    if rejected {
-        return Err(ControlError::new(
-            ErrorCode::InvalidSelector,
-            format!("{} does not accept {families}", action.as_str()),
-        ));
-    }
-    Ok(())
 }

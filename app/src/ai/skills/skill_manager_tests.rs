@@ -506,6 +506,18 @@ fn test_build_bundled_skill_context() {
     );
 }
 
+fn bundled_test_skill(id: &str, description: &str) -> ParsedSkill {
+    ParsedSkill {
+        name: id.to_owned(),
+        description: description.to_owned(),
+        path: LocalOrRemotePath::Local(format!("/bundled/skills/{id}/SKILL.md").into()),
+        content: format!("# {id}"),
+        line_range: None,
+        provider: SkillProvider::Warp,
+        scope: SkillScope::Bundled,
+    }
+}
+
 fn make_remote_skill(host_id: &HostId, name: &str) -> ParsedSkill {
     ParsedSkill {
         name: name.to_string(),
@@ -558,15 +570,7 @@ fn get_skills_for_working_directory_respects_location() {
     };
     let same_host_skill = make_remote_skill(&same_host_id, "same-host-project");
     let other_host_skill = make_remote_skill(&other_host_id, "other-host-project");
-    let bundled_skill = ParsedSkill {
-        name: "bundled".to_string(),
-        description: "bundled skill".to_string(),
-        path: LocalOrRemotePath::Local("/bundled/skills/bundled/SKILL.md".into()),
-        content: "# bundled".to_string(),
-        line_range: None,
-        provider: SkillProvider::Warp,
-        scope: SkillScope::Bundled,
-    };
+    let bundled_skill = bundled_test_skill("bundled", "bundled skill");
 
     let mut directory_skills = HashMap::new();
     let mut skills_by_path = HashMap::new();
@@ -671,28 +675,12 @@ fn feature_gated_bundled_skill_is_listed_only_when_enabled() {
         handle.update(&mut app, |manager, _| {
             manager.add_bundled_skill_for_testing(
                 "warpctrl",
-                ParsedSkill {
-                    name: "warpctrl".to_owned(),
-                    description: "Control Warp".to_owned(),
-                    path: LocalOrRemotePath::Local("/bundled/skills/warpctrl/SKILL.md".into()),
-                    content: "# warpctrl".to_owned(),
-                    line_range: None,
-                    provider: SkillProvider::Warp,
-                    scope: SkillScope::Bundled,
-                },
+                bundled_test_skill("warpctrl", "Control Warp"),
                 BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
             );
             manager.add_bundled_skill_for_testing(
                 "always",
-                ParsedSkill {
-                    name: "always".to_owned(),
-                    description: "Always available".to_owned(),
-                    path: LocalOrRemotePath::Local("/bundled/skills/always/SKILL.md".into()),
-                    content: "# always".to_owned(),
-                    line_range: None,
-                    provider: SkillProvider::Warp,
-                    scope: SkillScope::Bundled,
-                },
+                bundled_test_skill("always", "Always available"),
                 BundledSkillActivation::Always,
             );
         });
@@ -760,15 +748,7 @@ fn warp_control_direct_read_respects_warp_control_feature() {
         handle.update(&mut app, |manager, _| {
             manager.add_bundled_skill_for_testing(
                 "warpctrl",
-                ParsedSkill {
-                    name: "warpctrl".to_owned(),
-                    description: "Control Warp".to_owned(),
-                    path: LocalOrRemotePath::Local("/bundled/skills/warpctrl/SKILL.md".into()),
-                    content: "# warpctrl".to_owned(),
-                    line_range: None,
-                    provider: SkillProvider::Warp,
-                    scope: SkillScope::Bundled,
-                },
+                bundled_test_skill("warpctrl", "Control Warp"),
                 BundledSkillActivation::RequiresFeature(FeatureFlag::WarpControlCli),
             );
         });

@@ -4,268 +4,22 @@
 //! before routing each supported action to an app-side handler.
 
 use ::local_control::auth::CredentialGrant;
-use ::local_control::protocol::{
-    PaneTarget, TabCloseMode, TabCloseParams, TabTarget, TargetSelector,
-};
 use ::local_control::{
     Action, ActionKind, ControlError, ErrorCode, InstanceId, RequestEnvelope, ResponseEnvelope,
 };
-use serde_json::json;
-use warpui::platform::TerminationMode;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, ViewHandle, WindowId};
+use warpui::{Entity, ModelContext, SingletonEntity};
 
-use crate::local_control::handlers::{app_state, metadata, metadata_config, settings_surfaces};
+use crate::local_control::handlers::{
+    app_state, close, metadata, metadata_config, settings_surfaces,
+};
 use crate::local_control::permissions::{
     ensure_action_allowed, ensure_feature_enabled, ensure_protocol_version,
 };
-use crate::local_control::resolver::{
-    target_window_id_for_target, validate_action_params, validate_action_target,
-};
-use crate::workspace::Workspace;
+use crate::local_control::resolver::{validate_action_params, validate_action_target};
 
 /// WarpUI model that executes already-authenticated local-control actions.
 pub struct LocalControlBridge {
     instance_id: Option<InstanceId>,
-}
-
-fn tab_close_mode(action: &Action) -> Result<TabCloseMode, ControlError> {
-    Ok(action.params_as::<TabCloseParams>()?.mode)
-}
-
-fn validate_empty_params(action: &Action) -> Result<(), ControlError> {
-    if action
-        .params
-        .as_object()
-        .is_some_and(serde_json::Map::is_empty)
-    {
-        return Ok(());
-    }
-    Err(ControlError::new(
-        ErrorCode::InvalidParams,
-        format!("{} does not accept parameters", action.kind.as_str()),
-    ))
-}
-
-fn workspace_for_window(
-    window_id: WindowId,
-    action: ActionKind,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<ViewHandle<Workspace>, ControlError> {
-    ctx.views_of_type::<Workspace>(window_id)
-        .and_then(|workspaces| workspaces.into_iter().next())
-        .ok_or_else(|| {
-            ControlError::new(
-                ErrorCode::MissingTarget,
-                format!(
-                    "{} requires a workspace in the target window",
-                    action.as_str()
-                ),
-            )
-        })
-}
-
-fn tab_index_for_target(
-    target: &TargetSelector,
-    active_index: usize,
-    tab_ids: &[String],
-    workspace: &Workspace,
-    ctx: &AppContext,
-) -> Result<usize, ControlError> {
-    match target.tab.as_ref() {
-        None | Some(TabTarget::Active) => Ok(active_index),
-        Some(TabTarget::Id { id }) => tab_ids
-            .iter()
-            .position(|tab_id| *tab_id == id.0)
-            .ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::StaleTarget,
-                    "close action cannot resolve the requested tab id",
-                )
-            }),
-        Some(TabTarget::Index { index }) => {
-            let index = *index as usize;
-            (index < tab_ids.len()).then_some(index).ok_or_else(|| {
-                ControlError::new(
-                    ErrorCode::StaleTarget,
-                    "close action cannot resolve the requested tab index",
-                )
-            })
-        }
-        Some(TabTarget::Title { title }) => {
-            let matches = workspace
-                .tab_views()
-                .enumerate()
-                .filter_map(|(index, tab)| {
-                    (tab.as_ref(ctx).display_title(ctx).as_str() == title).then_some(index)
-                })
-                .collect::<Vec<_>>();
-            match matches.as_slice() {
-                [index] => Ok(*index),
-                [] => Err(ControlError::new(
-                    ErrorCode::MissingTarget,
-                    "close action cannot resolve the requested tab title",
-                )),
-                _ => Err(ControlError::new(
-                    ErrorCode::AmbiguousTarget,
-                    "close action resolved multiple tabs by title",
-                )),
-            }
-        }
-    }
-}
-
-fn handle_window_close(
-    request: &RequestEnvelope,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<serde_json::Value, ControlError> {
-    validate_empty_params(&request.action)?;
-    if request.target.tab.is_some()
-        || request.target.pane.is_some()
-        || request.target.session.is_some()
-    {
-        return Err(ControlError::new(
-            ErrorCode::InvalidSelector,
-            "window.close does not accept tab, pane, or session selectors",
-        ));
-    }
-    let window_id = target_window_id_for_target(ctx, &request.target, ActionKind::WindowClose)?;
-    ctx.windows()
-        .close_window(window_id, TerminationMode::Cancellable);
-    Ok(json!({
-        "action": "window.close",
-        "ok": true,
-    }))
-}
-
-fn handle_tab_close(
-    request: &RequestEnvelope,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<serde_json::Value, ControlError> {
-    if request.target.pane.is_some() || request.target.session.is_some() {
-        return Err(ControlError::new(
-            ErrorCode::InvalidSelector,
-            "tab.close does not accept pane or session selectors",
-        ));
-    }
-    let mode = tab_close_mode(&request.action)?;
-    let window_id = target_window_id_for_target(ctx, &request.target, ActionKind::TabClose)?;
-    let workspace = workspace_for_window(window_id, ActionKind::TabClose, ctx)?;
-    let closed = workspace.update(ctx, |workspace, ctx| {
-        let all_tab_ids = workspace
-            .tab_views()
-            .map(|tab| tab.id().to_string())
-            .collect::<Vec<_>>();
-        let selected_index = tab_index_for_target(
-            &request.target,
-            workspace.active_tab_index(),
-            &all_tab_ids,
-            workspace,
-            ctx,
-        )?;
-        let tab_indices: Vec<usize> = match mode {
-            TabCloseMode::Target => vec![selected_index],
-            TabCloseMode::Active => {
-                if !matches!(request.target.tab.as_ref(), None | Some(TabTarget::Active)) {
-                    return Err(ControlError::new(
-                        ErrorCode::InvalidSelector,
-                        "tab.close active does not accept a concrete tab selector",
-                    ));
-                }
-                vec![workspace.active_tab_index()]
-            }
-            TabCloseMode::Others => (0..all_tab_ids.len())
-                .filter(|index| *index != selected_index)
-                .collect(),
-            TabCloseMode::RightOf => ((selected_index + 1)..all_tab_ids.len()).collect(),
-        };
-        if tab_indices.is_empty() {
-            return Ok(true);
-        }
-        let closed = workspace.close_tabs(
-            tab_indices.into_iter(),
-            crate::workspace::view::OpenDialogSource::CloseTab {
-                tab_index: selected_index,
-            },
-            false,
-            true,
-            ctx,
-        );
-        Ok(closed)
-    })?;
-    if closed {
-        Ok(json!({
-            "action": "tab.close",
-            "ok": true,
-        }))
-    } else {
-        Err(ControlError::new(
-            ErrorCode::TargetStateConflict,
-            "tab close was cancelled by an existing app warning",
-        ))
-    }
-}
-
-fn handle_pane_close(
-    request: &RequestEnvelope,
-    ctx: &mut ModelContext<LocalControlBridge>,
-) -> Result<serde_json::Value, ControlError> {
-    validate_empty_params(&request.action)?;
-    if request.target.session.is_some() {
-        return Err(ControlError::new(
-            ErrorCode::InvalidSelector,
-            "pane.close does not accept session selectors",
-        ));
-    }
-    let window_id = target_window_id_for_target(ctx, &request.target, ActionKind::PaneClose)?;
-    let workspace = workspace_for_window(window_id, ActionKind::PaneClose, ctx)?;
-    workspace.update(ctx, |workspace, ctx| {
-        let tab_ids = workspace
-            .tab_views()
-            .map(|tab| tab.id().to_string())
-            .collect::<Vec<_>>();
-        let tab_index = tab_index_for_target(
-            &request.target,
-            workspace.active_tab_index(),
-            &tab_ids,
-            workspace,
-            ctx,
-        )?;
-        let pane_group = workspace
-            .get_pane_group_view(tab_index)
-            .cloned()
-            .ok_or_else(|| {
-                ControlError::new(ErrorCode::StaleTarget, "pane.close target tab is stale")
-            })?;
-        let pane_id = pane_group.read(ctx, |pane_group, ctx| {
-            let pane_ids = pane_group.visible_pane_ids();
-            match request.target.pane.as_ref() {
-                None | Some(PaneTarget::Active) => Ok(pane_group.focused_pane_id(ctx)),
-                Some(PaneTarget::Id { id }) => pane_ids
-                    .into_iter()
-                    .find(|pane_id| pane_id.to_string() == id.0)
-                    .ok_or_else(|| {
-                        ControlError::new(
-                            ErrorCode::StaleTarget,
-                            "pane.close cannot resolve the requested pane id",
-                        )
-                    }),
-                Some(PaneTarget::Index { index }) => {
-                    pane_ids.into_iter().nth(*index as usize).ok_or_else(|| {
-                        ControlError::new(
-                            ErrorCode::StaleTarget,
-                            "pane.close cannot resolve the requested pane index",
-                        )
-                    })
-                }
-            }
-        })?;
-        pane_group.update(ctx, |pane_group, ctx| pane_group.close_pane(pane_id, ctx));
-        Ok::<_, ControlError>(())
-    })?;
-    Ok(json!({
-        "action": "pane.close",
-        "ok": true,
-    }))
 }
 
 impl Entity for LocalControlBridge {
@@ -408,9 +162,12 @@ impl LocalControlBridge {
             ActionKind::ThemeSet
             | ActionKind::ThemeSystemSet
             | ActionKind::ThemeLightSet
-            | ActionKind::ThemeDarkSet => {
-                metadata_config::theme_set(request.action.kind, &request.action, ctx)
-            }
+            | ActionKind::ThemeDarkSet => metadata_config::theme_set(
+                &self.instance_id,
+                request.action.kind,
+                &request.action,
+                ctx,
+            ),
             ActionKind::AppearanceGet => settings_surfaces::appearance_get(ctx),
             ActionKind::AppearanceFontSizeIncrease
             | ActionKind::AppearanceFontSizeDecrease
@@ -418,7 +175,7 @@ impl LocalControlBridge {
             | ActionKind::AppearanceZoomIncrease
             | ActionKind::AppearanceZoomDecrease
             | ActionKind::AppearanceZoomReset => {
-                metadata_config::appearance_mutation(request.action.kind, ctx)
+                metadata_config::appearance_mutation(&self.instance_id, request.action.kind, ctx)
             }
             ActionKind::SettingList => settings_surfaces::setting_list(&request.action, ctx),
             ActionKind::SettingGet => settings_surfaces::setting_get(&request.action, ctx),
@@ -426,9 +183,9 @@ impl LocalControlBridge {
             ActionKind::SettingToggle => metadata_config::setting_toggle(&request.action, ctx),
             ActionKind::KeybindingList => settings_surfaces::keybinding_list(ctx),
             ActionKind::KeybindingGet => settings_surfaces::keybinding_get(&request.action, ctx),
-            ActionKind::WindowClose => handle_window_close(&request, ctx),
-            ActionKind::TabClose => handle_tab_close(&request, ctx),
-            ActionKind::PaneClose => handle_pane_close(&request, ctx),
+            ActionKind::WindowClose => close::window_close(&self.instance_id, &request, ctx),
+            ActionKind::TabClose => close::tab_close(&self.instance_id, &request, ctx),
+            ActionKind::PaneClose => close::pane_close(&self.instance_id, &request, ctx),
         };
         match result {
             Ok(data) => ResponseEnvelope::ok(request.request_id, data),
