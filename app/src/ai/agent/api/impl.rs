@@ -100,9 +100,10 @@ pub async fn generate_multi_agent_output(
                 FeatureFlag::SummarizationViaMessageReplacement.is_enabled(),
             supports_bundled_skills: FeatureFlag::BundledSkills.is_enabled(),
             supports_research_agent: params.research_agent_enabled,
-            supports_orchestration_v2: params.orchestration_enabled
-                && FeatureFlag::OrchestrationV2.is_enabled(),
+            supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
             custom_model_providers: params.custom_model_providers,
+            // Background computer use is not supported by the local client yet.
+            supports_background_computer_use: false,
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
@@ -163,6 +164,10 @@ fn api_keys_with_warp_credit_fallback_setting(
         }),
         None => None,
     }
+}
+
+fn supports_orchestration_v2(orchestration_enabled: bool) -> bool {
+    orchestration_enabled
 }
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     let mut supported_tools = vec![
@@ -229,18 +234,10 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
     }
 
     if params.orchestration_enabled {
-        // Always advertise the legacy start-agent tool so the server
-        // can fall back to it when its own orchestrate flag is off.
-        // When RunAgents is also enabled, advertise it alongside.
-        supported_tools.push(if FeatureFlag::OrchestrationV2.is_enabled() {
-            api::ToolType::StartAgentV2
-        } else {
-            api::ToolType::StartAgent
-        });
-        if FeatureFlag::RunAgentsTool.is_enabled() && FeatureFlag::OrchestrationV2.is_enabled() {
-            supported_tools.push(api::ToolType::RunAgents);
-        }
-        supported_tools.push(api::ToolType::SendMessageToAgent);
+        supported_tools.extend([api::ToolType::RunAgents, api::ToolType::SendMessageToAgent]);
+        // Declare client-handled wait_for_events so the server doesn't
+        // fall back to the legacy server-handled form.
+        supported_tools.push(api::ToolType::WaitForEvents);
     }
 
     if FeatureFlag::AskUserQuestion.is_enabled() && params.ask_user_question_enabled {

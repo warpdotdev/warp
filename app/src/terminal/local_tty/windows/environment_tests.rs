@@ -18,6 +18,7 @@ fn wsl_env_allowlist_includes_client_version_without_notifications_flag() {
             format!("{CLIENT_VERSION_NAME}/u"),
             format!("{TERMINAL_SESSION_UUID_ENV}/u"),
             format!("{FOCUS_URL_ENV}/u"),
+            format!("{PROMPT_NODE_VERSION_ENABLED_NAME}/u"),
         ],
     );
 }
@@ -40,6 +41,7 @@ fn wsl_env_allowlist_includes_cli_agent_protocol_when_notifications_flag_is_enab
             format!("{CLIENT_VERSION_NAME}/u"),
             format!("{TERMINAL_SESSION_UUID_ENV}/u"),
             format!("{FOCUS_URL_ENV}/u"),
+            format!("{PROMPT_NODE_VERSION_ENABLED_NAME}/u"),
             format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"),
             format!("{INITIAL_WORKING_DIR_NAME}/pu"),
         ],

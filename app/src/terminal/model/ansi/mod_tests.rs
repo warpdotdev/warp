@@ -26,9 +26,18 @@ struct MockHandler {
     d_proto_hooks: Vec<DProtoHook>,
     pluggable_notifications: Vec<(Option<String>, String)>,
     cwd_updates: Vec<String>,
+    registered_session_ids: HashSet<SessionId>,
+    should_validate_dcs_hook_session_id: bool,
 }
 
 impl Handler for MockHandler {
+    fn is_registered_session(&self, session_id: SessionId) -> bool {
+        self.registered_session_ids.contains(&session_id)
+    }
+
+    fn should_validate_dcs_hook_session_id(&self) -> bool {
+        self.should_validate_dcs_hook_session_id
+    }
     fn terminal_attribute(&mut self, attr: Attr) {
         self.attr = Some(attr);
     }
@@ -49,7 +58,13 @@ impl Handler for MockHandler {
     fn report_xtversion<W: io::Write>(&mut self, _: &mut W) {}
 
     fn reset_state(&mut self) {
-        *self = Self::default();
+        let registered_session_ids = self.registered_session_ids.clone();
+        let should_validate_dcs_hook_session_id = self.should_validate_dcs_hook_session_id;
+        *self = Self {
+            registered_session_ids,
+            should_validate_dcs_hook_session_id,
+            ..Self::default()
+        };
     }
 
     fn set_title(&mut self, _: Option<String>) {}
@@ -256,6 +271,8 @@ impl Default for MockHandler {
             d_proto_hooks: Vec::new(),
             pluggable_notifications: Vec::new(),
             cwd_updates: Vec::new(),
+            registered_session_ids: HashSet::new(),
+            should_validate_dcs_hook_session_id: true,
         }
     }
 }
@@ -266,8 +283,27 @@ fn hex_encoded_dcs_string(dcs_payload: &str) -> Vec<u8> {
 }
 
 fn parse_bytes(bytes: &[u8]) -> (Processor, MockHandler) {
+    parse_bytes_with_registered_sessions(bytes, [SessionId::from(167303092612201)])
+}
+
+fn parse_bytes_with_registered_sessions(
+    bytes: &[u8],
+    registered_session_ids: impl IntoIterator<Item = SessionId>,
+) -> (Processor, MockHandler) {
+    parse_bytes_with_registered_sessions_and_validation(bytes, registered_session_ids, true)
+}
+
+fn parse_bytes_with_registered_sessions_and_validation(
+    bytes: &[u8],
+    registered_session_ids: impl IntoIterator<Item = SessionId>,
+    should_validate_dcs_hook_session_id: bool,
+) -> (Processor, MockHandler) {
     let mut parser = Processor::new();
-    let mut handler = MockHandler::default();
+    let mut handler = MockHandler {
+        registered_session_ids: registered_session_ids.into_iter().collect(),
+        should_validate_dcs_hook_session_id,
+        ..Default::default()
+    };
 
     parser.parse_bytes(&mut handler, bytes, &mut io::sink());
 
@@ -481,7 +517,9 @@ fn parse_dcs_ssh() {
                 "hook": "SSH",
                 "value": {
                     "socket_path": "~/.ssh/9001",
-                    "remote_shell": "zsh"
+                    "remote_shell": "zsh",
+                    "session_id": 167303092612201,
+                    "remote_session_id": 167303092612202
                 }
             }"#,
     );
@@ -494,6 +532,8 @@ fn parse_dcs_ssh() {
             SSHValue {
                 socket_path: PathBuf::from("~/.ssh/9001"),
                 remote_shell: "zsh".to_string(),
+                session_id: Some(167303092612201),
+                remote_session_id: Some(167303092612202),
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -545,13 +585,50 @@ fn parse_dcs_precmd() {
 }
 
 #[test]
+fn parse_dcs_unregistered_session_id_rejected() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "pwd": "/Users",
+                    "session_id": 167303092612201
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes_with_registered_sessions(&bytes, []);
+
+    assert_eq!(handler.d_proto_hooks.len(), 0);
+}
+
+#[test]
+fn parse_dcs_unregistered_session_id_allowed_when_validation_disabled() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "Precmd",
+                "value": {
+                    "pwd": "/Users",
+                    "session_id": 167303092612201
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes_with_registered_sessions_and_validation(&bytes, [], false);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::Precmd { value } => assert_eq!(value.session_id, Some(167303092612201)),
+        _ => panic!("incorrect dcs value"),
+    };
+}
+
+#[test]
 fn parse_dcs_command_finished() {
     let bytes = hex_encoded_dcs_string(
         r#"{
                 "hook": "CommandFinished",
                 "value": {
                     "exit_code": 127,
-                    "next_block_id": "block_id"
+                    "next_block_id": "block_id",
+                    "session_id": 167303092612201
                 }
             }"#,
     );
@@ -564,7 +641,8 @@ fn parse_dcs_command_finished() {
                 *value,
                 CommandFinishedValue {
                     exit_code: ExitCode::from(127),
-                    next_block_id: "block_id".to_owned().into()
+                    next_block_id: "block_id".to_owned().into(),
+                    session_id: Some(167303092612201)
                 }
             )
         }
@@ -608,6 +686,7 @@ fn parse_dcs_bootstrapped() {
         DProtoHook::Bootstrapped { value } => assert_eq!(
             **value,
             BootstrappedValue {
+                session_id: Some(167303092612201),
                 histfile: Some("/Users/andy/.zsh_history".to_string()),
                 shell: "bash".to_string(),
                 home_dir: Some("/Users/andy".to_string()),
@@ -710,7 +789,8 @@ fn parse_dcs_input_buffer() {
         r#"{
                 "hook": "InputBuffer",
                 "value": {
-                    "buffer": "ls -al dir"
+                    "buffer": "ls -al dir",
+                    "session_id": 167303092612201
                 }
             }"#,
     );
@@ -722,7 +802,8 @@ fn parse_dcs_input_buffer() {
         DProtoHook::InputBuffer { value } => assert_eq!(
             *value,
             InputBufferValue {
-                buffer: "ls -al dir".to_string()
+                buffer: "ls -al dir".to_string(),
+                session_id: Some(167303092612201)
             }
         ),
         _ => panic!("incorrect dcs value"),

@@ -17,7 +17,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 use super::protocol::RequestId;
 use super::server_model::ConnectionId;
 use crate::code_review::diff_state::{
-    DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, FileDiffAndContent,
+    BackendOrigin, DiffMetadata, DiffMode, DiffState, DiffStateModelEvent, FileDiffAndContent,
     GitDiffWithBaseContent, LocalDiffStateModel,
 };
 
@@ -279,7 +279,8 @@ impl RemoteDiffStateManager {
             let repo_path_str = key.repo_path.to_string();
             let mode = key.mode.clone();
             let model = ctx.add_model(|ctx| {
-                let mut m = LocalDiffStateModel::new(Some(repo_path_str), ctx);
+                let mut m =
+                    LocalDiffStateModel::new(Some(repo_path_str), BackendOrigin::RemoteDaemon, ctx);
                 m.set_diff_mode(mode, false, false, ctx);
                 m.set_code_review_metadata_refresh_enabled(true, ctx);
                 m
@@ -373,9 +374,11 @@ impl RemoteDiffStateManager {
                 // Client-only event — should not occur on the server side.
                 log::warn!("Unexpected ConnectionLost event on server-side model key={key:?}");
             }
-            DiffStateModelEvent::BranchesReceived(_) => {
-                // Client-only event — the server model fetches branches
-                // directly via handle_get_branches, not through this tracker.
+            DiffStateModelEvent::BranchesReceived(_)
+            | DiffStateModelEvent::GitOpCompleted(_)
+            | DiffStateModelEvent::CommitMessageGenerated(_)
+            | DiffStateModelEvent::BranchCommittedFilesReceived(_) => {
+                // Client-only events don't go through this tracker.
             }
         }
     }

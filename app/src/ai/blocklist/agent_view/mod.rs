@@ -1,7 +1,6 @@
 pub(crate) mod agent_input_footer;
 mod agent_message_bar;
 mod agent_view_block;
-pub mod child_agent_status_card;
 mod controller;
 mod ephemeral_message_model;
 mod inline_agent_view_header;

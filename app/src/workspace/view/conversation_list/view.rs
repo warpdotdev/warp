@@ -872,6 +872,7 @@ impl TypedActionView for ConversationListView {
                 terminal_view_id,
             } => {
                 let window_id = ctx.window_id();
+                // A conversation can only be deleted once it's done.
                 let conversation_is_done = BlocklistAIHistoryModel::as_ref(ctx)
                     .conversation(conversation_id)
                     .is_none_or(|c| c.status().is_done());
@@ -1036,6 +1037,7 @@ impl TypedActionView for ConversationListView {
                     BlocklistAIHistoryModel::as_ref(ctx).conversation(&ai_conversation_id);
 
                 if let Some(conversation) = conversation {
+                    // Same gate as the deletion path above.
                     if !conversation.status().is_done() && !conversation.is_empty() {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -1148,6 +1150,7 @@ impl TypedActionView for ConversationListView {
                     summarize_after_fork: false,
                     summarization_prompt: None,
                     initial_prompt: None,
+                    initial_attachments: vec![],
                     destination: *destination,
                 });
             }

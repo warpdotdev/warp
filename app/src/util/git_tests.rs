@@ -111,10 +111,10 @@ async fn get_repository_info_reads_gh_repo_view() {
         super::get_repository_info(&repo, Some(&path_env))
             .await
             .unwrap(),
-        Some(RepositoryInfo {
+        RepositoryInfo {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
-        })
+        }
     );
 }
 
@@ -194,6 +194,45 @@ async fn get_pr_for_branch_returns_none_for_detached_head() {
     let (_dir, repo) = init_repo().await;
     git(&repo, &["checkout", "--detach", "HEAD"]).await;
     assert_eq!(get_pr_for_branch(&repo, None).await.unwrap(), None);
+}
+
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn committed_branch_files_excludes_uncommitted_and_untracked() {
+    let (_dir, repo) = init_repo().await;
+    // Branch off main; the merge base is main's initial commit.
+    git(&repo, &["checkout", "-b", "feature"]).await;
+
+    // Commit a new file on the feature branch — this SHOULD appear in the
+    // committed branch diff.
+    std::fs::write(repo.join("committed.txt"), "line1\nline2\n").expect("write committed.txt");
+    git(&repo, &["add", "committed.txt"]).await;
+    git(&repo, &["commit", "-m", "add committed.txt"]).await;
+
+    // Further-modify the committed file in the working tree (uncommitted) and
+    // add an untracked file. Neither is part of the PR's committed history, so
+    // neither should appear, and the committed file's counts must reflect only
+    // the committed change (2 added lines, not 3).
+    std::fs::write(repo.join("committed.txt"), "line1\nline2\nline3\n")
+        .expect("modify committed.txt");
+    std::fs::write(repo.join("untracked.txt"), "new\n").expect("write untracked.txt");
+
+    let entries = super::get_committed_branch_file_entries(&repo)
+        .await
+        .expect("committed branch files");
+
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected only the committed file: {entries:?}"
+    );
+    assert_eq!(entries[0].path, "committed.txt");
+    assert_eq!(entries[0].additions, 2);
+    assert_eq!(entries[0].deletions, 0);
+    assert!(
+        !entries.iter().any(|e| e.path == "untracked.txt"),
+        "untracked files must be excluded: {entries:?}"
+    );
 }
 
 #[cfg(unix)]

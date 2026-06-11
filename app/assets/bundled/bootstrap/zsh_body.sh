@@ -253,7 +253,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
   # invoke any external commands in here.
   warp_preexec () {
       local warp_escaped_command="$(warp_escape_json $1)"
-      warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$warp_escaped_command\"}}"
+      warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$warp_escaped_command\", \"session_id\": $WARP_SESSION_ID}}"
       warp_maybe_send_reset_grid_osc
 
       # If this preexec is called for user command, kill ongoing generator command jobs and clean
@@ -307,7 +307,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       # in this function below).
       local exit_code=$?
 
-      warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$((block_id++))\"}}"
+      warp_send_json_message "{\"hook\": \"CommandFinished\", \"value\": {\"exit_code\": $exit_code, \"next_block_id\": \"precmd-$WARP_SESSION_ID-$((block_id++))\", \"session_id\": $WARP_SESSION_ID}}"
       warp_maybe_send_reset_grid_osc
 
       # If this is being called for a generator command, short circuit and send an unpopulated
@@ -394,37 +394,56 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
           escaped_conda_env=$(warp_escape_json $CONDA_DEFAULT_ENV)
         fi
 
-          # Get Node.js version if node is available and we're in a Node.js project
-          if command -v node > /dev/null 2>&1; then
+          # Get the Node.js version, but only when the Node.js Version chip is enabled.
+          # Warp sets WARP_PROMPT_NODE_VERSION_ENABLED to "0" when the chip is not in the
+          # prompt (defaulting to enabled when unset), so we avoid spawning `node` on
+          # every prompt when the chip is not shown.
+          if [[ "$WARP_PROMPT_NODE_VERSION_ENABLED" != "0" ]] && command -v node > /dev/null 2>&1; then
               # Check for package.json in current directory and parent directories
               local current_dir="$PWD"
               local found_package_json=false
               local package_json_dir=""
-              while [[ "$current_dir" != "/" ]]; do
+              while [[ -n "$current_dir" ]]; do
                   if [[ -f "$current_dir/package.json" ]]; then
                       found_package_json=true
                       package_json_dir="$current_dir"
                       break
                   fi
-                  current_dir=$(dirname "$current_dir")
+                  [[ "$current_dir" == "/" ]] && break
+                  # Strip the last path segment without spawning `dirname`.
+                  current_dir="${current_dir%/*}"
+                  [[ -z "$current_dir" ]] && current_dir="/"
               done
               
               # Only show node version if package.json is within a git repository
               if [[ "$found_package_json" = true ]]; then
                   local git_dir="$package_json_dir"
                   local in_git_repo=false
-                  while [[ "$git_dir" != "/" ]]; do
+                  while [[ -n "$git_dir" ]]; do
                       if [[ -d "$git_dir/.git" ]]; then
                           in_git_repo=true
                           break
                       fi
-                      git_dir=$(dirname "$git_dir")
+                      [[ "$git_dir" == "/" ]] && break
+                      git_dir="${git_dir%/*}"
+                      [[ -z "$git_dir" ]] && git_dir="/"
                   done
                   
                   if [[ "$in_git_repo" = true ]]; then
-                      local node_version=$(node --version 2>/dev/null)
-                      if [[ -n "$node_version" ]]; then
-                          escaped_node_version=$(warp_escape_json "$node_version")
+                      # Cache the resolved version keyed on PWD + PATH so we only spawn
+                      # `node --version` when the directory or PATH changes (PATH changes
+                      # on `nvm use`). The cache vars are global (no `local`) so they
+                      # persist across precmd invocations.
+                      local node_cache_key="$PWD:$PATH"
+                      if [[ "$node_cache_key" == "$_WARP_NODE_VERSION_CACHE_KEY" ]]; then
+                          escaped_node_version="$_WARP_NODE_VERSION_CACHE_VALUE"
+                      else
+                          local node_version=$(node --version 2>/dev/null)
+                          if [[ -n "$node_version" ]]; then
+                              escaped_node_version=$(warp_escape_json "$node_version")
+                          fi
+                          _WARP_NODE_VERSION_CACHE_KEY="$node_cache_key"
+                          _WARP_NODE_VERSION_CACHE_VALUE="$escaped_node_version"
                       fi
                   fi
               fi
@@ -622,19 +641,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
 
   function warp_report_input {
     local escaped_input="$(warp_escape_json "$BUFFER")"
-    warp_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\" } }"
+    warp_send_json_message "{ \"hook\": \"InputBuffer\", \"value\": { \"buffer\": \"$escaped_input\", \"session_id\": $WARP_SESSION_ID } }"
     # This prevents zsh from printing typeahead as background output after we've fetched it.
     BUFFER=""
   }
   zle -N warp_report_input
 
   function clear() {
-      warp_send_json_message "{\"hook\": \"Clear\", \"value\": {}}"
+      warp_send_json_message "{\"hook\": \"Clear\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
   }
 
   function warp_finish_update {
     local update_id="$1"
-    warp_send_json_message "{ \"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\"} }"
+    warp_send_json_message "{ \"hook\": \"FinishUpdate\", \"value\": { \"update_id\": \"$update_id\", \"session_id\": $WARP_SESSION_ID} }"
   }
 
   # Check if the warp apt source file has been renamed to `warpdotdev.list.distUpgrade` due to an ubuntu version update.
@@ -659,6 +678,21 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         echo "Executing: sudo cp \"$APT_SOURCESDIR$source_file_name.list.distUpgrade\" \"$APT_SOURCESDIR$source_file_name.list\""
         sudo cp "$APT_SOURCESDIR$source_file_name.list.distUpgrade" "$APT_SOURCESDIR$source_file_name.list"
       fi
+  }
+
+  # Strips prompt constructs that zsh counts as visible "glitch" columns even
+  # when they appear inside a %{...%} zero-width region, returning the result
+  # in $REPLY. The explicit-width form %n{ is rewritten to %{ (preserving the
+  # brace pairing), and the %G, %nG, and %-nG forms are removed entirely.
+  # Neither change affects the rendered prompt bytes, only zsh's internal
+  # width accounting. Literal %% escapes are matched first so that they cannot
+  # form false positives (e.g. %%1{ renders as literal text and must be left
+  # alone).
+  function warp_strip_glitch_width_constructs() {
+    setopt localoptions extendedglob
+    local match mbegin mend
+    REPLY=${1:-}
+    REPLY=${REPLY//(#b)(%%|%<->\{|%(-|)(<->|)G)/${${match[1]:#%(-|)(<->|)G}/(#s)%<->\{(#e)/%\{}}
   }
 
   # Check whether the prompt-related variables have OSC prompt marker sequences,
@@ -742,7 +776,21 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         PROMPT=$preceding_suffix$following_suffix
       fi
 
-      ORIGINAL_PROMPT=$PROMPT
+      # If the prompt we extracted is exactly the glitch-stripped value that we
+      # installed on a previous refresh, keep the existing ORIGINAL_PROMPT: it
+      # holds the pristine value, whose width annotations are still needed if
+      # we later switch to honoring the PS1.
+      if [[ "$PROMPT" != "${WARP_STRIPPED_ORIGINAL_PROMPT:-}" ]]; then
+        if [[ -n "${WARP_STRIPPED_ORIGINAL_PROMPT:-}" && "$PROMPT" == *"$WARP_STRIPPED_ORIGINAL_PROMPT"* ]]; then
+          # Another hook added content around the stripped prompt that we
+          # installed (e.g. a virtualenv prefix). Rehydrate the stripped
+          # portion back to its pristine value before saving, so that the
+          # width annotations survive alongside the added content.
+          ORIGINAL_PROMPT=${PROMPT//$WARP_STRIPPED_ORIGINAL_PROMPT/$ORIGINAL_PROMPT}
+        else
+          ORIGINAL_PROMPT=$PROMPT
+        fi
+      fi
       PROMPT="$prompt_prefix$PROMPT$suffix"
     fi
 
@@ -762,14 +810,26 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     # If we are using the Warp prompt, we pass a "hidden left prompt" to the prompt
     # preview grid (the hidden prompt grid) with cursor markers surrounding the entire prompt.
     if [[ "$WARP_HONOR_PS1" != "1" ]]; then
-      if [[ "$PROMPT" != "%{$prompt_prefix$ORIGINAL_PROMPT$suffix%}" ]]; then
+      # Even though the entire prompt is surrounded by cursor markers below,
+      # zsh still counts explicit-width constructs (%n{...%} and %G) within it
+      # as visible "glitch" columns. Since the prompt is routed to the hidden
+      # prompt grid and occupies zero columns of the combined prompt/command
+      # grid, any nonzero counted width desyncs zle's internal cursor position
+      # from the physical one, which corrupts partial redraws of the command
+      # (e.g. when zsh-syntax-highlighting recolors individual tokens). Strip
+      # those constructs before wrapping; this only changes zsh's width
+      # accounting, never the rendered prompt bytes.
+      local REPLY
+      warp_strip_glitch_width_constructs "$ORIGINAL_PROMPT"
+      WARP_STRIPPED_ORIGINAL_PROMPT=$REPLY
+      if [[ "$PROMPT" != "%{$prompt_prefix$WARP_STRIPPED_ORIGINAL_PROMPT$suffix%}" ]]; then
         # We purposefully surround this entire prompt with cursor markers to prevent
         # the shell from moving its internal state of the cursor position, for purposes
         # of printing the command with the Warp prompt.
         # Note that the Warp prompt is always ABOVE the combined grid in finished blocks
         # (same line prompt only affects the input editor with Warp prompt, not
         # finished blocks).
-        PROMPT="%{$prompt_prefix$ORIGINAL_PROMPT$suffix%}"
+        PROMPT="%{$prompt_prefix$WARP_STRIPPED_ORIGINAL_PROMPT$suffix%}"
       fi
     # Otherwise, if we are using the PS1, we use the normal prompt markers.
     else
@@ -866,10 +926,16 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
       }
 
       function warp_ssh_helper() {
+          local remote_session_id=$(command -p od -An -N8 -tu8 /dev/urandom 2>/dev/null | command -p tr -d ' \n')
+          if [[ -z "$remote_session_id" || "$remote_session_id" == "0" ]]; then
+              # If we cannot generate a non-zero random token, run plain SSH instead.
+              command ssh "${@:1}"
+              return
+          fi
           # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
           # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
           # and use printf to convert back to plaintext
-          local zsh_env_script=$(printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID="$(command -p date +%s)$RANDOM"; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
+          local zsh_env_script=$(printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d '"'"' \n'"'"'); printf '"'"'\e]9278;d;%s\x07'"'"' $_msg; unset _hostname _user _msg' | command -p od -An -v -tx1 | command -p tr -d ' \n')
 
           # Keep remote commands up-to-date with shell.rs & bash.sh.
           # Note that in this command, we're passing a string to the remote shell. Any variable expansions need to be
@@ -889,7 +955,7 @@ export WARP_IS_SSH='1'
 test -n '$WARP_CLIENT_VERSION' && export WARP_CLIENT_VERSION='$WARP_CLIENT_VERSION'
 # Only forward the protocol version if it was set locally (i.e. the HOANotifications feature flag is on).
 test -n '$WARP_CLI_AGENT_PROTOCOL_VERSION' && export WARP_CLI_AGENT_PROTOCOL_VERSION='$WARP_CLI_AGENT_PROTOCOL_VERSION'
-hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$WARP_SESSION_ID'\", \"remote_shell\": \"%s\"}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
+hook="'$(printf "{\"hook\": \"SSH\", \"value\": {\"socket_path\": \"'$SSH_SOCKET_DIR/$WARP_SESSION_ID'\", \"remote_shell\": \"%s\", \"session_id\": '"$WARP_SESSION_ID"', \"remote_session_id\": '"$remote_session_id"'}}" "${SHELL##*/}" | command -p od -An -v -tx1 | command -p tr -d " \n")'"
 printf '$OSC_START$DCS_JSON_MARKER$OSC_PARAM_SEPARATOR%s$OSC_END' "'$hook'"
 
 if test "'"${SHELL##*/}" != "bash" -a "${SHELL##*/}" != "zsh"'"; then
@@ -924,7 +990,7 @@ case "'${SHELL##*/}'" in
       command -p stty raw
       HISTCONTROL=ignorespace
       HISTIGNORE=" *"
-      WARP_SESSION_ID="$(command -p date +%s)$RANDOM"
+      WARP_SESSION_ID='$remote_session_id'
       WARP_HONOR_PS1="'$WARP_HONOR_PS1'"
       _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || command -p uname -n)
       _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER)
@@ -957,7 +1023,7 @@ esac
 
       function ssh() {
           if is_interactive_ssh_session "$@"; then
-              warp_send_json_message "{\"hook\": \"PreInteractiveSSHSession\", \"value\": {}}"
+              warp_send_json_message "{\"hook\": \"PreInteractiveSSHSession\", \"value\": {\"session_id\": $WARP_SESSION_ID}}"
 
               # If the SSH wrapper is not enabled for this session, don't use it.
               if [ "$WARP_USE_SSH_WRAPPER" = "1" ]; then
@@ -1404,7 +1470,7 @@ esac
     local escaped_editor="$(warp_escape_json "$EDITOR")"
     local escaped_shell_path="$(warp_escape_json "${commands[zsh]}")"
     local escaped_cdpath="$(warp_escape_json "$CDPATH")"
-    local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"shell\": \"zsh\", \"home_dir\": \"$HOME\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\":  \"$env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$function_names\",  \"builtins\": \"$escaped_builtins\",  \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$ZSH_VERSION\", \"shell_options\": \"$shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"shell_plugins\": \"$escaped_shell_plugins\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"${WSL_DISTRO_NAME:-}\", \"shell_path\": \"$escaped_shell_path\"}}"
+    local escaped_json="{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"home_dir\": \"$HOME\", \"path\": \"$escaped_path\", \"cdpath\": \"$escaped_cdpath\", \"editor\": \"$escaped_editor\", \"env_var_names\":  \"$env_var_names\", \"abbreviations\": \"$escaped_abbrs\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$function_names\",  \"builtins\": \"$escaped_builtins\",  \"keywords\": \"$escaped_keywords\", \"shell_version\": \"$ZSH_VERSION\", \"shell_options\": \"$shell_options\", \"rcfiles_start_time\": \"$rcfiles_start_time\", \"rcfiles_end_time\": \"$rcfiles_end_time\", \"shell_plugins\": \"$escaped_shell_plugins\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"${WSL_DISTRO_NAME:-}\", \"shell_path\": \"$escaped_shell_path\"}}"
     warp_send_json_message "$escaped_json"
   }
   warp_bootstrapped

@@ -21,6 +21,9 @@ use warpui::windowing::WindowManager;
 use warpui::{App, ModelHandle};
 use watcher::HomeDirectoryWatcher;
 
+use super::child_agent::hydration::{
+    decide_remote_child_hydration_action, RemoteChildHydrationAction,
+};
 use super::child_agent::{
     create_hidden_child_agent_conversation, HiddenChildAgentConversationRequest,
     HiddenChildAgentTaskContext,
@@ -35,7 +38,8 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{
-    AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    AgentSource, AmbientAgentLiveSessionState, AmbientAgentTask, AmbientAgentTaskId,
+    AmbientAgentTaskState,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::CloudConversationData;
@@ -166,9 +170,7 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
-    if FeatureFlag::OrchestrationV2.is_enabled() {
-        app.add_singleton_model(OrchestrationEventStreamer::new);
-    }
+    app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(crate::ai::blocklist::BlocklistAIPermissions::new);
     app.add_singleton_model(AgentNotificationsModel::new);
@@ -838,8 +840,6 @@ fn test_insert_hidden_ambient_child_agent_pane_suppresses_details_auto_open() {
 }
 #[test]
 fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -883,8 +883,6 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
 
 #[test]
 fn test_restored_hidden_child_pane_reapplies_ambient_task_id_to_controller() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -917,8 +915,6 @@ fn test_restored_hidden_child_pane_reapplies_ambient_task_id_to_controller() {
 
 #[test]
 fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -998,8 +994,6 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
 /// never produce a worse state than the pre-Fix-B fallback.
 #[test]
 fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -1095,7 +1089,6 @@ fn test_restored_remote_hidden_child_pane_fallback_when_task_data_unavailable() 
 #[test]
 fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_child_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -1249,8 +1242,6 @@ fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_ch
 
 #[test]
 fn test_create_missing_child_agent_panes_restores_remote_child_from_history_model() {
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
-
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let pane_group = mock_pane_group(&mut app, Default::default());
@@ -1508,7 +1499,6 @@ fn test_entering_parent_agent_view_lazily_restores_hidden_child_pane() {
 #[test]
 fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -1589,7 +1579,6 @@ fn test_entering_remote_parent_agent_view_lazily_restores_local_hidden_child_pan
 #[test]
 fn test_entering_remote_parent_agent_view_lazily_restores_remote_hidden_child_pane() {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -1875,7 +1864,6 @@ fn test_ensure_hidden_child_agent_pane_materializes_missing_child_pane() {
 fn test_ensure_hidden_child_agent_pane_materializes_restored_remote_child_linked_by_parent_agent_id(
 ) {
     let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);

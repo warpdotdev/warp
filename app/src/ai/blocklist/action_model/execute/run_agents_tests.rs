@@ -6,20 +6,26 @@ use ai::agent::orchestration_config::{
 };
 use settings::Setting;
 use warp_core::execution_mode::ExecutionMode;
-use warpui::{App, EntityId, ModelHandle};
+use warp_core::features::FeatureFlag;
+use warpui::{App, Entity, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::task::TaskId;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, BlocklistAIPermissions, StartAgentExecutorEvent, StartAgentRequest,
+};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStatus};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::RunAgentsPermission;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::SyncId;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -33,6 +39,14 @@ use crate::{
 struct RunAgentsTestState {
     conversation_id: AIConversationId,
     executor: ModelHandle<RunAgentsExecutor>,
+    start_agent_executor: ModelHandle<StartAgentExecutor>,
+}
+
+#[derive(Default)]
+struct CapturedStartAgentRequests(Vec<StartAgentRequest>);
+
+impl Entity for CapturedStartAgentRequests {
+    type Event = ();
 }
 fn with_plan_id(mut action: AIAgentAction, plan_id: &str) -> AIAgentAction {
     let AIAgentActionType::RunAgents(request) = &mut action.action else {
@@ -164,6 +178,8 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
     app.add_singleton_model(TeamTesterStatus::mock);
     app.add_singleton_model(UpdateManager::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(|_| Appearance::mock());
+    app.add_singleton_model(|_| AIDocumentModel::new_for_test());
     app.add_singleton_model(|_| TemplatableMCPServerManager::default());
     app.add_singleton_model(|ctx| {
         AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
@@ -175,12 +191,27 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
     });
     let start_agent_executor = app.add_model(StartAgentExecutor::new);
     let executor =
-        app.add_model(|_| RunAgentsExecutor::new(start_agent_executor, terminal_view_id));
+        app.add_model(|_| RunAgentsExecutor::new(start_agent_executor.clone(), terminal_view_id));
 
     RunAgentsTestState {
         conversation_id,
         executor,
+        start_agent_executor,
     }
+}
+
+fn subscribe_to_start_agent_requests(
+    app: &mut App,
+    start_agent_executor: &ModelHandle<StartAgentExecutor>,
+) -> ModelHandle<CapturedStartAgentRequests> {
+    let captured = app.add_model(|_| CapturedStartAgentRequests::default());
+    captured.update(app, |_, ctx| {
+        ctx.subscribe_to_model(start_agent_executor, |captured, event, _ctx| {
+            let StartAgentExecutorEvent::CreateAgent(request) = event;
+            captured.0.push(request.clone());
+        });
+    });
+    captured
 }
 
 fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
@@ -216,6 +247,34 @@ fn with_agent_name(mut action: AIAgentAction, name: &str) -> AIAgentAction {
     };
     request.agent_run_configs[0].name = name.to_string();
     action
+}
+
+#[test]
+fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
+    let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate the failure".to_string(),
+        title: String::new(),
+    };
+
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Local,
+        "codex",
+        "",
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("local Codex should be accepted when the feature flag is enabled");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: Some("codex".to_string()),
+            model_id: None,
+        }
+    );
 }
 
 fn persist_default_auth_secret(app: &mut App, harness_config_name: &str, secret_name: &str) {
@@ -382,6 +441,149 @@ fn autonomous_mode_autoexecutes_and_does_not_deny_missing_api_key() {
                 .into()
         });
         assert!(matches!(execution, AnyActionExecution::Async { .. }));
+    });
+}
+
+#[test]
+fn execute_publishes_every_parent_owned_plan_before_dispatch() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.assign_run_id_for_conversation(
+                state.conversation_id,
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                None,
+                EntityId::new(),
+                ctx,
+            );
+        });
+        let unrelated_conversation_id = AIConversationId::new();
+        let (first_plan_id, second_plan_id, unrelated_plan_id) = AIDocumentModel::handle(&app)
+            .update(&mut app, |model, ctx| {
+                (
+                    model.create_document(
+                        "First plan",
+                        "# First",
+                        state.conversation_id,
+                        None,
+                        ctx,
+                    ),
+                    model.create_document(
+                        "Second plan",
+                        "# Second",
+                        state.conversation_id,
+                        None,
+                        ctx,
+                    ),
+                    model.create_document(
+                        "Unrelated plan",
+                        "# Unrelated",
+                        unrelated_conversation_id,
+                        None,
+                        ctx,
+                    ),
+                )
+            });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let action = remote_run_agents_action("oz");
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+        captured.read(&app, |captured, _ctx| {
+            assert!(captured.0.is_empty());
+        });
+        AIDocumentModel::handle(&app).read(&app, |model, _ctx| {
+            assert!(matches!(
+                model.get_document_save_status(&first_plan_id),
+                AIDocumentSaveStatus::Saving
+            ));
+            assert!(matches!(
+                model.get_document_save_status(&second_plan_id),
+                AIDocumentSaveStatus::Saving
+            ));
+            assert!(matches!(
+                model.get_document_save_status(&unrelated_plan_id),
+                AIDocumentSaveStatus::NotSaved
+            ));
+        });
+    });
+}
+
+/// A run_agents call holds in the `Publishing` state while it waits for the parent's
+/// plans to become server-backed, then dispatches children. This verifies that
+/// cancelling mid-publication prevents fan-out: even when the plan finishes publishing
+/// afterwards (resolving the wait), the post-wait dispatch is skipped because
+/// `cancel_execution` cleared the pending marker that `is_pending` guards on.
+#[test]
+fn cancel_during_plan_publication_does_not_dispatch_children() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.assign_run_id_for_conversation(
+                state.conversation_id,
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                None,
+                EntityId::new(),
+                ctx,
+            );
+        });
+        let plan_id = AIDocumentModel::handle(&app).update(&mut app, |model, ctx| {
+            model.create_document("Plan", "# Plan", state.conversation_id, None, ctx)
+        });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let action = remote_run_agents_action("oz");
+        let action_id = action.id.clone();
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        // The action is awaiting plan publication, so it's pending but no children dispatched yet.
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+        state.executor.update(&mut app, |executor, ctx| {
+            assert!(executor.is_pending(&action_id));
+            executor.cancel_execution(&action_id, ctx);
+            assert!(!executor.is_pending(&action_id));
+        });
+
+        // Finish publishing the plan, which resolves the wait the dispatch was blocked on.
+        AIDocumentModel::handle(&app).update(&mut app, |model, ctx| {
+            model.create_document_from_notebook(
+                plan_id,
+                SyncId::ServerId(123.into()),
+                "Plan",
+                "# Plan",
+                state.conversation_id,
+                None,
+                ctx,
+            );
+        });
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+
+        // Cancellation won the race: the resolved wait does not fan out children.
+        captured.read(&app, |captured, _ctx| {
+            assert!(captured.0.is_empty());
+        });
     });
 }
 

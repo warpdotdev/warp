@@ -20,7 +20,7 @@ use crate::agent::action_result::{
     RequestComputerUseResult, RequestFileEditsResult, RunAgentsResult, SearchCodebaseResult,
     SendMessageToAgentResult, StartAgentResult, StartAgentVersion, SuggestNewConversationResult,
     SuggestPromptResult, TransferShellCommandControlToUserResult, UploadArtifactResult,
-    UseComputerResult, WriteToLongRunningShellCommandResult,
+    UseComputerResult, WaitForEventsResult, WriteToLongRunningShellCommandResult,
 };
 use crate::agent::{AIAgentCitation, FileLocations};
 use crate::diff_validation::ParsedDiff;
@@ -142,7 +142,9 @@ pub enum AIAgentActionType {
     FetchConversation {
         conversation_id: String,
     },
-
+    // TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 action support once
+    // old preview orchestration history no longer needs parse/display/result compatibility.
+    // Linear issue: QUALITY-788.
     StartAgent {
         version: StartAgentVersion,
         name: String,
@@ -172,6 +174,17 @@ pub enum AIAgentActionType {
     /// `base_prompt + "\n\n" + agent_run_configs[i].prompt` (or just
     /// `base_prompt` when the per-agent `prompt` is empty).
     RunAgents(RunAgentsRequest),
+
+    /// Synthesized from a server-emitted Message::ToolCall::WaitForEvents;
+    /// dispatched by WaitForEventsExecutor.
+    WaitForEvents {
+        /// tool_call_id of the unresolved WaitForEvents call; used to
+        /// match inbound resume signals.
+        tool_call_id: String,
+        /// 0 means "unset" (prost flat-scalar convention); the executor
+        /// falls back to a default.
+        idle_timeout_seconds: i32,
+    },
 }
 
 /// Run-wide + per-agent configuration for a `RunAgents` tool call.
@@ -382,6 +395,9 @@ impl AIAgentActionType {
                 AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
             }
             Self::RunAgents(_) => AIAgentActionResultType::RunAgents(RunAgentsResult::Cancelled),
+            Self::WaitForEvents { .. } => {
+                AIAgentActionResultType::WaitForEvents(WaitForEventsResult::Cancelled)
+            }
         }
     }
 
@@ -430,6 +446,7 @@ impl AIAgentActionType {
             Self::RunAgents(req) => {
                 format!("Orchestrate {} agent(s)", req.agent_run_configs.len())
             }
+            Self::WaitForEvents { .. } => "Wait for events".to_string(),
         }
     }
 }
@@ -610,6 +627,15 @@ impl Display for AIAgentActionType {
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "Orchestrate: summary='{}' agents=[{names}]", req.summary,)
+            }
+            AIAgentActionType::WaitForEvents {
+                tool_call_id,
+                idle_timeout_seconds,
+            } => {
+                write!(
+                    f,
+                    "WaitForEvents: tool_call_id={tool_call_id} idle_timeout_seconds={idle_timeout_seconds}"
+                )
             }
         }
     }

@@ -262,13 +262,11 @@ fn participant_for_agent_id_uses_pill_style_child_agent_avatar() {
 fn participant_for_restored_child_run_id_resolves_to_agent_name() {
     use chrono::Utc;
     use uuid::Uuid;
-    use warp_core::features::FeatureFlag;
 
     use crate::persistence::model::{
         AgentConversation, AgentConversationData, AgentConversationRecord,
     };
 
-    let _orchestration_v2 = FeatureFlag::OrchestrationV2.override_enabled(true);
     App::test((), |app| async move {
         let parent_id = AIConversationId::new();
         let child_id = AIConversationId::new();

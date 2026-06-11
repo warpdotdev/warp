@@ -42,7 +42,7 @@ fn test_mac_warpification_script_size() {
 
         app.read(|ctx| {
             assert_script_is_short_enough_mac(
-                &begin_warpify_ssh_session_command(ctx),
+                &begin_warpify_ssh_session_command(ctx, SessionId::from(u64::MAX)),
                 "unknown_init_subshell.sh",
                 false,
             );

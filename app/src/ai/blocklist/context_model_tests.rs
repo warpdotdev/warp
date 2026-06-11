@@ -17,14 +17,21 @@ use warpui::r#async::executor::Background;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::{BlocklistAIContextModel, PendingAttachment, PendingFile};
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentContext, ImageContext};
 use crate::ai::blocklist::agent_view::{AgentViewController, EphemeralMessageModel};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin,
+};
 #[cfg(feature = "local_fs")]
 use crate::code_review::git_status_update::GitRepoStatusModel;
+#[cfg(feature = "local_fs")]
+use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::test_utils::block_size;
 use crate::terminal::model::{BlockId, TerminalModel};
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 use crate::util::git::{PrInfo, RepositoryInfo};
 
 impl BlocklistAIContextModel {
@@ -46,7 +53,7 @@ impl BlocklistAIContextModel {
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn repository_context_reads_git_repo_status_model() {
+fn repository_context_reads_github_repo_model() {
     App::test((), |mut app| async move {
         let context_model = build_test_context_model(&mut app);
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -60,8 +67,9 @@ fn repository_context_reads_git_repo_status_model() {
                 .unwrap()
         });
         let git_status = app.add_model(move |_| GitRepoStatusModel::new_for_test(repository, None));
+        let github_repo_model = app.add_model(move |_| GitHubRepoModel::new_for_test(git_status));
 
-        git_status.update(&mut app, |model, ctx| {
+        github_repo_model.update(&mut app, |model, ctx| {
             model.set_repository_info_for_test(
                 Some(RepositoryInfo {
                     name: "warp-internal".to_owned(),
@@ -72,7 +80,7 @@ fn repository_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(Some(git_status.downgrade()));
+            model.set_github_repo_model(Some(github_repo_model.downgrade()));
         });
 
         context_model.read(&app, |model, ctx| {
@@ -86,7 +94,7 @@ fn repository_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(None);
+            model.set_github_repo_model(None);
         });
 
         context_model.read(&app, |model, ctx| {
@@ -227,7 +235,7 @@ fn pull_request_context_from_pr_info_rejects_numbers_that_do_not_fit_agent_conte
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn pull_request_context_reads_git_repo_status_model() {
+fn pull_request_context_reads_github_repo_model() {
     App::test((), |mut app| async move {
         let context_model = build_test_context_model(&mut app);
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -241,8 +249,9 @@ fn pull_request_context_reads_git_repo_status_model() {
                 .unwrap()
         });
         let git_status = app.add_model(move |_| GitRepoStatusModel::new_for_test(repository, None));
+        let github_repo_model = app.add_model(move |_| GitHubRepoModel::new_for_test(git_status));
 
-        git_status.update(&mut app, |model, ctx| {
+        github_repo_model.update(&mut app, |model, ctx| {
             model.set_pr_info_for_test(
                 Some(PrInfo {
                     number: 123,
@@ -256,7 +265,7 @@ fn pull_request_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(Some(git_status.downgrade()));
+            model.set_github_repo_model(Some(github_repo_model.downgrade()));
         });
 
         context_model.read(&app, |model, ctx| {
@@ -272,7 +281,7 @@ fn pull_request_context_reads_git_repo_status_model() {
         });
 
         context_model.update(&mut app, |model, _| {
-            model.set_git_repo_status(None);
+            model.set_github_repo_model(None);
         });
 
         context_model.read(&app, |model, ctx| {
@@ -341,5 +350,70 @@ fn has_locking_attachment_is_true_with_mixed_image_and_file_attachments() {
         });
 
         model.read(&app, |m, _| assert!(m.has_locking_attachment()));
+    });
+}
+
+#[test]
+fn take_pending_attachments_drains_and_returns_all_staged() {
+    App::test((), |mut app| async move {
+        let model = build_test_context_model(&mut app);
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![
+                make_image_attachment("a.png"),
+                make_file_attachment("notes.txt"),
+            ]);
+        });
+
+        let taken = model.update(&mut app, |m, ctx| m.take_pending_attachments(ctx));
+        assert_eq!(taken.len(), 2);
+        assert_eq!(taken[0].file_name(), "a.png");
+        assert_eq!(taken[1].file_name(), "notes.txt");
+
+        // Draining clears the live staging so the input's attachment chips disappear.
+        model.read(&app, |m, _| assert!(m.pending_attachments().is_empty()));
+    });
+}
+
+#[test]
+fn enqueue_moves_staged_attachments_onto_the_row_and_clears_input() {
+    // Mirrors the enqueue sites in `input.rs`: `take_pending_attachments` drains the live input
+    // staging and the drained set is stored on the queued row via `new_with_attachments`, leaving
+    // no attachments behind in the input.
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let queued = app.add_singleton_model(QueuedQueryModel::new);
+        let model = build_test_context_model(&mut app);
+        let conv = AIConversationId::new();
+
+        model.update(&mut app, |m, _| {
+            m.append_pending_attachments_for_test(vec![
+                make_image_attachment("a.png"),
+                make_file_attachment("notes.txt"),
+            ]);
+        });
+
+        // Capture-and-clear, then store on the row (the exact composition used at enqueue time).
+        let taken = model.update(&mut app, |m, ctx| m.take_pending_attachments(ctx));
+        let id = queued.update(&mut app, |q, ctx| {
+            q.append(
+                conv,
+                QueuedQuery::new_with_attachments(
+                    "queued".to_owned(),
+                    QueuedQueryOrigin::AutoQueueToggle,
+                    taken,
+                ),
+                ctx,
+            )
+        });
+
+        // Live staging is cleared; the row owns the attachments.
+        model.read(&app, |m, _| assert!(m.pending_attachments().is_empty()));
+        queued.read(&app, |q, _| {
+            let attachments = q.attachments_for(conv, id);
+            assert_eq!(attachments.len(), 2);
+            assert_eq!(attachments[0].file_name(), "a.png");
+            assert_eq!(attachments[1].file_name(), "notes.txt");
+        });
     });
 }

@@ -1,10 +1,15 @@
 ---
 name: review-pr-local
 specializes: review-pr
+specializes_source: warpdotdev/common-skills:.agents/skills/review-pr
 description: Repo-specific review guidance for warp. Only the categories declared overridable by the core review-pr skill may be specialized here.
 ---
 
 # Repo-specific review guidance for `warp`
+
+## Prerequisite: install the parent skill
+
+This skill specializes the core `review-pr` skill (named in the `specializes` frontmatter field) and is not functional on its own. Before applying its guidance, confirm the parent skill is installed and resolvable at `.agents/skills/review-pr/SKILL.md`. If it is missing, install it first by copying the skill directory from the source declared in the `specializes_source` frontmatter field (`warpdotdev/common-skills:.agents/skills/review-pr`). Then continue with the guidance below.
 
 This file is a companion to the core `review-pr` skill. It does not
 redefine the review output schema, severity labels, safety rules, or
