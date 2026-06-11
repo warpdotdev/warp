@@ -57,7 +57,9 @@ fn create_test_task(task_id: &str) -> AmbientAgentTask {
 fn test_from_conversation_prefers_server_creator_profile() {
     App::test((), |mut app| async move {
         let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-        app.add_singleton_model(|_| AgentConversationsModel::new_for_test());
+        // The AgentManagementView flag is off in tests, so `new` registers an
+        // inert model with no subscriptions or polling.
+        app.add_singleton_model(AgentConversationsModel::new);
         let conversation_id = AIConversationId::new();
         let mut conversation = create_restored_conversation(
             conversation_id,
@@ -213,7 +215,7 @@ fn create_test_server_metadata(
 fn test_from_task_includes_linked_directory_when_run_id_matches() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-        app.add_singleton_model(|_| AgentConversationsModel::new_for_test());
+        app.add_singleton_model(AgentConversationsModel::new);
 
         let conversation_id = AIConversationId::new();
         let task_id = "550e8400-e29b-41d4-a716-000000004000";
@@ -295,7 +297,7 @@ fn test_from_conversation_metadata_passes_harness_through() {
 fn test_from_task_resolves_harness() {
     App::test((), |mut app| async move {
         let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-        app.add_singleton_model(|_| AgentConversationsModel::new_for_test());
+        app.add_singleton_model(AgentConversationsModel::new);
 
         // Base task has `agent_config_snapshot: None`; cloning lets us mutate per case.
         let base_task = create_test_task("550e8400-e29b-41d4-a716-000000004020");
@@ -334,8 +336,7 @@ fn test_from_task_resolves_harness() {
 fn test_from_task_aggregates_child_run_artifacts() {
     App::test((), |mut app| async move {
         let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-        let conversations_model =
-            app.add_singleton_model(|_| AgentConversationsModel::new_for_test());
+        let conversations_model = app.add_singleton_model(AgentConversationsModel::new);
 
         let pr_artifact = |url: &str| Artifact::PullRequest {
             url: url.to_string(),
@@ -369,7 +370,7 @@ fn test_from_task_aggregates_child_run_artifacts() {
 fn test_from_task_populates_executor() {
     App::test((), |mut app| async move {
         let _history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-        app.add_singleton_model(|_| AgentConversationsModel::new_for_test());
+        app.add_singleton_model(AgentConversationsModel::new);
         let mut task = create_test_task("550e8400-e29b-41d4-a716-000000004030");
         task.executor = Some(TaskPrincipalInfo {
             creator_type: "service_account".to_string(),
@@ -396,7 +397,7 @@ fn test_from_conversation_populates_local_conversation_fields() {
     // renders for local Warp Agent runs (APP-3595).
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-        app.add_singleton_model(|_| AgentConversationsModel::new_for_test());
+        app.add_singleton_model(AgentConversationsModel::new);
 
         let conversation_id = AIConversationId::new();
         let directory = "/tmp/local-conversation-directory";
@@ -466,7 +467,7 @@ fn test_from_conversation_populates_local_conversation_fields() {
 fn test_from_task_includes_linked_directory_when_server_token_matches() {
     App::test((), |mut app| async move {
         let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
-        app.add_singleton_model(|_| AgentConversationsModel::new_for_test());
+        app.add_singleton_model(AgentConversationsModel::new);
 
         let conversation_id = AIConversationId::new();
         let server_token = "server-token-123";

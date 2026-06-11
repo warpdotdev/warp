@@ -188,7 +188,7 @@ impl Workspace {
                 let conversations_model_handle = AgentConversationsModel::handle(ctx);
                 let task = conversations_model_handle.update(ctx, |conversations_model, ctx| {
                     let task = conversations_model.get_or_async_fetch_task_data(&task_id, ctx);
-                    // Backfill missing child runs so the panel can aggregate their
+                    // Fetch missing child runs so the panel can aggregate their
                     // artifacts; at most one request per parent run per session.
                     conversations_model.ensure_child_tasks_loaded(&task_id, ctx);
                     task

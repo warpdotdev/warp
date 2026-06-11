@@ -964,7 +964,7 @@ impl TerminalView {
                 crate::ai::agent_conversations_model::AgentConversationsModel::handle(ctx);
             let task = conversations_handle.update(ctx, |model, ctx| {
                 let task = model.get_or_async_fetch_task_data(&task_id, ctx);
-                // Backfill missing child runs so the panel can aggregate their
+                // Fetch missing child runs so the panel can aggregate their
                 // artifacts; at most one request per parent run per session.
                 model.ensure_child_tasks_loaded(&task_id, ctx);
                 task
@@ -997,7 +997,7 @@ impl TerminalView {
             return;
         };
 
-        // Backfill missing child runs (e.g. remote children of a local
+        // Fetch missing child runs (e.g. remote children of a local
         // orchestrator) so the panel can aggregate their artifacts; at most
         // one request per parent run per session.
         crate::ai::agent_conversations_model::AgentConversationsModel::handle(ctx).update(

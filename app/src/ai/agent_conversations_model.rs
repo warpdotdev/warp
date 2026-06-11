@@ -563,11 +563,12 @@ pub struct AgentConversationsModel {
     /// Earliest RTC timestamp received while no list surface was open.
     /// On next `register_view_open`, triggers a single `fetch_tasks_updated_after`.
     dirty_since: Option<DateTime<Utc>>,
-    /// Parent run IDs for which a child-run backfill has already been attempted
-    /// this session. Ensures `ensure_child_tasks_loaded` issues at most one
+    /// Parent run IDs whose child runs we have already requested from the
+    /// server this session. Like `task_fetch_state`, this exists purely to
+    /// dedupe requests: `ensure_child_tasks_loaded` issues at most one
     /// `ancestor_run_id` list request per parent, even across repeated panel
-    /// refreshes or after a failed attempt.
-    child_backfill_attempted: HashSet<AmbientAgentTaskId>,
+    /// refreshes or after a failed request.
+    requested_child_runs_for: HashSet<AmbientAgentTaskId>,
 }
 
 pub enum AgentConversationsModelEvent {
@@ -616,7 +617,7 @@ impl AgentConversationsModel {
                 task_fetch_state: HashMap::new(),
                 rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
                 dirty_since: None,
-                child_backfill_attempted: HashSet::new(),
+                requested_child_runs_for: HashSet::new(),
             };
         }
 
@@ -656,7 +657,7 @@ impl AgentConversationsModel {
             task_fetch_state: HashMap::new(),
             rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
             dirty_since: None,
-            child_backfill_attempted: HashSet::new(),
+            requested_child_runs_for: HashSet::new(),
         };
 
         // Only sync local conversations if we're not in CLI mode. Server-side data
@@ -668,24 +669,6 @@ impl AgentConversationsModel {
             model.has_finished_initial_load = true;
         }
         model
-    }
-
-    /// Empty model with no subscriptions or polling, for unit tests that only
-    /// need the singleton registered (e.g. details-panel data construction).
-    #[cfg(test)]
-    pub(crate) fn new_for_test() -> Self {
-        Self {
-            tasks: HashMap::new(),
-            conversations: HashMap::new(),
-            in_flight_poll_abort_handle: None,
-            next_poll_abort_handle: None,
-            active_data_consumers_per_window: HashMap::new(),
-            has_finished_initial_load: true,
-            task_fetch_state: HashMap::new(),
-            rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
-            dirty_since: None,
-            child_backfill_attempted: HashSet::new(),
-        }
     }
 
     pub fn is_loading(&self) -> bool {
@@ -1738,13 +1721,14 @@ impl AgentConversationsModel {
         )
     }
 
-    /// Backfills missing child runs of `parent_task_id` into the model with a
-    /// single `ancestor_run_id` list request, then emits a task update event.
+    /// Fetches child runs of `parent_task_id` that aren't loaded yet into the
+    /// model with a single `ancestor_run_id` list request, then emits a task
+    /// update event.
     ///
     /// Runs at most once per parent run per session: when every child is
     /// already loaded this short-circuits before consulting the guard, and
-    /// otherwise `child_backfill_attempted` ensures repeated panel refreshes
-    /// (or a failed attempt) never issue another request.
+    /// otherwise `requested_child_runs_for` ensures repeated panel refreshes
+    /// (or a failed request) never issue another one.
     pub fn ensure_child_tasks_loaded(
         &mut self,
         parent_task_id: &AmbientAgentTaskId,
@@ -1761,12 +1745,12 @@ impl AgentConversationsModel {
         if !has_missing_child {
             return;
         }
-        self.spawn_child_backfill_once(*parent_task_id, ctx);
+        self.fetch_child_runs_once(*parent_task_id, ctx);
     }
 
     /// Conversation-rooted variant of [`Self::ensure_child_tasks_loaded`] for
     /// local orchestrators: when any descendant conversation's backing run is
-    /// missing from the task map, backfills the orchestrator run's descendants
+    /// missing from the task map, fetches the orchestrator run's descendants
     /// with a single `ancestor_run_id` request (once per parent run per
     /// session). Used by panels rooted at a conversation, where the parent
     /// run record itself may not be loaded.
@@ -1796,17 +1780,17 @@ impl AgentConversationsModel {
         if !has_missing_child {
             return;
         }
-        self.spawn_child_backfill_once(parent_task_id, ctx);
+        self.fetch_child_runs_once(parent_task_id, ctx);
     }
 
-    /// Issues the one-per-parent-run `ancestor_run_id` backfill request,
-    /// guarded by `child_backfill_attempted`. Failures are not retried.
-    fn spawn_child_backfill_once(
+    /// Issues the one-per-parent-run `ancestor_run_id` list request, deduped
+    /// via `requested_child_runs_for`. Failures are not retried.
+    fn fetch_child_runs_once(
         &mut self,
         parent_task_id: AmbientAgentTaskId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !self.child_backfill_attempted.insert(parent_task_id) {
+        if !self.requested_child_runs_for.insert(parent_task_id) {
             return;
         }
 
@@ -1827,7 +1811,7 @@ impl AgentConversationsModel {
             move |model, result, ctx| match result {
                 Ok(tasks) => model.update_model_with_new_tasks(tasks, ctx),
                 Err(e) => {
-                    log::warn!("Failed to backfill child runs for {parent_task_id}: {e:#}");
+                    log::warn!("Failed to fetch child runs for {parent_task_id}: {e:#}");
                 }
             },
         );

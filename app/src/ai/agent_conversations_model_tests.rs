@@ -580,7 +580,7 @@ fn create_test_model() -> AgentConversationsModel {
         task_fetch_state: Default::default(),
         rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
         dirty_since: None,
-        child_backfill_attempted: Default::default(),
+        requested_child_runs_for: Default::default(),
     }
 }
 
