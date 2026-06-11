@@ -127,6 +127,12 @@ impl GrokTokens {
             None => false,
         }
     }
+
+    /// Returns `true` when the token is known to be past its hard expiry.
+    /// Tokens with an unknown expiry never report as expired.
+    pub fn is_expired(&self) -> bool {
+        self.needs_refresh(Duration::ZERO)
+    }
 }
 
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].

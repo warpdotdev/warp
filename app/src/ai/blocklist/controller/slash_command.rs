@@ -5,7 +5,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::{
     add_pending_file_attachments, input_context_for_request, parse_context_attachments,
-    BlocklistAIController, BlocklistAIControllerEvent, RequestInput,
+    BlocklistAIController, RequestInput,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
@@ -179,7 +179,6 @@ impl SlashCommandRequest {
             controller.terminal_view_id,
             ctx,
         );
-        let model_id = request_input.model_id.clone();
 
         match controller.send_request_input(
             request_input,
@@ -191,23 +190,19 @@ impl SlashCommandRequest {
             /*default_to_follow_up_on_success*/ true,
             /*can_attempt_resume_on_error*/ true,
             is_queued_prompt,
+            // `/summarize` inputs aren't user queries, but submitting one
+            // should still clear the input buffer like a user query; the
+            // dispatch emits the user-query `SentRequest` event for it.
+            /*emit_user_query_sent_event*/
+            is_summarize,
             ctx,
         ) {
-            Ok((_, stream_id)) => {
+            Ok(_) => {
                 // Direct skills consume live pending context; queued skills consume row-owned
                 // context and must not clear a new draft's staged attachments.
                 if is_invoke_skill && !is_queued_prompt {
                     controller.context_model.update(ctx, |context_model, ctx| {
                         context_model.reset_context_to_default(ctx);
-                    });
-                }
-                // Emit SentRequest event to trigger buffer clearing
-                if is_summarize {
-                    ctx.emit(BlocklistAIControllerEvent::SentRequest {
-                        contains_user_query: true,
-                        is_queued_prompt,
-                        model_id,
-                        stream_id,
                     });
                 }
             }

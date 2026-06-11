@@ -356,8 +356,24 @@ impl PassiveSuggestionsModel {
                             ctx,
                         )
                     });
-                    if let Ok((_, stream_id)) = request {
-                        me.pending_unit_test_stream_id = Some(stream_id.clone());
+                    match request {
+                        Ok((_, Some(stream_id))) => {
+                            me.pending_unit_test_stream_id = Some(stream_id);
+                        }
+                        Ok((conversation_id, None)) => {
+                            // Dispatch was deferred behind a Grok token
+                            // refresh. Passive suggestions are best-effort,
+                            // so abandon the deferred send instead of
+                            // tracking it.
+                            me.ai_controller.update(ctx, |controller, ctx| {
+                                controller.cancel_conversation_progress(
+                                    conversation_id,
+                                    CancellationReason::ManuallyCancelled,
+                                    ctx,
+                                );
+                            });
+                        }
+                        Err(_) => {}
                     }
                 },
             ));
@@ -497,7 +513,7 @@ impl PassiveSuggestionsModel {
                 });
 
                 match result {
-                    Ok((conversation_id, stream_id)) => {
+                    Ok((conversation_id, Some(stream_id))) => {
                         me.pending_code_diff_stream_id = Some(stream_id.clone());
                         let code_exchange_id = BlocklistAIHistoryModel::as_ref(ctx)
                             .conversation(&conversation_id)
@@ -509,6 +525,21 @@ impl PassiveSuggestionsModel {
                             block_id: block_id.clone(),
                         });
                         me.start_code_diff_timeout(stream_id, ctx);
+                    }
+                    Ok((conversation_id, None)) => {
+                        // Dispatch was deferred behind a Grok token refresh.
+                        // Passive code diffs are time-sensitive, so abandon
+                        // the deferred send and fall back like a failed one.
+                        me.ai_controller.update(ctx, |controller, ctx| {
+                            controller.cancel_conversation_progress(
+                                conversation_id,
+                                CancellationReason::ManuallyCancelled,
+                                ctx,
+                            );
+                        });
+                        ctx.emit(PassiveSuggestionsEvent::PassiveCodeDiffFailed {
+                            reason: PromptSuggestionFallbackReason::FailedToSendAIRequest,
+                        });
                     }
                     Err(_) => {
                         ctx.emit(PassiveSuggestionsEvent::PassiveCodeDiffFailed {

@@ -354,6 +354,13 @@ pub struct BlocklistAIController {
             Option<PassiveSuggestionTrigger>,
         )>,
     >,
+
+    /// Conversations whose next request dispatch is deferred behind a
+    /// blocking Grok OAuth token refresh. Presence makes the conversation
+    /// count as having an active request (so concurrent sends are rejected
+    /// like any in-flight request); removal by
+    /// [`Self::cancel_conversation_progress`] abandons the deferred dispatch.
+    conversations_awaiting_grok_refresh: HashSet<AIConversationId>,
 }
 
 enum InputQueryType {
@@ -417,6 +424,26 @@ impl InputQuery {
             InputQueryType::AIInputType { ai_input } => ai_input.user_query().unwrap_or_default(),
         }
     }
+}
+
+/// A validated, ready-to-dispatch agent request: the output of
+/// [`BlocklistAIController::send_request_input`]'s synchronous validation
+/// phase, bundled so the dispatch tail
+/// ([`BlocklistAIController::dispatch_request_input`]) can run either inline
+/// or deferred behind a blocking Grok OAuth token refresh.
+struct PreparedRequestDispatch {
+    request_input: RequestInput,
+    conversation_data: api::ConversationData,
+    query_metadata: Option<RequestMetadata>,
+    default_to_follow_up_on_success: bool,
+    can_attempt_resume_on_error: bool,
+    is_queued_prompt: bool,
+    /// When set, dispatch emits an additional `SentRequest` event marked
+    /// `contains_user_query: true` (e.g. `/summarize`, whose inputs aren't
+    /// user queries but should still clear the input buffer).
+    emit_user_query_sent_event: bool,
+    parent_agent_id: Option<String>,
+    agent_name: Option<String>,
 }
 
 impl BlocklistAIController {
@@ -494,10 +521,7 @@ impl BlocklistAIController {
                 // subscription callback was queued in response to auto-cancelling pending actions
                 // in the process of constructing a request. In such cases, we don't want to update
                 // conversation status to Cancelled/Success.
-                if !me
-                    .in_flight_response_streams
-                    .has_active_stream_for_conversation(*conversation_id, ctx)
-                {
+                if !me.has_active_stream_for_conversation(*conversation_id, ctx) {
                     // If the completed actions do not trigger a follow-up request, update conversation
                     // status based on the outcome of the actions.
                     //
@@ -625,6 +649,7 @@ impl BlocklistAIController {
             pending_local_claude_wakes: HashMap::new(),
             pending_passive_follow_ups: HashSet::new(),
             pending_passive_suggestion_results: HashMap::new(),
+            conversations_awaiting_grok_refresh: HashSet::new(),
         }
     }
 
@@ -843,6 +868,7 @@ impl BlocklistAIController {
             /*default_to_follow_up_on_success*/ true,
             /*can_attempt_resume_on_error*/ true,
             is_queued_prompt,
+            /*emit_user_query_sent_event*/ false,
             ctx,
         );
 
@@ -1380,10 +1406,7 @@ impl BlocklistAIController {
     ) {
         self.pending_passive_follow_ups.insert(conversation_id);
 
-        if self
-            .in_flight_response_streams
-            .has_active_stream_for_conversation(conversation_id, ctx)
-        {
+        if self.has_active_stream_for_conversation(conversation_id, ctx) {
             return;
         }
 
@@ -1511,10 +1534,7 @@ impl BlocklistAIController {
         trigger: FollowUpTrigger,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self
-            .in_flight_response_streams
-            .has_active_stream_for_conversation(conversation_id, ctx)
-        {
+        if self.has_active_stream_for_conversation(conversation_id, ctx) {
             return;
         }
 
@@ -1604,6 +1624,7 @@ impl BlocklistAIController {
             /*default_to_follow_up_on_success*/ false,
             /*can_attempt_resume_on_error*/ true,
             /*is_queued_prompt*/ false,
+            /*emit_user_query_sent_event*/ false,
             ctx,
         );
 
@@ -1624,9 +1645,7 @@ impl BlocklistAIController {
         let owns = BlocklistAIHistoryModel::as_ref(ctx)
             .all_live_conversations_for_terminal_view(self.terminal_view_id)
             .any(|conversation| conversation.id() == conversation_id);
-        let has_active_stream = self
-            .in_flight_response_streams
-            .has_active_stream_for_conversation(conversation_id, ctx);
+        let has_active_stream = self.has_active_stream_for_conversation(conversation_id, ctx);
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
@@ -1875,6 +1894,7 @@ impl BlocklistAIController {
                 /*default_to_follow_up_on_success*/ true,
                 /*can_attempt_resume_on_error*/ true,
                 /*is_queued_prompt*/ false,
+                /*emit_user_query_sent_event*/ false,
                 ctx,
             )
             .is_err()
@@ -1997,6 +2017,7 @@ impl BlocklistAIController {
             /*default_to_follow_up_on_success*/ true,
             can_attempt_resume_on_error,
             /*is_queued_prompt*/ false,
+            /*emit_user_query_sent_event*/ false,
             ctx,
         );
     }
@@ -2007,7 +2028,7 @@ impl BlocklistAIController {
         block_id: &BlockId,
         file_contexts: Vec<FileContext>,
         ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
+    ) -> anyhow::Result<(AIConversationId, Option<ResponseStreamId>)> {
         let mut input_context = file_contexts
             .into_iter()
             .map(AIAgentContext::File)
@@ -2045,6 +2066,7 @@ impl BlocklistAIController {
             /*default_to_follow_up_on_success=*/ false,
             /*can_attempt_resume_on_error*/ true,
             /*is_queued_prompt*/ false,
+            /*emit_user_query_sent_event*/ false,
             ctx,
         )
     }
@@ -2174,7 +2196,7 @@ impl BlocklistAIController {
         block_output: String,
         trigger: PassiveSuggestionTrigger,
         ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
+    ) -> anyhow::Result<(AIConversationId, Option<ResponseStreamId>)> {
         let attachments = vec![AIAgentAttachment::PlainText(block_output.to_string())];
         let trigger_type = (&trigger).into();
         let inputs = vec![AIAgentInput::TriggerPassiveSuggestion {
@@ -2211,6 +2233,7 @@ impl BlocklistAIController {
             /*default_to_follow_up_on_success*/ false,
             /*can_attempt_resume_on_error*/ true,
             /*is_queued_prompt*/ false,
+            /*emit_user_query_sent_event*/ false,
             ctx,
         )
     }
@@ -2268,12 +2291,16 @@ impl BlocklistAIController {
     /// existing in-flight request. Emits an event containing a receiver for the AI's output.
     /// If conversation_id is Some, we follow up in that conversation.
     /// If it's None or we can't find a conversation with that ID, we start a new one.
-    /// Returns the conversation ID of affected conversation and response stream ID.
+    /// Returns the conversation ID of the affected conversation, and the response stream ID
+    /// when the request was dispatched inline. The stream ID is `None` when the dispatch was
+    /// deferred behind a blocking refresh of an expired Grok OAuth token; the eventual
+    /// `SentRequest` event carries the stream ID for both paths.
     ///
     ///  This function does not handle cancelling any in flight requests (and sending them back as
     /// input) for an existing conversation. Consider calling [`Self::send_custom_ai_input_query`] if
     /// you're trying to send a query with a custom [`AIAgentInput`] type where you'd like the "normal"
     /// flow that handles existing conversations properly.
+    #[allow(clippy::too_many_arguments)]
     fn send_request_input(
         &mut self,
         request_input: RequestInput,
@@ -2281,8 +2308,9 @@ impl BlocklistAIController {
         default_to_follow_up_on_success: bool,
         can_attempt_resume_on_error: bool,
         is_queued_prompt: bool,
+        emit_user_query_sent_event: bool,
         ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
+    ) -> anyhow::Result<(AIConversationId, Option<ResponseStreamId>)> {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let (
             conversation_id,
@@ -2325,12 +2353,10 @@ impl BlocklistAIController {
             handle.abort();
         }
 
-        // Make sure there's no existing response stream for the conversation. If
+        // Make sure there's no existing response stream for the conversation
+        // (including a send already deferred behind a Grok token refresh). If
         // there is, something has gone wrong.
-        if self
-            .in_flight_response_streams
-            .has_active_stream_for_conversation(conversation_id, ctx)
-        {
+        if self.has_active_stream_for_conversation(conversation_id, ctx) {
             send_telemetry_from_ctx!(
                 TelemetryEvent::AIInputNotSent {
                     entrypoint: query_metadata.map(|metadata| metadata.entrypoint),
@@ -2369,20 +2395,98 @@ impl BlocklistAIController {
             &conversation_data.server_conversation_token,
         );
 
-        // Safety net: if the connected Grok subscription's OAuth token is
-        // nearing or past expiry, kick off a background refresh so upcoming
-        // requests can authenticate even when the proactive refresh loop
-        // isn't running. This request still carries the currently stored
-        // token; the server is the authority on its validity.
+        let dispatch = PreparedRequestDispatch {
+            request_input,
+            conversation_data,
+            query_metadata,
+            default_to_follow_up_on_success,
+            can_attempt_resume_on_error,
+            is_queued_prompt,
+            emit_user_query_sent_event,
+            parent_agent_id,
+            agent_name,
+        };
+
+        // The connected Grok subscription's OAuth token is BYO auth that
+        // `RequestParams::new` reads from `ApiKeyManager` when the dispatch
+        // builds the request. Keep it usable:
+        // - nearing expiry: refresh in the background (safety net for the
+        //   proactive refresh loop) without delaying this request;
+        // - already expired: block this request on a single refresh attempt
+        //   by deferring its dispatch until the attempt resolves, so the
+        //   request carries whichever token is then stored — refreshed on
+        //   success, stale on failure/timeout (the server is the authority
+        //   on token validity).
         #[cfg(not(target_family = "wasm"))]
         {
             use ::ai::api_keys::ApiKeyManager;
 
             let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
-            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            let pending_refresh = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                 manager.refresh_grok_tokens_if_needed(byo_allowed, ctx);
+                // When BYO auth is disabled the token is never sent, so a
+                // request must not wait on a refresh.
+                byo_allowed
+                    .then(|| manager.refresh_expired_grok_tokens_before_send(ctx))
+                    .flatten()
             });
+            if let Some(refresh_done) = pending_refresh {
+                let conversation_id = dispatch.conversation_data.id;
+                self.conversations_awaiting_grok_refresh
+                    .insert(conversation_id);
+                ctx.spawn(
+                    // Resolves on success, failure, or timeout; an `Err`
+                    // means the manager dropped the sender, which still
+                    // means the attempt is over.
+                    async move {
+                        let _ = refresh_done.await;
+                    },
+                    move |me, _, ctx| {
+                        // The pending mark doubles as the cancellation
+                        // signal: `cancel_conversation_progress` removes it
+                        // to abandon a deferred dispatch.
+                        if !me
+                            .conversations_awaiting_grok_refresh
+                            .remove(&conversation_id)
+                        {
+                            log::info!(
+                                "Dropping deferred agent request for {conversation_id:?}: cancelled while awaiting the Grok token refresh"
+                            );
+                            return;
+                        }
+                        me.dispatch_request_input(dispatch, ctx);
+                    },
+                );
+                return Ok((conversation_id, None));
+            }
         }
+
+        let (conversation_id, response_stream_id) = self.dispatch_request_input(dispatch, ctx);
+        Ok((conversation_id, Some(response_stream_id)))
+    }
+
+    /// Dispatches a validated agent request: builds the request params
+    /// (injecting BYO API keys — including the currently stored Grok OAuth
+    /// token — at build time), creates the response stream, and performs all
+    /// post-send bookkeeping. Runs inline from [`Self::send_request_input`],
+    /// or deferred behind a blocking Grok token refresh.
+    fn dispatch_request_input(
+        &mut self,
+        dispatch: PreparedRequestDispatch,
+        ctx: &mut ModelContext<Self>,
+    ) -> (AIConversationId, ResponseStreamId) {
+        let PreparedRequestDispatch {
+            request_input,
+            conversation_data,
+            query_metadata,
+            default_to_follow_up_on_success,
+            can_attempt_resume_on_error,
+            is_queued_prompt,
+            emit_user_query_sent_event,
+            parent_agent_id,
+            agent_name,
+        } = dispatch;
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
 
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_view_id),
@@ -2503,6 +2607,16 @@ impl BlocklistAIController {
             model_id: request_params.model.clone(),
             stream_id: response_stream_id.clone(),
         });
+        // Some non-user-query inputs (e.g. `/summarize`) should still drive
+        // user-query side effects like clearing the input buffer.
+        if emit_user_query_sent_event && !input_contains_user_query {
+            ctx.emit(BlocklistAIControllerEvent::SentRequest {
+                contains_user_query: true,
+                is_queued_prompt,
+                model_id: request_params.model.clone(),
+                stream_id: response_stream_id.clone(),
+            });
+        }
         if !is_passive_request {
             history_model.update(ctx, |history_model, ctx| {
                 history_model.mark_active_conversation_id(
@@ -2542,7 +2656,7 @@ impl BlocklistAIController {
             });
         }
 
-        Ok((conversation_data.id, response_stream_id))
+        (conversation_data.id, response_stream_id)
     }
 
     /// Cancels a pending AI request response stream, given the exchange ID, if it exists.
@@ -2562,8 +2676,13 @@ impl BlocklistAIController {
         conversation_id: AIConversationId,
         app: &AppContext,
     ) -> bool {
-        self.in_flight_response_streams
-            .has_active_stream_for_conversation(conversation_id, app)
+        // A send deferred behind a Grok token refresh counts as active: its
+        // dispatch is already committed and will create a stream shortly.
+        self.conversations_awaiting_grok_refresh
+            .contains(&conversation_id)
+            || self
+                .in_flight_response_streams
+                .has_active_stream_for_conversation(conversation_id, app)
     }
 
     /// Cancels 'progress' for the active conversation if there is one:
@@ -2583,6 +2702,17 @@ impl BlocklistAIController {
         // Discard any queued passive suggestion results for this conversation.
         self.pending_passive_suggestion_results
             .remove(&conversation_id);
+
+        // Abandon any send deferred behind a Grok token refresh; its dispatch
+        // callback no-ops once the mark is gone.
+        if self
+            .conversations_awaiting_grok_refresh
+            .remove(&conversation_id)
+        {
+            log::info!(
+                "Cancelled an agent request awaiting a Grok token refresh for {conversation_id:?}"
+            );
+        }
 
         if !self
             .in_flight_response_streams

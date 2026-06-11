@@ -393,10 +393,43 @@ fn grok_access_token_far_future_is_some() {
 fn grok_needs_refresh_within_lead_time() {
     assert!(grok_tokens("tok", Some(30)).needs_refresh(Duration::from_secs(300)));
     assert!(!grok_tokens("tok", Some(3600)).needs_refresh(Duration::from_secs(300)));
-    // Expired tokens still need a refresh.
-    assert!(grok_tokens("tok", Some(0)).needs_refresh(Duration::from_secs(300)));
     // Unknown expiry never reports as needing refresh.
     assert!(!grok_tokens("tok", None).needs_refresh(Duration::from_secs(300)));
+}
+
+#[test]
+fn grok_is_expired_only_past_hard_expiry() {
+    assert!(grok_tokens("tok", Some(0)).is_expired());
+    assert!(!grok_tokens("tok", Some(3600)).is_expired());
+    // Unknown expiry never reports as expired.
+    assert!(!grok_tokens("tok", None).is_expired());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn claim_blocking_grok_refresh_claims_expired_token_once() {
+    let mut mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("tok", Some(0))));
+    assert_eq!(mgr.claim_blocking_grok_refresh(), Some("refresh".into()));
+    // The claim marks a refresh as in flight, so a second claim is refused.
+    assert_eq!(mgr.claim_blocking_grok_refresh(), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn claim_blocking_grok_refresh_ignores_valid_token() {
+    let mut mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("tok", Some(3600))));
+    assert_eq!(mgr.claim_blocking_grok_refresh(), None);
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn claim_blocking_grok_refresh_requires_refresh_token() {
+    let tokens = GrokTokens {
+        refresh_token: None,
+        ..grok_tokens("tok", Some(0))
+    };
+    let mut mgr = make_manager_with_grok(ApiKeys::default(), Some(tokens));
+    assert_eq!(mgr.claim_blocking_grok_refresh(), None);
 }
 
 #[test]
