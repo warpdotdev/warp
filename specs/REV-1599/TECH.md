@@ -202,22 +202,108 @@ sequenceDiagram
 
 Security invariants: the access token lives only in memory, is never persisted, never logged (logs carry the audience — a public identifier — and outcomes only); no refresh token, ADC file, or SA key exists anywhere in the flow; expired tokens are never sent.
 
+### 4. Inline credential error view
+
+When a GEAP turn fails due to credential state, the block renders an inline recovery view — `GeapCredentialsErrorView` in `app/src/ai/blocklist/inline_action/geap_credentials_error.rs` — modelled on `AwsBedrockCredentialsErrorView` but simpler (no configurable command, no auto-login checkbox).
+
+Tokens last ~1h; any user who works in a single Warp session longer than that will hit token expiry. With the inline recovery, the experience is a short automatic re-mint (~1-3s) followed by a one-click retry.
+
+**States the view handles:**
+
+- **Token expired (most common, ~hourly):** The block detects `InvalidGeminiEnterpriseCredentialsError` from the server. The view immediately calls `force_refresh_geap_credentials` in the background and shows *"Gemini Enterprise credentials expired — refreshing..."*. The view subscribes to `ApiKeyManagerEvent::KeysUpdated`; when the state transitions to `Loaded`, it shows *"✓ Credentials refreshed"* and enables a **Retry** button. Retry calls `handle_resume_conversation` on the terminal view, replaying the failed turn with the fresh token.
+- **Leg 2 / `ExchangeToken` failure (admin config):** *"Gemini Enterprise pool or provider configuration error — contact your workspace admin to verify the `gcpAudience` setting."* Retry button still present (the admin may have already pushed a fix), but copy directs admin action.
+- **Leg 3 / `ImpersonateServiceAccount` failure (admin IAM):** *"Missing IAM binding on your workspace's service account — contact your workspace admin."* Same retry pattern.
+- **Server 403 (IAM / API disabled):** *"Permission denied on your workspace's GCP project — contact your workspace admin to verify the Vertex AI API is enabled and the service account has the required role."*
+- **Leg 1 / `MintIdentityToken` failure (Warp session / network):** *"Failed to authenticate with Warp — tap Retry or restart Warp."* Force-refresh fires automatically.
+
+**Creation:** lazily created in `AIBlock` (same `Option<ViewHandle<...>>` pattern as `aws_bedrock_credentials_error_view`). `maybe_create_geap_credentials_error_view` fires when `RenderableAIError::GeapCredentialsExpiredOrInvalid` hits the block. The Retry button emits `AIBlockEvent::RetryGeapRequest { conversation_id }`, which terminal view handles by calling `handle_resume_conversation`.
+
+The view has no auto-login checkbox (the re-mint is always automatic) and no Configure button (there is nothing member-configurable in GEAP).
+
+Alternatives to this approach are
+
+- Keeping a timer from the mint of the access token, and automatically minting a new access token when the expiry approaches (regardless of a user making a request or not). This seems like a waste of resources, especially if the user is not actively using the app.
+- When the user makes a request, first check if the access token is expired (whether curr time > mint time + 1hr). If it is not expired, continue as normal. If it is expired, remint BEFORE sending the request. The user will barely notice the delay, and this prevents confusion around having to resend commands. 
+
+
 ## Enterprise setup
 
-Two one-time setup surfaces, both admin-owned — members never configure anything.
+Two one-time setup surfaces (admin-owned) and one optional member toggle.
 
 **Warp side (workspace settings).** Until the admin Models-page card ships (Follow-ups), admins set the GEAP host fields — `enabled`, `enablementSetting`, `gcpProjectId`, `gcpLocation`, `gcpAudience`, `gcpSaEmail` — directly through the `updateWorkspaceSettings` mutation. Misconfiguration degrades safely on the client: an enabled host with an empty `gcpAudience` rests at `Missing`, and a wrong pool/provider/SA value surfaces as the corresponding per-leg `Failed` state rather than affecting requests.
 
-**Customer GCP side (the trust bridge).** What the enterprise configures once in *their* project:
-1. **Workload identity pool + OIDC provider.** Issuer URL: `https://app.warp.dev` — production-issued JWTs carry that `iss` and its JWKS is published under the same origin (staging/local-dev tokens sign as `https://staging.warp.dev`, which is what the E2E pool trusts). Allowed audience: the provider's own resource name — the exact string the admin then pastes into `gcpAudience`.
-2. **Attribute mapping.** `google.subject = assertion.sub` (the stable `user:<uid>`), plus `attribute.user_email = assertion.email` for human-readable audit logs. The E2E pool mapped subject to email instead — functional, but `assertion.sub` is the recommendation since emails can change.
-3. **IAM bindings — two configurations depending on `gcpSaEmail`:**
-   - **With SA impersonation (`gcpSaEmail` set, recommended):** grant pool principals `roles/iam.workloadIdentityUser` on the SA scoped to subject/attribute selectors (not `/*`); grant the SA a least-privilege Vertex role (`roles/aiplatform.user`, or a custom role carrying `aiplatform.endpoints.predict`). SA impersonation produces the cleaner audit log (`principalEmail` = SA, `serviceAccountDelegationInfo` = pool subject).
-   - **Without SA impersonation (`gcpSaEmail` empty):** the federated identity calls Vertex directly. Grant a Vertex role to the pool principal itself (e.g. via a `principalSet://` condition on `attribute.user_email`). This requires per-user IAM bindings and is supported but less common.
-4. **APIs enabled** in the customer project: Security Token Service, IAM Service Account Credentials (SA path only), Vertex AI.
-5. **Egress.** Member machines need HTTPS egress to `sts.googleapis.com` and `iamcredentials.googleapis.com` in addition to existing Warp endpoints — relevant for enterprises with egress allowlisting or TLS-inspecting proxies.
+**Customer GCP side (the trust bridge).** What the enterprise configures once in *their* project. All steps use the `gcloud` CLI; variables are listed at the top of each block.
+
+**Step 1 — Enable required APIs.**
+
+```bash
+gcloud services enable \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com \
+  sts.googleapis.com \
+  aiplatform.googleapis.com \
+  --project="$PROJECT_ID"
+```
+
+**Step 2 — Create the workload identity pool.** The pool is the top-level trust container. A single pool per Warp workspace is sufficient.
+
+```bash
+gcloud iam workload-identity-pools create "$POOL_ID" \
+  --location="global" \
+  --project="$PROJECT_ID"
+```
+
+**Step 3 — Create the OIDC provider inside the pool.** This tells GCP to trust JWTs signed by Warp's identity service. The allowed audience is the provider's own resource name — this exact string is what the admin pastes into `gcpAudience` in the Warp workspace settings.
+
+- `--issuer-uri`: Warp's production OIDC issuer. Staging/local-dev tokens use `https://staging.warp.dev` instead (the E2E test pool is configured against staging).
+- `--attribute-mapping`: `google.subject` maps to `assertion.sub` (stable `user:<uid>`) for the IAM binding; `attribute.user_email` maps to `assertion.email` for human-readable audit logs. Do not swap subject to email — emails can change and would invalidate bindings.
+
+```bash
+gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
+  --location=global \
+  --workload-identity-pool="$POOL_ID" \
+  --issuer-uri="https://auth.warp.dev" \
+  --allowed-audiences="//iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/providers/$PROVIDER_ID" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.user_email=assertion.email" \
+  --project="$PROJECT_ID"
+```
+
+**Step 4 — Create a service account and grant permissions.** The service account is what ultimately calls Vertex AI; pool identities impersonate it.
+
+```bash
+# Create the service account.
+gcloud iam service-accounts create "$SA_NAME" --project="$PROJECT_ID"
+
+# Grant the SA permission to call Vertex AI.
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/aiplatform.user"
+
+# Allow pool identities to impersonate the SA.
+# The example below uses the pool wildcard (/*) for simplicity.
+# For tighter security, scope to specific subjects:
+#   --member="principal://iam.googleapis.com/.../subject/user:SPECIFIC_UID"
+# or to an email attribute condition.
+gcloud iam service-accounts add-iam-policy-binding \
+  "$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/*" \
+  --project="$PROJECT_ID"
+```
+
+**After running these steps,** the admin pastes the audience string (`//iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$POOL_ID/providers/$PROVIDER_ID`) into `gcpAudience`, and `$SA_NAME@$PROJECT_ID.iam.gserviceaccount.com` into `gcpSaEmail` in the Warp workspace settings.
+
+**Egress note.** Member machines need HTTPS egress to `sts.googleapis.com` and `iamcredentials.googleapis.com` in addition to existing Warp endpoints — relevant for enterprises with allowlisting or TLS-inspecting proxies.
 
 Config-change propagation: the admin's own client re-mints on save; members pick up changed federation config via the existing workspace poll (~10 minutes) or on restart, at which point the mint binding (data model #2) forces the re-mint.
+
+**Member toggle in Settings.** Under `RESPECT_USER_SETTING`, members must be able to opt in. This requires a visible toggle in Settings — without it the default-`false` `AISettings` field is inaccessible and `RESPECT_USER_SETTING` is functionally "GEAP disabled for everyone" in MVP.
+
+Scope: add a `GeapCredentialsToggleRow` under **Settings > Warp Agent** (below the existing Bedrock section). The row is hidden when:
+- GEAP is not enabled in the workspace (`is_gemini_enterprise_available_from_workspace()` is false)
+- `enablementSetting` is `ENFORCE` (toggle replaced by an "Enabled by your workspace" note, via the same `is_*_toggleable` helper Bedrock uses at `user_workspaces.rs:538`)
+
+When visible, the row shows a labeled toggle bound to `AISettings::gemini_enterprise_credentials_enabled`. This is the **only** member-facing UI in MVP for GEAP — no status indicator, no expiry display, no refresh button. Those belong to the Settings status widget (Follow-ups).
 
 ## Testing and validation
 
@@ -238,13 +324,11 @@ No client `FeatureFlag`, deliberately: the rollout switch is the server-side adm
 
 ## Risks and mitigations
 
-- **Mid-session token expiry.** Tokens last ~1h and there is no proactive re-mint timer yet; after expiry the token is dropped from requests until a trigger fires. Under `ENFORCE` users see the server's reauth error; under `RESPECT_USER_SETTING` requests silently fall back to Warp-managed inference (policy-correct, but weakens the BYO guarantee). Mitigation: expired-token guard prevents bad sends today; scheduled refresh is the named follow-up.
+- **Mid-session token expiry.** Tokens last ~1h and there is no proactive re-mint timer yet; after expiry the token is dropped from requests until the inline error view detects the error, auto-fires `force_refresh_geap_credentials`, and presents a one-click Retry. Under `ENFORCE` this replays the failed turn with the fresh token (~1-3s). Under `RESPECT_USER_SETTING` requests silently fall back to Direct API when no token is present (policy-correct). Mitigation: the inline error view handles the expiry recovery path; a proactive background timer is the named follow-up to eliminate the failed-turn entirely.
 - **Workspace saves and config drift.** `UpdateWorkspaceSettingsSuccess` does not distinguish GEAP fields, but the mint binding (data model #2) makes the refresh guard a no-op unless the audience/SA actually changed — unrelated admin saves cost no STS round-trip, while real federation-config changes re-mint immediately.
 - **Customer-side misconfiguration.** The trust bridge is only as tight as the customer's IAM: setup docs must recommend scoping the `workloadIdentityUser` binding to team/user attributes (not the pool `/*` wildcard), a least-privilege (ideally custom) role on the SA, and a stable `google.subject` mapping (`assertion.sub`) with `attribute.user_email` for human-readable audit logs.
 
 ## Follow-ups
 
-- Proactive re-mint before expiry (background timer), removing the mid-session expiry gap.
-- Settings > Warp Agent status/refresh widget mirroring `AwsBedrockWidget`
 - Cloud-agent (Oz runner) mint path: same exchange keyed off task identity, the GEAP analog of `AwsCredentialsRefreshStrategy::OidcManaged`.
-- Admin Models page card for the GEAP fields (warp-server repo), replacing direct `updateWorkspaceSettings` edits.
+- Admin Models page card for the GEAP fields (warp-server repo), replacing direct `updateWorkspaceSettings` edits. This is not a big lift. Just some changes to connect the admin page to the server. 
