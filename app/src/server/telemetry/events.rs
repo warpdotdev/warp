@@ -1158,7 +1158,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::OnboardingCallout => Self::OnboardingCallout,
             AgentViewEntryOrigin::ConversationListView => Self::ConversationListView,
             AgentViewEntryOrigin::Onboarding => Self::Onboarding,
-            AgentViewEntryOrigin::Keybinding => Self::Keybinding,
+            AgentViewEntryOrigin::Keybinding(_) => Self::Keybinding,
             AgentViewEntryOrigin::SlashInit => Self::SlashInit,
             AgentViewEntryOrigin::CreateEnvironment => Self::CreateEnvironment,
             AgentViewEntryOrigin::ProjectEntry => Self::ProjectEntry,

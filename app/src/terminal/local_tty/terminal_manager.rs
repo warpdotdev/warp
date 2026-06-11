@@ -610,7 +610,7 @@ impl TerminalManager {
                         }
                         send_telemetry_from_ctx!(
                             TelemetryEvent::AgentViewExited {
-                                origin: TelemetryAgentViewEntryOrigin::from(*origin),
+                                origin: TelemetryAgentViewEntryOrigin::from(origin.clone()),
                                 was_empty: *final_exchange_count == 0,
                             },
                             ctx

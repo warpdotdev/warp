@@ -25,6 +25,7 @@ use super::{
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::codebase_index_speedbump_banner::CodebaseIndexSpeedbumpBannerAction;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::server::ids::SyncId;
@@ -407,7 +408,9 @@ pub enum TerminalAction {
     ToggleHideCliResponses,
     ExitAgentView,
     EnterCloudAgentView,
-    StartNewAgentConversation,
+    StartNewAgentConversation {
+        origin: AgentViewEntryOrigin,
+    },
     /// Toggle the cloud mode conversation details panel
     ToggleConversationDetailsPanel,
     /// Cancel the ambient agent task while it's loading
@@ -739,7 +742,9 @@ impl fmt::Debug for TerminalAction {
             ToggleHideCliResponses => write!(f, "ToggleHideCliResponses"),
             ExitAgentView => write!(f, "ExitAgentView"),
             EnterCloudAgentView => write!(f, "EnterCloudAgentView"),
-            StartNewAgentConversation => write!(f, "StartNewAgentConversation"),
+            StartNewAgentConversation { origin } => {
+                write!(f, "StartNewAgentConversation {{ origin: {origin:?} }}")
+            }
             ToggleConversationDetailsPanel => write!(f, "ToggleConversationDetailsPanel"),
             CancelAmbientAgentTask => write!(f, "CancelAmbientAgentTask"),
             OpenInlineHistoryMenu => write!(f, "OpenInlineHistoryMenu"),

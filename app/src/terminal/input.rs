@@ -1150,7 +1150,9 @@ pub enum InputAction {
     /// Toggles the inline conversation menu for selecting AI conversations.
     ToggleConversationsMenu,
 
-    StartNewAgentConversation,
+    StartNewAgentConversation {
+        origin: AgentViewEntryOrigin,
+    },
 
     /// This is for toggling whether autodetection is enabled/disabled at the app-level,
     /// not for whether its enabled/disabled for the current input
@@ -1982,7 +1984,11 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             START_NEW_CONVERSATION_KEYBINDING_NAME,
             "New agent conversation",
-            InputAction::StartNewAgentConversation,
+            InputAction::StartNewAgentConversation {
+                origin: AgentViewEntryOrigin::Input {
+                    was_prompt_autodetected: false,
+                },
+            },
         )
         .with_enabled(|| !FeatureFlag::AgentView.is_enabled())
         .with_group(bindings::BindingGroup::WarpAi.as_str())
@@ -15627,7 +15633,7 @@ impl TypedActionView for Input {
                 };
                 self.select_slash_command(command, SlashCommandTrigger::keybinding(), ctx);
             }
-            InputAction::StartNewAgentConversation => {
+            InputAction::StartNewAgentConversation { origin } => {
                 // Block starting a new conversation if the agent is in control of a long-running command
                 if !self
                     .ai_context_model
@@ -15648,27 +15654,28 @@ impl TypedActionView for Input {
                 }
 
                 if FeatureFlag::AgentView.is_enabled() {
-                    if let Err(e) = self.agent_view_controller.update(ctx, |controller, ctx| {
-                        controller.try_enter_agent_view(
-                            None,
-                            AgentViewEntryOrigin::Input {
-                                was_prompt_autodetected: false,
-                            },
-                            ctx,
-                        )
-                    }) {
-                        log::warn!("Failed to start new agent conversation from zero-state: {e:?}");
+                    if let AgentViewEntryOrigin::Keybinding(keystroke) = origin {
+                        let should_start_new_conversation =
+                            self.agent_view_controller.update(ctx, |controller, ctx| {
+                                controller.should_start_new_conversation_for_keystroke(
+                                    keystroke.clone(),
+                                    ctx,
+                                )
+                            });
+                        if !should_start_new_conversation {
+                            return;
+                        }
                     }
+                    ctx.emit(Event::EnterAgentView {
+                        initial_prompt: None,
+                        conversation_id: None,
+                        origin: origin.clone(),
+                    });
                 } else if self.should_show_universal_developer_input(ctx) {
                     // Clear follow-up state (start a fresh conversation)
                     self.ai_context_model.update(ctx, |ai_context_model, ctx| {
-                        ai_context_model.set_pending_query_state_for_new_conversation(
-                            // This is a placeholder origin, this codepath is dead when AgentView is enabled.
-                            AgentViewEntryOrigin::Input {
-                                was_prompt_autodetected: false,
-                            },
-                            ctx,
-                        );
+                        ai_context_model
+                            .set_pending_query_state_for_new_conversation(origin.clone(), ctx);
                     });
                     self.enter_ai_mode(
                         Some(InputTypeAutoDetectionSource::StartNewConversation),
