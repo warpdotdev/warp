@@ -12166,6 +12166,17 @@ impl Workspace {
                 return;
             };
 
+            if next_entry.is_near_duplicate_of(&current) {
+                nav_handle.update(ctx, |stack, _| {
+                    if go_back {
+                        stack.discard_back();
+                    } else {
+                        stack.discard_forward();
+                    }
+                });
+                continue;
+            }
+
             if self.navigation_entry_can_restore(&next_entry, ctx) {
                 let entry = nav_handle.update(ctx, |stack, _| {
                     if go_back {

@@ -5,10 +5,11 @@ use warpui::{navigation, AppContext, EntityId, WindowId};
 use crate::pane_group::PaneId;
 use crate::terminal::block_list_viewport::ScrollPosition;
 
-/// Terminal scroll anchors within this many lines of the previous entry are
-/// treated as near-duplicates and not recorded, so a trivial or net-zero
-/// scroll twitch does not create an imperceptible Back destination.
-const NEAR_DUPLICATE_TERMINAL_SCROLL_THRESHOLD_LINES: f32 = 10.0;
+/// Terminal scroll anchors within this many lines of each other are treated
+/// as near-duplicates: they are not recorded on top of one another, and
+/// Back/Forward skips destinations this close to the user's live position so
+/// navigation never moves the viewport by an imperceptible amount.
+const NEAR_DUPLICATE_TERMINAL_SCROLL_THRESHOLD_LINES: f32 = 8.0;
 
 #[derive(Debug, Clone)]
 pub enum ScrollSnapshot {
@@ -76,19 +77,29 @@ pub struct NavigationEntry {
     pub scroll_snapshot: Option<ScrollSnapshot>,
 }
 
+impl NavigationEntry {
+    /// Whether this entry targets the same place as `other` with an
+    /// imperceptibly close (or identical) scroll position. Used to dedupe
+    /// consecutive pushes and to skip Back/Forward destinations that would
+    /// not visibly move the user from their live position.
+    pub fn is_near_duplicate_of(&self, other: &Self) -> bool {
+        if self.window_id != other.window_id
+            || self.tab_index != other.tab_index
+            || self.pane_id != other.pane_id
+        {
+            return false;
+        }
+        match (&self.scroll_snapshot, &other.scroll_snapshot) {
+            (None, None) => true,
+            (Some(_), None) | (None, Some(_)) => false,
+            (Some(a), Some(b)) => a.is_near_duplicate(b),
+        }
+    }
+}
+
 impl navigation::NavigationEntry for NavigationEntry {
     fn should_push(&self, existing: &Self) -> bool {
-        if self.window_id != existing.window_id
-            || self.tab_index != existing.tab_index
-            || self.pane_id != existing.pane_id
-        {
-            return true;
-        }
-        match (&self.scroll_snapshot, &existing.scroll_snapshot) {
-            (None, None) => false,
-            (Some(_), None) | (None, Some(_)) => true,
-            (Some(a), Some(b)) => !a.is_near_duplicate(b),
-        }
+        !self.is_near_duplicate_of(existing)
     }
 }
 
