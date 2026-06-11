@@ -2976,7 +2976,11 @@ impl AgentDriver {
                                 _ => None,
                             })
                             .unwrap_or_else(|| {
-                                RenderableAIError::transient_network_error(false, false)
+                                RenderableAIError::transient_network_error(
+                                    false,
+                                    false,
+                                    "no structured error on the last exchange",
+                                )
                             });
                         run_exit.end_run_after(
                             AUTO_RESUME_TIMEOUT,

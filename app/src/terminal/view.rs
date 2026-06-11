@@ -7551,6 +7551,14 @@ impl TerminalView {
                         title: title.clone(),
                         description: error_message.clone(),
                     }),
+                    FinishedAIAgentOutput::Error {
+                        error: error @ RenderableAIError::TransientNetworkError { .. },
+                        ..
+                    } => Some(AIBlockNotificationSummary {
+                        success: false,
+                        title: title.clone(),
+                        description: error.to_string(),
+                    }),
                     _ => Some(AIBlockNotificationSummary {
                         success: false,
                         title,

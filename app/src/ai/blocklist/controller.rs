@@ -2790,6 +2790,11 @@ impl BlocklistAIController {
                             will_attempt_resume,
                             waiting_for_network,
                             ..
+                        }
+                        | RenderableAIError::TransientNetworkError {
+                            will_attempt_resume,
+                            waiting_for_network,
+                            ..
                         } = &mut renderable_error
                         {
                             // Rendering-only hints; state machine consumers key off the
@@ -2921,7 +2926,11 @@ impl BlocklistAIController {
 
                     history_model.update(ctx, |history_model, ctx| {
                         history_model.mark_response_stream_completed_with_error(
-                            RenderableAIError::transient_network_error(false, false),
+                            RenderableAIError::transient_network_error(
+                                false,
+                                false,
+                                "stream completed with an unfinished exchange and no error event",
+                            ),
                             /*recovery_pending*/ false,
                             &stream_id,
                             conversation_id,

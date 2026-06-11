@@ -3931,7 +3931,7 @@ fn statuses_after_stream_error(
 #[test]
 fn recovery_pending_error_sets_transient_error_status() {
     let (status, derived) = statuses_after_stream_error(
-        RenderableAIError::transient_network_error(true, false),
+        RenderableAIError::transient_network_error(true, false, "connection reset"),
         /*recovery_pending*/ true,
     );
 
@@ -3948,7 +3948,7 @@ fn recovery_pending_error_sets_transient_error_status() {
 #[test]
 fn structured_exchange_error_is_preserved_in_output_status() {
     let (status, derived) = statuses_after_stream_error(
-        RenderableAIError::transient_network_error(true, false),
+        RenderableAIError::transient_network_error(true, false, "connection reset"),
         /*recovery_pending*/ false,
     );
 
@@ -3966,7 +3966,7 @@ fn structured_exchange_error_is_preserved_in_output_status() {
 #[test]
 fn non_resumable_stream_error_stays_terminal_in_output_status() {
     let (status, derived) = statuses_after_stream_error(
-        RenderableAIError::transient_network_error(false, false),
+        RenderableAIError::transient_network_error(false, false, "connection reset"),
         /*recovery_pending*/ false,
     );
 

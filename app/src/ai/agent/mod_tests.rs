@@ -88,24 +88,21 @@ fn pull_request_number_deserializer_rejects_unsupported_json_types() {
 }
 
 #[test]
-fn transient_network_error_uses_user_facing_message() {
-    let error = RenderableAIError::transient_network_error(false, false);
+fn transient_network_error_includes_user_facing_message_and_debug_details() {
+    let error = RenderableAIError::transient_network_error(false, false, "connection reset");
 
     assert_eq!(
         error.to_string(),
-        "Warp lost connection while receiving the agent response. This is usually temporary."
+        "Warp lost connection while receiving the agent response. This is usually temporary.\n\nDebug info: connection reset"
     );
     assert!(!error.will_attempt_resume());
-    assert_eq!(
-        error,
-        RenderableAIError::Other {
-            error_message:
-                "Warp lost connection while receiving the agent response. This is usually temporary."
-                    .to_string(),
-            will_attempt_resume: false,
-            waiting_for_network: false,
-        }
-    );
+}
+
+#[test]
+fn transient_network_error_reports_pending_resume() {
+    let error = RenderableAIError::transient_network_error(true, false, "connection reset");
+
+    assert!(error.will_attempt_resume());
 }
 #[test]
 fn test_convert_files() {

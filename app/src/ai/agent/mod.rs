@@ -654,6 +654,16 @@ pub enum RenderableAIError {
     AwsBedrockCredentialsExpiredOrInvalid {
         model_name: String,
     },
+    /// A transient network failure (lost connection or truncated response stream). Carries its
+    /// own complete user-facing copy; `debug_details` preserves the raw underlying error so user
+    /// reports can disambiguate the different causes behind the shared message.
+    TransientNetworkError {
+        debug_details: String,
+        will_attempt_resume: bool,
+        /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
+        /// connectivity before attempting the resume.
+        waiting_for_network: bool,
+    },
     Other {
         error_message: String,
         will_attempt_resume: bool,
@@ -666,9 +676,16 @@ pub enum RenderableAIError {
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
-    pub fn transient_network_error(will_attempt_resume: bool, waiting_for_network: bool) -> Self {
-        Self::Other {
-            error_message: Self::TRANSIENT_NETWORK_ERROR_MESSAGE.to_string(),
+    /// Creates a transient network error. `debug_details` is the raw underlying failure (e.g.
+    /// the transport error's debug representation), preserved so user reports can disambiguate
+    /// the different causes behind the shared user-facing copy.
+    pub fn transient_network_error(
+        will_attempt_resume: bool,
+        waiting_for_network: bool,
+        debug_details: impl Into<String>,
+    ) -> Self {
+        Self::TransientNetworkError {
+            debug_details: debug_details.into(),
             will_attempt_resume,
             waiting_for_network,
         }
@@ -695,6 +712,9 @@ impl RenderableAIError {
             Self::Other {
                 will_attempt_resume: true,
                 ..
+            } | Self::TransientNetworkError {
+                will_attempt_resume: true,
+                ..
             }
         )
     }
@@ -713,9 +733,11 @@ impl From<&AIApiError> for RenderableAIError {
             | AIApiError::Deserialization(DeserializationError::Transport(error))
                 if Self::is_transient_network_transport_error(error) =>
             {
-                Self::transient_network_error(false, false)
+                Self::transient_network_error(false, false, format!("{value:?}"))
             }
-            AIApiError::StreamTruncated => Self::transient_network_error(false, false),
+            AIApiError::StreamTruncated => {
+                Self::transient_network_error(false, false, format!("{value:?}"))
+            }
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
@@ -751,6 +773,13 @@ impl Display for RenderableAIError {
                 write!(
                     f,
                     "AWS Bedrock credentials expired or invalid for {model_name}"
+                )
+            }
+            Self::TransientNetworkError { debug_details, .. } => {
+                write!(
+                    f,
+                    "{}\n\nDebug info: {debug_details}",
+                    Self::TRANSIENT_NETWORK_ERROR_MESSAGE
                 )
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),

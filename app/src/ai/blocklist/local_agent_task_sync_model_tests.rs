@@ -125,6 +125,20 @@ fn other_error_is_error_with_internal() {
     );
 }
 
+#[test]
+fn transient_network_error_is_error_with_internal_and_debug_details() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::transient_network_error(
+            false,
+            false,
+            "connection reset",
+        )),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("Debug info: connection reset"),
+    );
+}
+
 // --- map_conversation_status ---
 
 /// A yielded conversation must report `IN_PROGRESS` to the task service

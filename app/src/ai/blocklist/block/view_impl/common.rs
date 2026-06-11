@@ -3066,15 +3066,23 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             waiting_for_network,
         } => {
             if *will_attempt_resume {
-                if *waiting_for_network {
-                    format!(
-                        "{error_message}\n\nWill resume conversation when network connectivity is restored..."
-                    )
-                } else {
-                    format!("{error_message}\n\nAttempting to resume conversation...")
-                }
+                with_resume_status(error_message.clone(), *waiting_for_network)
             } else {
                 format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
+            }
+        }
+        RenderableAIError::TransientNetworkError {
+            will_attempt_resume,
+            waiting_for_network,
+            ..
+        } => {
+            // Transient network errors carry their own complete user-facing copy (plus
+            // debug info), so the apology prefix adds nothing.
+            let error_message = props.error.to_string();
+            if *will_attempt_resume {
+                with_resume_status(error_message, *waiting_for_network)
+            } else {
+                error_message
             }
         }
         RenderableAIError::InvalidApiKey {
@@ -3150,6 +3158,17 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             .finish(),
         )
         .finish()
+}
+
+/// Appends the pending auto-resume status line to a failed-output error message.
+fn with_resume_status(error_message: String, waiting_for_network: bool) -> String {
+    if waiting_for_network {
+        format!(
+            "{error_message}\n\nWill resume conversation when network connectivity is restored..."
+        )
+    } else {
+        format!("{error_message}\n\nAttempting to resume conversation...")
+    }
 }
 
 fn render_invalid_api_key_error(
