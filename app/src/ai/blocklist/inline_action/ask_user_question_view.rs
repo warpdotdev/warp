@@ -85,8 +85,11 @@ fn ask_user_question_header_height(appearance: &Appearance, app: &AppContext) ->
         + (2. * INLINE_ACTION_HEADER_VERTICAL_PADDING)
 }
 
-fn ask_user_question_auto_advance_enabled(is_multiselect: bool, is_last_question: bool) -> bool {
-    is_last_question || !is_multiselect
+fn ask_user_question_auto_advance_enabled(is_multiselect: bool) -> bool {
+    // Single-select answers auto-advance (and the last one auto-submits) as soon as an option is
+    // toggled. Multi-select answers never auto-submit on toggle so the user can pick multiple
+    // options via mouse/number keys first; they explicitly submit with Enter.
+    !is_multiselect
 }
 
 pub fn init(app: &mut AppContext) {
@@ -332,8 +335,9 @@ struct AskUserQuestionSession {
 /// status, returning effects for the view to execute.
 impl AskUserQuestionSession {
     fn new(mut questions: Vec<AskUserQuestionItem>) -> Self {
-        // Put multi-select questions before single-select so the last question
-        // can auto-submit after a single option toggle.
+        // Put multi-select questions before single-select so a single-select question is last when
+        // the set is mixed. Single-select toggles auto-advance, so this lets the final answer
+        // auto-submit the questionnaire; multi-select questions only submit on an explicit Enter.
         questions.sort_by_key(|q| !q.is_multiselect());
         Self {
             state: AskUserQuestionState::Editing(AskUserQuestionEditingState::new(questions.len())),
@@ -395,15 +399,6 @@ impl AskUserQuestionSession {
         }
     }
 
-    fn is_last_question(&self) -> bool {
-        match &self.state {
-            AskUserQuestionState::Editing(editing) => {
-                editing.is_last_question(self.questions.len())
-            }
-            AskUserQuestionState::Completed { .. } => false,
-        }
-    }
-
     // Centralize all state transitions so the view layer only maps UI events to actions and then
     // applies the returned effect.
     fn apply(&mut self, action: AskUserQuestionAction) -> AskUserQuestionEffect {
@@ -436,7 +431,7 @@ impl AskUserQuestionSession {
             let is_multi_select = current.question.is_multiselect();
             (
                 is_multi_select,
-                ask_user_question_auto_advance_enabled(is_multi_select, self.is_last_question()),
+                ask_user_question_auto_advance_enabled(is_multi_select),
             )
         }) else {
             return AskUserQuestionEffect::Noop;
@@ -450,12 +445,11 @@ impl AskUserQuestionSession {
         editing.update_current_draft(|draft| {
             if is_multi_select {
                 // Multiselect behaves like a checklist: toggling one option should not affect any
-                // of the other selected options, and only the last question is allowed to auto-advance.
+                // of the other selected options, and toggling never auto-submits — the user picks
+                // options with the mouse/number keys and submits explicitly with Enter.
                 if !draft.selected_option_indices.insert(option_index) {
                     draft.selected_option_indices.remove(&option_index);
                 }
-                should_auto_advance_after_toggle =
-                    auto_advance_enabled && !draft.selected_option_indices.is_empty();
                 return;
             }
             // Single-select behaves like a radio group, except clicking the selected option again
@@ -503,12 +497,10 @@ impl AskUserQuestionSession {
     }
 
     fn save_other_text(&mut self, text: Option<String>) -> AskUserQuestionEffect {
-        let Some(auto_advance_enabled) = self.current().map(|current| {
-            ask_user_question_auto_advance_enabled(
-                current.question.is_multiselect(),
-                self.is_last_question(),
-            )
-        }) else {
+        let Some(auto_advance_enabled) = self
+            .current()
+            .map(|current| ask_user_question_auto_advance_enabled(current.question.is_multiselect()))
+        else {
             return AskUserQuestionEffect::Noop;
         };
         let Some(editing) = self.editing_state_mut() else {
@@ -563,8 +555,9 @@ impl AskUserQuestionSession {
         highlighted_index: Option<usize>,
         active_other_text: Option<String>,
     ) -> AskUserQuestionEffect {
-        let Some((supports_other, option_count)) = self.current().map(|current| {
+        let Some((is_multiselect, supports_other, option_count)) = self.current().map(|current| {
             (
+                current.question.is_multiselect(),
                 current.question.supports_other(),
                 current
                     .question
@@ -579,9 +572,14 @@ impl AskUserQuestionSession {
             return self.open_other_input();
         }
 
-        if let Some(option_index) = highlighted_index.filter(|index| *index < option_count) {
-            let _ = self.toggle_option(option_index);
-            return self.enter_submit_effect();
+        // Single-select activates the highlighted option on Enter before submitting. Multi-select
+        // options are toggled explicitly via click or number keys, so Enter only commits the
+        // current selection and never toggles the highlighted option.
+        if !is_multiselect {
+            if let Some(option_index) = highlighted_index.filter(|index| *index < option_count) {
+                let _ = self.toggle_option(option_index);
+                return self.enter_submit_effect();
+            }
         }
 
         if self

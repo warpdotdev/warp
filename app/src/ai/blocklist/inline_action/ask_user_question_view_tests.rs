@@ -162,24 +162,26 @@ fn enter_on_single_select_option_toggles_it_and_schedules_auto_advance() {
 }
 
 #[test]
-fn enter_on_non_last_multi_select_option_toggles_it_and_schedules_auto_advance() {
+fn enter_on_multi_select_does_not_toggle_highlighted_option() {
     let mut session = build_session(vec![
         build_question("q1", "First", true, true, &["Stable", "Nightly"]),
         build_question("q2", "Second", false, false, &["CLI"]),
     ]);
 
+    // For multi-select, Enter must not toggle the highlighted option. With nothing selected it
+    // commits the (empty) answer and advances to the next question.
     assert_eq!(
         session.apply(AskUserQuestionAction::PressEnter {
             highlighted_index: Some(1),
             active_other_text: None,
         }),
-        AskUserQuestionEffect::ScheduleAutoAdvance
+        AskUserQuestionEffect::ShowQuestion
     );
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&1)));
+    assert_eq!(session.current_question_index(), 1);
 }
 
 #[test]
-fn enter_on_answered_non_last_multi_select_option_keeps_existing_selection_and_advances() {
+fn enter_on_answered_multi_select_keeps_selection_without_toggling_highlighted_option() {
     let mut session = build_session(vec![
         build_question("q1", "First", true, true, &["Stable", "Nightly"]),
         build_question("q2", "Second", false, false, &["CLI"]),
@@ -189,6 +191,8 @@ fn enter_on_answered_non_last_multi_select_option_keeps_existing_selection_and_a
         session.apply(AskUserQuestionAction::ToggleOption { option_index: 0 }),
         AskUserQuestionEffect::RefreshCurrent
     );
+    // Enter keeps the existing selection (0) and schedules the advance without toggling the
+    // highlighted option (1).
     assert_eq!(
         session.apply(AskUserQuestionAction::PressEnter {
             highlighted_index: Some(1),
@@ -197,7 +201,7 @@ fn enter_on_answered_non_last_multi_select_option_keeps_existing_selection_and_a
         AskUserQuestionEffect::ScheduleAutoAdvance
     );
     assert!(current_draft(&session).is_some_and(|draft| {
-        draft.selected_option_indices.contains(&0) && draft.selected_option_indices.contains(&1)
+        draft.selected_option_indices.contains(&0) && !draft.selected_option_indices.contains(&1)
     }));
 }
 
@@ -232,7 +236,7 @@ fn multi_select_non_last_toggle_does_not_auto_advance() {
 }
 
 #[test]
-fn last_multi_select_toggle_schedules_auto_advance() {
+fn last_multi_select_toggle_does_not_auto_advance() {
     let mut session = build_session(vec![build_question(
         "q1",
         "Only",
@@ -241,11 +245,53 @@ fn last_multi_select_toggle_schedules_auto_advance() {
         &["Rust", "Go"],
     )]);
 
-    let effect = session.apply(AskUserQuestionAction::ToggleOption { option_index: 0 });
-
-    assert_eq!(effect, AskUserQuestionEffect::ScheduleAutoAdvance);
+    // Toggling options on the last multi-select question must never auto-submit; the user picks
+    // options with the mouse/number keys and submits explicitly with Enter.
+    assert_eq!(
+        session.apply(AskUserQuestionAction::ToggleOption { option_index: 0 }),
+        AskUserQuestionEffect::RefreshCurrent
+    );
+    assert_eq!(
+        session.apply(AskUserQuestionAction::ToggleOption { option_index: 1 }),
+        AskUserQuestionEffect::RefreshCurrent
+    );
     assert_eq!(session.current_question_index(), 0);
-    assert!(current_draft(&session).is_some_and(|draft| draft.selected_option_indices.contains(&0)));
+    assert!(matches!(session.phase(), AskUserQuestionPhase::Editing));
+    assert!(current_draft(&session).is_some_and(|draft| {
+        draft.selected_option_indices.contains(&0) && draft.selected_option_indices.contains(&1)
+    }));
+}
+
+#[test]
+fn last_multi_select_submits_on_enter() {
+    let mut session = build_session(vec![build_question(
+        "q1",
+        "Only",
+        true,
+        false,
+        &["Rust", "Go"],
+    )]);
+
+    session.apply(AskUserQuestionAction::ToggleOption { option_index: 0 });
+
+    // Enter on the last multi-select question schedules the auto-advance that submits it.
+    assert_eq!(
+        session.apply(AskUserQuestionAction::PressEnter {
+            highlighted_index: None,
+            active_other_text: None,
+        }),
+        AskUserQuestionEffect::ScheduleAutoAdvance
+    );
+
+    // Confirming (as the auto-advance timer does) submits the answered question.
+    assert_eq!(
+        session.apply(AskUserQuestionAction::Confirm),
+        AskUserQuestionEffect::Submit(vec![AskUserQuestionAnswerItem::Answered {
+            question_id: "q1".to_string(),
+            selected_options: vec!["Rust".to_string()],
+            other_text: String::new(),
+        }])
+    );
 }
 
 #[test]
