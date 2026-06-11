@@ -29,7 +29,8 @@ message HostScopedRequest {
   // 4 (open_buffer) and 7 (get_diff_state) moved to SessionScopedRequest:
   // they establish per-connection subscription state, so they must be
   // delivered on (and answered by) a specific connection, never failed over.
-  reserved 4, 7;
+  // 18 (git_get_pr_info) was removed in favor of GitHub-specific requests.
+  reserved 4, 7, 18;
   oneof message {
     WriteFile write_file = 1;
     DeleteFile delete_file = 2;
@@ -46,9 +47,10 @@ message HostScopedRequest {
     GitCommitChainRequest git_commit_chain = 15;
     GitPushRequest git_push = 16;
     GitCreatePrRequest git_create_pr = 17;
-    GitGetPrInfoRequest git_get_pr_info = 18;
     GitGenerateCommitMessageRequest git_generate_commit_message = 19;
     GitGetCommittedBranchFilesRequest git_get_committed_branch_files = 20;
+    GetGitHubPrInfoRequest get_github_pr_info = 21;
+    GetGitHubRepoInfoRequest get_github_repository_info = 22;
   }
 }
 
@@ -79,6 +81,7 @@ message Notification {
     BufferEdit buffer_edit = 5;
     CloseBuffer close_buffer = 6;
     UnsubscribeDiffState unsubscribe_diff_state = 7;
+    UpdateGitStatus update_git_status = 8;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -115,9 +118,13 @@ message ServerMessage {
     GitCommitChainResponse git_commit_chain_response = 27;
     GitPushResponse git_push_response = 28;
     GitCreatePrResponse git_create_pr_response = 29;
-    GitGetPrInfoResponse git_get_pr_info_response = 30;
     GitGenerateCommitMessageResponse git_generate_commit_message_response = 31;
     GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 32;
+    GitStatusPush git_status_push = 33;
+    GitHubPrInfoPush github_pr_info_push = 35;
+    GetGitHubPrInfoResponse get_github_pr_info_response = 36;
+    GetGitHubRepoInfoResponse get_github_repo_info_response = 37;
+    GitHubRepositoryInfoPush github_repository_info_push = 38;
   }
 }
 
