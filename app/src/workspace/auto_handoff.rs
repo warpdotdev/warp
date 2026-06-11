@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
@@ -32,13 +32,6 @@ pub(crate) enum AutoCloudHandoffSkipReason {
     SharedSessionViewer,
     CloudHandoffUnavailable,
     AlreadyAttempted,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AutoCloudHandoffAttemptState {
-    InFlight,
-    #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
-    Succeeded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +105,7 @@ impl AutoCloudHandoffRequest {
     }
 }
 pub(crate) struct AutoCloudHandoffController {
-    attempted_conversation_ids: HashMap<AIConversationId, AutoCloudHandoffAttemptState>,
+    attempted_conversation_ids: HashSet<AIConversationId>,
     /// Set at sleep time when an eligible in-progress local agent run would have
     /// been handed off but `auto_handoff_on_sleep_enabled` is off. Consumed on
     /// wake to surface the discoverability modal.
@@ -133,7 +126,7 @@ impl AutoCloudHandoffController {
         });
 
         Self {
-            attempted_conversation_ids: HashMap::new(),
+            attempted_conversation_ids: HashSet::new(),
             pending_sleep_prompt: false,
             is_system_sleeping: false,
             pending_success_toast_window: None,
@@ -151,8 +144,7 @@ impl AutoCloudHandoffController {
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.attempted_conversation_ids
-            .insert(conversation_id, AutoCloudHandoffAttemptState::Succeeded);
+        self.attempted_conversation_ids.insert(conversation_id);
 
         if self.is_system_sleeping {
             self.pending_success_toast_window = Some(window_id);
@@ -192,7 +184,7 @@ impl AutoCloudHandoffController {
         }
     }
 
-    pub(crate) fn show_success_toast(window_id: WindowId, ctx: &mut ModelContext<Self>) {
+    fn show_success_toast(window_id: WindowId, ctx: &mut ModelContext<Self>) {
         log::info!("auto handoff: showing success toast in window {window_id:?}");
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
             toast_stack.add_ephemeral_toast(
@@ -224,9 +216,8 @@ impl AutoCloudHandoffController {
         };
 
         // Only prompt when the setting is off and cloud handoff is otherwise
-        // available (so enabling the setting actually helps). The prompt is not
-        // permanently dismissable: it resurfaces on every sleep interruption
-        // until the user enables auto-handoff-on-sleep.
+        // available (so enabling the setting actually helps). The modal itself
+        // is shown at most once per user; OneTimeModalModel enforces that.
         if setting_on {
             log::info!(
                 "auto-handoff sleep prompt: skipping at sleep, auto-handoff-on-sleep is already enabled"
@@ -401,8 +392,7 @@ impl AutoCloudHandoffController {
             AutoCloudHandoffEligibility::from_conversation(
                 conversation,
                 can_handoff_to_cloud,
-                self.attempted_conversation_ids
-                    .contains_key(&conversation_id),
+                self.attempted_conversation_ids.contains(&conversation_id),
             )
             .skip_reason()
         };
@@ -414,8 +404,7 @@ impl AutoCloudHandoffController {
             return None;
         }
 
-        self.attempted_conversation_ids
-            .insert(conversation_id, AutoCloudHandoffAttemptState::InFlight);
+        self.attempted_conversation_ids.insert(conversation_id);
 
         log::info!(
             "Triggering auto handoff to cloud for conversation {conversation_id:?} in window {window_id:?} via {trigger:?}"

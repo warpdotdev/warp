@@ -660,9 +660,6 @@ pub enum WorkspaceAction {
     /// were about to sleep (for debugging)
     #[cfg(debug_assertions)]
     TriggerAutoHandoffToCloud,
-    /// Show the auto-handoff success toast directly (for debugging)
-    #[cfg(debug_assertions)]
-    ShowAutoHandoffSuccessToast,
     /// Install the opencode-warp plugin from GitHub into the global opencode config.
     #[cfg(debug_assertions)]
     InstallOpenCodeWarpPlugin,
@@ -1080,7 +1077,6 @@ impl WorkspaceAction {
             | OpenAutoHandoffSleepModal
             | ResetAutoHandoffSleepModalState
             | TriggerAutoHandoffToCloud
-            | ShowAutoHandoffSuccessToast
             | InstallOpenCodeWarpPlugin
             | UseLocalOpenCodeWarpPlugin => false,
             #[cfg(not(target_family = "wasm"))]

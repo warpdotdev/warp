@@ -24036,13 +24036,6 @@ impl TypedActionView for Workspace {
                 );
             }
             #[cfg(debug_assertions)]
-            ShowAutoHandoffSuccessToast => {
-                let window_id = ctx.window_id();
-                AutoCloudHandoffController::handle(ctx).update(ctx, |_, ctx| {
-                    AutoCloudHandoffController::show_success_toast(window_id, ctx);
-                });
-            }
-            #[cfg(debug_assertions)]
             ResetOrchestrationLaunchModalState => {
                 let old_value =
                     *AISettings::as_ref(ctx).did_check_to_trigger_orchestration_launch_modal;

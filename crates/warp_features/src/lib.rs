@@ -887,11 +887,10 @@ pub enum FeatureFlag {
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 
-    /// Gates the sleep-interruption discoverability notification: when the
-    /// computer sleeps and an in-progress local agent run would have been
-    /// handed off to cloud but `auto_handoff_on_sleep_enabled` is off, a
-    /// notification surfaces on wake offering to enable the setting. Requires
-    /// `HOANotifications` and cloud handoff availability to do anything.
+    /// Gates the sleep-interruption discoverability modal: when the computer
+    /// sleeps and an in-progress local agent run would have been handed off to
+    /// cloud but `auto_handoff_on_sleep_enabled` is off, a one-time modal
+    /// surfaces on wake offering to enable the setting.
     AutoHandoffSleepPrompt,
 }
 

@@ -238,12 +238,6 @@ pub fn init(app: &mut AppContext) {
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(
-                    "workspace:show_auto_handoff_success_toast",
-                    "[Debug] Show Auto-Handoff Success Toast",
-                    WorkspaceAction::ShowAutoHandoffSuccessToast,
-                )
-                .with_context_predicate(id!("Workspace")),
-                EditableBinding::new(
                     "workspace:install_opencode_warp_plugin",
                     "[Debug] Install OpenCode Warp plugin",
                     WorkspaceAction::InstallOpenCodeWarpPlugin,
