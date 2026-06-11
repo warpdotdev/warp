@@ -172,7 +172,9 @@ fn push_output(lines: &mut Vec<FormattedTextLine>, output: &Output) {
                 .as_ref()
                 .map(|tb| tb.join("\n"))
                 .unwrap_or_default();
-            push_text_output(lines, &strip_ansi(&traceback));
+            // ANSI escapes (common in colored tracebacks) are stripped centrally
+            // by `push_text_output`.
+            push_text_output(lines, &traceback);
         }
         // Unknown output types are skipped.
         _ => {}

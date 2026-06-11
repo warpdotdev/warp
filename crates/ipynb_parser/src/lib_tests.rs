@@ -336,6 +336,17 @@ fn test_missing_nbformat_is_error() {
 }
 
 #[test]
+fn test_missing_cells_is_error() {
+    // A v4 notebook that omits the required `cells` field must error rather than
+    // deserialize as an empty (blank-rendering) notebook, so the caller falls
+    // back to raw content. An explicit `"cells": []` remains a valid empty
+    // notebook (see `test_empty_notebook_is_ok`).
+    let json = r#"{"nbformat": 4}"#;
+    let result = ipynb_to_formatted_text(json, false);
+    assert!(matches!(result, Err(IpynbError::Parse(_))));
+}
+
+#[test]
 fn test_raw_cell_rendered_as_plain_block() {
     let json = r#"{
         "nbformat": 4,

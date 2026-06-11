@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
+use base64::Engine as _;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
 use reqwest::Url;
 use warpui_core::assets::asset_cache::{
@@ -12,6 +14,10 @@ use warpui_core::assets::asset_cache::{
 /// Namespace marker for URL-based async asset sources without persistence.
 pub struct UrlAssetWithoutPersistence;
 impl AsyncAssetType for UrlAssetWithoutPersistence {}
+
+/// Namespace marker for inline base64 `data:` URI async asset sources.
+pub struct DataUriAsset;
+impl AsyncAssetType for DataUriAsset {}
 
 /// Namespace marker for URL-based async asset sources with persistence.
 ///
@@ -36,6 +42,42 @@ pub fn url_source(url: impl Into<String>) -> AssetSource {
             })
         }),
     }
+}
+
+/// Creates an [`AssetSource::Async`] that decodes an inline base64 `data:` URI
+/// (e.g. `data:image/png;base64,<payload>`) into its raw bytes.
+pub fn data_uri_source(source: &str) -> Option<AssetSource> {
+    // data:[<mediatype>][;base64],<payload>
+    let (header, payload) = source.strip_prefix("data:")?.split_once(',')?;
+    if !header
+        .split(';')
+        .any(|segment| segment.eq_ignore_ascii_case("base64"))
+    {
+        return None;
+    }
+
+    // Derive a compact, stable cache key from the full URI so identical payloads
+    // dedupe and we don't retain the (potentially large) data URI as the key.
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    let id = format!("{:x}", hasher.finish());
+
+    // base64 payloads may contain embedded whitespace/newlines; strip it before
+    // decoding.
+    let payload: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+
+    Some(AssetSource::Async {
+        id: AsyncAssetId::new::<DataUriAsset>(id),
+        fetch: Arc::new(move || {
+            let payload = payload.clone();
+            Box::pin(async move {
+                BASE64_STANDARD
+                    .decode(payload.as_bytes())
+                    .map(Bytes::from)
+                    .map_err(Into::into)
+            })
+        }),
+    })
 }
 
 /// Creates an [`AssetSource::Async`] that fetches bytes from the given URL,
@@ -181,3 +223,7 @@ async fn fetch_asset_from_url(url: Url, file: Option<PathBuf>) -> Result<Bytes> 
         _ => fetch_file_and_persist_bytes(url, file).await,
     }
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;

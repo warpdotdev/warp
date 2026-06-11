@@ -1168,6 +1168,7 @@ dependencies = [
  "anyhow",
  "async-compat",
  "async-fs",
+ "base64 0.22.1",
  "bytes",
  "cfg-if",
  "futures",
