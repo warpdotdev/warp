@@ -6,7 +6,7 @@
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId};
@@ -65,9 +65,25 @@ pub fn collect_descendant_conversation_ids_in_spawn_order(
     parent_id: AIConversationId,
     descendants: &mut Vec<AIConversationId>,
 ) {
+    let mut visited = HashSet::from([parent_id]);
+    collect_descendants_guarded(history, parent_id, &mut visited, descendants);
+}
+
+/// Recursive worker for [`collect_descendant_conversation_ids_in_spawn_order`].
+/// `visited` guards against cycles and diamonds in the parent/child index so a
+/// corrupted topology can't cause infinite recursion or duplicate entries.
+fn collect_descendants_guarded(
+    history: &BlocklistAIHistoryModel,
+    parent_id: AIConversationId,
+    visited: &mut HashSet<AIConversationId>,
+    descendants: &mut Vec<AIConversationId>,
+) {
     for child_id in history.child_conversation_ids_of(&parent_id) {
+        if !visited.insert(*child_id) {
+            continue;
+        }
         descendants.push(*child_id);
-        collect_descendant_conversation_ids_in_spawn_order(history, *child_id, descendants);
+        collect_descendants_guarded(history, *child_id, visited, descendants);
     }
 }
 
@@ -266,26 +282,38 @@ pub fn aggregated_conversation_artifacts(
     tasks: &HashMap<AmbientAgentTaskId, AmbientAgentTask>,
     root_id: AIConversationId,
 ) -> Vec<Artifact> {
-    let lists = std::iter::once(root_id)
+    merge_artifacts(conversation_subtree_artifact_lists(history, tasks, root_id))
+}
+
+/// Borrowed artifact slices contributed by the conversation subtree rooted at
+/// `root_id`, in spawn order: each node's conversation artifacts (falling back
+/// to cached historical metadata when not loaded) followed by the artifacts on
+/// its backing run record in `tasks`. Callers dedupe via [`merge_artifacts`].
+pub(crate) fn conversation_subtree_artifact_lists<'a>(
+    history: &'a BlocklistAIHistoryModel,
+    tasks: &'a HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+    root_id: AIConversationId,
+) -> Vec<&'a [Artifact]> {
+    std::iter::once(root_id)
         .chain(descendant_conversation_ids_in_spawn_order(history, root_id))
         .flat_map(|id| {
             let conversation = history.conversation(&id);
             let conversation_artifacts = conversation
-                .map(|conversation| conversation.artifacts().to_vec())
+                .map(|conversation| conversation.artifacts())
                 .or_else(|| {
                     history
                         .get_conversation_metadata(&id)
-                        .map(|metadata| metadata.artifacts.clone())
+                        .map(|metadata| metadata.artifacts.as_slice())
                 })
                 .unwrap_or_default();
             let run_artifacts = conversation
                 .and_then(|conversation| conversation.task_id())
                 .and_then(|task_id| tasks.get(&task_id))
-                .map(|task| task.artifacts.clone())
+                .map(|task| task.artifacts.as_slice())
                 .unwrap_or_default();
             [conversation_artifacts, run_artifacts]
-        });
-    merge_artifacts(lists)
+        })
+        .collect()
 }
 
 /// Returns `conversation_id` followed by its orchestration ancestors

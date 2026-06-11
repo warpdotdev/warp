@@ -3660,9 +3660,12 @@ impl TerminalView {
                         .is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
                     // Non-ambient panes refresh when an artifact update lands in
                     // the active conversation's orchestration subtree, or when
-                    // task data changes while the active conversation has
-                    // children (remote children report artifacts on their run
-                    // records, which arrive via task updates).
+                    // task data changes the subtree's aggregated artifacts
+                    // (remote children report artifacts on their run records,
+                    // which arrive via task updates). Task events can only
+                    // affect the panel through artifacts, so unrelated task
+                    // updates are skipped by comparing against what the panel
+                    // already shows.
                     let is_subtree_artifact_update = match event {
                         AgentConversationsModelEvent::ConversationArtifactsUpdated {
                             conversation_id,
@@ -3685,6 +3688,12 @@ impl TerminalView {
                                 .active_conversation(me.view_id)
                                 .is_some_and(|active| {
                                     !history.child_conversation_ids_of(&active.id()).is_empty()
+                                        && AgentConversationsModel::as_ref(ctx)
+                                            .aggregated_conversation_artifacts(active.id(), ctx)
+                                            != me
+                                                .conversation_details_panel
+                                                .as_ref(ctx)
+                                                .current_artifacts()
                                 })
                         }
                         AgentConversationsModelEvent::ConversationsLoaded

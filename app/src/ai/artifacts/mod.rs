@@ -264,14 +264,15 @@ impl Artifact {
     }
 }
 
-/// Merges artifact lists into a flat, order-preserving list deduped by
-/// [`Artifact::identity`]; the first occurrence wins.
-pub fn merge_artifacts(lists: impl IntoIterator<Item = Vec<Artifact>>) -> Vec<Artifact> {
+/// Merges borrowed artifact lists into a flat, order-preserving list deduped
+/// by [`Artifact::identity`]; the first occurrence wins. Only kept artifacts
+/// are cloned.
+pub fn merge_artifacts<'a>(lists: impl IntoIterator<Item = &'a [Artifact]>) -> Vec<Artifact> {
     let mut seen = HashSet::new();
     let mut merged = Vec::new();
     for artifact in lists.into_iter().flatten() {
-        if seen.insert(artifact.identity().to_string()) {
-            merged.push(artifact);
+        if seen.insert(artifact.identity()) {
+            merged.push(artifact.clone());
         }
     }
     merged
