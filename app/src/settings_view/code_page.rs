@@ -2878,7 +2878,7 @@ impl SettingsWidget for FormatOnSaveToggleWidget {
         let code_settings = CodeSettings::as_ref(app);
 
         render_body_item::<CodeSettingsPageAction>(
-            "Format on save".into(),
+            "Format on save (requires an active language server)".into(),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
@@ -2893,7 +2893,7 @@ impl SettingsWidget for FormatOnSaveToggleWidget {
                 })
                 .finish(),
             Some(
-                "Automatically format the file with the language server on save. Other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
+                "Only applies when a language server is active for the file. Automatically formats the file with the language server on save; other LSP features (hover, go-to-definition, references, diagnostics) are unaffected."
                     .into(),
             ),
         )

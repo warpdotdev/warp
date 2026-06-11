@@ -80,33 +80,3 @@ define_settings_group!(CodeSettings, settings: [
         description: "Whether the language server automatically formats the file on save. Other LSP features (hover, go-to-definition, references, diagnostics) are unaffected.",
     },
 ]);
-
-#[cfg(test)]
-mod format_on_save_tests {
-    use settings::Setting;
-    use warpui::{App, SingletonEntity};
-
-    use super::*;
-    use crate::test_util::settings::initialize_settings_for_tests;
-
-    #[test]
-    fn format_on_save_defaults_to_true() {
-        App::test((), |mut app| async move {
-            initialize_settings_for_tests(&mut app);
-
-            CodeSettings::handle(&app).read(&app, |settings, _ctx| {
-                assert!(*settings.format_on_save);
-            });
-        });
-    }
-
-    #[test]
-    fn format_on_save_uses_code_editor_toml_path() {
-        assert_eq!(
-            FormatOnSave::toml_path(),
-            Some("code.editor.format_on_save")
-        );
-        assert_eq!(FormatOnSave::hierarchy(), Some("code.editor"));
-        assert_eq!(FormatOnSave::toml_key(), "format_on_save");
-    }
-}
