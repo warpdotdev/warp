@@ -50,6 +50,12 @@ pub(crate) fn terminal_view_agent_icon_variant(
     let task_data = ambient_task_id
         .and_then(|task_id| AgentConversationsModel::as_ref(app).get_task_data(&task_id));
 
+    // A locally-hosted orchestration child runs on this machine even though it carries a
+    // server-side task id for orchestration tracking. It must render the local agent icon
+    // (no cloud lobe), so suppress the ambient treatment that a bare task id would otherwise
+    // imply. Remote children stay ambient because `is_local_orchestration_child` is false.
+    let is_local_orchestration_child = terminal_view.is_local_orchestration_child(app);
+
     // Defer to the card helper when we have task data and no CLI session takes precedence.
     if cli_agent_session.is_none() {
         if let Some(task) = task_data.as_ref() {
@@ -60,13 +66,18 @@ pub(crate) fn terminal_view_agent_icon_variant(
                 .and_then(|config| config.harness.as_ref())
                 .map(|harness| harness.harness_type)
                 .unwrap_or(Harness::Oz);
-            return Some(agent_icon_variant_for_run(harness, status, true));
+            return Some(agent_icon_variant_for_run(
+                harness,
+                status,
+                !is_local_orchestration_child,
+            ));
         }
     }
 
     let is_ambient = terminal_view.is_ambient_agent_session(app) || ambient_task_id.is_some();
     let inputs = TerminalIconInputs {
         is_ambient,
+        is_local_orchestration_child,
         cli_session: cli_agent_session.map(|session| CLISessionInputs {
             agent: session.agent,
             has_listener: session.listener.is_some(),
@@ -102,6 +113,10 @@ pub(crate) fn agent_conversation_entry_icon_variant(
 /// [`TerminalView`] / [`AppContext`].
 struct TerminalIconInputs {
     is_ambient: bool,
+    /// Whether the terminal view is hosting a live, locally-executed orchestration child.
+    /// When true, the ambient/cloud treatment is suppressed even if `is_ambient` would
+    /// otherwise be set (local children carry a server-side task id but run locally).
+    is_local_orchestration_child: bool,
     cli_session: Option<CLISessionInputs>,
     /// Third-party CLI agent for a live ambient run before task data is available (e.g.
     /// Claude pre-dispatch). `None` otherwise; task-derived harnesses are handled upstream.
@@ -129,6 +144,11 @@ struct CLISessionInputs {
 fn agent_icon_variant_from_terminal_inputs(
     inputs: &TerminalIconInputs,
 ) -> Option<IconWithStatusVariant> {
+    // A locally-hosted orchestration child runs on this machine, so it must never render the
+    // cloud lobe even though it has a server-side task id. Collapse `is_ambient` to false in
+    // that case; every downstream arm reads this effective value.
+    let is_ambient = inputs.is_ambient && !inputs.is_local_orchestration_child;
+
     // 1. CLI session with a known (non-Unknown) agent wins. Status is only meaningful when
     //    the session is plugin-backed and the handler exposes rich status.
     if let Some(session) = inputs
@@ -141,14 +161,14 @@ fn agent_icon_variant_from_terminal_inputs(
         return Some(IconWithStatusVariant::CLIAgent {
             agent: session.agent,
             status,
-            is_ambient: inputs.is_ambient,
+            is_ambient,
         });
     }
 
     // 2. Live ambient run with a third-party harness selected, before task data is
     //    available (e.g. Claude pre-dispatch). `Unknown` is filtered so an unrecognized
     //    harness doesn't render as an unbranded gray circle.
-    if inputs.is_ambient {
+    if is_ambient {
         if let Some(agent) = inputs
             .selected_third_party_cli_agent
             .filter(|agent| !matches!(agent, CLIAgent::Unknown))
@@ -162,10 +182,10 @@ fn agent_icon_variant_from_terminal_inputs(
     }
 
     // 3. Selected conversation OR ambient (Oz) terminal: Oz agent variant.
-    if inputs.has_selected_conversation || inputs.is_ambient {
+    if inputs.has_selected_conversation || is_ambient {
         return Some(IconWithStatusVariant::OzAgent {
             status: inputs.selected_conversation_status.clone(),
-            is_ambient: inputs.is_ambient,
+            is_ambient,
         });
     }
 

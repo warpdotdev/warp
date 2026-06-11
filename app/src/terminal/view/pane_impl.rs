@@ -912,6 +912,25 @@ impl TerminalView {
                 .is_some_and(|model| model.as_ref(ctx).is_ambient_agent())
     }
 
+    /// Whether this terminal view is hosting a live, locally-executed orchestration
+    /// child conversation. Local children carry a server-side task id for orchestration
+    /// tracking but run on the local machine, so the agent chrome must render the local
+    /// agent icon rather than the cloud/ambient treatment. Remote children (which execute
+    /// on a cloud worker, `AIConversation::is_remote_child`) are intentionally excluded so
+    /// they keep the cloud icon.
+    pub(crate) fn is_local_orchestration_child(&self, ctx: &AppContext) -> bool {
+        if self.is_ambient_agent_session(ctx) {
+            return false;
+        }
+        let history = BlocklistAIHistoryModel::as_ref(ctx);
+        self.active_conversation_id(ctx)
+            .and_then(|id| history.conversation(&id))
+            .or_else(|| history.active_conversation(self.view_id))
+            .is_some_and(|conversation| {
+                conversation.is_child_agent_conversation() && !conversation.is_remote_child()
+            })
+    }
+
     fn selected_conversation_for_user_facing_chrome<'a>(
         &'a self,
         ctx: &'a AppContext,
