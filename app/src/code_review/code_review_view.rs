@@ -6314,6 +6314,7 @@ impl CodeReviewView {
                 let github_repo_model = self.github_repo_model.as_ref()?;
                 github_repo_model.as_ref(ctx).pr_info(ctx).cloned()
             } else {
+                let _ = ctx;
                 None
             }
         }

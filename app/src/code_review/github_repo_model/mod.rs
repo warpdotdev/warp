@@ -1,13 +1,20 @@
-use warpui::{AppContext, Entity, ModelContext, ModelHandle};
+use warpui::Entity;
+#[cfg(feature = "local_fs")]
+use warpui::{AppContext, ModelContext, ModelHandle};
 
+#[cfg(feature = "local_fs")]
 mod local;
+#[cfg(feature = "local_fs")]
 pub use local::LocalGitHubRepoModel;
 
+#[cfg(feature = "local_fs")]
 mod remote;
+#[cfg(feature = "local_fs")]
 pub use remote::RemoteGitHubRepoModel;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local_fs"))]
 use crate::code_review::git_repo_model::GitRepoStatusModel;
+#[cfg(feature = "local_fs")]
 use crate::util::git::{PrInfo, RepositoryInfo};
 
 #[derive(Debug)]
@@ -21,21 +28,31 @@ pub enum GitHubRepoEvent {
 
 // ── Unified GitHubRepoModel (local or remote backend) ───────────────────────
 
+#[cfg(not(feature = "local_fs"))]
+#[allow(dead_code)]
+pub struct GitHubRepoModel;
+
+#[cfg(not(feature = "local_fs"))]
+impl Entity for GitHubRepoModel {
+    type Event = ();
+}
+
 /// Unified per-repo GitHub-info model that dispatches to a local or remote
 /// backend, mirroring [`crate::code_review::git_repo_model::GitRepoStatusModel`].
 ///
 /// Consumers (prompt chips, code review, agent context) hold a
 /// `ModelHandle<GitHubRepoModel>` and subscribe to its [`GitHubRepoEvent`]s
 /// without caring whether the repository is local or on an SSH host.
+#[cfg(feature = "local_fs")]
 pub enum GitHubRepoModel {
     Local(ModelHandle<LocalGitHubRepoModel>),
     Remote(ModelHandle<RemoteGitHubRepoModel>),
 }
-
+#[cfg(feature = "local_fs")]
 impl Entity for GitHubRepoModel {
     type Event = GitHubRepoEvent;
 }
-
+#[cfg(feature = "local_fs")]
 impl GitHubRepoModel {
     /// Re-emit a sub-model event so subscribers of the unified model observe
     /// the same `GitHubRepoEvent`s regardless of backend.
@@ -89,7 +106,7 @@ impl GitHubRepoModel {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "local_fs"))]
 impl GitHubRepoModel {
     /// Wraps an inert local-backend test model in the unified enum.
     pub(crate) fn new_local_for_test(
