@@ -312,7 +312,16 @@ impl Engine {
                         }
                     } else if let Some(character) = cursor.char() {
                         let mut bytes = [0u8; 4];
-                        for byte in character.encode_utf8(&mut bytes).bytes() {
+                        let encoded = character.encode_utf8(&mut bytes).len();
+                        let utf8 = &mut bytes[..encoded];
+                        // The reverse DFA was compiled over the reversed byte stream, so a
+                        // multi-byte character's bytes must be fed to it back-to-front.
+                        // Single-byte (ASCII) characters are unaffected, which is why the bug
+                        // only surfaced for non-ASCII (e.g. CJK) queries.
+                        if matches!(direction, SearchDirection::Reverse) {
+                            utf8.reverse();
+                        }
+                        for &byte in utf8.iter() {
                             state = dfa
                                 .next_state(cache, state, byte)
                                 .context("Couldn't advance to next state")?;
