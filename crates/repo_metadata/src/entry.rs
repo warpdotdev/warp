@@ -859,6 +859,14 @@ pub(crate) fn is_tracking_state_git_file(path: &Path) -> bool {
             Some("HEAD" | "config" | "config.worktree")
         )
 }
+/// Returns true for Git exclude files that can change which untracked paths
+/// should appear in git status/diff output.
+pub(crate) fn is_git_exclude_file(path: &Path) -> bool {
+    let Some(suffix) = git_suffix_components(path) else {
+        return false;
+    };
+    suffix.len() == 2 && suffix[0].as_os_str() == "info" && suffix[1].as_os_str() == "exclude"
+}
 
 /// Returns true for `.git/config` in the shared Git directory.
 pub(crate) fn is_common_git_config(path: &Path) -> bool {
@@ -900,8 +908,9 @@ pub(crate) fn is_index_lock_file(path: &Path) -> bool {
 /// Determines if a git-related path should be ignored by the filesystem watcher.
 ///
 /// Uses an allowlist approach: only commit-related files (HEAD, refs/heads/*),
-/// loose remote-tracking refs, tracked-upstream state files, and the index lock
-/// file are allowed through. Everything else inside `.git/` is ignored.
+/// loose remote-tracking refs, tracked-upstream state files, the git exclude
+/// file, and the index lock file are allowed through. Everything else inside
+/// `.git/` is ignored.
 pub fn should_ignore_git_path(path: &Path) -> bool {
     if !is_git_internal_path(path) {
         return false; // Not a git path, don't ignore
@@ -911,6 +920,7 @@ pub fn should_ignore_git_path(path: &Path) -> bool {
         && !is_index_lock_file(path)
         && !is_remote_tracking_ref(path)
         && !is_tracking_state_git_file(path)
+        && !is_git_exclude_file(path)
 }
 
 /// Returns `true` when the directory at `path` should be registered for watching.
@@ -938,8 +948,8 @@ pub fn should_watch_directory_in_git_path(path: &Path) -> bool {
     }
 
     // Common `.git/` directory: allow descending along the path to
-    // `.git/`, `.git/refs/heads/`, `.git/refs/remotes/<remote>/`, and
-    // `.git/worktrees/<name>/`.
+    // `.git/`, `.git/refs/heads/`, `.git/refs/remotes/<remote>/`,
+    // `.git/info/exclude`, and `.git/worktrees/<name>/`.
     let Some(suffix) = git_suffix_components(path) else {
         // Path is `.git/` itself — needed so we can reach allowlisted children.
         return true;
@@ -959,13 +969,17 @@ pub fn should_watch_directory_in_git_path(path: &Path) -> bool {
 fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
     let top_level_dir = suffix.first().and_then(|c| c.as_os_str().to_str());
     let refs_subdir = suffix.get(1).and_then(|c| c.as_os_str().to_str());
+    let info_child = suffix.get(1).and_then(|c| c.as_os_str().to_str());
     match top_level_dir {
         // `.git/refs`, `.git/refs/heads[/...]`, `.git/refs/remotes[/<r>[/...]]`.
         // `.git/refs/tags/*` and other refs subtrees stay pruned.
         Some("refs") => matches!(refs_subdir, None | Some("heads") | Some("remotes")),
+        // `.git/info/exclude` is a git status ignore source, so watch `info`
+        // and emit only the `exclude` file through `should_ignore_git_path`.
+        Some("info") => matches!(info_child, None | Some("exclude")),
         // Worktree dispatcher — needed to reach `.git/worktrees/<name>/...`.
         Some("worktrees") => true,
-        // All other `.git/` subdirectories (objects, hooks, logs, info, lfs, …) are pruned.
+        // All other `.git/` subdirectories (objects, hooks, logs, lfs, …) are pruned.
         Some(_) => false,
         // `.git/` itself — descend so allowlisted children stay reachable.
         None => true,

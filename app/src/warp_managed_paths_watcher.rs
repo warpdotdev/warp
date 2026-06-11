@@ -121,6 +121,7 @@ fn filter_repository_update(
         commit_updated: update.commit_updated,
         index_lock_detected: update.index_lock_detected,
         remote_ref_updated: update.remote_ref_updated,
+        exclude_rules_updated: update.exclude_rules_updated,
         ..Default::default()
     };
 
@@ -199,6 +200,7 @@ fn filesystem_event_to_repository_update(event: &BulkFilesystemWatcherEvent) -> 
         commit_updated: false,
         index_lock_detected: false,
         remote_ref_updated: false,
+        exclude_rules_updated: false,
     }
 }
 

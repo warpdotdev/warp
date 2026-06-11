@@ -319,6 +319,10 @@ impl Repository {
                 if let Ok(config_std) = StandardizedPath::from_local_canonicalized(&config_file) {
                     paths.push(config_std);
                 }
+                let exclude_file = common_local.join("info").join("exclude");
+                if let Ok(exclude_std) = StandardizedPath::from_local_canonicalized(&exclude_file) {
+                    paths.push(exclude_std);
+                }
             }
         }
         paths
@@ -533,6 +537,7 @@ fn merge_repository_updates(acc: &mut RepositoryUpdate, incoming: &RepositoryUpd
     acc.commit_updated |= incoming.commit_updated;
     acc.index_lock_detected |= incoming.index_lock_detected;
     acc.remote_ref_updated |= incoming.remote_ref_updated;
+    acc.exclude_rules_updated |= incoming.exclude_rules_updated;
 }
 
 /// A generic debouncing layer for any RepositorySubscriber.

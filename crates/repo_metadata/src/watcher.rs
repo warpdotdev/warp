@@ -18,8 +18,8 @@ cfg_if::cfg_if! {
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
             extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
-            is_common_git_config, is_index_lock_file, is_remote_tracking_ref,
-            is_shared_git_ref, is_tracking_state_git_file,
+            is_common_git_config, is_git_exclude_file, is_index_lock_file,
+            is_remote_tracking_ref, is_shared_git_ref, is_tracking_state_git_file,
         };
         /// Duration between filesystem watch events in milliseconds
         const FILESYSTEM_WATCHER_DEBOUNCE_MILLI_SECS: u64 = 500;
@@ -152,7 +152,8 @@ impl DirectoryWatcher {
     /// 3. **Shared refs** (`.git/refs/heads/*`): all repos whose
     ///    `common_git_dir()` is a prefix of the event path (main repo +
     ///    all linked worktrees).
-    /// 4. **Common config** (`.git/config`): all repos sharing that common Git directory.
+    /// 4. **Common config/exclude** (`.git/config`, `.git/info/exclude`):
+    ///    all repos sharing that common Git directory.
     /// 5. **Repo-specific** (`.git/HEAD`, `.git/index.lock`, etc.): only the
     ///    repo whose working tree directly contains `.git` (main repo).
     #[cfg(feature = "local_fs")]
@@ -214,12 +215,17 @@ impl DirectoryWatcher {
                     }
                 }
             }
-        } else if is_common_git_config(git_path) {
+        } else if is_common_git_config(git_path) || is_git_exclude_file(git_path) {
             log::debug!(
-                "[GIT_EVENT_ROUTING] tier=common-config path={}",
+                "[GIT_EVENT_ROUTING] tier=common-git-file path={}",
                 git_path.display()
             );
-            let Some(common_git_dir) = git_path.parent() else {
+            let common_git_dir = if is_git_exclude_file(git_path) {
+                git_path.parent().and_then(Path::parent)
+            } else {
+                git_path.parent()
+            };
+            let Some(common_git_dir) = common_git_dir else {
                 return affected;
             };
             for repo_handle in self.directories.values() {
@@ -453,9 +459,10 @@ impl DirectoryWatcher {
         let is_lock = is_index_lock_file(path);
         let is_remote_ref = is_remote_tracking_ref(path);
         let is_tracking_state = is_tracking_state_git_file(path);
+        let is_git_exclude = is_git_exclude_file(path);
 
         for repo_handle in &affected {
-            if is_commit || is_lock || is_remote_ref {
+            if is_commit || is_lock || is_remote_ref || is_git_exclude {
                 let repo_update = repo_updates.entry(repo_handle.clone()).or_default();
                 if is_commit {
                     repo_update.commit_updated = true;
@@ -466,6 +473,9 @@ impl DirectoryWatcher {
                 if is_remote_ref {
                     repo_update.remote_ref_updated = true;
                 }
+                if is_git_exclude {
+                    repo_update.exclude_rules_updated = true;
+                }
             }
             if is_tracking_state {
                 repos_to_refresh_tracked_remote_ref.insert(repo_handle.clone());
@@ -474,7 +484,7 @@ impl DirectoryWatcher {
 
         if !affected.is_empty() {
             log::debug!(
-                "[GIT_EVENT_ROUTING] dispatched path={} commit_updated={is_commit} remote_ref_updated={is_remote_ref} index_lock={is_lock} tracking_state={is_tracking_state} to {} repo(s)",
+                "[GIT_EVENT_ROUTING] dispatched path={} commit_updated={is_commit} remote_ref_updated={is_remote_ref} index_lock={is_lock} tracking_state={is_tracking_state} git_exclude={is_git_exclude} to {} repo(s)",
                 path.display(),
                 affected.len()
             );
@@ -693,6 +703,9 @@ pub struct RepositoryUpdate {
 
     /// Whether the tracked upstream ref changed or the current tracked remote ref was updated.
     pub remote_ref_updated: bool,
+
+    /// Whether Git exclude rules changed (`.git/info/exclude` or a worktree equivalent).
+    pub exclude_rules_updated: bool,
 }
 
 impl RepositoryUpdate {
@@ -705,6 +718,7 @@ impl RepositoryUpdate {
             && !self.commit_updated
             && !self.index_lock_detected
             && !self.remote_ref_updated
+            && !self.exclude_rules_updated
     }
 
     /// Iterator over all created and modified files.

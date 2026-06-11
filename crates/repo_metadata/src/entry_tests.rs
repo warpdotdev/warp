@@ -11,7 +11,7 @@ fn test_git_path_filtering_allowlist() {
     use std::path::Path;
 
     use super::{
-        is_commit_related_git_file, is_common_git_config, is_index_lock_file,
+        is_commit_related_git_file, is_common_git_config, is_git_exclude_file, is_index_lock_file,
         is_remote_tracking_ref, is_tracking_state_git_file, should_ignore_git_path,
     };
 
@@ -43,6 +43,9 @@ fn test_git_path_filtering_allowlist() {
     )));
     assert!(!should_ignore_git_path(Path::new(
         "/home/user/project/.git/config"
+    )));
+    assert!(!should_ignore_git_path(Path::new(
+        "/home/user/project/.git/info/exclude"
     )));
     assert!(!should_ignore_git_path(Path::new(
         "/home/user/project/.git/refs/remotes/origin/main"
@@ -89,6 +92,9 @@ fn test_git_path_filtering_allowlist() {
     )));
     assert!(!should_ignore_git_path(Path::new(
         "/home/user/project/.git/worktrees/my-wt/config.worktree"
+    )));
+    assert!(!should_ignore_git_path(Path::new(
+        "/home/user/project/.git/worktrees/my-wt/info/exclude"
     )));
     // Non-allowlisted worktree paths are still ignored
     assert!(should_ignore_git_path(Path::new(
@@ -153,6 +159,16 @@ fn test_git_path_filtering_allowlist() {
     )));
     assert!(!is_tracking_state_git_file(Path::new(
         "/repo/.git/refs/remotes/origin/main"
+    )));
+
+    // Git exclude file
+    assert!(is_git_exclude_file(Path::new("/repo/.git/info/exclude")));
+    assert!(is_git_exclude_file(Path::new(
+        "/repo/.git/worktrees/wt/info/exclude"
+    )));
+    assert!(!is_git_exclude_file(Path::new("/repo/.git/info")));
+    assert!(!is_git_exclude_file(Path::new(
+        "/repo/.git/info/attributes"
     )));
 
     // Common config
@@ -800,8 +816,10 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
         "/repo/.git/refs/heads",
         "/repo/.git/refs/remotes",
         "/repo/.git/refs/remotes/origin",
+        "/repo/.git/info",
         "/repo/.git/worktrees",
         "/repo/.git/worktrees/my-wt",
+        "/repo/.git/worktrees/my-wt/info",
         "/repo/.git/worktrees/my-wt/refs",
         "/repo/.git/worktrees/my-wt/refs/heads",
     ] {
@@ -815,7 +833,6 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
         "/repo/.git/objects",
         "/repo/.git/hooks",
         "/repo/.git/logs",
-        "/repo/.git/info",
         "/repo/.git/lfs",
         "/repo/.git/refs/tags",
         "/repo/.git/worktrees/my-wt/objects",
