@@ -1,91 +1,82 @@
 use warp_core::ui::Icon;
 
 use super::{icon_for_context_window_usage, LongContextWarningState};
-use crate::ai::llms::{LLMId, LLMProvider};
+use crate::ai::llms::LLMProvider;
+
+const THRESHOLD: u32 = 272_000;
 
 #[test]
-fn new_initializes_visibility_from_long_context_used() {
-    let visible = LongContextWarningState::new(LLMId::from("gpt-5"), LLMProvider::OpenAI, true);
-    assert!(visible.is_visible());
+fn visible_only_strictly_above_threshold() {
+    let below = LongContextWarningState::new(LLMProvider::OpenAI, Some(THRESHOLD), THRESHOLD - 1);
+    assert!(!below.is_visible());
 
-    let hidden = LongContextWarningState::new(LLMId::from("gpt-5"), LLMProvider::OpenAI, false);
-    assert!(!hidden.is_visible());
+    let at_threshold =
+        LongContextWarningState::new(LLMProvider::OpenAI, Some(THRESHOLD), THRESHOLD);
+    assert!(
+        !at_threshold.is_visible(),
+        "exactly at the threshold must not warn; the server prices long context strictly above it"
+    );
+
+    let above = LongContextWarningState::new(LLMProvider::OpenAI, Some(THRESHOLD), THRESHOLD + 1);
+    assert!(above.is_visible());
 }
 
 #[test]
-fn sync_from_server_overwrites_visibility() {
-    let mut state = LongContextWarningState::new(LLMId::from("gpt-5"), LLMProvider::OpenAI, false);
-    state.sync_from_server(true);
+fn sync_from_server_updates_visibility() {
+    let mut state = LongContextWarningState::new(LLMProvider::OpenAI, Some(THRESHOLD), 0);
+    assert!(!state.is_visible());
+
+    // A qualifying request shows the warning.
+    state.sync_from_server(THRESHOLD + 1);
     assert!(state.is_visible());
 
-    // A later short request clears the warning.
-    state.sync_from_server(false);
+    // A later short request clears it.
+    state.sync_from_server(12_000);
     assert!(!state.is_visible());
 }
 
 #[test]
-fn changing_effective_model_resets_warning() {
-    let mut state = LongContextWarningState::new(LLMId::from("gpt-5"), LLMProvider::OpenAI, true);
-    assert!(state.is_visible());
-
-    // Selecting a different base model hides the prior model's warning. Both models are
-    // OpenAI here so this isolates the model-change reset from the provider gate.
-    state.update_effective_model(LLMId::from("gpt-5.1"), LLMProvider::OpenAI);
+fn hidden_without_threshold() {
+    // Models without a long-context pricing tier (including Auto models, whose
+    // underlying model varies) never warn, regardless of context size.
+    let state = LongContextWarningState::new(LLMProvider::OpenAI, None, 1_000_000);
     assert!(!state.is_visible());
 }
 
 #[test]
-fn reselecting_same_effective_model_does_not_reset_warning() {
-    let mut state = LongContextWarningState::new(LLMId::from("gpt-5"), LLMProvider::OpenAI, true);
-    assert!(state.is_visible());
-
-    // Re-selecting the same effective model must not reset the warning.
-    state.update_effective_model(LLMId::from("gpt-5"), LLMProvider::OpenAI);
-    assert!(state.is_visible());
-}
-
-#[test]
-fn server_value_remains_authoritative_after_model_change() {
-    let mut state = LongContextWarningState::new(LLMId::from("gpt-5"), LLMProvider::OpenAI, true);
-    state.update_effective_model(LLMId::from("gpt-5.1"), LLMProvider::OpenAI);
-    assert!(!state.is_visible());
-
-    // The next streamed/restored server value can show the warning again.
-    state.sync_from_server(true);
-    assert!(state.is_visible());
-}
-
-#[test]
-fn warning_hidden_for_non_openai_provider_even_when_long_context_used() {
-    // The server may report long-context usage for non-OpenAI models (e.g. Gemini), but the
-    // OpenAI-specific pricing warning must not surface for them.
-    let anthropic =
-        LongContextWarningState::new(LLMId::from("claude-sonnet"), LLMProvider::Anthropic, true);
-    assert!(!anthropic.is_visible());
-
-    let google =
-        LongContextWarningState::new(LLMId::from("gemini-3-pro"), LLMProvider::Google, true);
+fn hidden_for_non_openai_provider_even_above_threshold() {
+    // Gemini exposes a 200K threshold, but the warning communicates OpenAI's
+    // long-context pricing tiers and must not surface for other providers.
+    let google = LongContextWarningState::new(LLMProvider::Google, Some(200_000), 250_000);
     assert!(!google.is_visible());
+
+    let anthropic = LongContextWarningState::new(LLMProvider::Anthropic, Some(200_000), 250_000);
+    assert!(!anthropic.is_visible());
 }
 
 #[test]
-fn sync_from_server_does_not_show_for_non_openai_provider() {
-    let mut state =
-        LongContextWarningState::new(LLMId::from("claude-sonnet"), LLMProvider::Anthropic, false);
-    state.sync_from_server(true);
+fn model_switch_recomputes_against_new_threshold() {
+    // 250K tokens is below GPT-5.4's 272K threshold...
+    let mut state = LongContextWarningState::new(LLMProvider::OpenAI, Some(272_000), 250_000);
     assert!(!state.is_visible());
-}
 
-#[test]
-fn switching_to_non_openai_model_hides_warning_even_with_server_true() {
-    let mut state = LongContextWarningState::new(LLMId::from("gpt-5"), LLMProvider::OpenAI, true);
+    // ...but above a hypothetical lower-threshold OpenAI model.
+    state.update_effective_model(LLMProvider::OpenAI, Some(200_000));
     assert!(state.is_visible());
 
-    // Switching to a non-OpenAI model hides the warning, and a later server "true" must not
-    // resurface it while a non-OpenAI model is the effective model.
-    state.update_effective_model(LLMId::from("claude-sonnet"), LLMProvider::Anthropic);
+    // Switching to a higher-threshold model hides it again from the same tokens.
+    state.update_effective_model(LLMProvider::OpenAI, Some(400_000));
     assert!(!state.is_visible());
-    state.sync_from_server(true);
+
+    // Switching to a non-OpenAI model hides it even when its threshold is exceeded.
+    state.update_effective_model(LLMProvider::Google, Some(200_000));
+    assert!(!state.is_visible());
+}
+
+#[test]
+fn zero_tokens_never_warn() {
+    // Legacy conversations and old servers report 0; the warning stays hidden.
+    let state = LongContextWarningState::new(LLMProvider::OpenAI, Some(THRESHOLD), 0);
     assert!(!state.is_visible());
 }
 

@@ -2,52 +2,58 @@ use warp_core::ui::theme::{Fill, WarpTheme};
 use warp_core::ui::Icon;
 use warpui::Element;
 
-use crate::ai::llms::{LLMId, LLMProvider};
+use crate::ai::llms::LLMProvider;
 
 pub mod conversation_usage_view;
 pub mod rollup;
 
 #[derive(Debug)]
 pub(crate) struct LongContextWarningState {
-    effective_model_id: LLMId,
     effective_model_provider: LLMProvider,
-    visible: bool,
+    /// The active model's long-context pricing threshold, in input tokens.
+    /// `None` when the model has no long-context pricing tier.
+    effective_model_threshold: Option<u32>,
+    /// Input tokens of the latest primary-agent LLM call in the latest
+    /// successfully persisted request, as reported by the server.
+    total_input_tokens: u32,
 }
 
 impl LongContextWarningState {
     pub fn new(
-        effective_model_id: LLMId,
         effective_model_provider: LLMProvider,
-        long_context_used: bool,
+        effective_model_threshold: Option<u32>,
+        total_input_tokens: u32,
     ) -> Self {
         Self {
-            effective_model_id,
             effective_model_provider,
-            visible: long_context_used,
+            effective_model_threshold,
+            total_input_tokens,
         }
     }
 
-    pub fn sync_from_server(&mut self, long_context_used: bool) {
-        self.visible = long_context_used;
+    pub fn sync_from_server(&mut self, total_input_tokens: u32) {
+        self.total_input_tokens = total_input_tokens;
     }
 
     pub fn update_effective_model(
         &mut self,
-        effective_model_id: LLMId,
         effective_model_provider: LLMProvider,
+        effective_model_threshold: Option<u32>,
     ) {
-        if self.effective_model_id != effective_model_id {
-            self.effective_model_id = effective_model_id;
-            self.effective_model_provider = effective_model_provider;
-            self.visible = false;
-        }
+        self.effective_model_provider = effective_model_provider;
+        self.effective_model_threshold = effective_model_threshold;
     }
 
-    /// The long-context warning communicates OpenAI's long-context pricing tiers, so it is only
-    /// surfaced for OpenAI models — even if the server reports long-context usage for a model
-    /// from another provider.
+    /// Visible when the latest reported input tokens exceed the active model's
+    /// long-context pricing threshold (strictly greater, matching the server's
+    /// pricing predicate). The warning communicates OpenAI's long-context
+    /// pricing tiers, so it is only surfaced for OpenAI models — even though
+    /// other providers (e.g. Gemini) also expose a threshold.
     pub fn is_visible(&self) -> bool {
-        self.visible && self.effective_model_provider == LLMProvider::OpenAI
+        self.effective_model_provider == LLMProvider::OpenAI
+            && self
+                .effective_model_threshold
+                .is_some_and(|threshold| self.total_input_tokens > threshold)
     }
 }
 

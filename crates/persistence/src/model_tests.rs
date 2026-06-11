@@ -314,22 +314,22 @@ fn model_token_usage_replay_skips_non_custom_endpoint_entries() {
 }
 
 #[test]
-fn conversation_usage_metadata_roundtrips_long_context_used() {
+fn conversation_usage_metadata_roundtrips_total_input_tokens() {
     let metadata = ConversationUsageMetadata {
-        long_context_used: true,
+        total_input_tokens: 280_123,
         ..Default::default()
     };
     let json = serde_json::to_string(&metadata).expect("serialize");
     let roundtripped: ConversationUsageMetadata = serde_json::from_str(&json).expect("deserialize");
-    assert!(roundtripped.long_context_used);
+    assert_eq!(roundtripped.total_input_tokens, 280_123);
 }
 
 #[test]
-fn conversation_usage_metadata_legacy_rows_default_long_context_used_to_false() {
+fn conversation_usage_metadata_legacy_rows_default_total_input_tokens_to_zero() {
     // Rows persisted before this field landed omit it entirely;
-    // `#[serde(default)]` must accept them as `false`.
+    // `#[serde(default)]` must accept them as `0`.
     let legacy_json = r#"{"was_summarized":false,"context_window_usage":0.5,"credits_spent":0.0}"#;
     let metadata: ConversationUsageMetadata =
         serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
-    assert!(!metadata.long_context_used);
+    assert_eq!(metadata.total_input_tokens, 0);
 }

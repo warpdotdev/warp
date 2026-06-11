@@ -1361,8 +1361,10 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
     pub context_window_usage: f32,
+    /// Input tokens of the latest primary-agent LLM call in the latest
+    /// successfully persisted request that had Warp-charged or BYOK usage.
     #[serde(default)]
-    pub long_context_used: bool,
+    pub total_input_tokens: u32,
     pub credits_spent: f32,
     #[serde(default)]
     pub platform_credits_spent: f32,
