@@ -692,16 +692,12 @@ impl<T: EventLoopSender> PtyController<T> {
             }
             PtyWrite::Bytes { bytes } => (bytes, false, None, false),
             PtyWrite::TmuxCommand(command) => {
-                let command = command.get_command_string();
-                debug_assert!(
-                    command.ends_with('\n'),
-                    "Tmux commands must end in a newlines so they are executed"
-                );
-                debug_assert!(
-                    self.tmux_control_mode.is_some(),
-                    "Received tmux command outside of control mode."
-                );
-                (command.into_bytes().into(), false, None, true)
+                let Some(command) =
+                    bytes_for_tmux_command(command, self.tmux_control_mode.is_some())
+                else {
+                    return;
+                };
+                (command.into(), false, None, true)
             }
             PtyWrite::RunNativeShellCompletions(state) => {
                 self.in_flight_native_completions_state = Some(state);
@@ -784,6 +780,22 @@ impl<T: EventLoopSender> PtyController<T> {
     }
 }
 
+fn bytes_for_tmux_command(
+    command: TmuxCommand,
+    is_tmux_control_mode_active: bool,
+) -> Option<Vec<u8>> {
+    if !is_tmux_control_mode_active {
+        log::warn!("Dropping tmux command because tmux control mode is not active.");
+        return None;
+    }
+
+    let command = command.get_command_string();
+    debug_assert!(
+        command.ends_with('\n'),
+        "Tmux commands must end in a newlines so they are executed"
+    );
+    Some(command.into_bytes())
+}
 pub enum PtyControllerEvent {
     /// Emitted when the event loop thread has exited.
     PtyDisconnected,
@@ -867,3 +879,7 @@ pub enum EventLoopSendError {
 pub trait EventLoopSender: 'static {
     fn send(&self, message: Message) -> Result<(), EventLoopSendError>;
 }
+
+#[cfg(test)]
+#[path = "pty_controller_unit_tests.rs"]
+mod tests;
