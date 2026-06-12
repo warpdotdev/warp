@@ -129,6 +129,12 @@ struct AmbientTrialMouseStates {
 }
 
 #[derive(Default)]
+struct FreePlanNoAiMouseStates {
+    byok_button: MouseStateHandle,
+    upgrade_button: MouseStateHandle,
+}
+
+#[derive(Default)]
 struct TabMouseStates {
     overview: MouseStateHandle,
     usage_history: MouseStateHandle,
@@ -263,6 +269,7 @@ pub struct BillingAndUsagePageV2View {
     plan_mouse_states: PlanSectionMouseStates,
     buy_credits_mouse_states: BuyCreditsMouseStates,
     ambient_trial_mouse_states: AmbientTrialMouseStates,
+    free_plan_no_ai_mouse_states: FreePlanNoAiMouseStates,
     billing_cycle_usage_section: ViewHandle<BillingCycleUsageSectionView>,
 }
 
@@ -359,6 +366,7 @@ impl BillingAndUsagePageV2View {
             plan_mouse_states: Default::default(),
             buy_credits_mouse_states: Default::default(),
             ambient_trial_mouse_states: Default::default(),
+            free_plan_no_ai_mouse_states: Default::default(),
             billing_cycle_usage_section,
         };
         me.update_addon_credits_options(ctx);
@@ -768,6 +776,10 @@ impl BillingAndUsagePageV2View {
         let ai_model = AIRequestUsageModel::as_ref(app);
 
         let has_base_credits = ai_model.request_limit() > 0;
+        // REV-1625 (P16): on the gated Free plan there is no credit meter to show —
+        // the plan simply includes no Warp AI usage.
+        let entitlement_card =
+            warp_ai_entitlement_card(has_base_credits, ai_model.is_free_plan_ai_gated(app));
 
         let grants = ai_model.bonus_grants();
         let workspace_uid = UserWorkspaces::as_ref(app)
@@ -775,7 +787,7 @@ impl BillingAndUsagePageV2View {
             .map(|ws| ws.uid);
         let classified = ClassifiedGrants::new(grants, workspace_uid);
 
-        if !has_base_credits && !classified.has_any() {
+        if entitlement_card == WarpAiEntitlementCard::None && !classified.has_any() {
             return None;
         }
 
@@ -785,30 +797,41 @@ impl BillingAndUsagePageV2View {
 
         let outline_color = theme.outline().into_solid();
 
-        if has_base_credits {
-            let reset_str = ai_model
-                .next_refresh_time_local()
-                .format("Resets %b %d at %-I:%M %p")
-                .to_string();
-            let base_remaining = ai_model
-                .request_limit()
-                .saturating_sub(ai_model.requests_used()) as i64;
-            let base_limit = (!ai_model.is_unlimited()).then(|| ai_model.request_limit() as i64);
-            cards_row.add_child(
-                Expanded::new(
-                    1.,
-                    render_balance_card(
-                        appearance,
-                        BASE_CREDITS_DOT_COLOR,
-                        "Base credits",
-                        &reset_str,
-                        base_remaining,
-                        base_limit,
-                        outline_color,
-                    ),
-                )
-                .finish(),
-            );
+        match entitlement_card {
+            WarpAiEntitlementCard::BaseCredits => {
+                let reset_str = ai_model
+                    .next_refresh_time_local()
+                    .format("Resets %b %d at %-I:%M %p")
+                    .to_string();
+                let base_remaining = ai_model
+                    .request_limit()
+                    .saturating_sub(ai_model.requests_used())
+                    as i64;
+                let base_limit =
+                    (!ai_model.is_unlimited()).then(|| ai_model.request_limit() as i64);
+                cards_row.add_child(
+                    Expanded::new(
+                        1.,
+                        render_balance_card(
+                            appearance,
+                            BASE_CREDITS_DOT_COLOR,
+                            "Base credits",
+                            &reset_str,
+                            base_remaining,
+                            base_limit,
+                            outline_color,
+                        ),
+                    )
+                    .finish(),
+                );
+            }
+            WarpAiEntitlementCard::FreePlanNoAi => {
+                cards_row.add_child(
+                    Expanded::new(1., render_free_plan_no_ai_card(appearance, outline_color))
+                        .finish(),
+                );
+            }
+            WarpAiEntitlementCard::None => {}
         }
 
         if !classified.personal.is_empty() {
@@ -847,26 +870,87 @@ impl BillingAndUsagePageV2View {
             );
         }
 
-        Some(
-            Flex::column()
-                .with_child(
-                    Container::new(
-                        Text::new_inline("Balance", appearance.ui_font_family(), HEADER_FONT_SIZE)
-                            .with_style(Properties::default().weight(Weight::Bold))
-                            .with_color(theme.active_ui_text_color().into())
-                            .finish(),
-                    )
-                    .with_margin_bottom(12.)
-                    .finish(),
-                )
-                .with_child(cards_row.finish())
-                .with_child(
-                    ConstrainedBox::new(Empty::new().finish())
-                        .with_height(24.)
+        let mut section = Flex::column()
+            .with_child(
+                Container::new(
+                    Text::new_inline("Balance", appearance.ui_font_family(), HEADER_FONT_SIZE)
+                        .with_style(Properties::default().weight(Weight::Bold))
+                        .with_color(theme.active_ui_text_color().into())
                         .finish(),
                 )
+                .with_margin_bottom(12.)
                 .finish(),
-        )
+            )
+            .with_child(cards_row.finish());
+
+        if entitlement_card == WarpAiEntitlementCard::FreePlanNoAi {
+            section.add_child(
+                Container::new(self.render_free_plan_no_ai_actions(appearance, app))
+                    .with_margin_top(12.)
+                    .finish(),
+            );
+        }
+
+        section.add_child(
+            ConstrainedBox::new(Empty::new().finish())
+                .with_height(24.)
+                .finish(),
+        );
+
+        Some(section.finish())
+    }
+
+    /// BYOK setup and upgrade actions shown under the Balance cards on the gated
+    /// Free plan (REV-1625, P16).
+    fn render_free_plan_no_ai_actions(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let byok_button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Secondary,
+                self.free_plan_no_ai_mouse_states.byok_button.clone(),
+            )
+            .with_style(UiComponentStyles {
+                font_size: Some(14.),
+                height: Some(32.),
+                ..Default::default()
+            })
+            .with_centered_text_label("Set up your own API key".to_string())
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(BillingAndUsagePageAction::NavigateToByokSettings);
+            })
+            .finish();
+
+        let team_uid = UserWorkspaces::as_ref(app).current_team_uid();
+        let user_id = self.auth_state.user_id().unwrap_or_default();
+        let upgrade_button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Accent,
+                self.free_plan_no_ai_mouse_states.upgrade_button.clone(),
+            )
+            .with_style(UiComponentStyles {
+                font_size: Some(14.),
+                height: Some(32.),
+                ..Default::default()
+            })
+            .with_centered_text_label("Upgrade plan".to_string())
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(BillingAndUsagePageAction::Upgrade { team_uid, user_id });
+            })
+            .finish();
+
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(8.)
+            .with_child(byok_button)
+            .with_child(upgrade_button)
+            .finish()
     }
 
     fn render_ambient_agent_trial_widget(
@@ -2153,6 +2237,79 @@ impl TypedActionView for BillingAndUsagePageV2View {
     }
 }
 
+/// Which card the Balance section shows for the plan's Warp AI entitlement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WarpAiEntitlementCard {
+    /// The plan includes base credits: show the remaining-of-limit meter card.
+    BaseCredits,
+    /// REV-1625 (P16): the Free plan includes no Warp AI; show the gated card
+    /// instead of a "0 of N" meter, even if a stale cached limit is non-zero.
+    FreePlanNoAi,
+    /// No base credits and not plan-gated: show no entitlement card.
+    None,
+}
+
+fn warp_ai_entitlement_card(has_base_credits: bool, is_plan_gated: bool) -> WarpAiEntitlementCard {
+    if is_plan_gated {
+        WarpAiEntitlementCard::FreePlanNoAi
+    } else if has_base_credits {
+        WarpAiEntitlementCard::BaseCredits
+    } else {
+        WarpAiEntitlementCard::None
+    }
+}
+
+/// Renders the Balance card for the gated Free plan (REV-1625, P16): instead of a
+/// credit meter, it states that the plan includes no Warp AI usage.
+fn render_free_plan_no_ai_card(appearance: &Appearance, border_color: ColorU) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let sub_color = blended_colors::text_sub(theme, theme.background());
+
+    let status_dot = ConstrainedBox::new(
+        Container::new(Empty::new().finish())
+            .with_background_color(AGGREGATE_CREDITS_DOT_COLOR)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .finish(),
+    )
+    .with_width(8.)
+    .with_height(8.)
+    .finish();
+
+    let label_text = Text::new_inline("Warp AI".to_string(), appearance.ui_font_family(), 12.)
+        .with_color(sub_color)
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .finish();
+
+    let header = Flex::row()
+        .with_child(status_dot)
+        .with_child(Container::new(label_text).with_margin_left(8.).finish())
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Max)
+        .finish();
+
+    let body = Text::new(
+        "The Free plan includes no Warp AI usage.",
+        appearance.ui_font_family(),
+        14.,
+    )
+    .with_color(theme.active_ui_text_color().into())
+    .finish();
+
+    Container::new(
+        Flex::column()
+            .with_child(header)
+            .with_child(body)
+            .with_spacing(8.)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .finish(),
+    )
+    .with_border(Border::all(1.).with_border_color(border_color))
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+    .with_horizontal_padding(16.)
+    .with_vertical_padding(12.)
+    .finish()
+}
+
 fn render_balance_card(
     appearance: &Appearance,
     dot_color: ColorU,
@@ -2241,3 +2398,7 @@ fn render_balance_card(
     .with_vertical_padding(12.)
     .finish()
 }
+
+#[cfg(test)]
+#[path = "billing_and_usage_page_v2_tests.rs"]
+mod tests;
