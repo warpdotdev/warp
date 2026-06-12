@@ -23,37 +23,6 @@ const MODAL_WIDTH: f32 = 420.;
 const HERO_HEIGHT: f32 = 92.;
 const HERO_IMAGE_PATH: &str = "async/png/onboarding/auto_handoff_sleep_banner.png";
 
-fn modal_background(appearance: &Appearance) -> Fill {
-    appearance.theme().surface_3()
-}
-
-fn modal_text_main(appearance: &Appearance) -> ColorU {
-    appearance
-        .theme()
-        .main_text_color(modal_background(appearance))
-        .into_solid()
-}
-
-fn modal_text_sub(appearance: &Appearance) -> ColorU {
-    appearance
-        .theme()
-        .sub_text_color(modal_background(appearance))
-        .into_solid()
-}
-
-fn modal_overlay_1(appearance: &Appearance) -> Fill {
-    appearance.theme().surface_overlay_1()
-}
-
-fn modal_terminal_red(appearance: &Appearance) -> ColorU {
-    appearance.theme().terminal_colors().normal.red.into()
-}
-
-fn modal_terminal_red_overlay_2(appearance: &Appearance) -> ColorU {
-    let red = appearance.theme().terminal_colors().normal.red;
-    appearance.theme().ansi_overlay_2(red)
-}
-
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -83,7 +52,7 @@ struct CloseButtonTheme;
 impl ActionButtonTheme for CloseButtonTheme {
     fn background(&self, hovered: bool, appearance: &Appearance) -> Option<Fill> {
         if hovered {
-            Some(modal_overlay_1(appearance))
+            Some(appearance.theme().surface_overlay_1())
         } else {
             None
         }
@@ -172,8 +141,9 @@ impl AutoHandoffSleepModal {
     }
 
     fn render_badge(appearance: &Appearance) -> Box<dyn Element> {
-        let text_color = modal_terminal_red(appearance);
-        let background_color = modal_terminal_red_overlay_2(appearance);
+        let red = appearance.theme().terminal_colors().normal.red;
+        let text_color: ColorU = red.into();
+        let background_color = appearance.theme().ansi_overlay_2(red);
         let text = Text::new_inline(
             "Run Connection Lost".to_string(),
             appearance.ui_font_family(),
@@ -200,7 +170,12 @@ impl AutoHandoffSleepModal {
 
     fn render_title(appearance: &Appearance) -> Box<dyn Element> {
         Text::new("Enable auto-handoff?", appearance.ui_font_family(), 20.)
-            .with_color(modal_text_main(appearance))
+            .with_color(
+                appearance
+                    .theme()
+                    .main_text_color(appearance.theme().surface_3())
+                    .into_solid(),
+            )
             .with_style(Properties::default().weight(Weight::Semibold))
             .finish()
     }
@@ -212,7 +187,12 @@ impl AutoHandoffSleepModal {
             appearance.ui_font_family(),
             14.,
         )
-        .with_color(modal_text_sub(appearance))
+        .with_color(
+            appearance
+                .theme()
+                .sub_text_color(appearance.theme().surface_3())
+                .into_solid(),
+        )
         .finish()
     }
 
@@ -242,7 +222,7 @@ impl AutoHandoffSleepModal {
         )
         .with_horizontal_padding(32.)
         .with_vertical_padding(32.)
-        .with_background(modal_background(appearance))
+        .with_background(appearance.theme().surface_3())
         .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
         .finish()
     }
@@ -273,7 +253,7 @@ impl View for AutoHandoffSleepModal {
                     .with_child(self.render_body(appearance))
                     .finish(),
             )
-            .with_background(modal_background(appearance))
+            .with_background(appearance.theme().surface_3())
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
             .finish(),
         )

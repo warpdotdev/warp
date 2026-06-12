@@ -11774,6 +11774,15 @@ impl Workspace {
             })
         }
         self.update_active_session(ctx);
+
+        // `on_window_closed` unregistered this workspace even though the close
+        // was restorable, and reopening reuses the view without re-running
+        // `Workspace::new`, so register it again.
+        let window_id = ctx.window_id();
+        let weak_handle = ctx.handle();
+        WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
+            registry.register(window_id, weak_handle);
+        });
     }
 
     pub fn restore_closed_tab(
@@ -24629,7 +24638,7 @@ impl TypedActionView for Workspace {
             #[cfg(debug_assertions)]
             OpenAutoHandoffSleepModal => {
                 OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.force_open_auto_handoff_sleep_modal(ctx);
+                    model.set_auto_handoff_sleep_modal_open(true, ctx);
                 });
                 ctx.notify();
             }

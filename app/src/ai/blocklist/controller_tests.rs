@@ -12,7 +12,6 @@ use crate::ai::agent::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, PendingAttachment, PendingFile};
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
-use crate::workspace::OneTimeModalModel;
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
@@ -176,77 +175,30 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
 }
 
 #[test]
-fn auto_resume_after_error_pauses_while_auto_handoff_modal_open_and_drains_on_close() {
+fn cancelling_conversation_aborts_pending_auto_resume() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
 
-        // Use an ID with no backing conversation so the drained resume is a
-        // harmless no-op instead of sending a real request.
+        // An ID with no backing conversation: if the scheduled wait ever
+        // completes, the resume is a harmless no-op.
         let conversation_id = AIConversationId::new();
 
         terminal.update(&mut app, |terminal, ctx| {
-            let window_id = ctx.window_id();
-            OneTimeModalModel::handle(ctx).update(ctx, |modal_model, ctx| {
-                modal_model.update_target_window_id(window_id, ctx);
-                modal_model.set_auto_handoff_sleep_modal_open_for_test(true, ctx);
-            });
-
             terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller.auto_resume_after_error_or_pause_for_modal(conversation_id, ctx);
+                controller.schedule_auto_resume_after_error(conversation_id, ctx);
                 assert!(controller
-                    .auto_resumes_paused_for_auto_handoff_modal
-                    .contains(&conversation_id));
-            });
-        });
-
-        // Close the modal; the controller's subscription drains the paused
-        // resume when effects flush after this update.
-        terminal.update(&mut app, |_, ctx| {
-            OneTimeModalModel::handle(ctx).update(ctx, |modal_model, ctx| {
-                modal_model.mark_auto_handoff_sleep_modal_dismissed(ctx);
-            });
-        });
-
-        terminal.update(&mut app, |terminal, ctx| {
-            terminal.ai_controller().update(ctx, |controller, _| {
-                assert!(controller
-                    .auto_resumes_paused_for_auto_handoff_modal
-                    .is_empty());
-            });
-        });
-    });
-}
-
-#[test]
-fn cancelling_conversation_clears_auto_resume_paused_for_auto_handoff_modal() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let terminal = add_window_with_terminal(&mut app, None);
-
-        let conversation_id = AIConversationId::new();
-
-        terminal.update(&mut app, |terminal, ctx| {
-            let window_id = ctx.window_id();
-            OneTimeModalModel::handle(ctx).update(ctx, |modal_model, ctx| {
-                modal_model.update_target_window_id(window_id, ctx);
-                modal_model.set_auto_handoff_sleep_modal_open_for_test(true, ctx);
-            });
-
-            terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller.auto_resume_after_error_or_pause_for_modal(conversation_id, ctx);
-                assert!(controller
-                    .auto_resumes_paused_for_auto_handoff_modal
-                    .contains(&conversation_id));
+                    .pending_auto_resume_handles
+                    .contains_key(&conversation_id));
 
                 controller.cancel_conversation_progress(
                     conversation_id,
                     CancellationReason::ManuallyCancelled,
                     ctx,
                 );
-                assert!(controller
-                    .auto_resumes_paused_for_auto_handoff_modal
-                    .is_empty());
+                assert!(!controller
+                    .pending_auto_resume_handles
+                    .contains_key(&conversation_id));
             });
         });
     });
