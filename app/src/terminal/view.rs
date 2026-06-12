@@ -5256,11 +5256,9 @@ impl TerminalView {
             // handing off to it — not the end of the overall turn. Defer
             // conversation-finished side effects (e.g. firing a queued `/queue`
             // prompt) until the entire turn is actually done.
-            let has_active_subagent = || {
-                BlocklistAIHistoryModel::as_ref(ctx)
-                    .conversation(conversation_id)
-                    .is_some_and(|c| c.has_active_subagent())
-            };
+            let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(conversation_id)
+                .is_some_and(|c| c.has_active_subagent());
 
             let mut finish_reason: Option<FinishReason> = None;
             if let Some(active_ai_block) = self.active_ai_block(ctx) {
@@ -5279,7 +5277,7 @@ impl TerminalView {
                 if self.pending_user_query_view_id.is_some() && !is_same_conversation {
                     self.remove_pending_user_query_block(ctx);
                 }
-            } else if !has_active_subagent() {
+            } else if !has_active_subagent {
                 if let Some(last_ai_block) = self.last_ai_block() {
                     finish_reason = last_ai_block.as_ref(ctx).finish_reason();
                 }
@@ -5287,6 +5285,17 @@ impl TerminalView {
 
             if let Some(reason) = finish_reason {
                 self.handle_finished_conversation(*conversation_id, reason, ctx);
+            } else if !has_active_subagent {
+                // The pane-global checks above can be masked by a sibling
+                // conversation: an orchestration pane hosts the lead and local
+                // child conversations in one view, so when this conversation's
+                // turn ends while a sibling is mid-turn, `active_ai_block` /
+                // `last_ai_block` observe the sibling's block instead. Still
+                // drain this conversation's queued prompts using its own last
+                // block so a queued prompt isn't stranded.
+                if let Some(reason) = self.finish_reason_for_conversation(*conversation_id, ctx) {
+                    self.drain_queued_prompts(*conversation_id, reason, ctx);
+                }
             }
 
             // If the most recent action in the current interaction turn created or updated a plan
@@ -20267,6 +20276,32 @@ impl TerminalView {
         })
     }
 
+    /// Returns the finish reason of the most recent AI block belonging to
+    /// `conversation_id`, or `None` when the conversation has no AI blocks in
+    /// this view or its most recent block is still in flight.
+    ///
+    /// Unlike [`Self::active_ai_block`] / [`Self::last_ai_block`], this is
+    /// scoped to a single conversation: orchestration panes host the lead and
+    /// local child conversations in one view, so the pane-global helpers can
+    /// observe a sibling conversation's block instead of the one that
+    /// finished.
+    fn finish_reason_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> Option<FinishReason> {
+        self.rich_content_views
+            .iter()
+            .rev()
+            .filter(|rc| !rc.is_usage_footer() && !rc.is_pending_user_query())
+            .find_map(|rc| {
+                let ai_metadata = rc.ai_block_metadata()?;
+                (ai_metadata.conversation_id == conversation_id)
+                    .then_some(&ai_metadata.ai_block_handle)
+            })
+            .and_then(|ai_block| ai_block.as_ref(ctx).finish_reason())
+    }
+
     /// Check if there's an active (non-completed, non-cancelled) /init in progress
     fn has_active_init_project(&self, ctx: &AppContext) -> bool {
         self.active_init_project_model
@@ -22348,6 +22383,31 @@ impl TerminalView {
         output: String,
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AIBlock> {
+        self.insert_dummy_ai_block_internal(query, output, /* is_streaming */ false, ctx)
+    }
+
+    /// Inserts a dummy AI block that is still streaming (unfinished), for tests
+    /// that need an in-flight block in the pane.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn insert_dummy_streaming_ai_block(
+        &mut self,
+        query: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<AIBlock> {
+        self.insert_dummy_ai_block_internal(query, String::new(), /* is_streaming */ true, ctx)
+    }
+
+    /// Shared body for the dummy AI block insertion helpers. Creates a fresh
+    /// conversation for the block; `is_streaming` controls whether the block is
+    /// finished (Complete) or still in flight.
+    #[cfg(any(test, feature = "integration_tests"))]
+    fn insert_dummy_ai_block_internal(
+        &mut self,
+        query: String,
+        output: String,
+        is_streaming: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<AIBlock> {
         use rand::distributions::{Alphanumeric, DistString};
 
         use crate::ai::agent::{
@@ -22399,7 +22459,11 @@ impl TerminalView {
         });
         let conversation_id = new_conversation_id.expect("conversation created for dummy AI block");
 
-        let ai_block_model = Rc::new(FakeAIBlockModel::new(inputs, output));
+        let ai_block_model = Rc::new(if is_streaming {
+            FakeAIBlockModel::new_streaming(inputs)
+        } else {
+            FakeAIBlockModel::new(inputs, output)
+        });
         let ai_block = ctx.add_typed_action_view(|ctx| {
             AIBlock::new(
                 ai_block_model,

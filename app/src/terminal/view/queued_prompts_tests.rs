@@ -1477,3 +1477,39 @@ fn multi_cycle_queue_keeps_each_rows_attachments_independent() {
         });
     });
 }
+
+#[test]
+fn finish_reason_is_scoped_to_the_finished_conversation() {
+    // An orchestration pane hosts the lead and local child conversations in one view, so the
+    // most recent block in the pane can belong to a sibling conversation that is still
+    // mid-turn. The per-conversation lookup must report the finished conversation's own block
+    // as Complete (so its queued prompts drain) and the streaming sibling's as unfinished.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let finished_block =
+                view.insert_dummy_ai_block("review".to_owned(), "done".to_owned(), ctx);
+            let finished_conversation = finished_block.as_ref(ctx).conversation_id();
+            // Inserted after the finished block, so it is the last block in the pane and
+            // masks the pane-global `active_ai_block` / `last_ai_block` lookups.
+            let streaming_block = view.insert_dummy_streaming_ai_block("working".to_owned(), ctx);
+            let streaming_conversation = streaming_block.as_ref(ctx).conversation_id();
+            assert_ne!(finished_conversation, streaming_conversation);
+
+            assert_eq!(
+                view.finish_reason_for_conversation(finished_conversation, ctx),
+                Some(FinishReason::Complete)
+            );
+            assert_eq!(
+                view.finish_reason_for_conversation(streaming_conversation, ctx),
+                None
+            );
+            // A conversation with no blocks in this pane has no finish reason.
+            assert_eq!(
+                view.finish_reason_for_conversation(AIConversationId::new(), ctx),
+                None
+            );
+        });
+    });
+}
