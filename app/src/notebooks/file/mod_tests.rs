@@ -246,67 +246,6 @@ fn test_file_notebook_mermaid_blocks_default_to_rendered() {
 }
 
 #[test]
-fn test_load_ipynb_renders_notebook() {
-    use std::io::Write;
-
-    App::test((), |mut app| async move {
-        init_app(&mut app);
-        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, FileNotebookView::new);
-
-        // A valid notebook written to a real `.ipynb` path, so the view routes it
-        // through the notebook parser rather than the Markdown parser.
-        let mut file = tempfile::Builder::new()
-            .suffix(".ipynb")
-            .tempfile()
-            .expect("temp file should be created");
-        let notebook = r##"{
-            "nbformat": 4,
-            "metadata": {"language_info": {"name": "python"}},
-            "cells": [
-                {"cell_type": "markdown", "source": ["# Notebook Title"]},
-                {"cell_type": "code", "source": "print('hi')", "outputs": []}
-            ]
-        }"##;
-        file.write_all(notebook.as_bytes())
-            .expect("notebook should be written");
-        let path = file.path().to_path_buf();
-
-        let session = Arc::new(Session::test());
-        handle
-            .update(&mut app, |file_notebook, ctx| {
-                file_notebook.open_local(path.clone(), Some(session), ctx);
-
-                let file_id = file_notebook
-                    .file_id
-                    .expect("File should be opened and have a file_id");
-
-                let future_handle = FileModel::as_ref(ctx)
-                    .get_future_handle(file_id)
-                    .expect("Loading future should be present");
-
-                ctx.await_spawned_future(future_handle.future_id())
-            })
-            .await;
-
-        app.read(|ctx| {
-            let view = handle.as_ref(ctx);
-            assert!(view.is_ipynb_file());
-
-            // The notebook is rendered (markdown cell heading is present) rather
-            // than dumped as raw JSON (no `nbformat`/`cell_type` keys).
-            let rendered = view.editor.as_ref(ctx).markdown(ctx);
-            assert!(rendered.contains("Notebook Title"), "got: {rendered:?}");
-            assert!(rendered.contains("print('hi')"), "got: {rendered:?}");
-            assert!(!rendered.contains("nbformat"), "got: {rendered:?}");
-            assert!(!rendered.contains("cell_type"), "got: {rendered:?}");
-
-            // Rendering should not panic.
-            view.render(ctx);
-        });
-    });
-}
-
-#[test]
 fn test_markdown_file_detection() {
     assert!(is_markdown_file("README.md"));
     assert!(is_markdown_file("DATABASE.MD"));

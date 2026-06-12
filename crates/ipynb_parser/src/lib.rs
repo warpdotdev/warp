@@ -52,7 +52,15 @@ pub enum IpynbError {
 /// notebook; callers should fall back to [`raw_fallback_formatted_text`] in that
 /// case so the contents are shown verbatim (never a blank view).
 pub fn ipynb_to_formatted_text(json: &str, gfm_tables: bool) -> Result<FormattedText, IpynbError> {
-    let notebook = parse_notebook(json)?;
+    let notebook: Notebook = serde_json::from_str(json)?;
+
+    // Guard against arbitrary JSON that happens to deserialize into an empty
+    // notebook: require an explicit, supported nbformat version.
+    if notebook.nbformat != Some(SUPPORTED_NBFORMAT) {
+        return Err(IpynbError::UnsupportedFormat {
+            nbformat: notebook.nbformat,
+        });
+    }
 
     let language = notebook.language();
     let mut lines: Vec<FormattedTextLine> = Vec::new();
@@ -83,33 +91,6 @@ pub fn ipynb_to_formatted_text(json: &str, gfm_tables: bool) -> Result<Formatted
     }
 
     Ok(FormattedText::new_trimmed(lines))
-}
-
-/// Check whether `json` is a parseable notebook in the supported nbformat
-/// version, without building the full [`FormattedText`]. Returns the same
-/// errors as [`ipynb_to_formatted_text`] would for an unrenderable notebook, so
-/// callers can cheaply decide whether to render it or fall back to a raw view
-/// (e.g. a code editor) instead of paying for a full render they may discard.
-pub fn validate_notebook(json: &str) -> Result<(), IpynbError> {
-    parse_notebook(json).map(|_| ())
-}
-
-/// Deserialize the top-level notebook structure and enforce the supported
-/// nbformat version. Shared by [`ipynb_to_formatted_text`] and
-/// [`validate_notebook`] so both agree on exactly what counts as a renderable
-/// notebook.
-fn parse_notebook(json: &str) -> Result<Notebook, IpynbError> {
-    let notebook: Notebook = serde_json::from_str(json)?;
-
-    // Guard against arbitrary JSON that happens to deserialize into an empty
-    // notebook: require an explicit, supported nbformat version.
-    if notebook.nbformat != Some(SUPPORTED_NBFORMAT) {
-        return Err(IpynbError::UnsupportedFormat {
-            nbformat: notebook.nbformat,
-        });
-    }
-
-    Ok(notebook)
 }
 
 /// Build a verbatim [`FormattedText`] fallback for content that is not a

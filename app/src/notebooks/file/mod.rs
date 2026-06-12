@@ -11,7 +11,6 @@ use warp_editor::model::CoreEditorModel;
 use warp_files::{FileModel, FileModelEvent};
 #[cfg(feature = "local_fs")]
 use warp_util::file::FileId;
-use warp_util::file_type::is_jupyter_notebook_file;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::user_friendly_path;
 use warp_util::remote_path::RemotePath;
@@ -326,59 +325,11 @@ impl FileNotebookView {
         ctx.focus(&self.editor);
     }
 
-    /// Reset the rich text contents based on the given file content.
-    ///
-    /// Markdown files are parsed as Markdown; Jupyter notebooks (`.ipynb`) are
-    /// rendered via the notebook parser (see [`Self::set_ipynb_content`]).
+    /// Reset the rich text contents based on the given Markdown content.
     pub fn set_content(&mut self, content: &str, ctx: &mut ViewContext<Self>) {
         let doc_path = self.file_state.local_path().map(|p| p.to_path_buf());
-
-        if self.is_ipynb_file() {
-            self.set_ipynb_content(content, doc_path, ctx);
-            return;
-        }
-
         self.editor.update(ctx, |editor, ctx| {
             editor.reset_with_markdown(content, ctx);
-            // Set the document path for resolving relative image paths
-            editor.model().update(ctx, |model, ctx| {
-                model.set_document_path(doc_path, ctx);
-            });
-        });
-    }
-
-    /// Render a Jupyter notebook (`.ipynb`).
-    ///
-    /// The notebook is validated up front. If it can't be parsed as a supported
-    /// notebook, the failure is surfaced by swapping this pane for the raw code
-    /// editor rather than silently rendering a giant block of JSON. When there is
-    /// no backing file path (or no code-pane support, e.g. WASM), we fall back to
-    /// rendering the raw contents verbatim so the view is never blank.
-    fn set_ipynb_content(
-        &mut self,
-        content: &str,
-        doc_path: Option<PathBuf>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if let Err(e) = ipynb_parser::validate_notebook(content) {
-            safe_warn!(
-                safe: ("Unable to render Jupyter notebook; opening as raw text"),
-                full: ("Unable to render Jupyter notebook; opening as raw text: {e}")
-            );
-
-            #[cfg(feature = "local_fs")]
-            {
-                // Swap to the raw code editor so the failure is visible and the
-                // file is still readable. Needs a backing file path.
-                if self.file_state.path().is_some() {
-                    self.open_as_code(ctx);
-                    return;
-                }
-            }
-        }
-
-        self.editor.update(ctx, |editor, ctx| {
-            editor.reset_with_ipynb(content, ctx);
             // Set the document path for resolving relative image paths
             editor.model().update(ctx, |model, ctx| {
                 model.set_document_path(doc_path, ctx);
@@ -752,13 +703,6 @@ impl FileNotebookView {
         self.file_state
             .path()
             .map(|p| is_markdown_file(Path::new(&p.display_path())))
-            .unwrap_or(false)
-    }
-
-    fn is_ipynb_file(&self) -> bool {
-        self.file_state
-            .path()
-            .map(|p| is_jupyter_notebook_file(Path::new(&p.display_path())))
             .unwrap_or(false)
     }
 

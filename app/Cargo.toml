@@ -134,7 +134,6 @@ indexmap = { version = "2.0.2", features = ["serde"] }
 input_classifier.workspace = true
 instant.workspace = true
 ipc.workspace = true
-ipynb_parser.workspace = true
 iso8601-duration.workspace = true
 itertools.workspace = true
 kmeans_colors = { version = "0.5", default-features = false, features = [
