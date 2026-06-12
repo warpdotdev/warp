@@ -169,9 +169,12 @@ pub struct QueuedPromptsPanelView {
     /// Host-pushed: whether this terminal can send prompts at all (false for read-only
     /// shared-session viewers). Gates the send-now buttons, empty-Enter sends, and the hint.
     can_send_prompt: bool,
-    /// Host-pushed: whether the host input's buffer is empty. An empty input is what makes
-    /// Enter send the top queued row, so this gates empty-Enter sends and the hint.
-    input_is_empty: bool,
+    /// Host input's editor. An empty input is what makes Enter send the top queued row, so
+    /// Enter-send and hint decisions read its emptiness live.
+    host_editor: ViewHandle<EditorView>,
+    /// Last observed emptiness of `host_editor`; only damps re-render notifications to
+    /// empty <-> non-empty transitions. Decisions always read the editor live.
+    host_editor_was_empty: bool,
     header_mouse_state: MouseStateHandle,
     row_states: HashMap<QueuedQueryId, QueuedPromptRowState>,
     dragging_query_id: Option<QueuedQueryId>,
@@ -218,6 +221,7 @@ impl QueuedPromptsPanelView {
         terminal_view_id: EntityId,
         suggestions_mode_model: ModelHandle<InputSuggestionsModeModel>,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
+        host_editor: ViewHandle<EditorView>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let edit_editor = build_edit_editor(ctx);
@@ -230,6 +234,13 @@ impl QueuedPromptsPanelView {
         // CLI agent there), so re-render when it opens or closes.
         ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cli_agent_sessions_event(event, ctx);
+        });
+
+        // Enter-send and the header hint depend on the host input's emptiness, which is read
+        // live from `host_editor`; re-render when the buffer transitions between empty and
+        // non-empty.
+        ctx.subscribe_to_view(&host_editor, |me, _, event, ctx| {
+            me.handle_host_editor_event(event, ctx);
         });
 
         let history_handle = BlocklistAIHistoryModel::handle(ctx);
@@ -249,6 +260,7 @@ impl QueuedPromptsPanelView {
             me.handle_cli_subagent_event(event, ctx);
         });
 
+        let host_editor_was_empty = host_editor.as_ref(ctx).is_empty(ctx);
         let mut me = Self {
             view_id: ctx.view_id(),
             terminal_view_id,
@@ -259,7 +271,8 @@ impl QueuedPromptsPanelView {
             edit_editor_scroll_state: Default::default(),
             collapsed: false,
             can_send_prompt: true,
-            input_is_empty: true,
+            host_editor,
+            host_editor_was_empty,
             header_mouse_state: MouseStateHandle::default(),
             row_states: HashMap::new(),
             dragging_query_id: None,
@@ -288,23 +301,14 @@ impl QueuedPromptsPanelView {
         ctx.notify();
     }
 
-    /// Updates whether the host input's buffer is empty. Pushed by the host on emptiness
-    /// transitions.
-    pub fn set_input_is_empty(&mut self, input_is_empty: bool, ctx: &mut ViewContext<Self>) {
-        if self.input_is_empty == input_is_empty {
-            return;
-        }
-        self.input_is_empty = input_is_empty;
-        ctx.notify();
-    }
-
     /// True when pressing Enter in the host input should send the top queued row instead of
     /// performing its usual action: the panel is showing, prompts can be sent, the input is
-    /// empty, and the CLI-agent rich input is closed (Enter submits to the CLI agent there).
+    /// empty (read live from the host editor, so the decision cannot trail same-update buffer
+    /// changes), and the CLI-agent rich input is closed (Enter submits to the CLI agent there).
     pub fn enter_sends_queued_prompt(&self, ctx: &AppContext) -> bool {
         self.should_render(ctx)
             && self.can_send_prompt
-            && self.input_is_empty
+            && self.host_editor.as_ref(ctx).is_empty(ctx)
             && !CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id)
     }
 
@@ -321,6 +325,19 @@ impl QueuedPromptsPanelView {
                 .queue(conv_id)
                 .first()
                 .is_some_and(|row| !row.is_locked())
+    }
+
+    /// Re-renders when the host input transitions between empty and non-empty, so the header
+    /// hint tracks whether Enter would send.
+    fn handle_host_editor_event(&mut self, event: &EditorEvent, ctx: &mut ViewContext<Self>) {
+        if !matches!(event, EditorEvent::Edited(_) | EditorEvent::BufferReplaced) {
+            return;
+        }
+        let is_empty = self.host_editor.as_ref(ctx).is_empty(ctx);
+        if is_empty != self.host_editor_was_empty {
+            self.host_editor_was_empty = is_empty;
+            ctx.notify();
+        }
     }
 
     /// Re-renders the header hint when the CLI-agent rich input opens or closes for this

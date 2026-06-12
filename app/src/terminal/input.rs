@@ -3583,25 +3583,25 @@ impl Input {
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
             let cli_subagent_controller = cli_subagent_controller.clone();
+            let host_editor = editor.clone();
             let panel = ctx.add_typed_action_view(|ctx| {
                 QueuedPromptsPanelView::new(
                     terminal_view_id,
                     suggestions_mode_model.clone(),
                     cli_subagent_controller,
+                    host_editor,
                     ctx,
                 )
             });
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
             });
-            // Seed the host-pushed send state; later changes flow through the
-            // emptiness-transition push in `handle_editor_event` and the shared-session
-            // role-change push in `TerminalView::on_self_role_updated`.
+            // Seed the host-pushed send permission; later changes flow through the
+            // shared-session role-change push in `TerminalView::on_self_role_updated`. Input
+            // emptiness is not pushed: the panel reads the host editor live.
             let can_send_prompt = !model.lock().shared_session_status().is_reader();
-            let input_is_empty = editor.as_ref(ctx).is_empty(ctx);
             panel.update(ctx, |panel, ctx| {
                 panel.set_can_send_prompt(can_send_prompt, ctx);
-                panel.set_input_is_empty(input_is_empty, ctx);
             });
             panel
         });
@@ -9814,11 +9814,6 @@ impl Input {
                         is_empty: is_editor_empty,
                         reason: InputEmptyStateChangeReason::Edited,
                     });
-                    if let Some(panel) = self.queued_prompts_panel.clone() {
-                        panel.update(ctx, |panel, ctx| {
-                            panel.set_input_is_empty(is_editor_empty, ctx);
-                        });
-                    }
                 }
 
                 let is_ai_input_enabled = self.ai_input_model.as_ref(ctx).is_ai_input_enabled();
@@ -10387,15 +10382,6 @@ impl Input {
                 }
             }
             EditorEvent::BufferReplaced => {
-                // Buffer replacement can change emptiness without an `Edited` event
-                // (e.g. clearing or restoring drafts).
-                if let Some(panel) = self.queued_prompts_panel.clone() {
-                    let input_is_empty = self.editor.as_ref(ctx).is_empty(ctx);
-                    panel.update(ctx, |panel, ctx| {
-                        panel.set_input_is_empty(input_is_empty, ctx);
-                    });
-                }
-
                 let ai_input_model = self.ai_input_model.as_ref(ctx);
                 if FeatureFlag::AgentMode.is_enabled()
                     && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
