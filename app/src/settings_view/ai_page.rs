@@ -6140,24 +6140,28 @@ impl SettingsWidget for AIInputWidget {
             // Only meaningful in Interrupt mode: with Queue selected, prompts already
             // queue until the end of the full response, so the LRC mode is hidden.
             if ai_settings.default_prompt_submission_mode == PromptSubmissionMode::Interrupt {
-                widget_children.push(render_dropdown_item(
-                    appearance,
-                    "Default long-running command submission mode",
-                    Some(
-                        "What happens when you submit a prompt while an agent is driving a \
-                         long-running command. Queued prompts are sent to the agent when the \
-                         command finishes.",
-                    ),
-                    None,
-                    LocalOnlyIconState::for_setting(
-                        LongRunningCommandSubmissionMode::storage_key(),
-                        LongRunningCommandSubmissionMode::sync_to_cloud(),
-                        &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                        app,
-                    ),
-                    (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
-                    &view.lrc_submission_mode_dropdown,
-                ));
+                widget_children.push(
+                    Container::new(render_dropdown_item(
+                        appearance,
+                        "Default long-running command submission mode",
+                        Some(
+                            "What happens when you submit a prompt while an agent is driving a \
+                             long-running command. Queued prompts are sent to the agent when the \
+                             command finishes.",
+                        ),
+                        None,
+                        LocalOnlyIconState::for_setting(
+                            LongRunningCommandSubmissionMode::storage_key(),
+                            LongRunningCommandSubmissionMode::sync_to_cloud(),
+                            &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                            app,
+                        ),
+                        (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
+                        &view.lrc_submission_mode_dropdown,
+                    ))
+                    .with_margin_top(styles::DESCRIPTION_MARGIN_BOTTOM)
+                    .finish(),
+                );
             }
         }
 
