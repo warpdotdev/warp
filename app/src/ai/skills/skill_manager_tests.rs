@@ -395,13 +395,7 @@ Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
     )
     .unwrap();
 
-    let resources_dir = LocalOrRemotePath::Local(resources_dir.to_path_buf());
-    let host_skills_dir = LocalOrRemotePath::Local(skills_dir.clone());
-    let skills = futures::executor::block_on(read_bundled_skills(
-        &skills_dir,
-        &host_skills_dir,
-        &resources_dir,
-    ));
+    let skills = futures::executor::block_on(read_bundled_skills(&skills_dir, temp_dir.path()));
 
     assert_eq!(skills.len(), 1);
     let skill = skills.get("test-skill").unwrap();
@@ -414,16 +408,17 @@ Run `{{warp_cli_binary_name}}` to connect to {{warp_server_url}}.
 }
 
 #[test]
-fn test_read_bundled_skills_renders_remote_host_paths() {
+fn test_read_bundled_skills_renders_host_paths() {
     let temp_dir = TempDir::new().unwrap();
-    let source_skills_dir = temp_dir.path().join("bundled/skills");
-    let source_skill_dir = source_skills_dir.join("test-skill");
-    fs::create_dir_all(&source_skill_dir).unwrap();
+    let resources_dir = temp_dir.path();
+    let skills_dir = resources_dir.join("bundled/skills");
+    let skill_dir = skills_dir.join("test-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
     fs::write(
-        source_skill_dir.join("SKILL.md"),
+        skill_dir.join("SKILL.md"),
         r#"---
 name: test-skill
-description: Test remote rendering
+description: Test path rendering
 ---
 
 Use {{skill_dir}} and {{settings_schema_path}}.
@@ -431,33 +426,22 @@ Use {{skill_dir}} and {{settings_schema_path}}.
     )
     .unwrap();
 
-    let host_id = HostId::new("remote-host".to_string());
-    let remote_resources_dir = LocalOrRemotePath::Remote(RemotePath::new(
-        host_id.clone(),
-        StandardizedPath::try_new("/opt/warp/resources").unwrap(),
-    ));
-    let remote_skills_dir = remote_resources_dir.join("bundled/skills");
-    let skills = futures::executor::block_on(read_bundled_skills(
-        &source_skills_dir,
-        &remote_skills_dir,
-        &remote_resources_dir,
-    ));
+    let skills = futures::executor::block_on(read_bundled_skills(&skills_dir, resources_dir));
 
     let skill = skills.get("test-skill").unwrap();
+    // The skill's reported path and rendered variables are anchored to the
+    // resources root the skills were read from.
     assert_eq!(
         skill.path,
-        LocalOrRemotePath::Remote(RemotePath::new(
-            host_id,
-            StandardizedPath::try_new("/opt/warp/resources/bundled/skills/test-skill/SKILL.md")
-                .unwrap(),
-        ))
+        LocalOrRemotePath::Local(skill_dir.join("SKILL.md"))
     );
-    assert!(skill
-        .content
-        .contains("/opt/warp/resources/bundled/skills/test-skill"));
-    assert!(skill
-        .content
-        .contains("/opt/warp/resources/settings_schema.json"));
+    assert!(skill.content.contains(&skill_dir.display().to_string()));
+    assert!(skill.content.contains(
+        &resources_dir
+            .join("settings_schema.json")
+            .display()
+            .to_string()
+    ));
 }
 
 #[test]
@@ -482,13 +466,7 @@ Use {{other_var}}, {{warp_cli_binary_name}}, and {{skill_dir}} together.
     )
     .unwrap();
 
-    let resources_dir = LocalOrRemotePath::Local(resources_dir.to_path_buf());
-    let host_skills_dir = LocalOrRemotePath::Local(skills_dir.clone());
-    let skills = futures::executor::block_on(read_bundled_skills(
-        &skills_dir,
-        &host_skills_dir,
-        &resources_dir,
-    ));
+    let skills = futures::executor::block_on(read_bundled_skills(&skills_dir, resources_dir));
 
     assert_eq!(skills.len(), 1);
     let skill = skills.get("test-skill").unwrap();
@@ -522,13 +500,7 @@ Plain content with no variables.
     )
     .unwrap();
 
-    let resources_dir = LocalOrRemotePath::Local(resources_dir.to_path_buf());
-    let host_skills_dir = LocalOrRemotePath::Local(skills_dir.clone());
-    let skills = futures::executor::block_on(read_bundled_skills(
-        &skills_dir,
-        &host_skills_dir,
-        &resources_dir,
-    ));
+    let skills = futures::executor::block_on(read_bundled_skills(&skills_dir, resources_dir));
 
     assert_eq!(skills.len(), 1);
     let skill = skills.get("test-skill").unwrap();
@@ -540,10 +512,7 @@ fn test_build_bundled_skill_context() {
     let temp_dir = TempDir::new().unwrap();
     let resources_dir = temp_dir.path();
     let skill_dir = resources_dir.join("bundled/skills/test-skill");
-    let context = build_bundled_skill_context(
-        &LocalOrRemotePath::Local(resources_dir.to_path_buf()),
-        &LocalOrRemotePath::Local(skill_dir.clone()),
-    );
+    let context = build_bundled_skill_context(resources_dir, &skill_dir);
 
     assert_eq!(context.len(), 7);
     assert!(context.contains_key("warp_server_url"));
@@ -650,6 +619,22 @@ fn get_skills_for_working_directory_respects_location() {
         provider: SkillProvider::Warp,
         scope: SkillScope::Bundled,
     };
+    // A bundled skill from the remote host's daemon-pushed catalog.
+    let remote_bundled_skill = ParsedSkill {
+        name: "remote-bundled".to_string(),
+        description: "remote bundled skill".to_string(),
+        path: LocalOrRemotePath::Remote(RemotePath::new(
+            same_host_id.clone(),
+            StandardizedPath::try_new(
+                "/home/user/.warp/remote-server/bundled_resources/bundled/skills/remote-bundled/SKILL.md",
+            )
+            .unwrap(),
+        )),
+        content: "# remote-bundled".to_string(),
+        line_range: None,
+        provider: SkillProvider::Warp,
+        scope: SkillScope::Bundled,
+    };
 
     let mut directory_skills = HashMap::new();
     let mut skills_by_path = HashMap::new();
@@ -684,8 +669,18 @@ fn get_skills_for_working_directory_respects_location() {
                 bundled_skill,
                 BundledSkillActivation::Always,
             );
+            manager.set_remote_bundled_skill(
+                same_host_id.clone(),
+                BundledSkill::from_definitions([(
+                    "remote-bundled".to_string(),
+                    remote_bundled_skill,
+                    BundledSkillActivation::Always,
+                )]),
+            );
         });
 
+        // A remote working directory sees the remote host's bundled catalog,
+        // never the local client's.
         let remote_skills = handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(Some(&same_host_dir), ctx)
         });
@@ -694,7 +689,8 @@ fn get_skills_for_working_directory_respects_location() {
             .map(|skill| skill.name.as_str())
             .collect();
         assert!(remote_names.contains("same-host-project"));
-        assert!(remote_names.contains("bundled"));
+        assert!(remote_names.contains("remote-bundled"));
+        assert!(!remote_names.contains("bundled"));
         assert!(!remote_names.contains("local-home"));
         assert!(!remote_names.contains("local-project"));
         assert!(!remote_names.contains("other-host-project"));
@@ -718,6 +714,7 @@ fn get_skills_for_working_directory_respects_location() {
         assert!(local_names.contains("local-home"));
         assert!(local_names.contains("local-project"));
         assert!(local_names.contains("bundled"));
+        assert!(!local_names.contains("remote-bundled"));
         assert!(!local_names.contains("same-host-project"));
         assert!(!local_names.contains("other-host-project"));
 

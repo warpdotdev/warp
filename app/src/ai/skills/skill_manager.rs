@@ -161,9 +161,20 @@ impl SkillManager {
             }
         }
 
-        // Append bundled skills whose activation condition is met.
+        // Append bundled skills whose activation condition is met, from the
+        // catalog of the host that owns the working directory: SSH sessions
+        // see the remote daemon's catalog (empty until its snapshot arrives),
+        // never the local client's.
         if FeatureFlag::BundledSkills.is_enabled() {
-            skills.extend(self.bundled_skills.local().active_descriptors(ctx));
+            let bundled = match working_directory {
+                Some(LocalOrRemotePath::Remote(remote)) => {
+                    self.bundled_skills.remote(&remote.host_id)
+                }
+                Some(LocalOrRemotePath::Local(_)) | None => Some(self.bundled_skills.local()),
+            };
+            if let Some(bundled) = bundled {
+                skills.extend(bundled.active_descriptors(ctx));
+            }
         }
 
         skills
@@ -285,11 +296,15 @@ impl SkillManager {
     }
 
     /// Returns a reference to a parsed skill for a specific SKILL.md file path, if it is cached.
+    /// Falls through to remote bundled catalogs, whose skills are addressed by path.
     pub fn skill_by_path<P: SkillPathQuery + ?Sized>(
         &self,
         skill_path: &P,
     ) -> Option<&ParsedSkill> {
-        self.skills_by_path.get(&skill_path.to_skill_location())
+        let location = skill_path.to_skill_location();
+        self.skills_by_path
+            .get(&location)
+            .or_else(|| self.bundled_skills.remote_skill_by_path(&location))
     }
 
     /// Returns the appropriate `SkillReference` for a skill at the given path.
@@ -310,7 +325,10 @@ impl SkillManager {
     /// Get the definition of a skill, if it is cached.
     pub fn skill_by_reference(&self, reference: &SkillReference) -> Option<&ParsedSkill> {
         match reference {
-            SkillReference::Path(path) => self.skills_by_path.get(path),
+            SkillReference::Path(path) => self
+                .skills_by_path
+                .get(path)
+                .or_else(|| self.bundled_skills.remote_skill_by_path(path)),
             SkillReference::BundledSkillId(id) => self.bundled_skills.local().skill(id),
         }
     }
@@ -318,15 +336,19 @@ impl SkillManager {
     /// Get the definition of a skill only if it is currently available for invocation.
     ///
     /// Path-based user skills are always controlled by normal path scoping. Bundled
-    /// skills additionally respect their runtime activation state so stale references
-    /// cannot invoke disabled bundled skills.
+    /// skills (the local catalog's ID-addressed entries and remote catalogs'
+    /// path-addressed entries) additionally respect their runtime activation
+    /// state so stale references cannot invoke disabled bundled skills.
     pub fn active_skill_by_reference(
         &self,
         reference: &SkillReference,
         ctx: &AppContext,
     ) -> Option<&ParsedSkill> {
         match reference {
-            SkillReference::Path(path) => self.skill_by_path(path),
+            SkillReference::Path(path) => self
+                .skills_by_path
+                .get(path)
+                .or_else(|| self.bundled_skills.remote_active_skill_by_path(path, ctx)),
             SkillReference::BundledSkillId(id) => self.active_bundled_skill(id, ctx),
         }
     }

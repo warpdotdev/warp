@@ -7,9 +7,11 @@ pub use telemetry::{SkillOpenOrigin, SkillTelemetryEvent};
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
 mod remote;
 #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
-pub(crate) use remote::wire_remote_bundled_skills;
+pub(crate) use remote::{bundled_skills_snapshot_protos, wire_remote_bundled_skills};
 #[cfg(feature = "local_fs")]
 mod bundled;
+#[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+pub(crate) use bundled::BundledSkill;
 #[cfg(all(feature = "local_fs", test))]
 pub use bundled::BundledSkillActivation;
 

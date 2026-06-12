@@ -249,77 +249,64 @@ fn parse_preinstall_unsupported_non_glibc() {
 }
 
 #[test]
-fn remote_server_bundle_paths_are_version_scoped() {
-    let expected_bundle_dir = format!(
-        "{}/bundles/{}",
-        remote_server_dir(),
-        remote_server_artifact_version()
+fn bundled_resources_dir_is_global_and_version_independent() {
+    let dir = remote_server_bundled_resources_dir();
+    assert_eq!(
+        dir,
+        format!("{}/{}", remote_server_dir(), BUNDLED_RESOURCES_DIR_NAME)
     );
+    // The whole point of the global location: no version in the path.
+    assert!(!dir.contains(remote_server_artifact_version()));
+}
 
-    assert_eq!(remote_server_bundle_dir(), expected_bundle_dir);
+#[test]
+fn binary_check_runs_version() {
     assert_eq!(
-        remote_server_bundle_binary(),
-        format!("{expected_bundle_dir}/{}", binary_name())
-    );
-    assert_eq!(
-        remote_server_bundle_resources_dir(),
-        format!("{expected_bundle_dir}/resources")
+        binary_check_command(),
+        format!("{} --version", remote_server_binary())
     );
 }
 
 #[test]
-fn binary_check_requires_symlink_executable_and_resources() {
-    let command = binary_check_command();
-
-    assert!(command.contains(&format!("test -L {}", remote_server_binary())));
-    assert!(command.contains(&format!(
-        "test \"$(readlink {})\" = \"{}\"",
-        remote_server_binary(),
-        remote_server_binary_symlink_target()
-    )));
-    assert!(command.contains(&format!("test -x {}", remote_server_bundle_binary())));
-    assert!(command.contains(&format!("test -d {}", remote_server_bundle_resources_dir())));
-    assert!(command.ends_with(&format!("{} --version", remote_server_binary())));
+fn removal_command_removes_binary_but_leaves_global_resources() {
+    let command = remote_server_removal_command();
+    assert_eq!(command, format!("rm -f {}", remote_server_binary()));
+    assert!(!command.contains(BUNDLED_RESOURCES_DIR_NAME));
 }
 
 #[test]
-fn removal_command_removes_compatibility_path_and_bundle() {
-    assert_eq!(
-        remote_server_removal_command(),
-        format!(
-            "rm -f {} && rm -rf {}",
-            remote_server_binary(),
-            remote_server_bundle_dir()
-        )
-    );
+fn install_script_substitutes_bundled_resources_dir_name() {
+    let script = install_script(None);
+    assert!(!script.contains("{bundled_resources_dir_name}"));
+    assert!(script.contains(&format!("$install_dir/{BUNDLED_RESOURCES_DIR_NAME}")));
 }
 
 #[cfg(unix)]
-#[test]
-fn install_script_installs_complete_bundle_and_compatibility_symlink() {
-    let test_root = std::env::temp_dir().join(format!(
-        "remote-server-bundle-install-{}",
-        uuid::Uuid::new_v4()
-    ));
-    let fake_home = test_root.join("home");
-    let tar_source = test_root.join("tar-source");
+fn make_test_tarball(
+    test_root: &std::path::Path,
+    tarball_name: &str,
+    skill_content: &str,
+    include_decoy: bool,
+) -> std::path::PathBuf {
+    let tar_source = test_root.join(format!("tar-source-{tarball_name}"));
     let resources = tar_source.join("resources/bundled/skills/test-skill");
-    let tarball = test_root.join("oz.tar.gz");
-    fs::create_dir_all(&fake_home).unwrap();
+    let tarball = test_root.join(format!("{tarball_name}.tar.gz"));
     fs::create_dir_all(&resources).unwrap();
     fs::write(
         tar_source.join("oz-test"),
         "#!/usr/bin/env bash\n[ \"$1\" = \"--version\" ]\n",
     )
     .unwrap();
-    fs::write(resources.join("SKILL.md"), "test skill").unwrap();
-    // Decoy: skills may ship companion files whose names also start with `oz`.
-    // The installer must not mistake them for the executable.
-    fs::write(
-        resources.join("oz-decoy.sh"),
-        "#!/usr/bin/env bash\nexit 1\n",
-    )
-    .unwrap();
+    fs::write(resources.join("SKILL.md"), skill_content).unwrap();
+    if include_decoy {
+        // Decoy: skills may ship companion files whose names also start
+        // with `oz`. The installer must not mistake them for the executable.
+        fs::write(
+            resources.join("oz-decoy.sh"),
+            "#!/usr/bin/env bash\nexit 1\n",
+        )
+        .unwrap();
+    }
 
     let tar_output = Command::new("tar")
         .arg("-czf")
@@ -337,12 +324,16 @@ fn install_script_installs_complete_bundle_and_compatibility_symlink() {
         "tar failed: {}",
         String::from_utf8_lossy(&tar_output.stderr)
     );
+    tarball
+}
 
+#[cfg(unix)]
+fn run_install_script(tarball: &std::path::Path, fake_home: &std::path::Path) {
     let script = install_script(Some(tarball.to_str().unwrap()));
     let install_output = Command::new("bash")
         .arg("-c")
         .arg(&script)
-        .env("HOME", &fake_home)
+        .env("HOME", fake_home)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -352,30 +343,30 @@ fn install_script_installs_complete_bundle_and_compatibility_symlink() {
         "install failed: {}",
         String::from_utf8_lossy(&install_output.stderr)
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn install_script_installs_binary_and_global_resources() {
+    let test_root = std::env::temp_dir().join(format!(
+        "remote-server-global-install-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let fake_home = test_root.join("home");
+    fs::create_dir_all(&fake_home).unwrap();
+
+    let tarball = make_test_tarball(&test_root, "first", "test skill", true);
+    run_install_script(&tarball, &fake_home);
 
     let resolve_remote_path = |path: String| path.replacen('~', fake_home.to_str().unwrap(), 1);
-    let compatibility_binary = resolve_remote_path(remote_server_binary());
-    let bundle_binary = resolve_remote_path(remote_server_bundle_binary());
-    let bundle_resources = resolve_remote_path(remote_server_bundle_resources_dir());
+    let binary = resolve_remote_path(remote_server_binary());
+    let resources = resolve_remote_path(remote_server_bundled_resources_dir());
+    let skill_md = std::path::Path::new(&resources).join("bundled/skills/test-skill/SKILL.md");
 
-    assert!(fs::symlink_metadata(&compatibility_binary)
-        .unwrap()
-        .file_type()
-        .is_symlink());
-    assert_eq!(
-        fs::read_link(&compatibility_binary).unwrap(),
-        std::path::PathBuf::from(remote_server_binary_symlink_target())
-    );
-    assert_eq!(
-        fs::canonicalize(&compatibility_binary).unwrap(),
-        fs::canonicalize(&bundle_binary).unwrap()
-    );
-    assert!(fs::metadata(&bundle_binary).unwrap().is_file());
-    assert!(fs::metadata(&bundle_resources).unwrap().is_dir());
-    assert!(std::path::Path::new(&bundle_resources)
-        .join("bundled/skills/test-skill/SKILL.md")
-        .is_file());
-    assert!(std::path::Path::new(&bundle_resources)
+    assert!(fs::metadata(&binary).unwrap().is_file());
+    assert!(fs::metadata(&resources).unwrap().is_dir());
+    assert_eq!(fs::read_to_string(&skill_md).unwrap(), "test skill");
+    assert!(std::path::Path::new(&resources)
         .join("bundled/skills/test-skill/oz-decoy.sh")
         .is_file());
 
@@ -386,15 +377,19 @@ fn install_script_installs_complete_bundle_and_compatibility_symlink() {
         .output()
         .expect("failed to run binary check command");
     assert!(check_output.status.success());
-    fs::remove_dir_all(&bundle_resources).unwrap();
-    let missing_resources_check = Command::new("bash")
-        .arg("-c")
-        .arg(binary_check_command())
-        .env("HOME", &fake_home)
-        .output()
-        .expect("failed to run binary check command without resources");
-    assert!(!missing_resources_check.status.success());
 
+    // A later install fully replaces the global resources (last install
+    // wins): updated content lands and files absent from the new artifact
+    // disappear, proving a swap rather than a merge.
+    let second_tarball = make_test_tarball(&test_root, "second", "updated skill", false);
+    run_install_script(&second_tarball, &fake_home);
+    assert_eq!(fs::read_to_string(&skill_md).unwrap(), "updated skill");
+    assert!(!std::path::Path::new(&resources)
+        .join("bundled/skills/test-skill/oz-decoy.sh")
+        .exists());
+
+    // Removal deletes the binary but leaves the global resources for the
+    // next install to overwrite.
     let removal_output = Command::new("bash")
         .arg("-c")
         .arg(remote_server_removal_command())
@@ -402,8 +397,49 @@ fn install_script_installs_complete_bundle_and_compatibility_symlink() {
         .output()
         .expect("failed to run removal command");
     assert!(removal_output.status.success());
-    assert!(!std::path::Path::new(&compatibility_binary).exists());
-    assert!(!std::path::Path::new(&bundle_binary).exists());
+    assert!(!std::path::Path::new(&binary).exists());
+    assert!(fs::metadata(&resources).unwrap().is_dir());
+
+    fs::remove_dir_all(test_root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn install_script_tolerates_tarball_without_resources() {
+    let test_root = std::env::temp_dir().join(format!(
+        "remote-server-no-resources-install-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let fake_home = test_root.join("home");
+    let tar_source = test_root.join("tar-source");
+    let tarball = test_root.join("oz.tar.gz");
+    fs::create_dir_all(&fake_home).unwrap();
+    fs::create_dir_all(&tar_source).unwrap();
+    fs::write(
+        tar_source.join("oz-test"),
+        "#!/usr/bin/env bash\n[ \"$1\" = \"--version\" ]\n",
+    )
+    .unwrap();
+
+    let tar_output = Command::new("tar")
+        .arg("-czf")
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&tar_source)
+        .arg("oz-test")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to create test tarball");
+    assert!(tar_output.status.success());
+
+    run_install_script(&tarball, &fake_home);
+
+    let resolve_remote_path = |path: String| path.replacen('~', fake_home.to_str().unwrap(), 1);
+    let binary = resolve_remote_path(remote_server_binary());
+    let resources = resolve_remote_path(remote_server_bundled_resources_dir());
+    assert!(fs::metadata(&binary).unwrap().is_file());
+    assert!(!std::path::Path::new(&resources).exists());
 
     fs::remove_dir_all(test_root).unwrap();
 }

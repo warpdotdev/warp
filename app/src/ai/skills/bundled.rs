@@ -66,12 +66,37 @@ impl BundledSkills {
     }
 
     /// Returns the catalog for a connected remote host.
-    ///
-    /// Agent Mode catalog selection is wired up in the stacked follow-up; until
-    /// then this read path is exercised by tests only.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn remote(&self, host_id: &HostId) -> Option<&BundledSkill> {
         self.remote_by_host.get(host_id)
+    }
+
+    /// Returns the remote catalog skill matching `path`, looked up in the
+    /// catalog of the host that owns the path. Remote bundled skills are
+    /// addressed by path (their paths are real files on the remote host),
+    /// unlike local bundled skills which are addressed by
+    /// [`SkillReference::BundledSkillId`].
+    pub fn remote_skill_by_path(&self, path: &LocalOrRemotePath) -> Option<&ParsedSkill> {
+        let LocalOrRemotePath::Remote(remote_path) = path else {
+            return None;
+        };
+        self.remote_by_host
+            .get(&remote_path.host_id)?
+            .skill_by_path(path)
+    }
+
+    /// Like [`Self::remote_skill_by_path`], but only returns the skill when
+    /// its activation condition is met.
+    pub fn remote_active_skill_by_path(
+        &self,
+        path: &LocalOrRemotePath,
+        ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
+        let LocalOrRemotePath::Remote(remote_path) = path else {
+            return None;
+        };
+        self.remote_by_host
+            .get(&remote_path.host_id)?
+            .active_skill_by_path(path, ctx)
     }
 
     #[cfg(test)]
@@ -105,18 +130,19 @@ impl BundledSkill {
         let Some(resources_dir) = warp_core::paths::bundled_resources_dir() else {
             return Self::default();
         };
-        Self::detect_for_resources_dir(LocalOrRemotePath::Local(resources_dir)).await
+        Self::detect_in_resources_dir(resources_dir).await
     }
 
-    /// Detect all client-shipped skill definitions, rendering their paths for
-    /// the host that owns `resources_dir`.
-    pub async fn detect_for_resources_dir(resources_dir: LocalOrRemotePath) -> Self {
-        let Some(source_resources_dir) = warp_core::paths::bundled_resources_dir() else {
-            return Self::default();
-        };
+    /// Detect all skill definitions under the given resources root on the
+    /// local filesystem, rendering skill content against this host.
+    ///
+    /// Called directly by the remote-server daemon, whose resources live at
+    /// the global install location rather than inside an app bundle (which
+    /// is what [`warp_core::paths::bundled_resources_dir`] resolves).
+    pub(crate) async fn detect_in_resources_dir(resources_dir: PathBuf) -> Self {
         let (mut definitions, figma_definitions) = futures::join!(
-            load_bundled_skill_definitions(&source_resources_dir, &resources_dir),
-            load_figma_skill_definitions(&source_resources_dir, &resources_dir)
+            load_bundled_skill_definitions(&resources_dir),
+            load_figma_skill_definitions(&resources_dir)
         );
         definitions.extend(figma_definitions);
         Self { definitions }
@@ -155,6 +181,62 @@ impl BundledSkill {
             .then_some(&definition.skill)
     }
 
+    /// Returns a bundled skill by its `SKILL.md` path.
+    pub fn skill_by_path(&self, path: &LocalOrRemotePath) -> Option<&ParsedSkill> {
+        self.definitions
+            .values()
+            .map(|definition| &definition.skill)
+            .find(|skill| skill.path == *path)
+    }
+
+    /// Returns a bundled skill by its `SKILL.md` path only if its activation
+    /// condition is met.
+    pub fn active_skill_by_path(
+        &self,
+        path: &LocalOrRemotePath,
+        ctx: &AppContext,
+    ) -> Option<&ParsedSkill> {
+        self.definitions
+            .values()
+            .find(|definition| definition.skill.path == *path)
+            .filter(|definition| definition.activation.is_enabled(ctx))
+            .map(|definition| &definition.skill)
+    }
+
+    /// Builds a catalog from pre-parsed definitions. Used for catalogs
+    /// received from a remote host's daemon, which parses and renders the
+    /// skills against its own filesystem.
+    pub(crate) fn from_definitions(
+        definitions: impl IntoIterator<Item = (String, ParsedSkill, BundledSkillActivation)>,
+    ) -> Self {
+        let definitions = definitions
+            .into_iter()
+            .map(|(id, skill, activation)| {
+                let icon = icon_for_bundled_skill(&id);
+                (
+                    id,
+                    BundledSkillDefinition {
+                        skill,
+                        activation,
+                        icon,
+                    },
+                )
+            })
+            .collect();
+        Self { definitions }
+    }
+
+    /// Iterates the catalog's definitions as `(id, skill, activation)`.
+    /// Used by the daemon to serialize its catalog for the
+    /// `BundledSkillsSnapshot` push.
+    pub(crate) fn iter_definitions(
+        &self,
+    ) -> impl Iterator<Item = (&str, &ParsedSkill, &BundledSkillActivation)> {
+        self.definitions
+            .iter()
+            .map(|(id, definition)| (id.as_str(), &definition.skill, &definition.activation))
+    }
+
     #[cfg(test)]
     pub fn insert_for_testing(
         &mut self,
@@ -176,17 +258,15 @@ impl BundledSkill {
 
 /// Load skill definitions bundled with Warp.
 async fn load_bundled_skill_definitions(
-    source_resources_dir: &Path,
-    resources_dir: &LocalOrRemotePath,
+    resources_dir: &Path,
 ) -> HashMap<String, BundledSkillDefinition> {
-    let skills_dir = source_resources_dir.join("bundled").join("skills");
-    let host_skills_dir = resources_dir.join("bundled").join("skills");
-    read_bundled_skills(&skills_dir, &host_skills_dir, resources_dir)
+    let skills_dir = resources_dir.join("bundled").join("skills");
+    read_bundled_skills(&skills_dir, resources_dir)
         .await
         .into_iter()
         .map(|(id, skill)| {
             let icon = icon_for_bundled_skill(&id);
-            let activation = activation_for_bundled_skill(&id, source_resources_dir);
+            let activation = activation_for_bundled_skill(&id, resources_dir);
             let bundled = BundledSkillDefinition {
                 skill,
                 activation,
@@ -199,18 +279,13 @@ async fn load_bundled_skill_definitions(
 
 /// Load Figma-specific bundled skills from the `figma/` subdirectory.
 async fn load_figma_skill_definitions(
-    source_resources_dir: &Path,
-    resources_dir: &LocalOrRemotePath,
+    resources_dir: &Path,
 ) -> HashMap<String, BundledSkillDefinition> {
-    let figma_skills_dir = source_resources_dir
+    let figma_skills_dir = resources_dir
         .join("bundled")
         .join("mcp_skills")
         .join("figma");
-    let host_figma_skills_dir = resources_dir
-        .join("bundled")
-        .join("mcp_skills")
-        .join("figma");
-    read_bundled_skills(&figma_skills_dir, &host_figma_skills_dir, resources_dir)
+    read_bundled_skills(&figma_skills_dir, resources_dir)
         .await
         .into_iter()
         .map(|(id, skill)| {
@@ -224,11 +299,12 @@ async fn load_figma_skill_definitions(
         .collect()
 }
 
-/// Read bundled skill definitions from the specified directory.
+/// Read bundled skill definitions from the specified directory, rendering
+/// handlebars variables against this host's filesystem (`resources_dir` is
+/// the resources root the skills belong to).
 pub(crate) async fn read_bundled_skills(
     skills_dir: &Path,
-    host_skills_dir: &LocalOrRemotePath,
-    resources_dir: &LocalOrRemotePath,
+    resources_dir: &Path,
 ) -> HashMap<String, ParsedSkill> {
     let mut skills = HashMap::new();
 
@@ -262,12 +338,10 @@ pub(crate) async fn read_bundled_skills(
             );
             continue;
         };
-        let host_skill_dir = host_skills_dir.join(skill_id);
-        let context = build_bundled_skill_context(resources_dir, &host_skill_dir);
+        let context = build_bundled_skill_context(resources_dir, &entry_path);
 
         // Apply variable substitution to the skill content.
         skill.content = handlebars::render_template(&skill.content, &context);
-        skill.path = host_skill_dir.join("SKILL.md");
         skills.insert(skill_id.to_owned(), skill);
     }
 
@@ -287,8 +361,8 @@ pub(crate) async fn read_bundled_skills(
 /// - `{{settings_file_path}}` - Path to the user's settings TOML file
 /// - `{{keybindings_file_path}}` - Path to the user's keybindings YAML file
 pub(crate) fn build_bundled_skill_context(
-    resources_dir: &LocalOrRemotePath,
-    skill_dir: &LocalOrRemotePath,
+    resources_dir: &Path,
+    skill_dir: &Path,
 ) -> HashMap<String, String> {
     [
         (
@@ -313,9 +387,12 @@ pub(crate) fn build_bundled_skill_context(
         ),
         (
             "settings_schema_path".to_owned(),
-            resources_dir.join("settings_schema.json").display_path(),
+            resources_dir
+                .join("settings_schema.json")
+                .display()
+                .to_string(),
         ),
-        ("skill_dir".to_owned(), skill_dir.display_path()),
+        ("skill_dir".to_owned(), skill_dir.display().to_string()),
     ]
     .into_iter()
     .collect()

@@ -237,45 +237,30 @@ REMOTE_SCRIPT
     "$LOCAL_BUNDLE_TARBALL" \
     "${REMOTE_USER}@${REMOTE_HOST}:~/$REMOTE_DIR/$TMP_BUNDLE_NAME"
 
-  echo "==> Installing bundle for ${REMOTE_USER}"
+  echo "==> Installing binary and resources for ${REMOTE_USER}"
+  # Args: <remote dir> <tarball name> <binary name in tarball> <installed name>.
+  # The tarball ships the unversioned binary beside its resources/ tree; the
+  # installed binary carries the version suffix the Integration channel
+  # launches. The resources tree lands at `bundled_resources`, the global
+  # version-independent location the daemon reads (must match
+  # BUNDLED_RESOURCES_DIR_NAME in crates/remote_server/src/setup.rs).
   "${SSH_CMD[@]}" "${SSH_OPTS[@]}" "${REMOTE_USER}@${REMOTE_HOST}" \
-    "bash -s -- '$REMOTE_DIR' '$TMP_BUNDLE_NAME' '$BUNDLE_VERSION' '$BUNDLE_BINARY_NAME' '$BINARY_NAME'" <<'REMOTE_SCRIPT'
+    "bash -s -- '$REMOTE_DIR' '$TMP_BUNDLE_NAME' '$BUNDLE_BINARY_NAME' '$BINARY_NAME'" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
-REMOTE_ROOT="$HOME/$1"
-TARBALL="$REMOTE_ROOT/$2"
-BUNDLE_VERSION="$3"
-BUNDLE_BINARY_NAME="$4"
-COMPATIBILITY_NAME="$5"
-BUNDLES_DIR="$REMOTE_ROOT/bundles"
-BUNDLE_DIR="$BUNDLES_DIR/$BUNDLE_VERSION"
-BUNDLE_TMP="$BUNDLES_DIR/.$BUNDLE_VERSION.install.$$"
-SYMLINK_TMP="$REMOTE_ROOT/.$COMPATIBILITY_NAME.link.$$"
+cd "$HOME/$1"
+tar -xzf "$2"
+rm -f "$2"
 
-cleanup() {
-  rm -f "$TARBALL" "$SYMLINK_TMP"
-  rm -rf "$BUNDLE_TMP"
-}
-trap cleanup EXIT
+rm -rf bundled_resources
+mv resources bundled_resources
 
-mkdir -p "$BUNDLE_TMP"
-tar -xzf "$TARBALL" -C "$BUNDLE_TMP"
-chmod 755 "$BUNDLE_TMP/$BUNDLE_BINARY_NAME"
-test -x "$BUNDLE_TMP/$BUNDLE_BINARY_NAME"
-test -d "$BUNDLE_TMP/resources"
-
-rm -rf "$BUNDLE_DIR"
-mv "$BUNDLE_TMP" "$BUNDLE_DIR"
-ln -s "bundles/$BUNDLE_VERSION/$BUNDLE_BINARY_NAME" "$SYMLINK_TMP"
-mv -f "$SYMLINK_TMP" "$REMOTE_ROOT/$COMPATIBILITY_NAME"
-
-test -L "$REMOTE_ROOT/$COMPATIBILITY_NAME"
-test -x "$BUNDLE_DIR/$BUNDLE_BINARY_NAME"
-test -d "$BUNDLE_DIR/resources"
-"$REMOTE_ROOT/$COMPATIBILITY_NAME" --version
+chmod 755 "$3"
+mv -f "$3" "$4"
+"./$4" --version
 REMOTE_SCRIPT
 done
 
 echo ""
-echo "==> Done! Bundle deployed to ${REMOTE_HOST}:~/$REMOTE_DIR/bundles/$BUNDLE_VERSION for users: ${REMOTE_USERS[*]}"
-echo "    Compatibility symlink: ~/$REMOTE_DIR/$BINARY_NAME"
+echo "==> Done! Binary deployed to ${REMOTE_HOST}:~/$REMOTE_DIR/$BINARY_NAME for users: ${REMOTE_USERS[*]}"
+echo "    Bundled resources: ~/$REMOTE_DIR/bundled_resources"

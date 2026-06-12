@@ -6,12 +6,12 @@ use warpui::App;
 
 use super::super::diff_state_tracker::RemoteDiffStateManager;
 use super::super::proto::{
-    server_message, write_file_response, Authenticate, Initialize, ServerMessage,
-    WriteFileResponse, WriteFileSuccess,
+    server_message, write_file_response, Authenticate, BundledSkillProto, Initialize,
+    ServerMessage, WriteFileResponse, WriteFileSuccess,
 };
 use super::super::protocol::RequestId;
 use super::super::server_buffer_tracker::ServerBufferTracker;
-use super::{bundled_resources_dir_for_executable, ConnectionId, PendingFileOps, ServerModel};
+use super::{ConnectionId, PendingFileOps, ServerModel};
 use crate::auth::auth_state::AuthState;
 use crate::code_review::diff_state::DiffMode;
 use crate::remote_server::diff_state_tracker::DiffModelKey;
@@ -23,7 +23,7 @@ fn test_model(app: &mut App) -> ServerModel {
         grace_timer_cancel: None,
         in_progress: HashMap::new(),
         host_id: "test-host-id".to_string(),
-        bundled_resources_dir: None,
+        bundled_skills: None,
         executors: HashMap::new(),
         pending_file_ops: PendingFileOps::new(),
         auth_state: Arc::new(AuthState::new_logged_out_for_test()),
@@ -42,25 +42,52 @@ fn test_key(repo: &str, mode: DiffMode) -> DiffModelKey {
     }
 }
 
-/// The compatibility symlink must resolve resources from its canonical bundle.
-#[cfg(unix)]
+fn test_bundled_skill_proto(id: &str) -> BundledSkillProto {
+    BundledSkillProto {
+        id: id.to_string(),
+        name: id.to_string(),
+        description: format!("{id} description"),
+        path: format!(
+            "/home/user/.warp/remote-server/bundled_resources/bundled/skills/{id}/SKILL.md"
+        ),
+        content: format!("# {id}"),
+        requires_mcp: None,
+    }
+}
+
+/// Parse completion broadcasts the catalog to every connection.
 #[test]
-fn bundled_resources_dir_is_discovered_beside_canonical_executable() {
-    use std::os::unix::fs::symlink;
+fn bundled_skills_broadcast_reaches_all_connections() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let (first_tx, first_rx) = async_channel::unbounded();
+        let (second_tx, second_rx) = async_channel::unbounded();
+        model
+            .connection_senders
+            .insert(uuid::Uuid::new_v4(), first_tx);
+        model
+            .connection_senders
+            .insert(uuid::Uuid::new_v4(), second_tx);
 
-    let temp_dir = tempfile::tempdir().unwrap();
-    let bundle_dir = temp_dir.path().join("bundle");
-    let executable = bundle_dir.join("oz");
-    let resources_dir = bundle_dir.join("resources");
-    let compatibility_symlink = temp_dir.path().join("oz");
-    std::fs::create_dir_all(&resources_dir).unwrap();
-    std::fs::write(&executable, "").unwrap();
-    symlink(&executable, &compatibility_symlink).unwrap();
+        // Before parsing completes the broadcast is a no-op.
+        model.broadcast_bundled_skills_snapshot();
+        assert!(first_rx.try_recv().is_err());
 
-    assert_eq!(
-        bundled_resources_dir_for_executable(&compatibility_symlink),
-        Some(std::fs::canonicalize(resources_dir).unwrap())
-    );
+        model.bundled_skills = Some(vec![test_bundled_skill_proto("test-skill")]);
+        model.broadcast_bundled_skills_snapshot();
+
+        for rx in [first_rx, second_rx] {
+            let msg = rx.try_recv().expect("connection should receive snapshot");
+            assert!(msg.request_id.is_empty(), "snapshot must be a push message");
+            match msg.message {
+                Some(server_message::Message::BundledSkillsSnapshot(snapshot)) => {
+                    assert_eq!(snapshot.skills.len(), 1);
+                    assert_eq!(snapshot.skills[0].id, "test-skill");
+                }
+                other => panic!("expected BundledSkillsSnapshot, got {other:?}"),
+            }
+        }
+    });
 }
 
 #[test]

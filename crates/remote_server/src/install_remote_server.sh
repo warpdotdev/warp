@@ -1,23 +1,15 @@
 #!/usr/bin/env bash
-# Installs the Warp remote server on a remote host.
-#
-# Install layout:
+# Installs the Warp remote server binary on a remote host, plus the
+# artifact's `resources/` tree (bundled skills, settings schema) at a
+# global, version-independent location:
 #
 #   {install_dir}/
-#   ├── bundles/{bundle_version}/      ← the artifact's shipped layout, unchanged:
-#   │   ├── {binary_name}                 the executable...
-#   │   └── resources/                    ...and its sibling resources
-#   └── {binary_name}{version_suffix}  ── symlink ─▶ bundles/{bundle_version}/{binary_name}
+#   ├── {binary_name}{version_suffix}   ← the executable
+#   └── bundled_resources/              ← the artifact's resources tree
 #
-# The bundle preserves the executable-beside-resources pairing exactly as the
-# release artifact ships it, because the daemon locates its resources by
-# canonicalizing its own executable path and reading the sibling `resources/`
-# directory. Bundles are version-scoped because the daemon outlives client
-# updates: an older daemon may still be running while a newer client installs,
-# and a single shared resources directory would swap skills and schema files
-# out from under it. The version-suffixed symlink keeps the launch path that
-# every client codepath already uses, while the shipped binary keeps its
-# unsuffixed name inside the bundle.
+# Resources are deliberately decoupled from the binary version: the last
+# install wins. An older daemon that is still running parsed its skills at
+# startup, so a slightly newer resources tree underneath it is accepted.
 #
 # Placeholders (substituted at runtime by setup.rs):
 #   {download_base_url}         — e.g. https://app.warp.dev/download/cli
@@ -26,8 +18,7 @@
 #   {binary_name}               — e.g. oz | oz-dev | oz-preview
 #   {version_query}             — e.g. &version=v0.2026... (empty when no release tag)
 #   {version_suffix}            — e.g. -v0.2026...        (empty when no release tag)
-#   {bundle_version}            — version-scoped bundle directory name
-#   {binary_symlink_target}     — relative target for the compatibility symlink
+#   {bundled_resources_dir_name} — global resources directory name (e.g. bundled_resources)
 #   {no_http_client_exit_code}  — exit code when neither curl nor wget is available
 #   {staging_tarball_path}      — path to a pre-uploaded tarball (SCP fallback; empty normally)
 set -e
@@ -72,12 +63,6 @@ tmpdir=$(mktemp -d "$install_dir/.install.XXXXXX")
 # instead of clobbering with the cleanup's exit code.
 cleanup() {
   rm -rf "$tmpdir" 2>/dev/null || true
-  if [ -n "${install_bundle_tmp:-}" ]; then
-    rm -rf "$install_bundle_tmp" 2>/dev/null || true
-  fi
-  if [ -n "${symlink_tmp:-}" ]; then
-    rm -f "$symlink_tmp" 2>/dev/null || true
-  fi
 }
 trap cleanup EXIT
 
@@ -110,44 +95,18 @@ tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 # whose names also start with `oz`.
 bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' ! -path '*/resources/*' | head -n1)
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
-resources="$(dirname "$bin")/resources"
-if [ ! -d "$resources" ]; then echo "no resources directory found in tarball" >&2; exit 1; fi
-
-# Assemble the complete bundle in the temp dir first: assembly takes multiple
-# moves, so it must happen at a path nothing launches from. The shipped
-# executable-beside-resources pairing is preserved as-is.
-staged_bundle="$tmpdir/bundle"
-mkdir -p "$staged_bundle"
 chmod +x "$bin"
-mv "$bin" "$staged_bundle/{binary_name}"
-mv "$resources" "$staged_bundle/resources"
 
-bundles_dir="$install_dir/bundles"
-bundle_dir="$bundles_dir/{bundle_version}"
-mkdir -p "$bundles_dir"
+# Install the resources tree at the global, version-independent location
+# the daemon reads. `$tmpdir` lives inside `$install_dir`, so the `mv` is a
+# same-filesystem rename. Installed before the binary so an interrupted
+# install never leaves a new binary without its resources — the binary miss
+# re-triggers this script. A tarball without resources is not an error: the
+# daemon simply has no bundled skills.
+resources="$(dirname "$bin")/resources"
+if [ -d "$resources" ]; then
+  rm -rf "$install_dir/{bundled_resources_dir_name}"
+  mv "$resources" "$install_dir/{bundled_resources_dir_name}"
+fi
 
-# Install the staged bundle with a single directory rename so the bundle
-# either exists in full or not at all — an interrupted install must never
-# leave a binary without its resources at a launchable path. The temp name is
-# dot-prefixed and PID-suffixed so concurrent installs cannot collide.
-# Replacing an existing bundle is only needed to repair an incomplete install
-# at this version; healthy bundles are skipped by the pre-install binary check.
-install_bundle_tmp="$bundles_dir/.{bundle_version}.install.$$"
-rm -rf "$install_bundle_tmp"
-mv "$staged_bundle" "$install_bundle_tmp"
-rm -rf "$bundle_dir"
-mv "$install_bundle_tmp" "$bundle_dir"
-
-# Point the historical launch path at the bundle. Clients launch the
-# version-suffixed path they have always used, while the shipped binary keeps
-# its unsuffixed name beside its resources — the symlink bridges the two, and
-# because the daemon canonicalizes through it, the daemon resolves its own
-# bundle's resources. The target is relative to keep the install relocatable.
-# The link is created at a temp name and renamed into place because `ln -s`
-# cannot atomically replace an existing path (including a legacy regular-file
-# binary being upgraded to the bundle layout).
-binary_path="$install_dir/{binary_name}{version_suffix}"
-symlink_tmp="$install_dir/.{binary_name}{version_suffix}.link.$$"
-rm -f "$symlink_tmp"
-ln -s "{binary_symlink_target}" "$symlink_tmp"
-mv -f "$symlink_tmp" "$binary_path"
+mv "$bin" "$install_dir/{binary_name}{version_suffix}"

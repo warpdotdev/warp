@@ -45,7 +45,10 @@ fn local_and_remote_catalogs_are_isolated() {
             .map(|skill| skill.content.as_str()),
         Some("local")
     );
-    assert_eq!(remote_content(&bundled_skills, &first_host_id), Some("first"));
+    assert_eq!(
+        remote_content(&bundled_skills, &first_host_id),
+        Some("first")
+    );
     assert_eq!(
         remote_content(&bundled_skills, &second_host_id),
         Some("second")

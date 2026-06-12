@@ -118,6 +118,7 @@ message ServerMessage {
     GitGetPrInfoResponse git_get_pr_info_response = 30;
     GitGenerateCommitMessageResponse git_generate_commit_message_response = 31;
     GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 32;
+    BundledSkillsSnapshot bundled_skills_snapshot = 33;
   }
 }
 
@@ -170,9 +171,6 @@ message Abort {
 message InitializeResponse {
   string server_version = 1;
   string host_id = 2;
-  // Absolute path to the packaged resources installed beside the daemon.
-  // Empty when the daemon has no packaged resources available.
-  string bundled_resources_dir = 3;
 }
 
 // Sent by the client after the SSH session has been bootstrapped.
@@ -242,6 +240,32 @@ message ErrorResponse {
   string message = 2;
 }
 
+// ── Bundled skills ────────────────────────────────────────────────
+
+// One bundled skill, pre-parsed and handlebars-rendered by the daemon
+// against its own filesystem. Named with the `Proto` suffix (like
+// `FileContextProto`) to avoid colliding with the app's `BundledSkill`.
+message BundledSkillProto {
+  // Directory-based skill ID (unique within the bundled catalog).
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  // Absolute path to the skill's SKILL.md on this host.
+  string path = 4;
+  // Skill content with handlebars variables rendered for this host.
+  string content = 5;
+  // When set, the skill is only active while the named MCP integration
+  // is running on the client (e.g. "figma"). Evaluated client-side.
+  optional string requires_mcp = 6;
+}
+
+// Server → client push: the daemon's bundled skill catalog. Sent to a
+// connection after its Initialize completes (when parsing has already
+// finished) and broadcast to all connections when parsing completes.
+// Never blocks the initialize handshake.
+message BundledSkillsSnapshot {
+  repeated BundledSkillProto skills = 1;
+}
 
 // ── Shared repo metadata sub-messages ─────────────────────────────
 // Mirror the Rust types in repo_metadata/src/file_tree_update.rs.
