@@ -3710,18 +3710,16 @@ impl DriveIndex {
                     .into_item(),
             );
 
-            if FeatureFlag::AgentModeWorkflows.is_enabled() {
-                menu_items.push(
-                    MenuItemFields::new(AGENT_MODE_WORKFLOW_LABEL)
-                        .with_on_select_action(DriveIndexAction::create_object(
-                            DriveObjectType::AgentModeWorkflow,
-                            *space,
-                            None,
-                        ))
-                        .with_icon(Icon::Prompt)
-                        .into_item(),
-                );
-            }
+            menu_items.push(
+                MenuItemFields::new(AGENT_MODE_WORKFLOW_LABEL)
+                    .with_on_select_action(DriveIndexAction::create_object(
+                        DriveObjectType::AgentModeWorkflow,
+                        *space,
+                        None,
+                    ))
+                    .with_icon(Icon::Prompt)
+                    .into_item(),
+            );
 
             menu_items.push(
                 MenuItemFields::new(NOTEBOOK_LABEL)
@@ -4381,18 +4379,16 @@ impl DriveIndex {
                                 .into_item(),
                         );
 
-                        if FeatureFlag::AgentModeWorkflows.is_enabled() {
-                            menu_items.push(
-                                MenuItemFields::new(INDEX_AGENT_MODE_WORKFLOW_LABEL)
-                                    .with_on_select_action(DriveIndexAction::create_object(
-                                        DriveObjectType::AgentModeWorkflow,
-                                        *space,
-                                        Some(*folder_id),
-                                    ))
-                                    .with_icon(Icon::Prompt)
-                                    .into_item(),
-                            );
-                        }
+                        menu_items.push(
+                            MenuItemFields::new(INDEX_AGENT_MODE_WORKFLOW_LABEL)
+                                .with_on_select_action(DriveIndexAction::create_object(
+                                    DriveObjectType::AgentModeWorkflow,
+                                    *space,
+                                    Some(*folder_id),
+                                ))
+                                .with_icon(Icon::Prompt)
+                                .into_item(),
+                        );
 
                         menu_items.push(
                             MenuItemFields::new(INDEX_NOTEBOOK_LABEL)

@@ -86,9 +86,7 @@ impl ZeroState {
         let mut valid_filters = vec![];
         if show_warp_drive {
             valid_filters.push(QueryFilter::Workflows);
-            if FeatureFlag::AgentModeWorkflows.is_enabled()
-                && AISettings::as_ref(app).is_any_ai_enabled(app)
-            {
+            if AISettings::as_ref(app).is_any_ai_enabled(app) {
                 valid_filters.push(QueryFilter::AgentModeWorkflows);
             }
             valid_filters.push(QueryFilter::Notebooks);

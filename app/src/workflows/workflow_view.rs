@@ -322,8 +322,6 @@ pub struct WorkflowView {
     all_workflow_enums: HashMap<SyncId, WorkflowEnumData>,
 
     /// `true` if this workflow view is for viewing/editing an AI workflow.
-    ///
-    /// This is currently internal-only, gated with the `am_workflows` feature flag.
     is_for_agent_mode: bool,
 }
 
