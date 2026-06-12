@@ -44,9 +44,10 @@ use crate::ai::blocklist::summarization_cancel_dialog::{
     self, SummarizationCancelDialog, SummarizationCancelDialogEvent,
 };
 use crate::ai::blocklist::{
-    ai_brand_color, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIContextEvent,
-    BlocklistAIContextModel, BlocklistAIController, BlocklistAIHistoryEvent, BlocklistAIInputEvent,
-    BlocklistAIInputModel, QueuedQueryEvent, QueuedQueryModel, ResponseStreamId,
+    ai_brand_color, is_lrc_auto_queue_active, BlocklistAIActionEvent, BlocklistAIActionModel,
+    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
+    BlocklistAIHistoryEvent, BlocklistAIInputEvent, BlocklistAIInputModel, QueuedQueryEvent,
+    QueuedQueryModel, ResponseStreamId,
 };
 use crate::ai::llms::LLMPreferences;
 use crate::ai::AgentTip;
@@ -839,8 +840,10 @@ impl BlocklistAIStatusBar {
                     ButtonProps {
                         button_handle: &self.state_handles.queue_next_prompt_button,
                         keystroke: self.queue_next_prompt_keystroke.as_ref(),
-                        is_active: QueuedQueryModel::as_ref(app)
-                            .is_queue_next_prompt_enabled(conversation.id()),
+                        is_active: QueuedQueryModel::as_ref(app).is_queue_next_prompt_enabled(
+                            conversation.id(),
+                            is_lrc_auto_queue_active(active_block, conversation.id(), app),
+                        ),
                     },
                 ),
                 stop_button: Some(ButtonProps {

@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
 use uuid::Uuid;
-use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
+use crate::features::FeatureFlag;
 use crate::settings::{AISettings, AISettingsChangedEvent, PromptSubmissionMode};
+use crate::terminal::model::block::Block;
 
 /// A globally unique identifier for a single queued prompt row.
 /// Used by the queue panel to address rows across reorder, edit, and delete.
@@ -28,6 +30,8 @@ pub enum QueuedQueryOrigin {
     QueueSlashCommand,
     /// Filed via the auto-queue toggle in the warping indicator.
     AutoQueueToggle,
+    /// Filed because auto-queue was in effect while an agent controlled a long-running command.
+    LrcAutoQueue,
     /// Filed as the follow-up prompt of a `/compact-and <prompt>` slash command, waiting for
     /// the summarize to finish.
     CompactAndSlashCommand,
@@ -161,6 +165,9 @@ struct ConversationQueueState {
     /// dispatched and cleared when it finishes; keeps the queue accepting new rows while the
     /// agent is idle and gates the next drain until the command completes.
     command_in_flight: bool,
+    /// Manual queue toggle made while an agent controls a long-running command. Cleared when
+    /// the command ends; never touches `queue_next_prompt_override`.
+    queue_next_lrc_prompt_override: Option<bool>,
 }
 
 /// App-wide singleton owning the queued prompts and auto-queue toggle for every conversation,
@@ -236,14 +243,20 @@ impl QueuedQueryModel {
 
         // Cache the default submission mode and refresh whenever the AI setting
         // changes. The render path consults the cache instead of dereferencing
-        // the setting on every call.
+        // the setting on every call. The auto-queue-during-LRC setting is read by
+        // callers directly, but its changes also re-emit `DefaultModeChanged` so
+        // the chip and ghost text re-render with the new effective state.
         let default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
         let ai_settings_handle = AISettings::handle(ctx);
-        ctx.subscribe_to_model(&ai_settings_handle, |this, event, ctx| {
-            if matches!(event, AISettingsChangedEvent::PromptSubmissionMode { .. }) {
+        ctx.subscribe_to_model(&ai_settings_handle, |this, event, ctx| match event {
+            AISettingsChangedEvent::PromptSubmissionMode { .. } => {
                 this.default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
                 ctx.emit(QueuedQueryEvent::DefaultModeChanged);
             }
+            AISettingsChangedEvent::AutoQueuePromptsDuringLongRunningCommands { .. } => {
+                ctx.emit(QueuedQueryEvent::DefaultModeChanged);
+            }
+            _ => {}
         });
 
         Self {
@@ -372,10 +385,21 @@ impl QueuedQueryModel {
 
     /// Returns the per-conversation auto-queue toggle state. Falls back to the cached
     /// [`AISettings::default_prompt_submission_mode`] when the conversation has no
-    /// explicit override.
-    pub fn is_queue_next_prompt_enabled(&self, conversation_id: AIConversationId) -> bool {
-        self.queues
-            .get(&conversation_id)
+    /// explicit override. When `lrc_auto_queue_active` (see [`is_lrc_auto_queue_active`]),
+    /// queueing is instead on by default, subject only to a toggle made during that
+    /// command ([`Self::toggle_queue_next_prompt_during_lrc`]).
+    pub fn is_queue_next_prompt_enabled(
+        &self,
+        conversation_id: AIConversationId,
+        lrc_auto_queue_active: bool,
+    ) -> bool {
+        let state = self.queues.get(&conversation_id);
+        if lrc_auto_queue_active {
+            return state
+                .and_then(|state| state.queue_next_lrc_prompt_override)
+                .unwrap_or(true);
+        }
+        state
             .and_then(|state| state.queue_next_prompt_override)
             .unwrap_or(self.default_mode == PromptSubmissionMode::Queue)
     }
@@ -389,10 +413,39 @@ impl QueuedQueryModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let current = self.is_queue_next_prompt_enabled(conversation_id);
+        let current = self.is_queue_next_prompt_enabled(conversation_id, false);
         let state = self.queues.entry(conversation_id).or_default();
         state.queue_next_prompt_override = Some(!current);
         ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
+    }
+
+    /// Toggles the auto-queue state for the duration of the agent-controlled long-running
+    /// command. Writes the LRC-scoped override instead of the persistent per-conversation
+    /// one; [`Self::clear_queue_next_lrc_prompt_override`] resets it when the command ends.
+    pub fn toggle_queue_next_prompt_during_lrc(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let current = self.is_queue_next_prompt_enabled(conversation_id, true);
+        let state = self.queues.entry(conversation_id).or_default();
+        state.queue_next_lrc_prompt_override = Some(!current);
+        ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
+    }
+
+    /// Clears the LRC-scoped auto-queue override when the long-running command ends, so the
+    /// conversation reverts to its pre-command queue state.
+    pub fn clear_queue_next_lrc_prompt_override(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(state) = self.queues.get_mut(&conversation_id) else {
+            return;
+        };
+        if state.queue_next_lrc_prompt_override.take().is_some() {
+            ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
+        }
     }
 
     /// Appends `query` to the tail of `conversation_id`'s queue.
@@ -687,6 +740,22 @@ impl QueuedQueryModel {
             query_id,
         });
     }
+}
+
+/// Returns true when the agent is in control of `active_block`'s long-running command on
+/// behalf of `conversation_id` and
+/// [`AISettings::auto_queue_prompts_during_long_running_commands`] is enabled — the
+/// conditions under which queue mode is auto-enabled. Feeds the `lrc_auto_queue_active`
+/// parameter of [`QueuedQueryModel::is_queue_next_prompt_enabled`].
+pub(crate) fn is_lrc_auto_queue_active(
+    active_block: &Block,
+    conversation_id: AIConversationId,
+    app: &AppContext,
+) -> bool {
+    FeatureFlag::QueueSlashCommand.is_enabled()
+        && *AISettings::as_ref(app).auto_queue_prompts_during_long_running_commands
+        && active_block.is_agent_in_control()
+        && active_block.ai_conversation_id() == Some(conversation_id)
 }
 
 #[cfg(test)]

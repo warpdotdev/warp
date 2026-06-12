@@ -518,6 +518,7 @@ pub mod flags {
         "Orchestration_Message_Display_AlwaysCollapse";
     pub const PROMPT_SUBMISSION_INTERRUPT: &str = "Prompt_Submission_Interrupt";
     pub const PROMPT_SUBMISSION_QUEUE: &str = "Prompt_Submission_Queue";
+    pub const AUTO_QUEUE_PROMPTS_DURING_LRC_FLAG: &str = "Auto_Queue_Prompts_During_LRC";
     pub const SHOW_TERMINAL_INPUT_MESSAGE_LINE_FLAG: &str = "Show_Terminal_Input_Message_Line";
     pub const PRESERVE_INPUT_FOCUS_ON_BLOCK_SELECTION_FLAG: &str =
         "Preserve_Input_Focus_On_Block_Selection";

@@ -45,9 +45,9 @@ use super::settings_page::{
     build_sub_header, build_toggle_element, render_body_item_label,
     render_body_item_label_with_icon, render_custom_size_header, render_dropdown_item,
     render_dropdown_item_label, render_full_pane_width_ai_button, render_input_list,
-    render_separator, render_settings_info_banner, InputListItem, LocalOnlyIconState, MatchData,
-    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
-    HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
+    render_separator, render_settings_info_banner, AdditionalInfo, InputListItem,
+    LocalOnlyIconState, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
+    SettingsWidget, ToggleState, HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
 };
 use super::{
     editor_text_colors, flags, SettingActionPairContexts, SettingActionPairDescriptions,
@@ -81,15 +81,16 @@ use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
-    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
-    AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
-    IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
-    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
-    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
-    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
-    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
+    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled,
+    AutoQueuePromptsDuringLongRunningCommands, AwsBedrockAutoLogin, AwsBedrockCredentialsEnabled,
+    CanUseWarpCreditsForFallback, CodeSettings, CodebaseContextEnabled, FileBasedMcpEnabled,
+    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
+    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
+    NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
+    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
+    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
+    WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -391,6 +392,19 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             .collect();
         app.register_fixed_bindings(mode_bindings);
     }
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+        vec![ToggleSettingActionPair::new(
+            "auto-queue prompts during long-running commands",
+            builder(SettingsAction::AI(
+                AISettingsPageAction::ToggleAutoQueuePromptsDuringLrc,
+            )),
+            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+            flags::AUTO_QUEUE_PROMPTS_DURING_LRC_FLAG,
+        )
+        .with_group(bindings::BindingGroup::WarpAi)
+        .with_enabled(|| FeatureFlag::QueueSlashCommand.is_enabled())],
+        app,
+    );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![ToggleSettingActionPair::new(
             "natural language autosuggestions",
@@ -3195,6 +3209,7 @@ pub enum AISettingsPageAction {
     ToggleCloudAgentComputerUse,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
+    ToggleAutoQueuePromptsDuringLrc,
     ToggleAgentAttribution,
 
     // Custom inference
@@ -3494,6 +3509,14 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::ToggleSubmitRichInputOnCtrlEnter => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.submit_on_ctrl_enter.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleAutoQueuePromptsDuringLrc => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .auto_queue_prompts_during_long_running_commands
+                        .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -5980,13 +6003,15 @@ struct AIInputWidget {
     show_input_hint_toggle: SwitchStateHandle,
     show_agent_tips_toggle: SwitchStateHandle,
     include_agent_commands_in_history_toggle: SwitchStateHandle,
+    auto_queue_during_lrc_toggle: SwitchStateHandle,
+    auto_queue_during_lrc_info_tooltip: MouseStateHandle,
 }
 
 impl SettingsWidget for AIInputWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default"
+        "oz agent ai input natural language detection autodetection prompt terminal command commands history shell executed execution queue interrupt submission submit auto-queue response while responding default long-running long running lrc"
     }
 
     fn render(
@@ -6074,6 +6099,42 @@ impl SettingsWidget for AIInputWidget {
                 ),
                 (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
                 &view.default_prompt_submission_mode_dropdown,
+            ));
+
+            let auto_queue_during_lrc_label = render_body_item_label::<AISettingsPageAction>(
+                "Auto-queue prompts during long-running commands".into(),
+                Some(styles::header_font_color(is_any_ai_enabled, app)),
+                Some(AdditionalInfo {
+                    mouse_state: self.auto_queue_during_lrc_info_tooltip.clone(),
+                    on_click_action: None,
+                    secondary_text: None,
+                    tooltip_override_text: Some(
+                        "While an agent is driving a long-running command, submitted prompts \
+                         are queued instead of sent to the agent immediately. Press Enter on \
+                         an empty input to send the next queued prompt."
+                            .to_owned(),
+                    ),
+                }),
+                LocalOnlyIconState::for_setting(
+                    AutoQueuePromptsDuringLongRunningCommands::storage_key(),
+                    AutoQueuePromptsDuringLongRunningCommands::sync_to_cloud(),
+                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                    app,
+                ),
+                ToggleState::Enabled,
+                appearance,
+            );
+            widget_children.push(build_toggle_element(
+                auto_queue_during_lrc_label,
+                render_ai_feature_switch(
+                    self.auto_queue_during_lrc_toggle.clone(),
+                    *ai_settings.auto_queue_prompts_during_long_running_commands,
+                    is_any_ai_enabled,
+                    AISettingsPageAction::ToggleAutoQueuePromptsDuringLrc,
+                    app,
+                ),
+                appearance,
+                None,
             ));
         }
 

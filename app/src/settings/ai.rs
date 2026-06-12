@@ -1420,6 +1420,19 @@ define_settings_group!(AISettings, settings: [
     // setting is the fallback used when a conversation has no explicit override.
     default_prompt_submission_mode: PromptSubmissionMode,
 
+    // Whether prompts submitted while an agent controls a long-running command are
+    // queued instead of sent to the agent immediately. Per-LRC manual overrides live
+    // on `QueuedQueryModel`.
+    auto_queue_prompts_during_long_running_commands: AutoQueuePromptsDuringLongRunningCommands {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.other.auto_queue_prompts_during_long_running_commands",
+        description: "Whether prompts submitted while an agent controls a long-running command are queued instead of sent immediately.",
+    }
+
     // Whether agent-executed shell commands should be included in command history
     // (up-arrow, Ctrl-R search, inline history menu).
     // When false, commands run by the AI agent are excluded from history.

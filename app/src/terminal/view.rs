@@ -254,16 +254,17 @@ use crate::ai::blocklist::usage::conversation_usage_view::{
 use crate::ai::blocklist::{
     ai_brand_color, block_context_from_terminal_model,
     get_ai_block_overflow_menu_element_position_id, get_attached_blocks_chip_element_position_id,
-    AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent, BlocklistAIActionModel,
-    BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
-    BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-    BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers, ConversationStatusUpdate,
-    InputConfig, InputType, InputTypeAutoDetectionSource, LegacyPassiveSuggestionsEvent,
-    LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel,
-    PassiveSuggestionsModels, PendingAttachment, PendingQueryState, QueuedQuery, QueuedQueryId,
-    QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
+    is_lrc_auto_queue_active, AIBlock, AIBlockEvent, AutofireAction, BlocklistAIActionEvent,
+    BlocklistAIActionModel, BlocklistAIContextEvent, BlocklistAIContextModel,
+    BlocklistAIController, BlocklistAIControllerEvent, BlocklistAIHistoryEvent,
+    BlocklistAIHistoryModel, BlocklistAIInputEvent, BlocklistAIInputModel, ClientIdentifiers,
+    ConversationStatusUpdate, InputConfig, InputType, InputTypeAutoDetectionSource,
+    LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
+    MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingAttachment, PendingQueryState,
+    QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin, RequestFileEditsFormatKind,
+    ShellCommandExecutor, ShellCommandExecutorEvent, SlashCommandRequest, StartAgentExecutor,
+    StartAgentExecutorEvent, StartAgentRequest, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+    PRE_REWIND_PREFIX,
 };
 use crate::ai::conversation_details_panel::ConversationDetailsPanelEvent;
 use crate::ai::conversation_utils;
@@ -6626,6 +6627,14 @@ impl TerminalView {
                 ..
             } => {
                 self.cli_subagent_views.remove(block_id);
+
+                // The command ended — drop any LRC-scoped auto-queue override so the
+                // conversation reverts to its pre-command queue state.
+                if let Some(conversation_id) = conversation_id {
+                    QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.clear_queue_next_lrc_prompt_override(*conversation_id, ctx);
+                    });
+                }
 
                 if FeatureFlag::AgentView.is_enabled() {
                     let Some(conversation_id) = conversation_id else {
@@ -26752,8 +26761,23 @@ impl TypedActionView for TerminalView {
                 else {
                     return;
                 };
+                // While an agent controls a long-running command, the toggle is scoped to
+                // that command so the conversation reverts to its pre-command queue state
+                // once the command ends.
+                let lrc_auto_queue_active = {
+                    let terminal_model = self.model.lock();
+                    is_lrc_auto_queue_active(
+                        terminal_model.block_list().active_block(),
+                        conversation_id,
+                        ctx,
+                    )
+                };
                 QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.toggle_queue_next_prompt(conversation_id, ctx);
+                    if lrc_auto_queue_active {
+                        model.toggle_queue_next_prompt_during_lrc(conversation_id, ctx);
+                    } else {
+                        model.toggle_queue_next_prompt(conversation_id, ctx);
+                    }
                 });
                 ctx.notify();
             }

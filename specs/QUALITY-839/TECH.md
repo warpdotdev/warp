@@ -42,9 +42,9 @@ The settings macro generates the matching `AISettingsChangedEvent` variant used 
 
 No LRC state is pushed into `QueuedQueryModel`; each call site determines the LRC context itself from the terminal model it already holds, and the model only answers the enablement question given that context.
 
-- `QueuedQueryModel::is_queue_next_prompt_enabled` gains an `active_lrc_block: Option<&BlockId>` parameter (callers pass `Some(block_id)` exactly when the active block's `is_agent_in_control()` is true AND the new setting is on; `None` otherwise). When `Some`, return the block-scoped override if one matches, else `true` (auto-enabled); when `None`, existing logic (persistent override → cached default). The persistent override is never consulted or written while the LRC branch is in effect, which yields the revert-on-LRC-end semantics for free (PRODUCT §11, §14).
-- One new field on `ConversationQueueState`: `lrc_override: Option<(BlockId, bool)>` — a manual toggle made during an agent-controlled LRC, keyed by that LRC's block. Because the key is the block id, the override is inert the moment the command finishes or a different LRC starts (PRODUCT §12-13, §19) — no clearing event needed; it is overwritten on the next LRC toggle and dropped with the conversation's queue state.
-- Call sites that compute `active_lrc_block` (each already holds the terminal model):
+- `QueuedQueryModel::is_queue_next_prompt_enabled` gains a `lrc_auto_queue_active: bool` parameter (true exactly when the active block's `is_agent_in_control()` is true AND the new setting is on; computed via the shared `is_lrc_auto_queue_active` helper). When true, return the LRC-scoped override if set, else `true` (auto-enabled); when false, existing logic (persistent override → cached default). The persistent override is never consulted or written while the LRC branch is in effect, which yields the revert-on-LRC-end semantics for PRODUCT §11, §14.
+- One new field on `ConversationQueueState`: `queue_next_lrc_prompt_override: Option<bool>` — a manual toggle made during an agent-controlled LRC. It is explicitly cleared when the command ends: `TerminalView` calls `clear_queue_next_lrc_prompt_override` on `CLISubagentEvent::FinishedSubagent` (PRODUCT §12-13, §19). Also dropped with the conversation's queue state.
+- Call sites that compute `lrc_auto_queue_active` (each already holds the terminal model):
   - `maybe_queue_input_for_in_progress_conversation` (`input.rs`) — the routing decision stays in the input, as today.
   - `agent_mode_hint_text` (`input.rs`) — ghost text (PRODUCT §10).
   - `render_warping_indicator_for_latest_exchange` (`status_bar.rs`) — the chip's `is_active` (PRODUCT §9); this render already reads `is_agent_in_control` from the locked terminal model.
@@ -52,11 +52,11 @@ No LRC state is pushed into `QueuedQueryModel`; each call site determines the LR
 
 ### 3. Toggle routing (`app/src/terminal/view.rs`)
 
-In the `ToggleQueueNextPrompt` handler (view.rs:27035), check the active block: if the agent is in control and the setting is on, call a new `QueuedQueryModel::toggle_queue_next_prompt_during_lrc(conversation_id, block_id, ctx)`, which writes `lrc_override = Some((block_id, !current_effective))`; otherwise the existing `toggle_queue_next_prompt`. Both emit `QueueNextPromptToggled`, which the status bar and input already subscribe to. Re-render on control transitions themselves (agent takes/loses control) is covered by the status bar's existing `UpdatedControl`/`BlockCompleted` notifies and the terminal view's existing notify paths.
+In the `ToggleQueueNextPrompt` handler (view.rs:27035), check the active block: if the agent is in control and the setting is on, call a new `QueuedQueryModel::toggle_queue_next_prompt_during_lrc(conversation_id, ctx)`, which writes `queue_next_lrc_prompt_override = Some(!current_effective)`; otherwise the existing `toggle_queue_next_prompt`. Both emit `QueueNextPromptToggled`, which the status bar and input already subscribe to. `TerminalView`'s existing `CLISubagentEvent::FinishedSubagent` handler clears the override when the command ends. Re-render on control transitions themselves (agent takes/loses control) is covered by the status bar's existing `UpdatedControl`/`BlockCompleted` notifies; the input additionally subscribes to `CLISubagentEvent` (`SpawnedSubagent`/`UpdatedControl`/`FinishedSubagent`/`ControlHandedBackAfterTransfer`) to refresh the ghost text, since its hint subscriptions did not previously cover control transitions.
 
 ### 4. Queued-row origin (`queued_query.rs`, `input.rs`, `server/telemetry/events.rs`)
 
-New `QueuedQueryOrigin::LrcAutoQueue` variant (and matching `TelemetryQueuedQueryOrigin` value). `maybe_queue_input_for_in_progress_conversation` uses it instead of `AutoQueueToggle` when the LRC branch was the effective enabler (it passed `Some(block_id)` and the non-LRC logic would have returned false), so existing `QueuedPrompt*` telemetry distinguishes auto-queued-during-LRC rows. Exhaustive matches on the enum get the new arm.
+New `QueuedQueryOrigin::LrcAutoQueue` variant (and matching `TelemetryQueuedQueryOrigin` value). `maybe_queue_input_for_in_progress_conversation` uses it instead of `AutoQueueToggle` when the LRC branch was the effective enabler (`lrc_auto_queue_active` was true and the non-LRC logic would have returned false), so existing `QueuedPrompt*` telemetry distinguishes auto-queued-during-LRC rows. Exhaustive matches on the enum get the new arm.
 
 ### 5. Settings UI (`app/src/settings_view/ai_page.rs`)
 
@@ -71,8 +71,8 @@ Inside the existing `FeatureFlag::QueueSlashCommand.is_enabled()` block in `AIIn
 ## Testing and validation
 
 - `app/src/ai/blocklist/queued_query_tests.rs` (model-level, maps to PRODUCT invariants):
-  - `is_queue_next_prompt_enabled` with `Some(block)` → enabled by default; with `None` → existing behavior unchanged (§1, §11, §16).
-  - `toggle_queue_next_prompt_during_lrc` writes the block-scoped override, leaves the persistent override untouched, and re-toggling re-enables (§12, §13); an override keyed to an old block does not apply to a new block (§19) and the pre-LRC state is what `None` returns afterward (§11, §14).
+  - `is_queue_next_prompt_enabled` with `lrc_auto_queue_active` → enabled by default; without → existing behavior unchanged (§1, §11, §16).
+  - `toggle_queue_next_prompt_during_lrc` writes the LRC-scoped override, leaves the persistent override untouched, and re-toggling re-enables (§12, §13); `clear_queue_next_lrc_prompt_override` (command end) restores auto-enable for the next LRC (§19) and the pre-LRC state is what the non-LRC path returns afterward (§11, §14).
 - `app/src/terminal/input_tests.rs` (host-level, next to the existing queue host tests): with the active block's agent in control and the setting on, a non-empty AI submission queues instead of submitting, with `LrcAutoQueue` origin (§5); ghost text returns the queue hint (§10); setting off → submission routes as today (§16, §18).
 - Chip state (§9) is a pure read of `is_queue_next_prompt_enabled` — covered by the model tests; verify visually in the manual smoke.
 - Manual smoke: run a dev-server-style command via the agent, let the agent take control, submit two prompts (both queue), press Enter on empty input (head row fires to the subagent), toggle the chip off (submission steers immediately), let the command finish (queue mode reverts), and flip the setting in Settings → AI mid-LRC.
