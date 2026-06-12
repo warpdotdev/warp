@@ -251,6 +251,12 @@ pub struct ServerModel {
     /// `BundledSkillsSnapshot` push. `None` until startup parsing completes
     /// (or forever, when the global resources directory is absent).
     bundled_skills: Option<Vec<BundledSkillProto>>,
+    /// Connections that have already received the `BundledSkillsSnapshot`
+    /// push, either from the parse-completion broadcast or during their
+    /// `Initialize` handshake. Prevents a duplicate push when parsing
+    /// completes between a connection registering its sender and its
+    /// `Initialize` being handled.
+    bundled_skills_sent: HashSet<ConnectionId>,
     /// Per-session command executors created from `SessionBootstrapped` notifications.
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
@@ -288,6 +294,7 @@ impl ServerModel {
             in_progress: HashMap::new(),
             host_id,
             bundled_skills: None,
+            bundled_skills_sent: HashSet::new(),
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
@@ -664,6 +671,27 @@ impl ServerModel {
             None,
             server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
         );
+        self.bundled_skills_sent
+            .extend(self.connection_senders.keys().copied());
+    }
+
+    /// Pushes the parsed bundled skill catalog to a single connection.
+    /// No-op until startup parsing has completed, or when the catalog was
+    /// already delivered to this connection (e.g. it registered before the
+    /// parse-completion broadcast fired).
+    fn send_bundled_skills_snapshot_to_connection(&mut self, conn_id: ConnectionId) {
+        if self.bundled_skills_sent.contains(&conn_id) {
+            return;
+        }
+        let Some(skills) = self.bundled_skills.clone() else {
+            return;
+        };
+        self.send_server_message(
+            Some(conn_id),
+            None,
+            server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+        );
+        self.bundled_skills_sent.insert(conn_id);
     }
 
     /// Called when a proxy connects.  Inserts `conn_tx` into the connection
@@ -693,6 +721,7 @@ impl ServerModel {
     /// and starts the grace timer if no connections remain.
     pub fn deregister_connection(&mut self, conn_id: ConnectionId, ctx: &mut ModelContext<Self>) {
         self.snapshot_sent_roots_by_connection.remove(&conn_id);
+        self.bundled_skills_sent.remove(&conn_id);
         // Guard against double-deregister (reader and writer tasks both call
         // this on connection close; the second call must be a safe no-op).
         if self.connection_senders.remove(&conn_id).is_none() {
@@ -1524,15 +1553,12 @@ impl ServerModel {
         }
 
         // Push the bundled skill catalog to this connection if it is already
-        // parsed. Enqueued on the same channel as the response below, so the
-        // client buffers it as a push event during the handshake.
-        if let Some(skills) = self.bundled_skills.clone() {
-            self.send_server_message(
-                Some(conn_id),
-                None,
-                server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
-            );
-        }
+        // parsed and the parse-completion broadcast didn't already deliver it
+        // (parsing can complete between this connection registering its
+        // sender and its `Initialize` being handled). Enqueued on the same
+        // channel as the response below, so the client buffers it as a push
+        // event during the handshake.
+        self.send_bundled_skills_snapshot_to_connection(conn_id);
 
         let server_version = ChannelState::app_version().unwrap_or("").to_string();
         HandlerOutcome::Sync(server_message::Message::InitializeResponse(
