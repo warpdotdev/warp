@@ -220,7 +220,7 @@ fn queue_next_prompt_toggle_defaults_false_and_emits_event() {
     with_model(|mut app, model, events| {
         let conv = AIConversationId::new();
         model.read(&app, |model, _| {
-            assert!(!model.is_queue_next_prompt_enabled(conv, false));
+            assert!(!model.is_queue_next_prompt_toggle_enabled(conv));
         });
 
         model.update(&mut app, |model, ctx| {
@@ -228,7 +228,7 @@ fn queue_next_prompt_toggle_defaults_false_and_emits_event() {
         });
 
         model.read(&app, |model, _| {
-            assert!(model.is_queue_next_prompt_enabled(conv, false));
+            assert!(model.is_queue_next_prompt_toggle_enabled(conv));
         });
 
         let evts = events.borrow();
@@ -248,8 +248,8 @@ fn toggle_state_is_isolated_per_conversation() {
 
         model.update(&mut app, |m, ctx| m.toggle_queue_next_prompt(conv_a, ctx));
         model.read(&app, |m, _| {
-            assert!(m.is_queue_next_prompt_enabled(conv_a, false));
-            assert!(!m.is_queue_next_prompt_enabled(conv_b, false));
+            assert!(m.is_queue_next_prompt_toggle_enabled(conv_a));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv_b));
         });
     });
 }
@@ -261,8 +261,8 @@ fn lrc_auto_queue_enables_queueing_by_default() {
     with_model(|app, model, _events| {
         let conv = AIConversationId::new();
         model.read(&app, |m, _| {
-            assert!(m.is_queue_next_prompt_enabled(conv, true));
-            assert!(!m.is_queue_next_prompt_enabled(conv, false));
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv));
         });
     });
 }
@@ -278,8 +278,8 @@ fn lrc_toggle_flips_only_the_lrc_override() {
             m.toggle_queue_next_prompt_during_lrc(conv, ctx)
         });
         model.read(&app, |m, _| {
-            assert!(!m.is_queue_next_prompt_enabled(conv, true));
-            assert!(!m.is_queue_next_prompt_enabled(conv, false));
+            assert!(!m.is_queue_next_prompt_enabled_during_lrc(conv));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv));
         });
 
         // Toggling back on re-enables for the remainder of the command.
@@ -287,7 +287,7 @@ fn lrc_toggle_flips_only_the_lrc_override() {
             m.toggle_queue_next_prompt_during_lrc(conv, ctx)
         });
         model.read(&app, |m, _| {
-            assert!(m.is_queue_next_prompt_enabled(conv, true));
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
         });
 
         let evts = events.borrow();
@@ -314,7 +314,7 @@ fn clearing_lrc_override_restores_auto_queue_for_the_next_command() {
             m.clear_queue_next_lrc_prompt_override(conv, ctx)
         });
         model.read(&app, |m, _| {
-            assert!(m.is_queue_next_prompt_enabled(conv, true));
+            assert!(m.is_queue_next_prompt_enabled_during_lrc(conv));
         });
         assert_eq!(events.borrow().len(), 2);
 
@@ -338,9 +338,9 @@ fn lrc_toggle_leaves_persistent_toggle_state_intact() {
         });
 
         model.read(&app, |m, _| {
-            assert!(!m.is_queue_next_prompt_enabled(conv, true));
+            assert!(!m.is_queue_next_prompt_enabled_during_lrc(conv));
             // After the LRC ends, the persistent toggle still applies.
-            assert!(m.is_queue_next_prompt_enabled(conv, false));
+            assert!(m.is_queue_next_prompt_toggle_enabled(conv));
         });
     });
 }
@@ -727,7 +727,7 @@ fn delete_conversation_drops_only_that_conversation_state() {
 
         model.read(&app, |m, _| {
             assert!(!m.has_queue(conv_a));
-            assert!(!m.is_queue_next_prompt_enabled(conv_a, false));
+            assert!(!m.is_queue_next_prompt_toggle_enabled(conv_a));
             let b = m.queue(conv_b);
             assert_eq!(b.len(), 1);
             assert_eq!(b[0].text(), "b1");
