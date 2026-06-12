@@ -22,8 +22,8 @@ use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::model::block::BlockSection;
 use crate::terminal::model::index::{Direction, Point, Side};
 use crate::terminal::model::selection::{
-    should_extend_selection_start, ExpandedSelectionRange, Selection, SelectionDirection,
-    SelectionPoint,
+    ExpandedSelectionRange, Selection, SelectionDirection, SelectionPoint,
+    should_extend_selection_start,
 };
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
 use crate::terminal::warpify::success_block::WarpifySuccessBlock;

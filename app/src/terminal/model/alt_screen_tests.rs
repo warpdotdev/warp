@@ -145,6 +145,15 @@ fn test_alt_screen_extend_selection_shrinks_inside_selection() {
 }
 
 #[test]
+fn test_alt_screen_extend_selection_without_existing_selection_noops() {
+    let mut screen = new_alt_screen(default_size());
+
+    screen.extend_selection(Point::new(3, 1), Side::Right);
+
+    assert!(screen.selection().is_none());
+}
+
+#[test]
 fn test_accumulate_lines_to_scroll() {
     let mut screen = new_alt_screen(default_size());
 
