@@ -5,12 +5,11 @@ use serde::Serialize;
 use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors::{neutral_2, neutral_3};
 use warpui::elements::{
-    ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Fill, Flex, HighlightedHyperlink, Hoverable, Icon, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius,
-    Shrinkable, Stack, Text,
+    ChildAnchor, ChildView, Container, CornerRadius, CrossAxisAlignment, Empty, Fill, Flex,
+    HighlightedHyperlink, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
+    Text,
 };
-use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
@@ -25,7 +24,6 @@ use crate::ai::blocklist::prompt::prompt_alert::{
     PromptAlertEvent, PromptAlertState, PromptAlertView,
 };
 use crate::ai::blocklist::BlocklistAIInputModel;
-use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
 use crate::appearance::Appearance;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::InteractionSource;
@@ -33,8 +31,6 @@ use crate::settings::InputSettings;
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
 use crate::terminal::view::{ContextMenuAction, InputType, PromptSuggestion, TerminalAction};
 use crate::ui_components::blended_colors;
-use crate::ui_components::icons::Icon as WarpUIIcon;
-use crate::util::bindings::keybinding_name_to_keystroke;
 
 const INLINE_BANNER_SPACING: f32 = 8.;
 const INLINE_BANNER_BUTTON_PADDING: f32 = 8.;
@@ -95,8 +91,6 @@ impl ZeroStatePromptSuggestionType {
     }
 }
 
-const KEYBOARD_SHORTCUT_MARGIN: f32 = 8.;
-
 #[derive(Clone, Debug)]
 pub struct PromptSuggestionBannerState {
     pub banner_id: usize,
@@ -121,9 +115,7 @@ pub struct PromptSuggestionBannerState {
 #[allow(clippy::too_many_arguments)]
 fn render_button(
     text: String,
-    icon: WarpUIIcon,
     button_index: usize,
-    keystroke: Option<Keystroke>,
     mouse_state: MouseStateHandle,
     on_click: Rc<impl Fn(&mut EventContext) + 'static>,
     debug_request_token: Option<ServerConversationToken>,
@@ -157,18 +149,13 @@ fn render_button(
             text_color = blended_colors::text_disabled(theme, theme.surface_1());
         }
 
-        let icon_size = appearance.monospace_font_size();
-        let mut icon_color = blended_colors::text_main(theme, theme.surface_1());
-        icon_color.a = opacity_u8;
-
-        let should_expand_button = mouse_state.is_hovered();
         let text = {
             let base = Text::new(
                 text,
                 appearance.ui_font_family(),
                 appearance.monospace_font_size(),
             )
-            .soft_wrap(should_expand_button)
+            .soft_wrap(true)
             .with_color(text_color)
             .finish();
 
@@ -179,50 +166,14 @@ fn render_button(
             }
         };
 
-        let mut flex = Flex::row()
+        let flex = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(
-                Container::new(
-                    ConstrainedBox::new(Icon::new(icon.into(), icon_color).finish())
-                        .with_width(icon_size)
-                        .with_height(icon_size)
-                        .finish(),
-                )
-                .with_padding_left(INLINE_BANNER_BUTTON_PADDING)
-                .with_padding_right(INLINE_BANNER_BUTTON_PADDING)
-                .finish(),
-            )
             .with_child(text);
-
-        if let Some(keystroke) = keystroke {
-            let style = UiComponentStyles {
-                font_family_id: Some(appearance.ui_font_family()),
-                font_size: Some(icon_size),
-                height: Some(20.),
-
-                border_radius: Some(CornerRadius::with_all(Radius::Pixels(3.))),
-                padding: Some(Coords::uniform(3.)),
-                margin: Some(Coords::default().left(KEYBOARD_SHORTCUT_MARGIN)),
-
-                font_color: Some(text_color),
-                background: Some(neutral_3(theme).into()),
-                ..Default::default()
-            };
-
-            flex.add_child(
-                appearance
-                    .ui_builder()
-                    .keyboard_shortcut(&keystroke)
-                    .with_style(style)
-                    .with_line_height_ratio(1.)
-                    .build()
-                    .finish(),
-            );
-        }
 
         let mut container = Container::new(flex.finish())
             .with_background(background_fill)
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .with_padding_left(INLINE_BANNER_BUTTON_PADDING)
             .with_padding_right(INLINE_BANNER_BUTTON_PADDING)
             .with_padding_top(INLINE_BANNER_BUTTON_VERTICAL_PADDING)
             .with_padding_bottom(INLINE_BANNER_BUTTON_VERTICAL_PADDING);
@@ -401,9 +352,7 @@ impl View for PromptSuggestionsView {
                 1.0,
                 render_button(
                     prompt_suggestion.label().clone(),
-                    WarpUIIcon::Oz,
                     0,
-                    keybinding_name_to_keystroke(ACCEPT_PROMPT_SUGGESTION_KEYBINDING, app),
                     banner_state.accept_button_mouse_state.clone(),
                     Rc::new(move |ctx: &mut warpui::EventContext<'_>| {
                         ctx.dispatch_typed_action(TerminalAction::ResolvePromptSuggestion(
