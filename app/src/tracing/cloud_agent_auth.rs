@@ -43,6 +43,7 @@ const REFRESHED_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 /// Proactive refresh starts roughly twenty minutes before expiry, with jitter to spread load.
 const PROACTIVE_REFRESH_BUFFER: Duration = Duration::from_secs(20 * 60);
 const PROACTIVE_REFRESH_JITTER: Duration = Duration::from_secs(2 * 60);
+const MIN_PROACTIVE_REFRESH_DELAY: Duration = Duration::from_secs(1);
 /// Failed refreshes use bounded full-jitter exponential backoff and rate-limited diagnostics.
 const INITIAL_FAILURE_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_FAILURE_BACKOFF: Duration = Duration::from_secs(5 * 60);
@@ -69,10 +70,11 @@ impl AuthContext {
     /// The caller treats failure as an opt-out so normal processes and partially rolled-out cloud
     /// agents retain no-op tracing behavior.
     pub(super) fn from_environment() -> anyhow::Result<Self> {
-        let token = std::env::var(CLOUD_AGENT_OTLP_TOKEN)
-            .context("Cloud-agent OTLP token is missing")?
-            .trim()
-            .to_owned();
+        let token =
+            std::env::var(CLOUD_AGENT_OTLP_TOKEN).context("Cloud-agent OTLP token is missing")?;
+        // Remove the bootstrap secret as soon as it is owned so child processes cannot inherit it.
+        std::env::remove_var(CLOUD_AGENT_OTLP_TOKEN);
+        let token = token.trim().to_owned();
         anyhow::ensure!(!token.is_empty(), "Cloud-agent OTLP token is empty");
 
         let expires_at = std::env::var(CLOUD_AGENT_OTLP_TOKEN_EXPIRES_AT)
@@ -467,7 +469,10 @@ impl AuthRefreshCoordinator {
         }
     }
 
-    /// Schedules successful refreshes around twenty minutes before server-returned expiry.
+    /// Schedules a refresh to occur before the current token expires.
+    ///
+    /// This leaves some buffer for retries in case the refresh fails, but also guarantees
+    /// some minimum amount of time before the first refresh attempt.
     fn schedule_proactive_refresh(
         &mut self,
         expires_at: DateTime<Utc>,
@@ -476,7 +481,11 @@ impl AuthRefreshCoordinator {
         let jitter = PROACTIVE_REFRESH_JITTER.mul_f64(rand::random::<f64>());
         let refresh_buffer = PROACTIVE_REFRESH_BUFFER.saturating_add(jitter);
         let remaining = (expires_at - Utc::now()).to_std().unwrap_or_default();
-        self.schedule_refresh(remaining.saturating_sub(refresh_buffer), ctx);
+        let delay = remaining
+            .saturating_sub(refresh_buffer)
+            .max(remaining.mul_f64(0.5))
+            .max(MIN_PROACTIVE_REFRESH_DELAY);
+        self.schedule_refresh(delay, ctx);
     }
 
     /// Schedules a full-jitter exponential retry capped at five minutes.

@@ -63,7 +63,7 @@ use opentelemetry_sdk::Resource;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::EnvFilter;
-use url::Url;
+use url::{Host, Url};
 
 use super::cloud_agent_auth::{self, AuthContext};
 use super::Initialization;
@@ -207,11 +207,19 @@ pub(super) fn start_auth_refresh(client: Arc<dyn ManagedSecretsClient>, ctx: &mu
 /// Converts the configured OTLP base URL into the HTTP/protobuf traces endpoint.
 ///
 /// The configuration is treated as a base URL rather than a complete signal-specific URL, so any
-/// query or fragment is discarded before appending `v1/traces`.
+/// query or fragment is discarded before appending `v1/traces`. Authenticated export requires
+/// HTTPS unless the configured host is guaranteed to resolve to the local machine.
 fn traces_endpoint(base_endpoint: &str) -> anyhow::Result<String> {
     let mut endpoint = Url::parse(base_endpoint).context("Invalid cloud-agent OTLP endpoint")?;
-    if !matches!(endpoint.scheme(), "http" | "https") {
-        return Err(anyhow!("Cloud-agent OTLP endpoint must use HTTP or HTTPS"));
+    match endpoint.scheme() {
+        "https" => {}
+        "http" if endpoint_host_is_loopback(&endpoint) => {}
+        "http" => {
+            return Err(anyhow!(
+                "Cloud-agent OTLP endpoint must use HTTPS unless its host is loopback"
+            ));
+        }
+        _ => return Err(anyhow!("Cloud-agent OTLP endpoint must use HTTP or HTTPS")),
     }
 
     endpoint.set_query(None);
@@ -222,6 +230,15 @@ fn traces_endpoint(base_endpoint: &str) -> anyhow::Result<String> {
         .pop_if_empty()
         .extend(["v1", "traces"]);
     Ok(endpoint.into())
+}
+/// Returns whether the endpoint host is guaranteed to resolve to the local machine.
+fn endpoint_host_is_loopback(endpoint: &Url) -> bool {
+    match endpoint.host() {
+        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    }
 }
 
 /// Returns the export shutdown timeout using the standard OpenTelemetry environment variables.
