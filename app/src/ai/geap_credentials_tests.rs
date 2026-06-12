@@ -244,6 +244,16 @@ fn expired_credentials() -> GeapCredentials {
     )
 }
 
+/// A binding that does not match the harness gate (minted before an account
+/// switch).
+fn stale_binding() -> GeapMintBinding {
+    GeapMintBinding {
+        user_uid: "previous-user".into(),
+        audience: TEST_AUDIENCE.into(),
+        sa_email: Some(TEST_SA_EMAIL.into()),
+    }
+}
+
 #[test]
 fn refresh_disables_and_drops_tokens_when_gate_is_off() {
     // GEAP host present but disabled by the admin.
@@ -377,18 +387,116 @@ fn refresh_remints_on_binding_mismatch() {
                 GeapCredentialsState::Loaded {
                     credentials: fresh_credentials(),
                     loaded_at: SystemTime::now(),
-                    minted_for: GeapMintBinding {
-                        user_uid: "previous-user".into(),
-                        audience: TEST_AUDIENCE.into(),
-                        sa_email: Some(TEST_SA_EMAIL.into()),
-                    },
+                    minted_for: stale_binding(),
                 },
                 ctx,
             );
             refresh_geap_credentials(manager, ctx);
+            // The mismatched token must NOT ride along as `previous`: it is
+            // unservable, and restoring it on a failed re-mint would mask the
+            // failure behind a misleading `Loaded`.
             match manager.geap_credentials_state() {
-                GeapCredentialsState::Refreshing { .. } => {}
-                other => panic!("expected a re-mint under the new identity, got {other:?}"),
+                GeapCredentialsState::Refreshing { previous: None } => {}
+                other => panic!("expected a re-mint with no carried token, got {other:?}"),
+            }
+        });
+    })
+}
+
+// ── mint completion (apply_geap_mint_result) ─────────────────────
+
+#[test]
+fn mint_completion_discards_stale_binding_result_and_remints() {
+    let workspace = workspace_with_geap_host(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app, vec![workspace]);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::Refreshing { previous: None },
+                ctx,
+            );
+            // A mint stamped for a stale binding completes successfully: the
+            // token must be discarded — never stored — with a re-mint under
+            // the current binding immediately in flight (no one-request
+            // token-less window).
+            apply_geap_mint_result(
+                manager,
+                Ok(fresh_credentials()),
+                stale_binding(),
+                false,
+                ctx,
+            );
+            match manager.geap_credentials_state() {
+                GeapCredentialsState::Refreshing { previous: None } => {}
+                other => panic!("expected an immediate re-mint, got {other:?}"),
+            }
+        });
+    })
+}
+
+#[test]
+fn mint_completion_failure_restores_servable_previous() {
+    let workspace = workspace_with_geap_host(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app, vec![workspace]);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
+            let current = binding_for_gate(&gate);
+            let carried = fresh_credentials();
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::Refreshing {
+                    previous: Some((carried.clone(), current.clone())),
+                },
+                ctx,
+            );
+            // A failed background re-mint restores the still-servable
+            // previous token and parks the chain.
+            apply_geap_mint_result(
+                manager,
+                Err(LoadGeapCredentialsError::ExchangeToken("boom".into())),
+                current.clone(),
+                false,
+                ctx,
+            );
+            match manager.geap_credentials_state() {
+                GeapCredentialsState::Loaded {
+                    credentials,
+                    minted_for,
+                    ..
+                } if *credentials == carried && *minted_for == current => {}
+                other => panic!("expected the previous token restored, got {other:?}"),
+            }
+        });
+    })
+}
+
+#[test]
+fn mint_completion_failure_with_unservable_previous_fails() {
+    let workspace = workspace_with_geap_host(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app, vec![workspace]);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
+            let current = binding_for_gate(&gate);
+            // The carried token was minted for someone else: restoring it
+            // would mask the failure behind a misleading `Loaded`, so the
+            // failure must surface instead.
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::Refreshing {
+                    previous: Some((fresh_credentials(), stale_binding())),
+                },
+                ctx,
+            );
+            apply_geap_mint_result(
+                manager,
+                Err(LoadGeapCredentialsError::ExchangeToken("boom".into())),
+                current,
+                false,
+                ctx,
+            );
+            match manager.geap_credentials_state() {
+                GeapCredentialsState::Failed { message } if message.contains("gcpAudience") => {}
+                other => panic!("expected Failed with per-leg copy, got {other:?}"),
             }
         });
     })

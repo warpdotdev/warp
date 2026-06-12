@@ -316,13 +316,16 @@ fn refresh_geap_credentials_with_options(
     }
     // The previous token (if any) keeps serving requests while the re-mint is
     // in flight — tokens stay until replaced, so a request landing in the
-    // ~1-3s mint window still authenticates.
+    // ~1-3s mint window still authenticates. Only a token minted for the SAME
+    // binding as this mint is carried: a binding-mismatched token is
+    // unservable (the attach matrix rejects it), and restoring it on a failed
+    // re-mint would mask the `Failed` state behind a misleading `Loaded`.
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Loaded {
             credentials,
-            minted_for,
+            minted_for: current_binding,
             ..
-        } => Some((credentials.clone(), minted_for.clone())),
+        } if *current_binding == minted_for => Some((credentials.clone(), current_binding.clone())),
         _ => None,
     };
     log::info!(
@@ -365,15 +368,54 @@ fn apply_geap_mint_result(
 ) {
     // Gate flipped off mid-mint: discard the result; no token is retained
     // while disabled.
-    if current_geap_request_gate(ctx).is_none() {
+    let Some(gate) = current_geap_request_gate(ctx) else {
         log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
         manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
         return;
-    }
+    };
+    // No state transition may store credentials under a binding that does not
+    // match the world at storage time. That covers `previous` too: a carried
+    // token is only restorable while it still matches the current gate — a
+    // mismatched token is unservable (the attach matrix rejects it), and
+    // restoring it would mask a failure behind a misleading `Loaded`.
+    let current_binding = binding_for_gate(&gate);
     let previous = match manager.geap_credentials_state() {
-        GeapCredentialsState::Refreshing { previous } => previous.clone(),
+        GeapCredentialsState::Refreshing {
+            previous: Some((credentials, binding)),
+        } if *binding == current_binding => Some((credentials.clone(), binding.clone())),
         _ => None,
     };
+
+    // The user/account or federation config changed while the mint was in
+    // flight: the result is stamped for a stale binding and would never be
+    // attachable. Discard it (success or failure alike) and immediately
+    // re-mint under the current binding — waiting for the next trigger would
+    // leave a one-request token-less window, i.e. a silent Direct API
+    // fallback under RESPECT_USER_SETTING.
+    if minted_for != current_binding {
+        log::info!("GEAP: binding changed mid-mint; discarding the result and re-minting");
+        match previous {
+            Some((credentials, minted_for)) => {
+                manager.set_geap_credentials_state(
+                    GeapCredentialsState::Loaded {
+                        credentials,
+                        loaded_at: SystemTime::now(),
+                        minted_for,
+                    },
+                    ctx,
+                );
+                // Keep the proactive loop alive in case the re-mint below
+                // skips (the restored token may already be fresh).
+                schedule_geap_token_refresh(manager, ctx);
+            }
+            None => {
+                manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            }
+        }
+        refresh_geap_credentials(manager, ctx);
+        return;
+    }
+
     match result {
         Ok(credentials) => {
             log::info!(
@@ -381,8 +423,6 @@ fn apply_geap_mint_result(
                 minted_for.audience,
                 credentials.expires_at()
             );
-            // If the admin changed audience/SA mid-mint, the binding mismatch
-            // surfaces at the next attach/trigger and self-heals via re-mint.
             manager.set_geap_credentials_state(
                 GeapCredentialsState::Loaded {
                     credentials,
@@ -414,7 +454,7 @@ fn apply_geap_mint_result(
                         ctx,
                     );
                 }
-                // First mint (nothing to keep serving), or a forced refresh
+                // First mint (nothing servable to keep), or a forced refresh
                 // where the user explicitly asked and needs visible feedback.
                 _ => {
                     manager.set_geap_credentials_state(
