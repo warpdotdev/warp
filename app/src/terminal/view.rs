@@ -24,6 +24,7 @@ pub use init_project::{
 };
 use onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
 use onboarding::{OnboardingCalloutView, OnboardingKeybindings};
+use repo_metadata::CanonicalizedPath;
 
 use crate::ai::block_context::BlockContext;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
@@ -2457,7 +2458,7 @@ impl DropTargetData for TerminalDropTargetData {
 struct CanonicalSessionPwdCache {
     /// Non-canonical path
     path: PathBuf,
-    canonical: PathBuf,
+    canonical: CanonicalizedPath,
 }
 
 pub struct TerminalView {
@@ -7660,7 +7661,10 @@ impl TerminalView {
     ///
     /// The canonicalization is memoized in `canonical_session_pwd_cache`, keyed on the
     /// non-canonical path, and only recomputed when that path changes.
-    pub fn canonical_session_pwd_if_local<C: ModelAsRef>(&self, ctx: &C) -> Option<PathBuf> {
+    pub fn canonical_session_pwd_if_local<C: ModelAsRef>(
+        &self,
+        ctx: &C,
+    ) -> Option<CanonicalizedPath> {
         let path = self.active_session_path_if_local(ctx)?;
 
         // Return the cached value when the non-canonical path has not changed.
@@ -7670,7 +7674,7 @@ impl TerminalView {
             }
         }
 
-        let canonical = dunce::canonicalize(&path).ok()?;
+        let canonical = CanonicalizedPath::try_from(&path).ok()?;
 
         if let Ok(mut cache) = self.canonical_session_pwd_cache.try_borrow_mut() {
             *cache = Some(CanonicalSessionPwdCache {
@@ -11697,7 +11701,7 @@ impl TerminalView {
                                         };
 
                                         let Ok(active_directory) =
-                                            repo_metadata::CanonicalizedPath::try_from(
+                                            CanonicalizedPath::try_from(
                                                 active_directory,
                                             )
                                         else {
@@ -25954,7 +25958,12 @@ impl TerminalView {
         };
 
         PersistedWorkspace::handle(ctx).update(ctx, |workspace, ctx| {
-            workspace.execute_lsp_task(LspTask::Spawn { file_path: cwd }, ctx);
+            workspace.execute_lsp_task(
+                LspTask::Spawn {
+                    file_path: cwd.into(),
+                },
+                ctx,
+            );
         });
     }
 
