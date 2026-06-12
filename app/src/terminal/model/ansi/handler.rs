@@ -307,9 +307,6 @@ pub trait Handler {
     /// Otherwise, it's ignored.
     fn sourced_rc_file(&mut self, _data: SourcedRcFileForWarpValue) {}
 
-    /// Callback emitted during the initialization process for ssh sessions
-    fn init_ssh(&mut self, _data: InitSshValue) {}
-
     /// Callback emitted to notify the app that we're ready to complete an
     /// assisted auto-update.
     fn finish_update(&mut self, _data: FinishUpdateValue) {}

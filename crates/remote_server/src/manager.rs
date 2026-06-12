@@ -1716,7 +1716,7 @@ impl RemoteServerManager {
                         Err(e) => {
                             if let Some(reason) = UnsupportedReason::from_transport_error(&e) {
                                 log::info!(
-                                    "Remote server platform is unsupported, falling back to legacy SSH: session={session_id:?}"
+                                    "Remote server platform is unsupported, falling back to the wrapper-only SSH flow: session={session_id:?}"
                                 );
                                 Self::emit_unsupported_preinstall_check(
                                     &spawner,
@@ -1760,7 +1760,7 @@ impl RemoteServerManager {
                             },
                         ) => {
                             log::info!(
-                                "Remote server preinstall check classified as unsupported, falling back to legacy SSH: session={session_id:?}"
+                                "Remote server preinstall check classified as unsupported, falling back to the wrapper-only SSH flow: session={session_id:?}"
                             );
                             Self::emit_unsupported_preinstall_check(
                                 &spawner, session_id, platform, preinstall,

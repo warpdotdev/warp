@@ -223,7 +223,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// This runs **before** any user-visible install affordance (the
     /// install choice block, auto-install, auto-update, or connect) and
     /// is the gate that decides whether to proceed with the install
-    /// pipeline or fall back to the legacy SSH flow.
+    /// pipeline or fall back to the wrapper-only SSH flow.
     ///
     /// Returns `Ok(_)` on success (including when the script reported
     /// `Unknown` — that's a parser-level outcome, not a transport-level

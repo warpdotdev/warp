@@ -149,7 +149,7 @@ fn parse_legacy_color(color: &[u8]) -> Option<ColorU> {
 /// Returns the decoded absolute path only when the host portion explicitly
 /// matches the local machine's hostname. Empty and `localhost` hosts are
 /// rejected because OSC 7 is terminal-controlled — a remote shell streamed
-/// through a legacy SSH session can emit either form, and we cannot
+/// through a wrapper SSH session can emit either form, and we cannot
 /// distinguish that from a real local shell. Shells that want OSC 7 honored
 /// must include the hostname (the de-facto convention; see wezterm/iTerm2).
 fn parse_osc_7_cwd(payload: &[u8]) -> Option<String> {
@@ -596,7 +596,6 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
             Ok(DProtoHook::InputBuffer { value }) => self.handler.input_buffer(value),
             Ok(DProtoHook::Clear { value }) => self.handler.clear(value),
             Ok(DProtoHook::InitSubshell { value }) => self.handler.init_subshell(value),
-            Ok(DProtoHook::InitSsh { value }) => self.handler.init_ssh(value),
             Ok(DProtoHook::SourcedRcFileForWarp { .. }) => {
                 // The SourcedRCFileForWarp hook should only be emitted by the
                 // shell without hex encoding. The RC file snippet given to
@@ -617,8 +616,8 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
     /// Calls the appropriate `ansi::Handler` function according to the given hook. This function
     /// assumes that the hook was never encoded.
     fn handle_unencoded_hook(&mut self, hook: Result<DProtoHook, serde_json::Error>) {
-        // Currently, only the `SourcedRcFileForWarp`, `InitShell`, `InitSubshell`, and `InitSsh`
-        // DCS's may be emitted without hex-encoding -- other DCS hooks should be sent hex-encoded.
+        // Currently, only the `SourcedRcFileForWarp`, `InitShell`, and `InitSubshell` DCS's may
+        // be emitted without hex-encoding -- other DCS hooks should be sent hex-encoded.
         // This is because we can guarantee that theses RC file hook don't contain non-ASCII chars
         // that might otherwise corrupt parsing of the PTY output (the same can't be said for the
         // payloads of other DCS hooks).
@@ -634,9 +633,6 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
             }
             Ok(DProtoHook::SourcedRcFileForWarp { value }) => {
                 self.handler.sourced_rc_file(value);
-            }
-            Ok(DProtoHook::InitSsh { value }) => {
-                self.handler.init_ssh(value);
             }
             Ok(_) => {
                 log::error!("Received non hex-encoded hook that is not SourcedRcFileForWarp");

@@ -403,7 +403,7 @@ pub struct TerminalModel {
     /// The pending `SSHValue`, if any, of the active session. This is a temporary value that's
     /// stored between when an SSH connection is initiated (the `SSH` hook executed on the local
     /// machine) and when the remote shell sends the `InitShell` DCS.
-    pending_legacy_ssh_session: Option<SSHValue>,
+    pending_ssh_wrapper_session: Option<SSHValue>,
 
     /// The path of the shell binary used for the pending shell session, if any. This is
     /// temporarily stored between the spawning of the child shell process and bootstrap completion.
@@ -1059,7 +1059,7 @@ impl TerminalModel {
             colors,
             override_colors: color::OverrideList::empty(),
             event_proxy,
-            pending_legacy_ssh_session: None,
+            pending_ssh_wrapper_session: None,
             pending_shell_launch_data: None,
             active_shell_launch_data: None,
             pending_session_info: None,
@@ -1576,7 +1576,7 @@ impl TerminalModel {
     }
 
     pub fn has_pending_ssh_session(&self) -> bool {
-        self.pending_legacy_ssh_session.is_some()
+        self.pending_ssh_wrapper_session.is_some()
     }
 
     pub fn pending_shell_type(&self) -> Option<ShellType> {
@@ -2733,7 +2733,7 @@ impl ansi::Handler for TerminalModel {
 
     fn set_current_working_directory(&mut self, path: String) {
         // OSC 7 is honor-system: the parser only accepts payloads whose host
-        // matches our local hostname, but a legacy SSH session streams the
+        // matches our local hostname, but a wrapper SSH session streams the
         // remote shell's bytes through this same Performer, so a remote box
         // with a coincident hostname could still slip through. Drop the
         // update entirely while we know we're inside an SSH-launching block.
@@ -2792,7 +2792,7 @@ impl ansi::Handler for TerminalModel {
         };
 
         let fully_populated_session_info =
-            pending_session_info.merge_from_bootstrapped_value(value, false);
+            pending_session_info.merge_from_bootstrapped_value(value);
 
         self.block_list
             .early_output_mut()
@@ -2838,7 +2838,7 @@ impl ansi::Handler for TerminalModel {
                     value.socket_path.display()
                 );
             }
-            self.pending_legacy_ssh_session = Some(value);
+            self.pending_ssh_wrapper_session = Some(value);
             self.event_proxy
                 .send_terminal_event(Event::SSH(remote_shell));
         }
@@ -2883,8 +2883,7 @@ impl ansi::Handler for TerminalModel {
                 data,
                 subshell_info,
                 self.pending_shell_launch_data.take(),
-                self.pending_legacy_ssh_session.take(),
-                false,
+                self.pending_ssh_wrapper_session.take(),
                 self.block_list().active_block().session_id(),
             );
             self.pending_session_info = Some(pending_session_info.clone());
@@ -2936,7 +2935,6 @@ impl ansi::Handler for TerminalModel {
                             SourcedRcFileInSubshellEvent {
                                 shell_type,
                                 uname: data.uname,
-                                tmux: data.tmux,
                             },
                         ))
                 }

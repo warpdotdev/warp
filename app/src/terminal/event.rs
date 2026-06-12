@@ -156,7 +156,6 @@ pub struct InitSubshellEvent {
 pub struct SourcedRcFileInSubshellEvent {
     pub shell_type: ShellType,
     pub uname: Option<String>,
-    pub tmux: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -330,7 +329,7 @@ pub struct UserBlockCompleted {
 }
 
 /// Emitted upon completion of an executor command that goes through the pty, such as the
-/// InBandCommandExecutor or the TmuxCommandExecutor.
+/// InBandCommandExecutor.
 #[derive(Clone)]
 pub struct ExecutedExecutorCommandEvent {
     pub command_id: String,

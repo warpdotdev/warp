@@ -3,7 +3,9 @@ use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
 define_settings_group!(SshSettings,
     settings: [
-        enable_legacy_ssh_wrapper: EnableSshWrapper {
+        // NOTE: the storage key and TOML path retain the historical "legacy" naming for
+        // backwards compatibility with existing user settings; do not rename them.
+        enable_ssh_wrapper: EnableSshWrapper {
             type: bool,
             default: true,
             supported_platforms: SupportedPlatforms::ALL,
@@ -11,7 +13,7 @@ define_settings_group!(SshSettings,
             private: false,
             storage_key: "EnableSSHWrapper",
             toml_path: "warpify.ssh.enable_legacy_ssh_wrapper",
-            description: "Whether the legacy SSH wrapper is enabled for SSH sessions.",
+            description: "Whether Warp's SSH wrapper is enabled for SSH sessions.",
         },
         reuse_existing_control_master: ReuseExistingSshControlMaster {
             type: bool,

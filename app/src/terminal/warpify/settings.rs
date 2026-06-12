@@ -106,7 +106,7 @@ pub enum SshExtensionInstallMode {
     AlwaysAsk,
     /// Automatically install and connect without prompting.
     AlwaysInstall,
-    /// Never install; fall back to legacy warpification.
+    /// Never install; fall back to wrapper-only SSH warpification.
     NeverInstall,
 }
 

@@ -229,10 +229,6 @@ impl Handler for MockHandler {
             .push(DProtoHook::InitSubshell { value: data })
     }
 
-    fn init_ssh(&mut self, data: InitSshValue) {
-        self.d_proto_hooks.push(DProtoHook::InitSsh { value: data })
-    }
-
     fn sourced_rc_file(&mut self, data: SourcedRcFileForWarpValue) {
         self.d_proto_hooks
             .push(DProtoHook::SourcedRcFileForWarp { value: data })
@@ -861,7 +857,6 @@ fn parse_sourced_rc_file_hook() {
             SourcedRcFileForWarpValue {
                 shell: "zsh".to_owned(),
                 uname: None,
-                tmux: None,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -888,7 +883,6 @@ fn parse_sourced_rc_file_hook_with_uname() {
             SourcedRcFileForWarpValue {
                 shell: "zsh".to_owned(),
                 uname: Some("Darwin".to_owned()),
-                tmux: None,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -1052,7 +1046,7 @@ fn parse_osc7_path_with_unescaped_semicolons_preserved() {
 #[test]
 fn parse_osc7_empty_host_ignored() {
     // Hostless payload (`file:///path`) is terminal-controlled and a remote
-    // shell over legacy SSH can emit it just as easily as a local one; reject.
+    // shell over a wrapper SSH session can emit it just as easily as a local one; reject.
     let bytes: &[u8] = b"\x1b]7;file:///Users/foo/bar\x07";
     let (_, handler) = parse_bytes(bytes);
 

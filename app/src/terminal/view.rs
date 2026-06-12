@@ -24736,7 +24736,7 @@ impl TerminalView {
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
             .map(|session| {
                 let shell_name = session.shell().shell_type().name();
-                (session.is_legacy_ssh_session(), shell_name)
+                (session.is_ssh_wrapper_session(), shell_name)
             });
 
         if let Some((is_ssh, shell)) = session_info {
@@ -25197,7 +25197,7 @@ impl TerminalView {
             return;
         };
 
-        let sshed = session.is_legacy_ssh_session();
+        let sshed = session.is_ssh_wrapper_session();
         if sshed && !paths.is_empty() && FeatureFlag::SshDragAndDrop.is_enabled() {
             self.initiate_ssh_file_upload(paths, ctx);
         } else {
@@ -26359,7 +26359,7 @@ impl TypedActionView for TerminalView {
                 else {
                     return;
                 };
-                let sshed = session.is_legacy_ssh_session();
+                let sshed = session.is_ssh_wrapper_session();
                 if sshed && !self.is_file_drop_target {
                     self.is_file_drop_target = true;
                     ctx.notify();

@@ -18,7 +18,7 @@ use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEven
 use crate::remote_server::ssh_transport::SshTransport;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
-use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
+use crate::terminal::model::session::{IsSSHWrapperSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
@@ -186,10 +186,10 @@ impl<T: EventLoopSender> RemoteServerController<T> {
 
     /// Idle -> AwaitingCheck
     fn on_ssh_init_shell_requested(&mut self, info: SessionInfo, ctx: &mut ModelContext<Self>) {
-        let IsLegacySSHSession::Yes {
+        let IsSSHWrapperSession::Yes {
             socket_path,
             external_control_master,
-        } = &info.is_legacy_ssh_session
+        } = &info.is_ssh_wrapper_session
         else {
             return;
         };

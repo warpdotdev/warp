@@ -8,7 +8,7 @@ use super::model::ansi;
 use super::model::ansi::FinishUpdateValue;
 use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
-use super::model::session::{IsLegacySSHSession, SessionId, SessionInfo};
+use super::model::session::{IsSSHWrapperSession, SessionId, SessionInfo};
 use super::model::terminal_model::{CommandType, ExitReason, HandlerEvent};
 use crate::features::FeatureFlag;
 use crate::remote_server::manager::RemoteServerManager;
@@ -73,11 +73,11 @@ impl ModelEventDispatcher {
                 self.sessions.update(ctx, |sessions, ctx| {
                     sessions.register_pending_session(pending_session_info.as_ref(), ctx);
                 });
-                let is_legacy_ssh = matches!(
-                    pending_session_info.is_legacy_ssh_session,
-                    IsLegacySSHSession::Yes { .. }
+                let is_ssh_wrapper_session = matches!(
+                    pending_session_info.is_ssh_wrapper_session,
+                    IsSSHWrapperSession::Yes { .. }
                 );
-                if FeatureFlag::SshRemoteServer.is_enabled() && is_legacy_ssh {
+                if FeatureFlag::SshRemoteServer.is_enabled() && is_ssh_wrapper_session {
                     ModelEvent::SshInitShell {
                         pending_session_info,
                     }
@@ -258,7 +258,7 @@ impl ModelEventDispatcher {
 
     /// Finalizes session initialization by calling `Sessions::initialize_bootstrapped_session`.
     ///
-    /// For legacy SSH sessions with the `SshRemoteServer` flag, this also
+    /// For SSH wrapper sessions with the `SshRemoteServer` flag, this also
     /// sends the `SessionBootstrapped` notification to the remote server via
     /// the manager.
     ///
@@ -280,10 +280,10 @@ impl ModelEventDispatcher {
             rcfiles_duration_seconds,
         } = event;
 
-        let (is_legacy_ssh, session_id, shell_type_name, shell_path) = (
+        let (is_ssh_wrapper_session, session_id, shell_type_name, shell_path) = (
             matches!(
-                session_info.is_legacy_ssh_session,
-                IsLegacySSHSession::Yes { .. }
+                session_info.is_ssh_wrapper_session,
+                IsSSHWrapperSession::Yes { .. }
             ),
             session_info.session_id,
             session_info.shell.shell_type().name().to_owned(),
@@ -295,7 +295,7 @@ impl ModelEventDispatcher {
         // `SessionsEvent::SessionBootstrapped`, which causes subscribers to
         // immediately queue `RunCommand` requests (e.g. `load_external_commands`).
         // The daemon must have the executor ready before those requests arrive.
-        if FeatureFlag::SshRemoteServer.is_enabled() && is_legacy_ssh {
+        if FeatureFlag::SshRemoteServer.is_enabled() && is_ssh_wrapper_session {
             RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
                 mgr.notify_session_bootstrapped(
                     session_id,

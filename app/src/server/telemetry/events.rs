@@ -2885,7 +2885,7 @@ pub enum TelemetryEvent {
     },
     /// Emitted when the preinstall check classifies the remote host as
     /// unsupported by the prebuilt remote-server binary, so the controller
-    /// silently falls back to the legacy SSH/`RemoteCommandExecutor`
+    /// silently falls back to the wrapper-only SSH/`RemoteCommandExecutor`
     /// flow without surfacing an install prompt.
     RemoteServerHostUnsupported {
         remote_os: Option<String>,
@@ -7270,7 +7270,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::RemoteServerHostUnsupported => {
                 "Preinstall check classified the remote host as unsupported, \
-                 falling back to the legacy SSH flow"
+                 falling back to the wrapper-only SSH flow"
             }
             Self::RemoteServerReconnection => {
                 "A reconnection attempt succeeded after a spontaneous disconnect"

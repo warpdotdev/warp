@@ -1126,7 +1126,7 @@ impl TerminalManager {
                     .contains(&ContextChipKind::NodeVersion)
         };
 
-        let enable_ssh_wrapper = *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value();
+        let enable_ssh_wrapper = *SshSettings::as_ref(ctx).enable_ssh_wrapper.value();
 
         // Only meaningful when the legacy ControlMaster wrapper is active.
         let reuse_ssh_control_master = enable_ssh_wrapper

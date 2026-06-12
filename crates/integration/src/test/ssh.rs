@@ -147,7 +147,7 @@ fn verify_login_shell(shell: &str) -> TestStep {
 
 /// A macro to generate a test function to validate that we are able to
 /// bootstrap a given remote shell when using ssh.
-macro_rules! generate_can_bootstrap_legacy_ssh_test_for_shell {
+macro_rules! generate_can_bootstrap_ssh_wrapper_test_for_shell {
     ($fn_name:ident, $shell:literal) => {
         /// Ensure we can successfully ssh into a $shell remote shell and bootstrap it
         /// successfully.
@@ -220,8 +220,8 @@ macro_rules! generate_long_running_block_ssh_test_for_shell {
 
 // Generate test methods to validate expected ssh behavior for a variety of
 // remote shells.
-generate_can_bootstrap_legacy_ssh_test_for_shell!(test_legacy_ssh_into_bash, "bash");
-generate_can_bootstrap_legacy_ssh_test_for_shell!(test_legacy_ssh_into_zsh, "zsh");
+generate_can_bootstrap_ssh_wrapper_test_for_shell!(test_ssh_wrapper_into_bash, "bash");
+generate_can_bootstrap_ssh_wrapper_test_for_shell!(test_ssh_wrapper_into_zsh, "zsh");
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_fish, "fish", prompt_regex: r"\nfish@ubuntu-14-04 ~>$");
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_sh, "sh", prompt_regex: r"\n\$ $");
 generate_long_running_block_ssh_test_for_shell!(test_ssh_into_ash, "ash", prompt_regex: r"\n\$ $");
