@@ -14,7 +14,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::appearance::Appearance;
+use crate::appearance::{Appearance, AppearanceEvent};
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
@@ -87,10 +87,11 @@ impl CustomEndpointModal {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         // Editor text colors are snapshotted at construction via
-        // `text_colors_override`, so refresh them whenever the appearance
-        // (e.g. the theme) changes.
-        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, _, ctx| {
-            me.update_editor_text_colors(ctx);
+        // `text_colors_override`, so refresh them whenever the theme changes.
+        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, event, ctx| {
+            if let AppearanceEvent::ThemeChanged = event {
+                me.update_editor_text_colors(ctx);
+            }
         });
         let font_family = Appearance::as_ref(ctx).ui_font_family();
         let text_colors = crate::settings_view::editor_text_colors(Appearance::as_ref(ctx));

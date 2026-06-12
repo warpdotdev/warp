@@ -136,7 +136,7 @@ use std::sync::LazyLock;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
-use crate::appearance::Appearance;
+use crate::appearance::{Appearance, AppearanceEvent};
 use crate::editor::{EditorView, Event as EditorEvent, TextOptions};
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::server::telemetry::{
@@ -7500,20 +7500,21 @@ impl ApiKeysWidget {
         );
 
         // Editor text colors are snapshotted at construction via
-        // `text_colors_override`, so refresh them whenever the appearance
-        // (e.g. the theme) changes.
+        // `text_colors_override`, so refresh them whenever the theme changes.
         let api_key_editors = [
             openai_api_key_editor.clone(),
             anthropic_api_key_editor.clone(),
             google_api_key_editor.clone(),
         ];
-        ctx.subscribe_to_model(&Appearance::handle(ctx), move |_, _, _, ctx| {
-            let text_colors = editor_text_colors(Appearance::as_ref(ctx));
-            for editor in &api_key_editors {
-                let colors = text_colors.clone();
-                editor.update(ctx, move |editor, ctx| {
-                    editor.set_text_colors(colors, ctx);
-                });
+        ctx.subscribe_to_model(&Appearance::handle(ctx), move |_, _, event, ctx| {
+            if let AppearanceEvent::ThemeChanged = event {
+                let text_colors = editor_text_colors(Appearance::as_ref(ctx));
+                for editor in &api_key_editors {
+                    let colors = text_colors.clone();
+                    editor.update(ctx, move |editor, ctx| {
+                        editor.set_text_colors(colors, ctx);
+                    });
+                }
             }
         });
 
