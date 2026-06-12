@@ -1271,6 +1271,19 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
+    // This is not a user-visible setting - it's merely a one-time flag to track if the
+    // free-AI-removal notice modal has been shown to (or silently marked as seen for) the user.
+    //
+    // We model it as a setting so it's only shown once to a given user regardless of the number of
+    // devices they use.
+    did_check_to_trigger_free_ai_removal_modal: DidShowFreeAiRemovalModal {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        private: true,
+    }
+
     // Used to determine whether the "What's new in Oz" section of the agent view
     // zero state is expanded or collapsed by default.
     should_expand_oz_updates: ShouldExpandOzUpdates {

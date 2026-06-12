@@ -95,6 +95,7 @@ pub fn init(app: &mut AppContext) {
     view::auto_handoff_sleep_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
+    view::free_ai_removal_modal::init(app);
     view::free_tier_limit_hit_modal::init(app);
     view::global_search::view::GlobalSearchView::init(app);
     view::right_panel::RightPanelView::init(app);
@@ -235,6 +236,18 @@ pub fn init(app: &mut AppContext) {
                     "workspace:trigger_auto_handoff_to_cloud",
                     "[Debug] Trigger Auto-Handoff to Cloud",
                     WorkspaceAction::TriggerAutoHandoffToCloud,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:open_free_ai_removal_modal",
+                    "[Debug] Open Free AI Removal Modal",
+                    WorkspaceAction::OpenFreeAiRemovalModal,
+                )
+                .with_context_predicate(id!("Workspace")),
+                EditableBinding::new(
+                    "workspace:reset_free_ai_removal_modal_state",
+                    "[Debug] Reset Free AI Removal Modal State",
+                    WorkspaceAction::ResetFreeAiRemovalModalState,
                 )
                 .with_context_predicate(id!("Workspace")),
                 EditableBinding::new(

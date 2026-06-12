@@ -712,6 +712,12 @@ pub enum WorkspaceAction {
     /// were about to sleep (for debugging)
     #[cfg(debug_assertions)]
     TriggerAutoHandoffToCloud,
+    /// Open the Free AI Removal Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenFreeAiRemovalModal,
+    /// Reset the free AI removal modal seen state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetFreeAiRemovalModalState,
     /// Install the opencode-warp plugin from GitHub into the global opencode config.
     #[cfg(debug_assertions)]
     InstallOpenCodeWarpPlugin,
@@ -1145,6 +1151,8 @@ impl WorkspaceAction {
             | OpenAutoHandoffSleepModal
             | ResetAutoHandoffSleepModalState
             | TriggerAutoHandoffToCloud
+            | OpenFreeAiRemovalModal
+            | ResetFreeAiRemovalModalState
             | InstallOpenCodeWarpPlugin
             | UseLocalOpenCodeWarpPlugin => false,
             #[cfg(not(target_family = "wasm"))]
