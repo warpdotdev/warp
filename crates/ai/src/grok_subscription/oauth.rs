@@ -8,6 +8,13 @@
 //! `client_id` bound to a specific port, so we reuse the Grok-CLI client and
 //! bind the callback server to that exact port.
 //!
+//! Some browsers/networks can't reach the loopback callback (e.g. Private
+//! Network Access is blocked), in which case xAI's consent screen instead
+//! *displays* the authorization code for the user to paste back into the app.
+//! [`OauthAttempt::manual_code_exchange`] supports that fallback by capturing
+//! the attempt's PKCE verifier so a pasted code can be exchanged directly,
+//! without ever observing the loopback redirect.
+//!
 //! This module owns only the network/protocol side: building the authorize
 //! URL, running the loopback callback server, and exchanging/refreshing tokens
 //! at xAI's token endpoint. Persistence of the resulting tokens, proactive
@@ -87,6 +94,48 @@ impl OauthAttempt {
     /// code for tokens. Consumes the attempt so its secrets can't be reused.
     pub async fn finish(self) -> anyhow::Result<TokenResponse> {
         run_oauth_flow(self.listener, self.pkce).await
+    }
+
+    /// Returns a handle for the manual code-entry fallback, used when the
+    /// browser can't reach the loopback callback and xAI instead shows the
+    /// authorization code for the user to paste back into Warp.
+    ///
+    /// This clones the attempt's PKCE verifier (rather than consuming the
+    /// attempt) so the loopback callback server from [`Self::finish`] can keep
+    /// running in parallel — whichever path the provider ends up taking can
+    /// complete the connection. The verifier never leaves this module as a
+    /// bare string; it stays wrapped in the returned [`ManualCodeExchange`].
+    pub fn manual_code_exchange(&self) -> ManualCodeExchange {
+        ManualCodeExchange {
+            verifier: self.pkce.verifier.clone(),
+        }
+    }
+}
+
+/// Completes the OAuth flow from a manually-pasted authorization code, the
+/// fallback for when the loopback redirect never fires. Holds a clone of the
+/// originating [`OauthAttempt`]'s PKCE verifier.
+///
+/// The CSRF `state` parameter is intentionally not checked here: the user
+/// copies the code out of band, so there is no redirect to read `state` from.
+/// PKCE (the verifier bound to the original `code_challenge`) is what protects
+/// the exchange against code interception in this flow.
+#[derive(Clone)]
+pub struct ManualCodeExchange {
+    verifier: String,
+}
+
+impl ManualCodeExchange {
+    /// Exchanges a user-pasted authorization `code` for tokens, reusing the
+    /// same PKCE verifier and loopback redirect URI as the original authorize
+    /// request (xAI binds the displayed code to that same request). Surrounding
+    /// whitespace is trimmed since the code is hand-copied.
+    pub async fn exchange(&self, code: &str) -> anyhow::Result<TokenResponse> {
+        let code = code.trim();
+        if code.is_empty() {
+            bail!("enter the code shown in your browser to finish connecting");
+        }
+        exchange_code_for_tokens(code, &self.verifier).await
     }
 }
 
