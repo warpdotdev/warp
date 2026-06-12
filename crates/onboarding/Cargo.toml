@@ -33,3 +33,6 @@ warp_core = { workspace = true }
 warpui.workspace = true
 warpui_core.workspace = true
 warp_logging.workspace = true
+
+[dev-dependencies]
+warp_core = { workspace = true, features = ["test-util"] }

@@ -69,6 +69,9 @@ use crate::notebooks::manager::NotebookSource;
 use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::experiments::{
+    is_free_ai_removal_experiment_enabled, ServerExperiments, ServerExperimentsEvent,
+};
 use crate::server::ids::SyncId;
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
@@ -1927,10 +1930,26 @@ impl RootView {
                 default_model_id,
                 workspace_enforces_autonomy,
                 FeatureFlag::AgentView.is_enabled(),
+                is_free_ai_removal_experiment_enabled(ctx),
                 auth_state,
                 ctx,
             )
         });
+
+        // Keep the FREE_AI_REMOVAL enrollment current; the experiments payload can
+        // arrive after the onboarding view is created (e.g. right after sign-in).
+        let onboarding_view_for_experiments = onboarding_view.clone();
+        ctx.subscribe_to_model(
+            &ServerExperiments::handle(ctx),
+            move |_, _, event, ctx| match event {
+                ServerExperimentsEvent::ExperimentsUpdated => {
+                    let enrolled = is_free_ai_removal_experiment_enabled(ctx);
+                    onboarding_view_for_experiments.update(ctx, |view, ctx| {
+                        view.set_free_ai_removal_enrolled(enrolled, ctx);
+                    });
+                }
+            },
+        );
 
         let onboarding_view_clone = onboarding_view.clone();
         ctx.subscribe_to_model(
