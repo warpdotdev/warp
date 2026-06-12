@@ -189,15 +189,14 @@ impl GlobalSearch {
         }
 
         for (host_id, paths) in remote_roots {
-            self.spawn_remote_search(
-                search_id,
-                effective_pattern.clone(),
-                host_id,
-                paths,
+            let request = RipgrepSearchRequest {
+                pattern: effective_pattern.clone(),
+                roots: paths.iter().map(|p| p.to_string()).collect(),
                 ignore_case,
                 multiline,
-                ctx,
-            );
+                max_matches: REMOTE_MAX_MATCH_COUNT,
+            };
+            self.spawn_remote_search(search_id, host_id, request, ctx);
         }
     }
 
@@ -240,24 +239,13 @@ impl GlobalSearch {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn spawn_remote_search(
         &mut self,
         search_id: u32,
-        pattern: String,
         host_id: HostId,
-        paths: Vec<StandardizedPath>,
-        ignore_case: bool,
-        multiline: bool,
+        request: RipgrepSearchRequest,
         ctx: &mut ModelContext<Self>,
     ) {
-        let request = RipgrepSearchRequest {
-            pattern,
-            roots: paths.iter().map(|p| p.to_string()).collect(),
-            ignore_case,
-            multiline,
-            max_matches: REMOTE_MAX_MATCH_COUNT,
-        };
         let pending = RemoteServerManager::handle(ctx).update(ctx, |manager, _| {
             manager.start_ripgrep_search(&host_id, request)
         });
