@@ -46,9 +46,10 @@
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Context as _};
+use instant::Instant;
 use opentelemetry::trace::{
     Span as _, SpanBuilder, SpanContext, Status, Tracer as _, TracerProvider as _,
 };

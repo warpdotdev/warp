@@ -28,6 +28,7 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use futures_util::stream::AbortHandle;
 use http::header::{HeaderValue, AUTHORIZATION};
+use instant::Instant;
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
 use warp_managed_secrets::client::{IdentityTokenOptions, ManagedSecretsClient, TaskIdentityToken};
 use warpui::r#async::{FutureExt as _, Timer};
@@ -379,7 +380,7 @@ struct AuthRefreshCoordinator {
     refresh_in_flight: bool,
     consecutive_failures: u32,
     scheduled_refresh: Option<AbortHandle>,
-    last_failure_diagnostic: Option<std::time::Instant>,
+    last_failure_diagnostic: Option<Instant>,
 }
 
 impl AuthRefreshCoordinator {
@@ -523,7 +524,7 @@ impl AuthRefreshCoordinator {
 
     /// Emits a local token-free failure diagnostic at most once per configured interval.
     fn warn_refresh_failure(&mut self) {
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         if self
             .last_failure_diagnostic
             .is_none_or(|last| now.duration_since(last) >= FAILURE_LOG_INTERVAL)
