@@ -73,7 +73,7 @@ const TAB_CLOSE_BUTTON_OPACITY: Opacity = 60;
 const TAB_CLOSE_BUTTON_WIDTH: f32 = 20.0;
 const MAX_TOOLTIP_LENGTH: usize = 80;
 
-const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
+pub(crate) const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 
 // Width threshold (in px) below which we render an icon-only tab
 const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
