@@ -50,6 +50,23 @@ fn initialize_app(
     app.add_singleton_model(AuthManager::new_for_test);
 }
 
+#[test]
+fn final_workspace_metadata_failure_is_observable() {
+    assert!(
+        final_workspace_metadata_refresh_result(&RequestState::RequestFailed(anyhow::anyhow!(
+            "final refresh failed"
+        )))
+        .expect("final failure should complete refresh")
+        .is_err()
+    );
+    assert!(
+        final_workspace_metadata_refresh_result(&RequestState::RequestFailedRetryPending(
+            anyhow::anyhow!("retry pending")
+        ))
+        .is_none()
+    );
+}
+
 fn mock_workflow(id: WorkflowId, owner: Owner) -> CloudWorkflow {
     CloudWorkflow::new_from_server(mock_server_workflow(id, owner))
 }

@@ -27,12 +27,49 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::{
     AdminEnablementSetting, CodebaseContextSettings, HostEnablementSetting, LlmHostSettings,
-    Workspace,
+    OrganizationTelemetryPolicy, TelemetryEnablementSetting, Workspace,
 };
 
 #[derive(Default)]
 struct CachedResources {
     workspaces: Vec<Workspace>,
+}
+
+#[test]
+fn current_workspace_telemetry_policy_propagates_to_privacy_settings() {
+    let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources::default(),
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.setup_test_workspace(ctx);
+            workspaces.update_current_workspace(
+                |workspace| {
+                    workspace
+                        .teams
+                        .first_mut()
+                        .expect("test workspace should contain a team")
+                        .organization_settings
+                        .telemetry_settings
+                        .policy =
+                        OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled);
+                },
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                PrivacySettings::as_ref(ctx).organization_telemetry_policy(),
+                OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled)
+            );
+        });
+    });
 }
 
 fn initialize_app(

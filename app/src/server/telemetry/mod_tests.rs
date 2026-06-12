@@ -2,6 +2,7 @@ use rudder_message::Track;
 use virtual_fs::VirtualFS;
 
 use super::*;
+use crate::workspaces::workspace::{OrganizationTelemetryPolicy, TelemetryEnablementSetting};
 
 // Tests that events with UGC are not persisted to desk.
 #[test]
@@ -47,6 +48,41 @@ fn test_persist_events_doesnt_include_ugc_events() {
 
             let track = file_content[0].unwrap_track();
             assert_eq!(track.event, "non UGC event name");
+        },
+    );
+}
+
+#[test]
+fn blocked_disk_persistence_drains_queue_and_deletes_existing_backlog() {
+    let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
+    let telemetry_api = TelemetryApi::new();
+
+    VirtualFS::test(
+        "blocked_disk_persistence_drains_queue_and_deletes_existing_backlog",
+        |dirs, _sandbox| {
+            let path = dirs.root().join("rudderstack");
+            std::fs::write(&path, b"existing backlog").expect("should create backlog");
+            warpui::telemetry::record_event(
+                Some("user".into()),
+                "anonymous_id".to_owned(),
+                "blocked event".into(),
+                None,
+                false,
+                warpui::time::get_current_time(),
+            );
+
+            telemetry_api
+                .flush_and_persist_events_at_path(
+                    10,
+                    PrivacySettingsSnapshot::mock_with_organization_policy(
+                        OrganizationTelemetryPolicy::Enforced(TelemetryEnablementSetting::Disabled),
+                    ),
+                    &path,
+                )
+                .expect("blocked persistence should drop events");
+
+            assert!(!path.exists());
+            assert!(warpui::telemetry::flush_events().is_empty());
         },
     );
 }

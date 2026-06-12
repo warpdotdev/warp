@@ -14,6 +14,7 @@ use super::super::server_buffer_tracker::ServerBufferTracker;
 use super::{ConnectionId, PendingFileOps, ServerModel};
 use crate::auth::auth_state::AuthState;
 use crate::code_review::diff_state::DiffMode;
+use crate::features::FeatureFlag;
 use crate::remote_server::diff_state_tracker::DiffModelKey;
 
 fn test_model(app: &mut App) -> ServerModel {
@@ -29,7 +30,53 @@ fn test_model(app: &mut App) -> ServerModel {
         buffers: ServerBufferTracker::new(),
         diff_states: app.add_model(|_| RemoteDiffStateManager::new()),
         host_scoped_requests: HashMap::new(),
+        pending_startup_timing_data: None,
+        telemetry_policy_refresh_in_flight: false,
     }
+}
+
+#[test]
+fn startup_telemetry_waits_for_authenticated_policy_refresh() {
+    let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(true);
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        model.pending_startup_timing_data = Some(Vec::new());
+
+        assert!(!model.should_refresh_telemetry_policy_after_auth());
+        assert!(model.pending_startup_timing_data.is_some());
+
+        model.apply_initialize_auth(&Initialize {
+            auth_token: "initial-token".to_string(),
+            user_id: "test-user-id".to_string(),
+            user_email: "test@example.com".to_string(),
+            crash_reporting_enabled: true,
+            codebase_index_limits: None,
+        });
+
+        assert!(model.should_refresh_telemetry_policy_after_auth());
+        assert!(model.pending_startup_timing_data.is_some());
+
+        model.telemetry_policy_refresh_in_flight = true;
+        assert!(!model.should_refresh_telemetry_policy_after_auth());
+        assert!(model.pending_startup_timing_data.is_some());
+    });
+}
+
+#[test]
+fn rollout_off_does_not_require_daemon_policy_refresh() {
+    let _flag = FeatureFlag::EnterpriseTelemetryPolicy.override_enabled(false);
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        model.apply_initialize_auth(&Initialize {
+            auth_token: "initial-token".to_string(),
+            user_id: "test-user-id".to_string(),
+            user_email: "test@example.com".to_string(),
+            crash_reporting_enabled: true,
+            codebase_index_limits: None,
+        });
+
+        assert!(!model.should_refresh_telemetry_policy_after_auth());
+    });
 }
 
 /// Uses `try_new` instead of `try_from_local` so that Unix-style paths
@@ -115,7 +162,7 @@ fn authenticate_with_auth_token_replaces_auth_token() {
             codebase_index_limits: None,
         });
 
-        model.handle_authenticate(Authenticate {
+        model.apply_authenticate_auth(Authenticate {
             auth_token: "rotated-token".to_string(),
         });
 
@@ -135,7 +182,7 @@ fn empty_authenticate_clears_auth_token() {
             codebase_index_limits: None,
         });
 
-        model.handle_authenticate(Authenticate {
+        model.apply_authenticate_auth(Authenticate {
             auth_token: String::new(),
         });
 

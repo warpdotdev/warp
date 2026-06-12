@@ -12,7 +12,7 @@ use super::team::{DiscoverableTeam, MembershipRole, Team};
 use super::workspace::WorkspaceMemberUsageInfo;
 use super::workspace::{
     AdminEnablementSetting, CustomerType, EnterpriseSecretRegex, HostEnablementSetting,
-    UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
+    OrganizationTelemetryPolicy, UgcCollectionEnablementSetting, Workspace, WorkspaceUid,
 };
 use crate::ai::llms::LLMModelHost;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -762,7 +762,7 @@ impl UserWorkspaces {
         // PrivacySettings can't observe UserWorkspaces for updates, as it's initialized too early in
         // the app initialization flow. So, we update it manually whenever teams data changes.
         PrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
-            settings.set_is_telemetry_force_enabled(self.is_telemetry_force_enabled());
+            settings.set_organization_telemetry_policy(self.organization_telemetry_policy(), ctx);
             settings.set_enterprise_secret_redaction_settings(
                 self.is_enterprise_secret_redaction_enabled(),
                 self.get_enterprise_secret_redaction_regex_list(),
@@ -1381,10 +1381,10 @@ impl UserWorkspaces {
             .unwrap_or_default()
     }
 
-    pub fn is_telemetry_force_enabled(&self) -> bool {
+    pub fn organization_telemetry_policy(&self) -> OrganizationTelemetryPolicy {
         self.current_team()
-            .map(|team| team.organization_settings.telemetry_settings.force_enabled)
-            .unwrap_or(false)
+            .map(|team| team.organization_settings.telemetry_settings.policy)
+            .unwrap_or(OrganizationTelemetryPolicy::Unmanaged)
     }
 
     pub fn is_enterprise_secret_redaction_enabled(&self) -> bool {

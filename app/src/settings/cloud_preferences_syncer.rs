@@ -159,6 +159,7 @@ lazy_static! {
         super::privacy::TELEMETRY_ENABLED_DEFAULTS_KEY,
         super::privacy::CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
         super::privacy::CLOUD_CONVERSATION_STORAGE_ENABLED_DEFAULTS_KEY,
+        super::privacy::UGC_COLLECTION_ENABLED_DEFAULTS_KEY,
     ];
 }
 

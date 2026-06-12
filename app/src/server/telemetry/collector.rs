@@ -64,15 +64,25 @@ impl TelemetryCollector {
             self.schedule_event_queue_flush(ctx);
         }
 
-        // Clear queued telemetry events when telemetry is enabled or disabled. If telemetry is
+        // Clear queued telemetry events when telemetry or its organization policy changes. If telemetry is
         // enabled, we will start sending Rudderstack requests when the event queue is periodically
         // flushed. The initial request should not contain any events recorded when the user was
         // previously opted-out of telemetry. In the case where the user turns the telemetry from
         // on to off, we should not send another request with any telemetry, even if the event was
         // initially recorded prior to the user turning telemetry off.`
-        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |_me, event, _ctx| {
-            if let PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled { .. } = event {
+        ctx.subscribe_to_model(&PrivacySettings::handle(ctx), |me, event, ctx| {
+            if matches!(
+                event,
+                PrivacySettingsChangedEvent::UpdateIsTelemetryEnabled { .. }
+                    | PrivacySettingsChangedEvent::UpdateOrganizationTelemetryPolicy { .. }
+            ) {
                 clear_event_queue();
+                if PrivacySettings::as_ref(ctx)
+                    .get_snapshot(ctx)
+                    .should_disable_telemetry()
+                {
+                    me.flush_persisted_events_from_disk(ctx);
+                }
             }
         });
     }
@@ -169,12 +179,12 @@ impl TelemetryCollector {
     /// `ACTIVE_USAGE_DURATION`.
     fn schedule_send_active_usage_event(&self, ctx: &mut ModelContext<TelemetryCollector>) {
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-        let is_telemetry_enabled = PrivacySettings::as_ref(ctx).is_telemetry_enabled;
+        let privacy_settings_snapshot = PrivacySettings::as_ref(ctx).get_snapshot(ctx);
         let _ = ctx.spawn(
             async move {
                 // Record app active if there was any activity now or right after the previous check
                 let last_active_timestamp = App::last_active_timestamp();
-                if is_telemetry_enabled
+                if !privacy_settings_snapshot.should_disable_telemetry()
                     && last_active_timestamp + ACTIVE_USAGE_DURATION.as_secs() as i64
                         > Utc::now().timestamp()
                 {

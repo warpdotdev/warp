@@ -466,9 +466,6 @@ impl AuthManager {
                             warpui::time::get_current_time(),
                         );
 
-                        // Note that this snapshot might get overwritten to disabled after the server fetch.
-                        // However, it is still fine to flush to Rudderstack here as the login event is low-risk
-                        // and it is better to err on the side of over-reporting than under-reporting.
                         if let Err(e) = server_api
                             .flush_telemetry_events(privacy_settings_snapshot)
                             .await

@@ -127,10 +127,10 @@ where
     });
 
     async move {
-        let _ = refresh_future
+        refresh_future
             .await
-            .map_err(|_| anyhow::anyhow!("Timed out refreshing team metadata"))?;
-        Ok(())
+            .map_err(|_| anyhow::anyhow!("Timed out refreshing team metadata"))?
+            .map_err(|_| anyhow::anyhow!("Team metadata refresh was canceled"))?
     }
 }
 

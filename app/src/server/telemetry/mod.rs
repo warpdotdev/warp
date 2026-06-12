@@ -94,6 +94,10 @@ impl TelemetryApi {
     pub async fn flush_events(&self, settings_snapshot: PrivacySettingsSnapshot) -> Result<usize> {
         let events = warpui::telemetry::flush_events();
         let event_count = events.len();
+        if settings_snapshot.should_disable_telemetry() {
+            log::info!("Discarding queued events because telemetry is disabled.");
+            return Ok(event_count);
+        }
 
         #[cfg(not(target_family = "wasm"))]
         if FeatureFlag::SendTelemetryToFile.is_enabled() {
@@ -122,6 +126,11 @@ impl TelemetryApi {
         settings_snapshot: PrivacySettingsSnapshot,
     ) -> Result<()> {
         if path.exists() {
+            if settings_snapshot.should_disable_telemetry() {
+                log::info!("Deleting persisted events because telemetry is disabled.");
+                std::fs::remove_file(path)?;
+                return Ok(());
+            }
             let file = File::open(path)?;
             let events: Vec<RudderBatchMessage> = serde_json::from_reader(file)?;
             if !events.is_empty() {
@@ -162,15 +171,19 @@ impl TelemetryApi {
         settings_snapshot: PrivacySettingsSnapshot,
         path: impl AsRef<Path>,
     ) -> Result<()> {
+        let events = warpui::telemetry::flush_events();
         if settings_snapshot.should_disable_telemetry() {
-            log::info!("Not writing queued events to disk because telemetry is disabled.");
+            log::info!("Discarding queued events instead of writing them to disk because telemetry is disabled.");
+            let path = path.as_ref();
+            if path.exists() {
+                std::fs::remove_file(path)?;
+            }
             return Result::Ok(());
         }
         log::info!("Writing queued events to disk because telemetry is enabled.");
 
         let file = File::create(path)?;
 
-        let events = warpui::telemetry::flush_events();
         if events.len() > max_event_count {
             log::error!("More telemetry events in queue than the limit to persist")
         }

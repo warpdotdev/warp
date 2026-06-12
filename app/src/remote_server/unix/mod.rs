@@ -20,6 +20,7 @@ use warpui::r#async::executor;
 use warpui::SingletonEntity;
 
 use super::server_model::{ConnectionId, ServerModel};
+use crate::features::FeatureFlag;
 use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
 
 /// Run the `remote-server-daemon` subcommand.
@@ -87,10 +88,17 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
             timer.mark_interval_end("DAEMON_SOCKET_BOUND");
             timer.compute_stats()
         });
-    send_telemetry_from_app_ctx!(
-        TelemetryEvent::RemoteServerDaemonStartup { timing_data },
-        ctx
-    );
+    let pending_startup_timing_data = if FeatureFlag::EnterpriseTelemetryPolicy.is_enabled() {
+        // Defer the startup event until the organization telemetry policy has been
+        // resolved post-auth; until then telemetry respects the user's own setting.
+        Some(timing_data)
+    } else {
+        send_telemetry_from_app_ctx!(
+            TelemetryEvent::RemoteServerDaemonStartup { timing_data },
+            ctx
+        );
+        None
+    };
 
     let _ = std::fs::write(&pid_path, std::process::id().to_string());
 
@@ -129,7 +137,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
         })
         .detach();
 
-        ServerModel::new(ctx)
+        ServerModel::new(pending_startup_timing_data, ctx)
     });
 }
 

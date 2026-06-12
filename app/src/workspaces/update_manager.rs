@@ -34,6 +34,16 @@ pub enum TeamUpdateManagerEvent {
     RenameTeamError,
 }
 
+fn final_workspace_metadata_refresh_result(
+    request_state: &RequestState<WorkspacesMetadataWithPricing>,
+) -> Option<Result<()>> {
+    match request_state {
+        RequestState::RequestSucceeded(_) => Some(Ok(())),
+        RequestState::RequestFailed(err) => Some(Err(anyhow::anyhow!("{err:#}"))),
+        RequestState::RequestFailedRetryPending(_) => None,
+    }
+}
+
 /// TeamUpdateManager is a singleton model responsible for communicating with the server and local
 /// database regarding teams' metadata.
 /// It emits events that are later processed by UserWorkspaces model (which is an in-memory store for
@@ -145,17 +155,20 @@ impl TeamUpdateManager {
     }
 
     /// Out-of-band (from the regular poll) refresh of workspace metadata.
-    /// Returns a oneshot Receiver that resolves when the refresh completes (success or final failure).
-    pub fn refresh_workspace_metadata(&mut self, ctx: &mut ModelContext<Self>) -> Receiver<()> {
+    /// Returns a oneshot Receiver that resolves with the final refresh result.
+    pub fn refresh_workspace_metadata(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Receiver<Result<()>> {
         // Skip the refresh when logged out to avoid noisy auth errors.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
-            let (tx, rx) = oneshot::channel::<()>();
-            let _ = tx.send(());
+            let (tx, rx) = oneshot::channel::<Result<()>>();
+            let _ = tx.send(Ok(()));
             return rx;
         }
 
         let team_client = self.team_client.clone();
-        let (tx, rx) = oneshot::channel::<()>();
+        let (tx, rx) = oneshot::channel::<Result<()>>();
         let mut tx = Some(tx);
         ctx.spawn_with_retry_on_error(
             move || {
@@ -165,11 +178,11 @@ impl TeamUpdateManager {
             OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
             move |update_manager, request_state, ctx| {
                 // Only signal once there are no more retries left.
-                let is_final = !request_state.has_pending_retries();
+                let final_result = final_workspace_metadata_refresh_result(&request_state);
                 update_manager.handle_workspace_metadata_with_request_state(request_state, ctx);
-                if is_final {
+                if let Some(final_result) = final_result {
                     if let Some(sender) = tx.take() {
-                        let _ = sender.send(());
+                        let _ = sender.send(final_result);
                     }
                 }
             },
