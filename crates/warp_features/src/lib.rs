@@ -131,9 +131,6 @@ pub enum FeatureFlag {
     /// Enables workflows for use with Agent Mode.
     AgentModeWorkflows,
 
-    /// Enables AI rules for use with Agent Mode.
-    AIRules,
-
     /// Routes SSH sessions through the tmux-backed SSH wrapper.
     SSHTmuxWrapper,
 

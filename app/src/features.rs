@@ -73,8 +73,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SharedWithMe,
         #[cfg(feature = "am_workflows")]
         FeatureFlag::AgentModeWorkflows,
-        #[cfg(feature = "ai_rules")]
-        FeatureFlag::AIRules,
         #[cfg(feature = "ssh_tmux_wrapper")]
         FeatureFlag::SSHTmuxWrapper,
         #[cfg(feature = "shell_selector")]

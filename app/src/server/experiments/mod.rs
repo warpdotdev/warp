@@ -87,7 +87,6 @@ impl ServerExperiment {
             }
             Self::AgentModeAnalyticsExperiment => {
                 FeatureFlag::AgentModeAnalytics.set_enabled(true);
-                FeatureFlag::AIRules.set_enabled(true);
                 FeatureFlag::SuggestedRules.set_enabled(true);
             }
             Self::WindowsLaunchExperiment => {

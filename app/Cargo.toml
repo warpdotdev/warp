@@ -514,7 +514,6 @@ default = [
     "reload_stale_conversation_files",
     "loginless_conversion",
     "warp_packs",
-    "ai_rules",
     "suggested_rules",
     "default_waterfall_mode",
     "am_workflows",
@@ -847,7 +846,6 @@ workflow_aliases = []
 rect_selection = []
 alacritty_settings_import = []
 shared_with_me = []
-ai_rules = []
 am_workflows = []
 shell_selector = []
 shared_session_long_running_commands = []

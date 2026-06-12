@@ -5400,7 +5400,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::MCPTemplateCreated { .. }
             | Self::MCPTemplateInstalled { .. }
             | Self::MCPTemplateShared { .. } => EnablementState::Always,
-            Self::KnowledgePaneOpened { .. } => EnablementState::Flag(FeatureFlag::AIRules),
+            Self::KnowledgePaneOpened { .. } => EnablementState::Always,
             #[cfg(feature = "local_fs")]
             Self::CodePaneOpened { .. } => EnablementState::Always,
             #[cfg(feature = "local_fs")]

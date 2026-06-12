@@ -1820,9 +1820,6 @@ impl PaneGroup {
                 Ok((PaneData::new(pane_id), focus))
             }
             LeafContents::AIFact(snapshot) => {
-                if !FeatureFlag::AIRules.is_enabled() {
-                    return Err(anyhow::anyhow!("AI fact pane not enabled"));
-                }
                 let pane: Box<dyn AnyPaneContent + 'static> = match snapshot {
                     AIFactPaneSnapshot::Personal => Box::new(AIFactPane::new(ctx)),
                 };

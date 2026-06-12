@@ -1285,7 +1285,6 @@ pub fn init(app: &mut AppContext) {
                 .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Open AI Rules"),
             WorkspaceAction::OpenAIFactCollection,
         )
-        .with_enabled(|| FeatureFlag::AIRules.is_enabled())
         .with_custom_action(CustomAction::OpenAIFactCollection)
         .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))
         .with_group(bindings::BindingGroup::WarpAi.as_str()),
