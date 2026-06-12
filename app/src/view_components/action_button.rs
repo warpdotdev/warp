@@ -426,17 +426,6 @@ impl ActionButton {
         ctx.notify();
     }
 
-    /// Set or clear the ANSI-palette icon color override. `None` restores the
-    /// default theme-derived icon color.
-    pub fn set_icon_ansi_color(
-        &mut self,
-        icon_ansi_color: Option<AnsiColorIdentifier>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.icon_ansi_color = icon_ansi_color;
-        ctx.notify();
-    }
-
     pub fn set_label(&mut self, label: impl Into<Cow<'static, str>>, ctx: &mut ViewContext<Self>) {
         self.label = label.into();
         ctx.notify();

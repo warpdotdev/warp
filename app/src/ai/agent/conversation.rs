@@ -2708,13 +2708,6 @@ impl AIConversation {
                                 .prompt_cache_expires_at
                                 .as_ref()
                                 .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos));
-                            log::info!(
-                                "[DEBUG] ModelUsed received: model_id={} is_fallback={} prompt_cache_expires_at={:?} (in {:?})",
-                                model_used.model_id,
-                                model_used.is_fallback,
-                                prompt_cache_expires_at,
-                                prompt_cache_expires_at.map(|t| t - Local::now()),
-                            );
                             let exchange_id = self
                                 .added_exchanges_by_response
                                 .get(response_stream_id)
