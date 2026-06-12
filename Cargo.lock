@@ -15280,6 +15280,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "warp_session_journal"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "warp_terminal"
 version = "0.0.0"
 dependencies = [

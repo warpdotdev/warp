@@ -1,0 +1,15 @@
+[package]
+name = "warp_session_journal"
+version = "0.1.0"
+edition = "2021"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
