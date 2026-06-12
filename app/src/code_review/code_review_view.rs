@@ -6367,7 +6367,6 @@ impl CodeReviewView {
         let Some(repo) = self.repo_path().cloned() else {
             return;
         };
-
         let result = GitRepoModels::handle(ctx)
             .update(ctx, |model, ctx| model.subscribe_github_repo(&repo, ctx));
         let handle = match result {

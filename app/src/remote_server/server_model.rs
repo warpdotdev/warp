@@ -35,7 +35,8 @@ use super::diff_state_tracker::{
 };
 use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, git_commit_chain_response, git_create_pr_response,
+    get_fragment_metadata_from_hash_response, get_git_hub_pr_info_response,
+    get_git_hub_repo_info_response, git_commit_chain_response, git_create_pr_response,
     git_generate_commit_message_response, git_get_committed_branch_files_response,
     git_push_response, host_scoped_request, notification, resolve_conflict_response,
     run_command_response, save_buffer_response, server_message, session_scoped_request,
@@ -49,8 +50,9 @@ use super::proto::{
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
     GetFragmentMetadataFromHashSuccess, GetGitHubPrInfoRequest, GetGitHubPrInfoResponse,
-    GetGitHubRepoInfoRequest, GetGitHubRepoInfoResponse, GitCommitChainMode, GitCommitChainRequest,
-    GitCommitChainResponse, GitCommitChainSuccess, GitCreatePrRequest, GitCreatePrResponse,
+    GetGitHubPrInfoSuccess, GetGitHubRepoInfoRequest, GetGitHubRepoInfoResponse,
+    GetGitHubRepoInfoSuccess, GitCommitChainMode, GitCommitChainRequest, GitCommitChainResponse,
+    GitCommitChainSuccess, GitCreatePrRequest, GitCreatePrResponse,
     GitGenerateCommitMessageRequest, GitGenerateCommitMessageResponse,
     GitGetCommittedBranchFilesRequest, GitGetCommittedBranchFilesResponse,
     GitGetCommittedBranchFilesSuccess, GitHubPrInfoPush, GitHubRepositoryInfoPush, GitOpDelta,
@@ -3399,22 +3401,22 @@ impl ServerModel {
                 git::get_pr_for_branch(&repo_path, path_env.as_deref()).await
             },
             move |me, result, _ctx| {
-                let response = match result {
-                    Ok(pr_info) => GetGitHubPrInfoResponse {
-                        pr_info: pr_info.as_ref().map(super::proto::PrInfo::from),
-                        error: None,
-                    },
-                    Err(e) => GetGitHubPrInfoResponse {
-                        pr_info: None,
-                        error: Some(GitOpError {
-                            message: format!("{e:#}"),
-                        }),
-                    },
+                let result = match result {
+                    Ok(pr_info) => {
+                        get_git_hub_pr_info_response::Result::Success(GetGitHubPrInfoSuccess {
+                            pr_info: pr_info.as_ref().map(super::proto::PrInfo::from),
+                        })
+                    }
+                    Err(e) => get_git_hub_pr_info_response::Result::Error(GitOpError {
+                        message: format!("{e:#}"),
+                    }),
                 };
                 me.send_server_message(
                     Some(conn_id),
                     Some(&request_id_for_response),
-                    server_message::Message::GetGithubPrInfoResponse(response),
+                    server_message::Message::GetGithubPrInfoResponse(GetGitHubPrInfoResponse {
+                        result: Some(result),
+                    }),
                 );
             },
             ctx,
@@ -3457,22 +3459,22 @@ impl ServerModel {
                 git::get_repository_info(&repo_path, path_env.as_deref()).await
             },
             move |me, result, _ctx| {
-                let response = match result {
-                    Ok(repository_info) => GetGitHubRepoInfoResponse {
-                        repository_info: repository_info.as_ref().map(RepositoryInfo::from),
-                        error: None,
-                    },
-                    Err(e) => GetGitHubRepoInfoResponse {
-                        repository_info: None,
-                        error: Some(GitOpError {
-                            message: format!("{e:#}"),
-                        }),
-                    },
+                let result = match result {
+                    Ok(repository_info) => {
+                        get_git_hub_repo_info_response::Result::Success(GetGitHubRepoInfoSuccess {
+                            repository_info: repository_info.as_ref().map(RepositoryInfo::from),
+                        })
+                    }
+                    Err(e) => get_git_hub_repo_info_response::Result::Error(GitOpError {
+                        message: format!("{e:#}"),
+                    }),
                 };
                 me.send_server_message(
                     Some(conn_id),
                     Some(&request_id_for_response),
-                    server_message::Message::GetGithubRepoInfoResponse(response),
+                    server_message::Message::GetGithubRepoInfoResponse(GetGitHubRepoInfoResponse {
+                        result: Some(result),
+                    }),
                 );
             },
             ctx,

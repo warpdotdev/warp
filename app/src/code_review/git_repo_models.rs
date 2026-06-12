@@ -1,16 +1,10 @@
 use std::collections::HashMap;
 
-#[cfg(feature = "local_fs")]
-use repo_metadata::repositories::DetectedRepositories;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
+use warpui::{AppContext, Entity, ModelHandle, SingletonEntity, WeakModelHandle};
 
-#[cfg(feature = "local_fs")]
-use super::git_repo_model::new_local_git_repo_status_model;
-use super::git_repo_model::{new_remote_git_repo_status_model, GitRepoStatusModel};
-#[cfg(feature = "local_fs")]
-use super::github_repo_model::LocalGitHubRepoModel;
-use super::github_repo_model::{GitHubRepoModel, RemoteGitHubRepoModel};
+use super::git_repo_model::GitRepoStatusModel;
+use super::github_repo_model::GitHubRepoModel;
 
 // ── GitRepoModels (singleton cache) ─────────────────────────────────────────
 
@@ -48,7 +42,7 @@ impl GitRepoModels {
     pub fn subscribe(
         &mut self,
         repo: &LocalOrRemotePath,
-        ctx: &mut ModelContext<Self>,
+        ctx: &mut AppContext,
     ) -> anyhow::Result<ModelHandle<GitRepoStatusModel>> {
         if let Some(handle) = self
             .git_status_models
@@ -58,33 +52,7 @@ impl GitRepoModels {
             return Ok(handle);
         }
 
-        let handle = match repo {
-            LocalOrRemotePath::Local(repo_path) => {
-                #[cfg(feature = "local_fs")]
-                {
-                    let Some(repository_model) = DetectedRepositories::as_ref(ctx)
-                        .get_local_watched_repo_for_path(repo_path, ctx)
-                    else {
-                        anyhow::bail!(
-                            "No watched repository found for path: {}",
-                            repo_path.display()
-                        );
-                    };
-                    new_local_git_repo_status_model(repo_path.clone(), repository_model, ctx)
-                }
-                #[cfg(not(feature = "local_fs"))]
-                {
-                    anyhow::bail!(
-                        "No watched repository found for path: {}",
-                        repo_path.display()
-                    );
-                }
-            }
-            LocalOrRemotePath::Remote(remote_path) => {
-                new_remote_git_repo_status_model(remote_path.clone(), ctx)
-            }
-        };
-
+        let handle = GitRepoStatusModel::new(repo, ctx)?;
         self.git_status_models
             .insert(repo.clone(), handle.downgrade());
         Ok(handle)
@@ -103,7 +71,7 @@ impl GitRepoModels {
     pub fn subscribe_github_repo(
         &mut self,
         repo: &LocalOrRemotePath,
-        ctx: &mut ModelContext<Self>,
+        ctx: &mut AppContext,
     ) -> anyhow::Result<ModelHandle<GitHubRepoModel>> {
         if let Some(handle) = self
             .github_repo_models
@@ -117,16 +85,11 @@ impl GitRepoModels {
             LocalOrRemotePath::Local(repo_path) => {
                 #[cfg(feature = "local_fs")]
                 {
-                    // LocalGitHubRepoModel needs a sibling GitRepoStatusModel for
-                    // branch info.
+                    // The local backend needs a sibling GitRepoStatusModel
+                    // for branch info; subscribe via this cache so it is
+                    // shared with other status consumers in the same repo.
                     let git_status = self.subscribe(repo, ctx)?;
-                    let repo_path = repo_path.clone();
-                    let inner =
-                        ctx.add_model(|ctx| LocalGitHubRepoModel::new(repo_path, git_status, ctx));
-                    ctx.add_model(|ctx| {
-                        ctx.subscribe_to_model(&inner, GitHubRepoModel::forward_event);
-                        GitHubRepoModel::Local(inner)
-                    })
+                    GitHubRepoModel::new_local(repo_path.clone(), git_status, ctx)
                 }
                 #[cfg(not(feature = "local_fs"))]
                 {
@@ -137,15 +100,9 @@ impl GitRepoModels {
                 }
             }
             LocalOrRemotePath::Remote(remote_path) => {
-                let inner =
-                    ctx.add_model(|ctx| RemoteGitHubRepoModel::new(remote_path.clone(), ctx));
-                ctx.add_model(|ctx| {
-                    ctx.subscribe_to_model(&inner, GitHubRepoModel::forward_event);
-                    GitHubRepoModel::Remote(inner)
-                })
+                GitHubRepoModel::new_remote(remote_path.clone(), ctx)
             }
         };
-
         self.github_repo_models
             .insert(repo.clone(), handle.downgrade());
         Ok(handle)

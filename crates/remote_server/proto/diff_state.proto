@@ -496,11 +496,16 @@ message GitHubRepositoryInfoPush {
 message GetGitHubPrInfoRequest {
   string repo_path = 1;
 }
-// Server -> client response for GetGitHubPrInfoRequest. `pr_info = None`
-// means the lookup completed and the current branch has no PR.
+// Server -> client response for GetGitHubPrInfoRequest.
 message GetGitHubPrInfoResponse {
+  oneof result {
+    GetGitHubPrInfoSuccess success = 1;
+    GitOpError error = 2;
+  }
+}
+// `pr_info` absent => the lookup completed and the current branch has no PR.
+message GetGitHubPrInfoSuccess {
   optional PrInfo pr_info = 1;
-  GitOpError error = 2;
 }
 // Client -> server request: ask the daemon to create the per-repo
 // GitHubRepoModel if needed and refresh repository name/owner.
@@ -509,6 +514,13 @@ message GetGitHubRepoInfoRequest {
 }
 // Server -> client response for GetGitHubRepoInfoRequest.
 message GetGitHubRepoInfoResponse {
+  oneof result {
+    GetGitHubRepoInfoSuccess success = 1;
+    GitOpError error = 2;
+  }
+}
+// `repository_info` absent => the lookup completed and the repository has no
+// GitHub repository info (e.g. no GitHub remotes).
+message GetGitHubRepoInfoSuccess {
   optional RepositoryInfo repository_info = 1;
-  GitOpError error = 2;
 }

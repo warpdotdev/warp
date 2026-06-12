@@ -67,9 +67,9 @@ fn repository_context_reads_github_repo_model() {
                 .unwrap()
         });
         let git_status =
-            app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+            app.add_model(move |ctx| GitRepoStatusModel::new_for_test(repository, None, ctx));
         let github_repo_model =
-            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx));
+            app.add_model(move |ctx| GitHubRepoModel::new_for_test(git_status, ctx));
 
         github_repo_model.update(&mut app, |model, ctx| {
             model.set_repository_info_for_test(
@@ -251,9 +251,9 @@ fn pull_request_context_reads_github_repo_model() {
                 .unwrap()
         });
         let git_status =
-            app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+            app.add_model(move |ctx| GitRepoStatusModel::new_for_test(repository, None, ctx));
         let github_repo_model =
-            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx));
+            app.add_model(move |ctx| GitHubRepoModel::new_for_test(git_status, ctx));
 
         github_repo_model.update(&mut app, |model, ctx| {
             model.set_pr_info_for_test(

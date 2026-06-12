@@ -185,20 +185,20 @@ fn detects_no_pr_for_branch_errors() {
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn detects_repository_lookup_not_applicable_errors() {
-    assert!(super::is_repository_lookup_not_applicable_error(
+fn detects_github_repo_not_applicable_errors() {
+    assert!(super::is_github_repo_not_applicable_error(
         "gh command failed: none of the git remotes configured for this repository point to a known GitHub host"
     ));
-    assert!(super::is_repository_lookup_not_applicable_error(
+    assert!(super::is_github_repo_not_applicable_error(
         "gh command failed: no GitHub remotes"
     ));
-    assert!(super::is_repository_lookup_not_applicable_error(
+    assert!(super::is_github_repo_not_applicable_error(
         "gh command failed: not a GitHub repository"
     ));
-    assert!(!super::is_repository_lookup_not_applicable_error(
+    assert!(!super::is_github_repo_not_applicable_error(
         "authentication required"
     ));
-    assert!(!super::is_repository_lookup_not_applicable_error(
+    assert!(!super::is_github_repo_not_applicable_error(
         "repository not found"
     ));
 }

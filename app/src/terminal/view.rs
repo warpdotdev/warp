@@ -5130,6 +5130,7 @@ impl TerminalView {
     /// These commands don't touch `.git/` so the filesystem watcher won't
     /// catch them; we refresh explicitly while a PR-info subscription is
     /// active for this terminal.
+    #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn refresh_pr_info_after_gh_or_gt_command(&mut self, ctx: &mut ViewContext<Self>) {
         // Ensure we have a subscription to the per-repo status model and the
         // per-repo PR-info model. `should_subscribe_to_git_status` already

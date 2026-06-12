@@ -46,7 +46,7 @@ fn new_github_repo_model_for_test(
     let temp_dir = tempfile::TempDir::new().unwrap();
     let repository = test_repository_handle(app, &temp_dir);
     let git_status =
-        app.add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repository, None, ctx));
+        app.add_model(move |ctx| GitRepoStatusModel::new_for_test(repository, None, ctx));
     let model = app.add_model(move |_| LocalGitHubRepoModel::new_for_test(git_status));
     (temp_dir, model)
 }

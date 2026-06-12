@@ -24,9 +24,10 @@ use crate::client::InitializeParams;
 use crate::client::RemoteServerClient;
 use crate::codebase_index_proto::RemoteCodebaseIndexStatus;
 use crate::proto::{
-    diff_state, get_diff_state_response, CodebaseIndexLimits, DiffMode, DiffState,
-    DiffStateErrorValue, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
-    FileStatusInfo, GetDiffStateResponse, GitOpDelta, GitStatusMetadata, RepositoryInfo, TextEdit,
+    diff_state, get_diff_state_response, get_git_hub_pr_info_response,
+    get_git_hub_repo_info_response, CodebaseIndexLimits, DiffMode, DiffState, DiffStateErrorValue,
+    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, FileStatusInfo,
+    GetDiffStateResponse, GitOpDelta, GitStatusMetadata, RepositoryInfo, TextEdit,
 };
 use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
 #[cfg(not(target_family = "wasm"))]
@@ -1214,10 +1215,14 @@ impl HostRequestHandle {
             .await?;
         match msg.message {
             Some(crate::proto::server_message::Message::GetGithubPrInfoResponse(resp)) => {
-                if let Some(error) = resp.error {
-                    Err(HostRequestError::OperationFailed(error.message))
-                } else {
-                    Ok(resp.pr_info)
+                match resp.result {
+                    Some(get_git_hub_pr_info_response::Result::Success(success)) => {
+                        Ok(success.pr_info)
+                    }
+                    Some(get_git_hub_pr_info_response::Result::Error(e)) => {
+                        Err(HostRequestError::OperationFailed(e.message))
+                    }
+                    None => Err(HostRequestError::UnexpectedResponse),
                 }
             }
             other => {
@@ -1243,10 +1248,14 @@ impl HostRequestHandle {
             .await?;
         match msg.message {
             Some(crate::proto::server_message::Message::GetGithubRepoInfoResponse(resp)) => {
-                if let Some(error) = resp.error {
-                    Err(HostRequestError::OperationFailed(error.message))
-                } else {
-                    Ok(resp.repository_info)
+                match resp.result {
+                    Some(get_git_hub_repo_info_response::Result::Success(success)) => {
+                        Ok(success.repository_info)
+                    }
+                    Some(get_git_hub_repo_info_response::Result::Error(e)) => {
+                        Err(HostRequestError::OperationFailed(e.message))
+                    }
+                    None => Err(HostRequestError::UnexpectedResponse),
                 }
             }
             other => {
