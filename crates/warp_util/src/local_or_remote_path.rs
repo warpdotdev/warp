@@ -101,6 +101,16 @@ impl LocalOrRemotePath {
         }
     }
 
+    /// Returns the remote path if this is a `Remote` location, `None` for `Local`.
+    /// Callers that only work with remote files should use this to gate their
+    /// behavior.
+    pub fn as_remote(&self) -> Option<&RemotePath> {
+        match self {
+            LocalOrRemotePath::Local(_) => None,
+            LocalOrRemotePath::Remote(remote) => Some(remote),
+        }
+    }
+
     /// Joins a (typically repo-relative) segment onto this location, preserving
     /// the host.
     ///
