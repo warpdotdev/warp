@@ -776,6 +776,11 @@ pub enum ShellLaunchData {
         /// image".
         base_image: Option<String>,
     },
+    /// A shell running inside a sandboxed environment (e.g., Firejail).
+    Sandbox {
+        sandbox_path: PathBuf,
+        shell_type: ShellType,
+    },
 }
 
 impl ShellLaunchData {
