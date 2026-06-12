@@ -235,6 +235,21 @@ impl AltScreen {
         self.set_selection(selection);
     }
 
+    pub fn extend_selection(&mut self, point: Point, side: Side) {
+        let mut selection = match self.selection.take() {
+            None => return,
+            Some(selection) => selection,
+        };
+
+        selection.extend_to_nearest_boundary(point, side);
+        if selection.is_tail_before_head() {
+            selection.set_smart_select_side(Direction::Right);
+        } else {
+            selection.set_smart_select_side(Direction::Left);
+        }
+        self.set_selection(selection);
+    }
+
     fn set_selection(&mut self, value: Selection) {
         self.selection = Some(value);
         self.event_proxy

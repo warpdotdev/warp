@@ -14,7 +14,7 @@ use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_terminal::model::grid::cell;
 use warpui::text::SelectionType;
-use warpui::units::Lines;
+use warpui::units::{IntoLines as _, Lines};
 
 use super::index::{Direction, VisibleRow};
 use crate::terminal::model::ansi::CursorShape;
@@ -236,6 +236,51 @@ impl Ord for SelectionPoint {
     }
 }
 
+impl SelectionPoint {
+    pub fn from_grid_point(point: Point) -> Self {
+        Self {
+            row: point.row.into_lines(),
+            col: point.col,
+        }
+    }
+}
+
+fn point_distance_to_selection_boundary(
+    point: SelectionPoint,
+    boundary: SelectionPoint,
+) -> (f64, usize) {
+    (
+        (point.row - boundary.row).as_f64().abs(),
+        point.col.abs_diff(boundary.col),
+    )
+}
+
+/// Returns true when extending a selection to `point` should move the start
+/// boundary rather than the end boundary. `start` must be before `end`.
+pub fn should_extend_selection_start(
+    point: SelectionPoint,
+    start: SelectionPoint,
+    end: SelectionPoint,
+) -> bool {
+    if point <= start {
+        return true;
+    }
+
+    if point >= end {
+        return false;
+    }
+
+    let (start_row_distance, start_col_distance) =
+        point_distance_to_selection_boundary(point, start);
+    let (end_row_distance, end_col_distance) = point_distance_to_selection_boundary(point, end);
+
+    if (start_row_distance - end_row_distance).abs() > f64::EPSILON {
+        return start_row_distance < end_row_distance;
+    }
+
+    start_col_distance <= end_col_distance
+}
+
 #[derive(Debug, Clone)]
 pub enum SelectAction<T> {
     Begin {
@@ -248,6 +293,14 @@ pub enum SelectAction<T> {
         point: T,
         side: Side,
         delta: Lines,
+        position: Vector2F,
+    },
+    /// Extends an existing selection to `point`, moving whichever boundary is
+    /// nearest to the clicked point. Used for iTerm-style shift+left-click
+    /// selection extension.
+    Extend {
+        point: T,
+        side: Side,
         position: Vector2F,
     },
     End,
@@ -323,6 +376,32 @@ impl Selection {
     /// Update the end of the selection.
     pub fn update(&mut self, point: Point, side: Side) {
         self.region.end = Anchor::new(point, side);
+    }
+
+    /// Extend the selection by moving whichever boundary is closest to `point`.
+    pub fn extend_to_nearest_boundary(&mut self, point: Point, side: Side) {
+        let target = Anchor::new(point, side);
+        let region_start_is_selection_start =
+            !Self::points_need_swap(self.region.start.point, self.region.end.point);
+        let (selection_start, selection_end) = if region_start_is_selection_start {
+            (self.region.start, self.region.end)
+        } else {
+            (self.region.end, self.region.start)
+        };
+
+        let should_update_selection_start = should_extend_selection_start(
+            SelectionPoint::from_grid_point(point),
+            SelectionPoint::from_grid_point(selection_start.point),
+            SelectionPoint::from_grid_point(selection_end.point),
+        );
+
+        match (
+            should_update_selection_start,
+            region_start_is_selection_start,
+        ) {
+            (true, true) | (false, false) => self.region.start = target,
+            (true, false) | (false, true) => self.region.end = target,
+        }
     }
 
     pub fn is_tail_before_head(&self) -> bool {
