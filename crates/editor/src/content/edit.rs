@@ -573,7 +573,7 @@ impl EditDelta {
                 if let (BlockItem::Hidden(running_config), BlockItem::Hidden(config)) =
                     (last, &item)
                 {
-                    *running_config += *config;
+                    *running_config += config.clone();
                     return acc;
                 }
             }
