@@ -321,9 +321,7 @@ use crate::code_review::context::{
 use crate::code_review::diff_state::LocalDiffStateModel;
 use crate::code_review::diff_state::{DiffMode, GitDeltaPreference};
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{
-    GitRepoStatusModel, GitStatusMetadata, GitStatusUpdateModel,
-};
+use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusModel, GitStatusMetadata};
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
@@ -3190,7 +3188,7 @@ impl TerminalView {
                                 let agent_view_zero_state = ctx.add_typed_action_view(|ctx| {
                                     AgentViewZeroStateBlock::new(
                                         *conversation_id,
-                                        *origin,
+                                        origin.clone(),
                                         me.agent_view_controller.clone(),
                                         &me.sessions,
                                         me.ambient_agent_view_model.as_ref(),
@@ -3388,7 +3386,7 @@ impl TerminalView {
                                 conversation_id: *conversation_id,
                                 is_new: was_new,
                                 is_restored: false, /* is_restored */
-                                origin: *origin,
+                                origin: origin.clone(),
                                 agent_view_controller: me.agent_view_controller.clone(),
                             },
                             RichContentInsertionPosition::Append {
@@ -5024,7 +5022,7 @@ impl TerminalView {
     fn git_status_metadata<'a>(&'a self, ctx: &'a AppContext) -> Option<&'a GitStatusMetadata> {
         self.git_repo_status
             .as_ref()
-            .and_then(|h| h.as_ref(ctx).metadata())
+            .and_then(|h| h.as_ref(ctx).metadata(ctx))
     }
 
     #[cfg(feature = "local_fs")]
@@ -5140,7 +5138,7 @@ impl TerminalView {
             let Some(repo_path) = self.current_local_repo_path().map(Path::to_path_buf) else {
                 return;
             };
-            let result = GitStatusUpdateModel::handle(ctx).update(ctx, |model, ctx| {
+            let result = GitRepoModels::handle(ctx).update(ctx, |model, ctx| {
                 model.subscribe_github_repo(&repo_path, ctx)
             });
             match result {
@@ -5205,7 +5203,7 @@ impl TerminalView {
             if self.git_repo_status.is_some() {
                 self.sync_pr_info_subscription(ctx);
             } else if let Some(repo_path) = self.current_local_repo_path().map(Path::to_path_buf) {
-                let result = GitStatusUpdateModel::handle(ctx)
+                let result = GitRepoModels::handle(ctx)
                     .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
                 match result {
                     Ok(handle) => {
@@ -5227,7 +5225,7 @@ impl TerminalView {
                         self.sync_pr_info_subscription(ctx);
                     }
                     Err(err) => {
-                        log::warn!("GitStatusUpdateModel subscribe failed: {err}");
+                        log::warn!("GitRepoModels subscribe failed: {err}");
                     }
                 }
             }
@@ -21436,7 +21434,7 @@ impl TerminalView {
                 Some(id) => {
                     self.enter_agent_view_for_conversation(
                         initial_prompt.clone(),
-                        *origin,
+                        origin.clone(),
                         *id,
                         ctx,
                     );
@@ -21444,7 +21442,7 @@ impl TerminalView {
                 None => {
                     self.enter_agent_view_for_new_conversation(
                         initial_prompt.clone(),
-                        *origin,
+                        origin.clone(),
                         ctx,
                     );
                 }
@@ -26325,7 +26323,7 @@ impl TypedActionView for TerminalView {
             | OpenConversationsPalette
             | ExitAgentView
             | EnterCloudAgentView
-            | StartNewAgentConversation
+            | StartNewAgentConversation { .. }
             | ToggleConversationDetailsPanel
             | CancelAmbientAgentTask
             | OpenInlineHistoryMenu
@@ -27414,9 +27412,14 @@ impl TypedActionView for TerminalView {
                 let initial_prompt = (!draft_text.trim().is_empty()).then_some(draft_text);
                 self.enter_cloud_agent_view(initial_prompt, ctx);
             }
-            StartNewAgentConversation => {
+            StartNewAgentConversation { origin } => {
                 self.input.update(ctx, |input, ctx| {
-                    input.handle_action(&InputAction::StartNewAgentConversation, ctx);
+                    input.handle_action(
+                        &InputAction::StartNewAgentConversation {
+                            origin: origin.clone(),
+                        },
+                        ctx,
+                    );
                 });
             }
             OpenInlineHistoryMenu => {

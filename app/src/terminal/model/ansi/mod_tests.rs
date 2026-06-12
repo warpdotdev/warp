@@ -534,6 +534,39 @@ fn parse_dcs_ssh() {
                 remote_shell: "zsh".to_string(),
                 session_id: Some(167303092612201),
                 remote_session_id: Some(167303092612202),
+                external_control_master: false,
+            }
+        ),
+        _ => panic!("incorrect dcs value"),
+    };
+}
+
+#[test]
+fn parse_dcs_ssh_with_external_control_master() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "SSH",
+                "value": {
+                    "socket_path": "/home/user/.ssh/cm-user@host:22",
+                    "remote_shell": "zsh",
+                    "session_id": 167303092612201,
+                    "remote_session_id": 167303092612202,
+                    "external_control_master": true
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::SSH { value } => assert_eq!(
+            *value,
+            SSHValue {
+                socket_path: PathBuf::from("/home/user/.ssh/cm-user@host:22"),
+                remote_shell: "zsh".to_string(),
+                session_id: Some(167303092612201),
+                remote_session_id: Some(167303092612202),
+                external_control_master: true,
             }
         ),
         _ => panic!("incorrect dcs value"),

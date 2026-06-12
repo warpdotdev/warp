@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -89,7 +90,7 @@ impl ThirdPartyHarness for CodexHarness {
     }
 
     fn requires_verified_platform_plugin(&self) -> bool {
-        true
+        FeatureFlag::CodexPlugin.is_enabled()
     }
 
     /// Fetch the codex transcript for the current task's conversation and wrap it into a

@@ -19,7 +19,7 @@ use crate::auth::AuthStateProvider;
 #[cfg(feature = "local_fs")]
 use crate::code_review::diff_state::DiffStats;
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{GitRepoStatusModel, GitStatusMetadata};
+use crate::code_review::git_repo_model::{GitRepoStatusModel, GitStatusMetadata};
 #[cfg(feature = "local_fs")]
 use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::context_chips::context_chip::{Environment, PromptGenerator};
@@ -521,8 +521,8 @@ fn test_externally_driven_chip_skips_periodic_timer() {
                 )
                 .unwrap()
         });
-        let git_status =
-            app.add_model(move |_| GitRepoStatusModel::new_for_test(repo_handle, None));
+        let git_status = app
+            .add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
 
         let sessions = app.add_model(|_| Sessions::new_for_test());
         let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
@@ -588,8 +588,8 @@ fn test_git_status_change_updates_chip_value() {
             main_branch_name: "main".to_string(),
             stats_against_head: DiffStats::default(),
         };
-        let git_status = app.add_model(move |_| {
-            GitRepoStatusModel::new_for_test(repo_handle, Some(initial_metadata))
+        let git_status = app.add_model(move |ctx| {
+            GitRepoStatusModel::new_local_for_test(repo_handle, Some(initial_metadata), ctx)
         });
 
         let sessions = app.add_model(|_| Sessions::new_for_test());
@@ -666,19 +666,20 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
                 .unwrap()
         });
 
-        let git_status = app.add_model(move |_| {
-            GitRepoStatusModel::new_for_test(
+        let git_status = app.add_model(move |ctx| {
+            GitRepoStatusModel::new_local_for_test(
                 repo_handle,
                 Some(GitStatusMetadata {
                     current_branch_name: "feature-a".to_string(),
                     main_branch_name: "main".to_string(),
                     stats_against_head: DiffStats::default(),
                 }),
+                ctx,
             )
         });
         let github_repo_model = {
             let git_status = git_status.clone();
-            app.add_model(move |_| GitHubRepoModel::new_for_test(git_status))
+            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx))
         };
 
         let sessions = app.add_model(|_| Sessions::new_for_test());

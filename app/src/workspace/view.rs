@@ -21993,6 +21993,11 @@ impl Workspace {
             #[allow(deprecated)]
             context.set.insert(flags::LEGACY_SSH_WRAPPER_CONTEXT_FLAG);
         }
+        if *ssh_settings.reuse_existing_control_master.value() {
+            context
+                .set
+                .insert(flags::SSH_REUSE_CONTROL_MASTER_CONTEXT_FLAG);
+        }
         if *warpify_settings.enable_ssh_warpification.value() {
             context.set.insert(flags::SSH_WARPIFICATION_CONTEXT_FLAG);
         }

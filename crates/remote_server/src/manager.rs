@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-#[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
@@ -39,7 +37,7 @@ use crate::setup::RemoteOs;
 use crate::setup::UnsupportedReason;
 use crate::setup::{PreinstallCheckResult, RemotePlatform, RemoteServerSetupState};
 #[cfg(not(target_family = "wasm"))]
-use crate::transport::Connection;
+use crate::transport::{Connection, ControlPath};
 use crate::transport::{Error, InstallSource, RemoteTransport};
 use crate::HostId;
 
@@ -70,7 +68,7 @@ struct ReconnectParams {
     transport: Arc<dyn RemoteTransport>,
     auth_context: Arc<RemoteServerAuthContext>,
     codebase_index_limits: Option<CodebaseIndexLimits>,
-    control_path: Option<PathBuf>,
+    control_path: ControlPath,
     identity_key: String,
 }
 #[cfg(not(target_family = "wasm"))]
@@ -315,12 +313,14 @@ pub struct RemoteCodebaseIndexStatusWithPath {
 /// unaffected by lingering `Arc<RemoteServerClient>` clones held
 /// elsewhere (e.g. the per-session command executor).
 ///
-/// They also optionally carry a `control_path` pointing at the SSH
-/// `ControlMaster` socket for this session. On explicit teardown
-/// (after the user's shell exits), `deregister_session` uses this to
-/// run `ssh -O exit`, forcing the master to terminate without waiting
-/// for half-closed multiplexed channels to finish cleanup on the
-/// remote side.
+/// They also carry a [`ControlPath`] identifying the SSH
+/// `ControlMaster` socket for this session and who owns the master. On
+/// explicit teardown (after the user's shell exits),
+/// `deregister_session` runs `ssh -O exit` against `WarpManaged`
+/// masters, forcing them to terminate without waiting for half-closed
+/// multiplexed channels to finish cleanup on the remote side.
+/// `UserOwned` masters (the SSH wrapper attached to a master the user
+/// already had running) are left untouched.
 #[derive(Debug)]
 pub enum RemoteSessionState {
     /// `connect_session` has been called; background task is starting the
@@ -336,7 +336,7 @@ pub enum RemoteSessionState {
         _child: async_process::Child,
         /// See type-level doc.
         #[cfg(not(target_family = "wasm"))]
-        control_path: Option<PathBuf>,
+        control_path: ControlPath,
         /// Tail buffer of the last N stderr lines from the proxy subprocess.
         #[cfg(not(target_family = "wasm"))]
         stderr_tail: crate::client::RemoteServerLog,
@@ -356,7 +356,7 @@ pub enum RemoteSessionState {
         _child: async_process::Child,
         /// See type-level doc.
         #[cfg(not(target_family = "wasm"))]
-        control_path: Option<PathBuf>,
+        control_path: ControlPath,
         /// Transport stored for reconnection after spontaneous disconnect.
         #[cfg(not(target_family = "wasm"))]
         transport: Arc<dyn RemoteTransport>,
@@ -366,14 +366,14 @@ pub enum RemoteSessionState {
     Reconnecting {
         attempt: u32,
         host_id: HostId,
-        control_path: Option<PathBuf>,
+        control_path: ControlPath,
     },
     /// The connection failed and the background task is briefly awaiting
     /// the child process's exit status before emitting the failure event.
     /// Preserves the `control_path` so `deregister_session` can still
     /// call `stop_control_master` if the user exits during this window.
     #[cfg(not(target_family = "wasm"))]
-    AwaitingExitStatus { control_path: Option<PathBuf> },
+    AwaitingExitStatus { control_path: ControlPath },
     /// Connection dropped (EOF/error from the reader task).
     Disconnected,
 }
@@ -2236,13 +2236,16 @@ impl RemoteServerManager {
     /// user's interactive ssh process and, without the explicit
     /// `-O exit`, it hangs waiting for remote-side cleanup of
     /// multiplexed channels (see [`crate::ssh::stop_control_master`]).
+    /// Sessions multiplexed through an external master carry
+    /// [`ControlPath::UserOwned`], so this step is skipped and the
+    /// user's master is left running.
     ///
     /// Mechanically:
     /// 1. Remove the session entry. Dropping the `RemoteSessionState`
     ///    drops the transport's owned `Child`, which SIGKILLs the
     ///    `ssh … remote-server-proxy` subprocess via `kill_on_drop`.
-    /// 2. If the session had a ControlMaster `control_path`, spawn a
-    ///    background task that runs `ssh -O exit` against it.
+    /// 2. If the session's `control_path` is [`ControlPath::WarpManaged`],
+    ///    spawn a background task that runs `ssh -O exit` against it.
     ///
     /// The `Child` is owned by the manager's state, *not* by
     /// `Arc<RemoteServerClient>`. Lingering `Arc` clones held elsewhere
@@ -2275,8 +2278,8 @@ impl RemoteServerManager {
         // `kill_on_drop`.
         let prev = self.sessions.remove(&session_id);
 
-        // Extract the ControlMaster socket path (if any) so we can
-        // force the master to exit below. Safe to do under the
+        // Extract the ControlMaster socket (if any) so we can force
+        // Warp-managed masters to exit below. Safe to do under the
         // "caller already observed ExitShell" assumption documented
         // above.
         #[cfg(not(target_family = "wasm"))]
@@ -2287,7 +2290,7 @@ impl RemoteServerManager {
                 control_path.clone()
             }
             Some(RemoteSessionState::Reconnecting { control_path, .. }) => control_path.clone(),
-            _ => None,
+            _ => ControlPath::None,
         };
 
         // Extract `host_id` from states that track a host connection.
@@ -2310,16 +2313,16 @@ impl RemoteServerManager {
         ctx.emit(RemoteServerManagerEvent::SessionDeregistered { session_id });
 
         // Force the local SSH ControlMaster to exit after teardown.
-        // Spawned detached because the ssh subcommand may take a moment
-        // to complete and we don't want to block the main thread on it.
+        // `stop_control_master` only acts on Warp-managed masters and
+        // leaves user-owned masters running. Spawned detached because
+        // the ssh subcommand may take a moment to complete and we don't
+        // want to block the main thread on it.
         #[cfg(not(target_family = "wasm"))]
-        if let Some(control_path) = control_path {
-            ctx.background_executor()
-                .spawn(async move {
-                    crate::ssh::stop_control_master(&control_path).await;
-                })
-                .detach();
-        }
+        ctx.background_executor()
+            .spawn(async move {
+                crate::ssh::stop_control_master(&control_path).await;
+            })
+            .detach();
     }
 
     /// Returns the client for this session, if connected.

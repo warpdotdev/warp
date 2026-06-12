@@ -2826,6 +2826,9 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::CustomEndpoint => {
                 LLMModelHost::CustomEndpoint
             }
+            warp_graphql::queries::get_feature_model_choices::LlmModelHost::GeminiEnterprise => {
+                LLMModelHost::GeminiEnterprise
+            }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::Other(value) => {
                 report_error!(
                     anyhow!(

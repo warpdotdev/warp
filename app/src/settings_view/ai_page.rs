@@ -2112,6 +2112,7 @@ impl AISettingsPageView {
     #[cfg(not(target_family = "wasm"))]
     fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
         use ::ai::grok_subscription::oauth;
+        use warp_core::safe_error;
 
         use crate::view_components::{DismissibleToast, ToastLink};
         use crate::workspace::WorkspaceAction;
@@ -2121,13 +2122,28 @@ impl AISettingsPageView {
         /// (success or error) automatically replaces the in-progress one.
         const CONNECT_TOAST_OBJECT_ID: &str = "grok_oauth_connect_toast";
 
+        // Record attempt initiation on click (before we attempt to bind the
+        // loopback server). This ensures every terminal SuperGrokSubscriptionConnectFinished
+        // (including immediate bind failures) is paired with a preceding Initiated
+        // for funnel/drop-off analysis.
+        send_telemetry_from_ctx!(TelemetryEvent::SuperGrokSubscriptionConnectInitiated, ctx);
+
         // Starting the attempt binds the loopback callback server before the
         // browser opens, so a bind failure surfaces immediately, without a
         // dangling browser tab.
         let attempt = match oauth::OauthAttempt::start() {
             Ok(attempt) => attempt,
             Err(err) => {
-                log::error!("Failed to start Grok OAuth callback server: {err:#}");
+                safe_error!(
+                    safe: ("Failed to start Grok OAuth callback server"),
+                    full: ("Failed to start Grok OAuth callback server: {err:#}")
+                );
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::SuperGrokSubscriptionConnectFinished {
+                        error: Some("bind_failed".to_string()),
+                    },
+                    ctx
+                );
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast =
@@ -2164,6 +2180,10 @@ impl AISettingsPageView {
             let window_id = ctx.window_id();
             let toast = match result {
                 Ok(tokens) => {
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
+                        ctx
+                    );
                     // Persist the tokens to secure storage and kick off the
                     // proactive refresh loop so subsequent requests can
                     // authenticate with the connected subscription.
@@ -2173,7 +2193,16 @@ impl AISettingsPageView {
                     DismissibleToast::success("SuperGrok subscription connected".to_string())
                 }
                 Err(err) => {
-                    log::error!("Grok OAuth failed: {err:#}");
+                    safe_error!(
+                        safe: ("Grok OAuth failed"),
+                        full: ("Grok OAuth failed: {err:#}")
+                    );
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::SuperGrokSubscriptionConnectFinished {
+                            error: Some("oauth_failed".to_string()),
+                        },
+                        ctx
+                    );
                     DismissibleToast::error(format!("Couldn't connect SuperGrok: {err}"))
                 }
             };

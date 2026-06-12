@@ -1,156 +1,16 @@
-#[cfg(feature = "local_fs")]
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-#[cfg(feature = "local_fs")]
-use warpui::ModelContext;
-use warpui::{Entity, SingletonEntity};
-#[cfg(feature = "local_fs")]
-use {
-    crate::throttle::throttle,
-    crate::util::git::{detect_current_branch_display, detect_main_branch},
-    async_channel::Sender,
-    repo_metadata::{
-        repositories::DetectedRepositories,
-        repository::{RepositorySubscriber, SubscriberId},
-        Repository, RepositoryUpdate,
-    },
-    std::{collections::HashMap, time::Duration},
-    warpui::{r#async::SpawnedFutureHandle, ModelHandle, WeakModelHandle},
-};
+use async_channel::Sender;
+use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
+use repo_metadata::{Repository, RepositoryUpdate};
+use warpui::r#async::SpawnedFutureHandle;
+use warpui::{Entity, ModelContext, ModelHandle};
 
-#[cfg(feature = "local_fs")]
-use super::diff_state::{diff_metadata_against_head, DiffStats};
-#[cfg(feature = "local_fs")]
-use super::github_repo_model::GitHubRepoModel;
-
-/// Public metadata exposed to consumers — the subset of diff metadata
-/// that the git chip (prompt display, agent view footer) needs.
-#[cfg(feature = "local_fs")]
-#[derive(Debug, Clone)]
-pub struct GitStatusMetadata {
-    pub current_branch_name: String,
-    pub main_branch_name: String,
-    pub stats_against_head: DiffStats,
-}
-
-// ── GitStatusUpdateModel (singleton cache) ──────────────────────────────────
-
-/// Singleton model that acts as a cache / factory for per-repository
-/// [`GitRepoStatusModel`] and [`GitHubRepoModel`] instances.
-///
-/// Multiple terminals in the same repo share a single sub-model.  When the last
-/// strong handle to a sub-model is dropped, the models are torn down automatically.
-pub struct GitStatusUpdateModel {
-    #[cfg(feature = "local_fs")]
-    git_repo_status_models: HashMap<PathBuf, WeakModelHandle<GitRepoStatusModel>>,
-    #[cfg(feature = "local_fs")]
-    github_repo_models: HashMap<PathBuf, WeakModelHandle<GitHubRepoModel>>,
-}
-
-// ── Non-local_fs stub ───────────────────────────────────────────────────────
-
-#[cfg(not(feature = "local_fs"))]
-#[allow(dead_code)]
-impl GitStatusUpdateModel {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-// ── local_fs implementation ─────────────────────────────────────────────────
-
-#[cfg(feature = "local_fs")]
-impl GitStatusUpdateModel {
-    pub fn new() -> Self {
-        Self {
-            git_repo_status_models: HashMap::new(),
-            github_repo_models: HashMap::new(),
-        }
-    }
-
-    /// Get or create a per-repo status model for `repo_path`.
-    ///
-    /// If a live model already exists for this path, returns a new strong handle
-    /// to it.  Otherwise, creates a new [`GitRepoStatusModel`] with an active
-    /// filesystem watcher and returns a handle to it.
-    ///
-    /// Callers hold the returned `ModelHandle` for as long as they need updates.
-    /// When all handles are dropped, the model (and its watcher) is torn down.
-    pub fn subscribe(
-        &mut self,
-        repo_path: &Path,
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<ModelHandle<GitRepoStatusModel>> {
-        let repo_path_buf = repo_path.to_path_buf();
-
-        // Check the cache for an existing live model.
-        if let Some(weak) = self.git_repo_status_models.get(&repo_path_buf) {
-            if let Some(handle) = weak.upgrade(ctx) {
-                return Ok(handle);
-            }
-        }
-
-        // Create a new sub-model.
-        let Some(repository_model) =
-            DetectedRepositories::as_ref(ctx).get_local_watched_repo_for_path(repo_path, ctx)
-        else {
-            anyhow::bail!(
-                "No watched repository found for path: {}",
-                repo_path.display()
-            );
-        };
-
-        let handle = ctx
-            .add_model(|ctx| GitRepoStatusModel::new(repo_path_buf.clone(), repository_model, ctx));
-
-        self.git_repo_status_models
-            .insert(repo_path_buf, handle.downgrade());
-        Ok(handle)
-    }
-
-    /// Get or create a per-repo GitHub-info model for `repo_path`.
-    ///
-    /// If a live model already exists for this path, returns a new strong handle
-    /// to it.  Otherwise, creates a new [`GitHubRepoModel`].
-    ///
-    /// The model subscribes to the git status model for the repository and
-    /// tracks the current branch. GitHub PR info and repository info are fetched
-    /// on creation, on branch change, and on a periodic timer.
-    ///
-    /// Callers hold the returned `ModelHandle` for as long as they need updates.
-    /// When all handles are dropped, the model and its in-flight fetches are torn down.
-    pub fn subscribe_github_repo(
-        &mut self,
-        repo_path: &Path,
-        ctx: &mut ModelContext<Self>,
-    ) -> anyhow::Result<ModelHandle<GitHubRepoModel>> {
-        let repo_path_buf = repo_path.to_path_buf();
-
-        // Check the cache for an existing live model.
-        if let Some(weak) = self.github_repo_models.get(&repo_path_buf) {
-            if let Some(handle) = weak.upgrade(ctx) {
-                return Ok(handle);
-            }
-        }
-
-        // GitHubRepoModel needs a sibling GitRepoStatusModel for branch info.
-        let git_status = self.subscribe(repo_path, ctx)?;
-        let handle =
-            ctx.add_model(|ctx| GitHubRepoModel::new(repo_path_buf.clone(), git_status, ctx));
-
-        self.github_repo_models
-            .insert(repo_path_buf, handle.downgrade());
-        Ok(handle)
-    }
-}
-
-impl Entity for GitStatusUpdateModel {
-    type Event = ();
-}
-
-impl SingletonEntity for GitStatusUpdateModel {}
-
-// ── GitRepoStatusModel ──────────────────────────────────────────────────────
+use super::{GitRepoStatusEvent, GitStatusMetadata};
+use crate::code_review::diff_state::diff_metadata_against_head;
+use crate::throttle::throttle;
+use crate::util::git::{detect_current_branch_display, detect_main_branch};
 
 /// Per-repository model that owns the filesystem watcher and exposes git status
 /// metadata. Consumers hold a `ModelHandle<GitRepoStatusModel>` and subscribe
@@ -158,8 +18,7 @@ impl SingletonEntity for GitStatusUpdateModel {}
 ///
 /// When all strong handles are dropped the model (and its watcher) is
 /// automatically torn down.
-#[cfg(feature = "local_fs")]
-pub struct GitRepoStatusModel {
+pub struct LocalGitRepoStatusModel {
     repo_path: PathBuf,
     repository: ModelHandle<Repository>,
     subscriber_id: Option<SubscriberId>,
@@ -167,32 +26,14 @@ pub struct GitRepoStatusModel {
     computing_metadata_abort_handle: Option<SpawnedFutureHandle>,
 }
 
-#[cfg(not(feature = "local_fs"))]
-#[allow(dead_code)]
-pub struct GitRepoStatusModel;
-
-#[cfg(not(feature = "local_fs"))]
-impl Entity for GitRepoStatusModel {
-    type Event = ();
-}
-
-#[cfg(feature = "local_fs")]
-#[derive(Debug)]
-pub enum GitRepoStatusEvent {
-    /// Emitted whenever the metadata changes (branch name, diff stats, etc.).
-    MetadataChanged,
-}
-
-#[cfg(feature = "local_fs")]
-impl Entity for GitRepoStatusModel {
+impl Entity for LocalGitRepoStatusModel {
     type Event = GitRepoStatusEvent;
 }
 
-#[cfg(feature = "local_fs")]
-impl GitRepoStatusModel {
+impl LocalGitRepoStatusModel {
     /// Create a new per-repo status model, set up the filesystem watcher, and
     /// kick off the initial metadata computation.
-    fn new(
+    pub(super) fn new(
         repo_path: PathBuf,
         repository_model: ModelHandle<Repository>,
         ctx: &mut ModelContext<Self>,
@@ -348,8 +189,8 @@ impl GitRepoStatusModel {
     }
 }
 
-#[cfg(all(test, feature = "local_fs"))]
-impl GitRepoStatusModel {
+#[cfg(test)]
+impl LocalGitRepoStatusModel {
     pub(crate) fn new_for_test(
         repository: ModelHandle<Repository>,
         metadata: Option<GitStatusMetadata>,
@@ -373,12 +214,11 @@ impl GitRepoStatusModel {
     }
 }
 
-#[cfg(all(test, feature = "local_fs"))]
-#[path = "git_status_update_tests.rs"]
+#[cfg(test)]
+#[path = "local_tests.rs"]
 mod tests;
 
-#[cfg(feature = "local_fs")]
-impl Drop for GitRepoStatusModel {
+impl Drop for LocalGitRepoStatusModel {
     fn drop(&mut self) {
         // Note: we cannot call `repository.update()` here because `Drop` does
         // not have access to `ModelContext`.  The `Repository` model will clean
@@ -391,12 +231,10 @@ impl Drop for GitRepoStatusModel {
 
 // ── Repository subscriber adapter ───────────────────────────────────────────
 
-#[cfg(feature = "local_fs")]
 struct GitStatusRepositorySubscriber {
     repository_update_tx: Sender<RepositoryUpdate>,
 }
 
-#[cfg(feature = "local_fs")]
 impl RepositorySubscriber for GitStatusRepositorySubscriber {
     fn on_scan(
         &mut self,

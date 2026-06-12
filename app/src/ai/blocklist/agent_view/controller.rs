@@ -98,7 +98,7 @@ impl PendingConfirmation {
 ///
 /// Depending on the entrypoint, an `AgentView` block representing the entry may be inserted into
 /// the terminal blocklist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentViewEntryOrigin {
     /// Entered agent view from user input (e.g. /agent or cmd-enter keypress).
     Input {
@@ -144,8 +144,8 @@ pub enum AgentViewEntryOrigin {
     },
     SlashInit,
     CreateEnvironment,
-    /// Entered agent view by executing a slash command that requires agent mode.
-    Keybinding,
+    /// Entered agent view from the new-conversation keybinding.
+    Keybinding(Keystroke),
     /// Entered agent view by attaching context from the code review panel.
     CodeReviewContext,
     /// Entered agent view from codex integration modal.
@@ -266,7 +266,7 @@ impl AgentViewState {
 
     pub fn origin(&self) -> Option<AgentViewEntryOrigin> {
         match self {
-            AgentViewState::Active { origin, .. } => Some(*origin),
+            AgentViewState::Active { origin, .. } => Some(origin.clone()),
             AgentViewState::Inactive => None,
         }
     }
@@ -587,6 +587,26 @@ impl AgentViewController {
         keybinding_name: &str,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        let Some(keystroke) = keybinding_name_to_keystroke(keybinding_name, ctx) else {
+            log::warn!(
+                "Expected keybinding for slash command {keybinding_name}, but none was found"
+            );
+            return true;
+        };
+
+        self.should_start_new_conversation_for_keystroke(keystroke, ctx)
+    }
+
+    /// Decides whether a keybinding-triggered new conversation should proceed immediately.
+    ///
+    /// We only require a second press when the user is already in an active, non-empty
+    /// conversation. This protects against accidental conversation resets from muscle-memory
+    /// keypresses, while preserving single-step behavior for explicit typed/slash-menu execution.
+    pub fn should_start_new_conversation_for_keystroke(
+        &mut self,
+        keystroke: Keystroke,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
         enum Decision {
             StartNewConversation,
             ArmConfirmation {
@@ -612,13 +632,6 @@ impl AgentViewController {
             if conversation.is_empty() {
                 break 'decision Decision::StartNewConversation;
             }
-
-            let Some(keystroke) = keybinding_name_to_keystroke(keybinding_name, ctx) else {
-                log::warn!(
-                    "Expected keybinding for slash command {keybinding_name}, but none was found"
-                );
-                break 'decision Decision::StartNewConversation;
-            };
 
             let normalized_keystroke = keystroke.normalized();
             if self.is_new_conversation_keybinding_confirmation_active_for(
@@ -728,7 +741,7 @@ impl AgentViewController {
                 .active_block()
                 .is_active_and_long_running()
                 && !terminal_model.is_conversation_transcript_viewer()
-                && !matches!(origin, AgentViewEntryOrigin::ThirdPartyCloudAgent)
+                && !matches!(&origin, AgentViewEntryOrigin::ThirdPartyCloudAgent)
         };
 
         if is_long_running {
@@ -798,8 +811,8 @@ impl AgentViewController {
                 history_model.start_new_conversation(
                     self.terminal_view_id,
                     false,
-                    matches!(origin, AgentViewEntryOrigin::CloudAgent),
-                    matches!(origin, AgentViewEntryOrigin::ThirdPartyCloudAgent),
+                    matches!(&origin, AgentViewEntryOrigin::CloudAgent),
+                    matches!(&origin, AgentViewEntryOrigin::ThirdPartyCloudAgent),
                     ctx,
                 )
             });
@@ -811,7 +824,7 @@ impl AgentViewController {
 
         self.agent_view_state = AgentViewState::Active {
             conversation_id,
-            origin,
+            origin: origin.clone(),
             display_mode,
             original_conversation_length: exchange_count,
         };
@@ -952,13 +965,14 @@ impl AgentViewController {
             .map(|conversation| conversation.exchange_count())
             .unwrap_or(0);
 
+        let was_ambient_agent = origin == AgentViewEntryOrigin::CloudAgent;
         ctx.emit(AgentViewControllerEvent::ExitedAgentView {
             conversation_id,
             origin,
             display_mode,
             original_exchange_count: original_conversation_length,
             final_exchange_count,
-            was_ambient_agent: origin == AgentViewEntryOrigin::CloudAgent,
+            was_ambient_agent,
             is_exit_before_new_entrance,
         });
     }

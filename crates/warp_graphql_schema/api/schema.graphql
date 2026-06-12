@@ -2044,6 +2044,7 @@ enum LlmModelHost {
   AWS_BEDROCK
   CUSTOM_ENDPOINT
   DIRECT_API
+  GEMINI_ENTERPRISE
 }
 
 type LlmModelHostSettings {

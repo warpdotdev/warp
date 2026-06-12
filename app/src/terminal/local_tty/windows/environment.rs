@@ -21,6 +21,7 @@ const HONOR_PS1_NAME: &str = "WARP_HONOR_PS1";
 const PROMPT_NODE_VERSION_ENABLED_NAME: &str = "WARP_PROMPT_NODE_VERSION_ENABLED";
 const INITIAL_WORKING_DIR_NAME: &str = "WARP_INITIAL_WORKING_DIR";
 const USE_SSH_WRAPPER_NAME: &str = "WARP_USE_SSH_WRAPPER";
+const SSH_REUSE_CONTROL_MASTER_NAME: &str = "WARP_SSH_REUSE_CONTROL_MASTER";
 const SHELL_DEBUG_MODE_NAME: &str = "WARP_SHELL_DEBUG_MODE";
 const TERM_PROGRAM_NAME: &str = "TERM_PROGRAM";
 const IS_LOCAL_SESSION_NAME: &str = "WARP_IS_LOCAL_SHELL_SESSION";
@@ -90,6 +91,15 @@ pub(super) fn get_shell_environment_variables(options: &PtyOptions) -> Vec<u16> 
         EnvEntry {
             preferred_key: USE_SSH_WRAPPER_NAME.into(),
             value: (options.enable_ssh_wrapper as usize).to_string().into(),
+        },
+    );
+    env.insert(
+        map_key(SSH_REUSE_CONTROL_MASTER_NAME.into()),
+        EnvEntry {
+            preferred_key: SSH_REUSE_CONTROL_MASTER_NAME.into(),
+            value: (options.reuse_ssh_control_master as usize)
+                .to_string()
+                .into(),
         },
     );
     env.insert(
@@ -208,6 +218,7 @@ fn wsl_env_allowlist(include_initial_working_dir: bool) -> OsString {
     let mut entries = vec![
         format!("{HONOR_PS1_NAME}/u"),
         format!("{USE_SSH_WRAPPER_NAME}/u"),
+        format!("{SSH_REUSE_CONTROL_MASTER_NAME}/u"),
         format!("{SHELL_DEBUG_MODE_NAME}/u"),
         format!("{TERM_PROGRAM_NAME}/u"),
         format!("{IS_LOCAL_SESSION_NAME}/u"),

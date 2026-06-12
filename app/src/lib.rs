@@ -1096,16 +1096,23 @@ pub(crate) fn initialize_app(
     // any other stuff here, as failures will be silent. Push them to pre_sentry_errors instead.
     let data_domain = ChannelState::data_domain();
 
-    // Register an implementation of the secure storage service.
-    cfg_if::cfg_if! {
-        if #[cfg(feature = "integration_tests")] {
-            warpui_extras::secure_storage::register_noop(&data_domain, ctx);
-        } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            warpui_extras::secure_storage::register_with_fallback(&data_domain, warp_core::paths::state_dir(), ctx)
-        } else if #[cfg(target_os = "windows")] {
-            warpui_extras::secure_storage::register_with_dir(&data_domain, warp_core::paths::state_dir(), ctx)
-        } else {
-            warpui_extras::secure_storage::register(&data_domain, ctx);
+    // Daemon auth arrives through the client handshake, so avoid platform keychains that may
+    // require an interactive unlock prompt. Other headless modes still use secure storage for
+    // persisted login and BYO provider credentials.
+    if matches!(launch_mode, LaunchMode::RemoteServerDaemon { .. }) {
+        warpui_extras::secure_storage::register_unavailable(ctx);
+    } else {
+        // Register an implementation of the secure storage service.
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "integration_tests")] {
+                warpui_extras::secure_storage::register_noop(&data_domain, ctx);
+            } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
+                warpui_extras::secure_storage::register_with_fallback(&data_domain, warp_core::paths::state_dir(), ctx)
+            } else if #[cfg(target_os = "windows")] {
+                warpui_extras::secure_storage::register_with_dir(&data_domain, warp_core::paths::state_dir(), ctx)
+            } else {
+                warpui_extras::secure_storage::register(&data_domain, ctx);
+            }
         }
     }
 
@@ -1616,9 +1623,10 @@ pub(crate) fn initialize_app(
         });
     }
 
+    #[cfg(feature = "local_fs")]
     {
-        use code_review::git_status_update::GitStatusUpdateModel;
-        ctx.add_singleton_model(|_| GitStatusUpdateModel::new());
+        use code_review::git_repo_model::GitRepoModels;
+        ctx.add_singleton_model(|_| GitRepoModels::new());
     }
 
     ctx.add_singleton_model(|ctx| {
