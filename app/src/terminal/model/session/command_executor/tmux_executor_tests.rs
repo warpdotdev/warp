@@ -66,12 +66,53 @@ fn test_emits_successful_command_output() {
                 exit_code: 0,
                 output: "foo".as_bytes().to_vec(),
             });
+
+            // Verify that in_flight_commands is cleaned up after handling.
+            assert!(
+                executor.in_flight_commands.lock().is_empty(),
+                "in_flight_commands should be empty after command completion"
+            );
         });
 
         task_executor
             .run(async move {
                 execute_command_future.await;
                 handle_command_output_future.await;
+            })
+            .await;
+    });
+}
+
+#[test]
+fn test_execute_command_returns_error_when_channel_closed() {
+    App::test((), |_app| async move {
+        let (executor_command_tx, executor_command_rx) = async_channel::unbounded();
+        let executor = Arc::new(TmuxCommandExecutor::new(executor_command_tx));
+
+        // Close the receiver so try_send will fail.
+        executor_command_rx.close();
+
+        let task_executor = async_executor::LocalExecutor::new();
+        let execute_command_future = task_executor.spawn(execute_test_command(
+            executor.clone(),
+            "echo foo",
+            |result| {
+                assert!(
+                    result.is_err(),
+                    "execute_command should return an error when the channel is closed"
+                );
+            },
+        ));
+
+        task_executor
+            .run(async move {
+                execute_command_future.await;
+
+                // Verify that in_flight_commands is cleaned up after the failed send.
+                assert!(
+                    executor.in_flight_commands.lock().is_empty(),
+                    "in_flight_commands should be empty after a failed send"
+                );
             })
             .await;
     });

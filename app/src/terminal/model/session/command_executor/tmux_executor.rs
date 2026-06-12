@@ -61,14 +61,18 @@ impl TmuxCommandExecutor {
             .executor_command_tx
             .try_send(ExecutorCommandEvent::ExecuteTmuxCommand(tmux_command))
         {
-            log::warn!("Failed to send TmuxCommand to pty_controller: {e}");
+            // Clean up the in-flight entry since the command will never be dispatched.
+            self.in_flight_commands.lock().remove(command_id);
+            anyhow::bail!("Failed to send TmuxCommand to pty_controller: {e}");
         }
 
         Ok(output_channel_rx)
     }
 
     pub fn handle_executed_command_event(&self, event: ExecutedExecutorCommandEvent) {
-        if let Some(output_tx) = self.in_flight_commands.lock().get(&event.command_id) {
+        // Use `.remove()` to clean up completed commands from the map, preventing
+        // unbounded growth of `in_flight_commands`.
+        if let Some(output_tx) = self.in_flight_commands.lock().remove(&event.command_id) {
             if !output_tx.is_closed() {
                 // We shouldn't be receiving exit codes that aren't 32 bit signed integers.
                 let exit_code = Some(ExitCode::from(event.exit_code as i32));
