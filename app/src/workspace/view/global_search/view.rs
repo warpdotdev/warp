@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,6 +9,7 @@ use async_channel::Sender;
 use instant::Instant;
 use pathfinder_geometry::vector::vec2f;
 use remote_server::manager::RemoteServerManager;
+use remote_server::HostId;
 use string_offset::{ByteOffset, CharCounter};
 use warp_core::r#async::debounce;
 use warp_core::send_telemetry_from_ctx;
@@ -19,6 +20,8 @@ use warp_core::ui::Icon;
 use warp_editor::editor::NavigationKey;
 use warp_ripgrep::search::Submatch;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DispatchEventResult, Empty, EventHandler, Fill, Flex, FormattedTextElement,
@@ -1014,32 +1017,40 @@ impl GlobalSearchView {
     ) {
         // Ancestor-dedup search roots so we don't search the same file twice
         // when terminal directories are nested (e.g. `~/code` + `~/code/a`).
-        // Local roots share `group_roots_by_common_ancestor` with
-        // `FileTreeView` for consistency; remote roots are deduped per host
-        // via `LocalOrRemotePath::starts_with`.
+        // Local and remote roots share `group_roots_by_common_ancestor` with
+        // `FileTreeView` for consistency; remote roots are grouped per host
+        // and deduped within each host independently.
         let local_roots: Vec<PathBuf> = roots
             .iter()
             .filter_map(|root| root.to_local_path().map(Path::to_path_buf))
             .collect();
         let deduped_local = warp_util::path::group_roots_by_common_ancestor(&local_roots).roots;
 
-        let mut seen_remote = HashSet::new();
-        let unique_remote: Vec<LocalOrRemotePath> = roots
-            .iter()
-            .filter(|root| root.is_remote())
-            .filter(|root| seen_remote.insert((*root).clone()))
-            .cloned()
-            .collect();
-        let deduped_remote = unique_remote
-            .iter()
-            .enumerate()
-            .filter(|(index, root)| {
-                !unique_remote
-                    .iter()
-                    .enumerate()
-                    .any(|(other_index, other)| other_index != *index && root.starts_with(other))
-            })
-            .map(|(_, root)| root.clone());
+        let mut remote_roots_by_host: Vec<(HostId, Vec<StandardizedPath>)> = Vec::new();
+        for root in &roots {
+            let LocalOrRemotePath::Remote(remote) = root else {
+                continue;
+            };
+            match remote_roots_by_host
+                .iter_mut()
+                .find(|(host_id, _)| host_id == &remote.host_id)
+            {
+                Some((_, paths)) => paths.push(remote.path.clone()),
+                None => {
+                    remote_roots_by_host.push((remote.host_id.clone(), vec![remote.path.clone()]))
+                }
+            }
+        }
+        let deduped_remote = remote_roots_by_host
+            .into_iter()
+            .flat_map(|(host_id, paths)| {
+                warp_util::path::group_roots_by_common_ancestor(&paths)
+                    .roots
+                    .into_iter()
+                    .map(move |path| {
+                        LocalOrRemotePath::Remote(RemotePath::new(host_id.clone(), path))
+                    })
+            });
 
         self.search_roots = deduped_local
             .into_iter()
