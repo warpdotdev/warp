@@ -25,6 +25,8 @@ pub use init_project::{
 use onboarding::callout::{FinalState, OnboardingCalloutViewEvent, OnboardingQuery};
 use onboarding::{OnboardingCalloutView, OnboardingKeybindings};
 use repo_metadata::CanonicalizedPath;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 
 use crate::ai::block_context::BlockContext;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
@@ -23207,10 +23209,10 @@ impl TerminalView {
                 SessionType::WarpifiedRemote { host_id } => host_id,
                 SessionType::Local => return None,
             }?;
-            let std_path = warp_util::standardized_path::StandardizedPath::try_new(cwd_str).ok()?;
-            Some(LocalOrRemotePath::Remote(
-                warp_util::remote_path::RemotePath::new(host_id, std_path),
-            ))
+            let std_path = StandardizedPath::try_new(cwd_str).ok()?;
+            Some(LocalOrRemotePath::Remote(RemotePath::new(
+                host_id, std_path,
+            )))
         }
     }
 
