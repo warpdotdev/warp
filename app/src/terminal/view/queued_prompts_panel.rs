@@ -957,7 +957,7 @@ fn render_header(
     let label_text = header_label_text(count);
     let sub_text_color: ColorU = theme.sub_text_color(theme.surface_1()).into();
     // The keycap is dimmed relative to the header text so it reads as a secondary affordance.
-    let keycap_color: ColorU = internal_colors::text_disabled(theme, theme.surface_1()).into();
+    let keycap_color: ColorU = internal_colors::text_disabled(theme, theme.surface_1());
     let banner_background: Fill = theme.surface_overlay_1().into();
     let border_color: Fill = theme.split_pane_border_color().into();
     let chevron_icon = if collapsed {
