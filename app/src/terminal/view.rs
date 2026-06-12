@@ -2457,7 +2457,7 @@ impl DropTargetData for TerminalDropTargetData {
 }
 
 /// Cached result of [`TerminalView::canonical_session_pwd_if_local`].
-struct CanonicalSessionPwdCache {
+struct LocalSessionCanonicalPwdCache {
     /// Non-canonical path
     path: PathBuf,
     canonical: CanonicalizedPath,
@@ -2612,7 +2612,7 @@ pub struct TerminalView {
     sessions: ModelHandle<Sessions>,
     active_block_metadata: Option<BlockMetadata>,
     /// Memoized result of `canonical_session_pwd_if_local`.
-    canonical_session_pwd_cache: RefCell<Option<CanonicalSessionPwdCache>>,
+    canonical_session_pwd_cache: RefCell<Option<LocalSessionCanonicalPwdCache>>,
 
     block_text_selection_start_position: Option<Vector2F>,
 
@@ -7679,7 +7679,7 @@ impl TerminalView {
         let canonical = CanonicalizedPath::try_from(&path).ok()?;
 
         if let Ok(mut cache) = self.canonical_session_pwd_cache.try_borrow_mut() {
-            *cache = Some(CanonicalSessionPwdCache {
+            *cache = Some(LocalSessionCanonicalPwdCache {
                 path,
                 canonical: canonical.clone(),
             });
