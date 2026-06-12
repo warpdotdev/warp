@@ -1,5 +1,4 @@
-use std::path::PathBuf;
-
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{Entity, ModelContext};
 
 use crate::workspace::view::global_search::view::GlobalSearchEvent;
@@ -16,12 +15,12 @@ impl GlobalSearch {
         GlobalSearch {}
     }
 
-    pub fn abort_search(&mut self) {}
+    pub fn abort_search(&mut self, _ctx: &mut ModelContext<Self>) {}
 
     pub fn run_search(
         &mut self,
         _pattern: String,
-        _root: Vec<PathBuf>,
+        _roots: Vec<LocalOrRemotePath>,
         _search_config: SearchConfig,
         _ctx: &mut ModelContext<Self>,
     ) {
