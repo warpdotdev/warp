@@ -498,7 +498,7 @@ impl Workspace {
     }
 
     /// Pushes `idx` past the leading effectively-pinned tabs in `tabs` if it
-    /// falls inside that prefix. 
+    /// falls inside that prefix.
     pub(super) fn clamp_to_unpinned_region(&self, tabs: &[TabData], idx: usize) -> usize {
         let boundary = tabs
             .iter()

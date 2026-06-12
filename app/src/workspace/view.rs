@@ -6996,9 +6996,7 @@ impl Workspace {
         }
         let previous_group_id = tab.group_id;
 
-        let target_index = self
-            .index_after_group(group_id)
-            .unwrap_or(self.tabs.len());
+        let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
         self.tabs[tab_index].group_id = Some(group_id);
 
         // Moving a tab to a group, clear its pinned state.
@@ -7116,9 +7114,7 @@ impl Workspace {
             let new_idx = self.active_tab_index;
             // Resolve the destination from the group's existing members before
             // adding the new tab to the group.
-            let target_index = self
-                .index_after_group(group_id)
-                .unwrap_or(self.tabs.len());
+            let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
             if let Some(tab) = self.tabs.get_mut(new_idx) {
                 tab.group_id = Some(group_id);
             }
@@ -7126,7 +7122,7 @@ impl Workspace {
         }
         self.expand_tab_group(group_id, ctx);
     }
-    
+
     /// True when the user-initiated reorder of `group_id` in `direction`
     /// would not cross the pinned/unpinned boundary or go beyond the tab list bounds.
     /// Used for the tab group menu which supports 'move group up/down' (or for htabs left/right).
@@ -11882,8 +11878,7 @@ impl Workspace {
         let insert_index = if let Some(group_id) = tab_data.group_id {
             if self.tab_groups.contains_key(&group_id) {
                 // Group still exists — append after its current last member.
-                self.index_after_group(group_id)
-                    .unwrap_or(self.tabs.len())
+                self.index_after_group(group_id).unwrap_or(self.tabs.len())
             } else {
                 // Group was pruned — drop membership.
                 tab_data.group_id = None;
