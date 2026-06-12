@@ -64,13 +64,13 @@ use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::EnvFilter;
 use url::{Host, Url};
+use warp_managed_secrets::client::ManagedSecretsClient;
+use warpui::AppContext;
 
 use super::cloud_agent_auth::{self, AuthContext};
 use super::Initialization;
 use crate::channel::ChannelState;
 use crate::tracing::install_no_subscriber;
-use warp_managed_secrets::client::ManagedSecretsClient;
-use warpui::AppContext;
 
 /// The tag used to mark spans related to cloud agents, which we use to filter out
 /// spans we don't care about (e.g.: ones from dependencies).
