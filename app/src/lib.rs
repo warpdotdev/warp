@@ -1173,6 +1173,13 @@ pub(crate) fn initialize_app(
     });
 
     let server_api = server_api_provider.as_ref(ctx).get();
+    #[cfg(not(target_family = "wasm"))]
+    if let Ok(run_id) = std::env::var(warp_cli::OZ_RUN_ID_ENV) {
+        match run_id.parse() {
+            Ok(task_id) => server_api.set_ambient_agent_task_id(Some(task_id)),
+            Err(err) => log::warn!("Ignoring invalid {}: {err}", warp_cli::OZ_RUN_ID_ENV),
+        }
+    }
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
     #[cfg(not(target_family = "wasm"))]
     // Refresh starts only after the authenticated server client exists; tracing initialization
