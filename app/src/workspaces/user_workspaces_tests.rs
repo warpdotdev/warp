@@ -41,6 +41,22 @@ fn initialize_app(
     team_client: Arc<dyn TeamClient>,
     workspace_client: Arc<dyn WorkspaceClient>,
 ) {
+    initialize_app_with_auth(
+        app,
+        resources,
+        team_client,
+        workspace_client,
+        AuthStateProvider::new_for_test(),
+    );
+}
+
+fn initialize_app_with_auth(
+    app: &mut App,
+    resources: CachedResources,
+    team_client: Arc<dyn TeamClient>,
+    workspace_client: Arc<dyn WorkspaceClient>,
+    auth_state_provider: AuthStateProvider,
+) {
     // Add the necessary singleton models to the App
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| SystemStats::new());
@@ -59,7 +75,7 @@ fn initialize_app(
     app.add_singleton_model(UpdateManager::mock);
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(|_| auth_state_provider);
     app.add_singleton_model(AuthManager::new_for_test);
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(|_| {
@@ -240,6 +256,7 @@ fn test_aws_bedrock_credentials_default_off_when_admin_respects_user_setting() {
         LlmHostSettings {
             enabled: true,
             enablement_setting: HostEnablementSetting::RespectUserSetting,
+            ..Default::default()
         },
     );
 
@@ -276,6 +293,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
         LlmHostSettings {
             enabled: true,
             enablement_setting: HostEnablementSetting::RespectUserSetting,
+            ..Default::default()
         },
     );
     let mut team_client = MockTeamClient::new();
@@ -331,6 +349,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
         LlmHostSettings {
             enabled: true,
             enablement_setting: HostEnablementSetting::Enforce,
+            ..Default::default()
         },
     );
     let mut team_client = MockTeamClient::new();
@@ -372,6 +391,254 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 !UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_toggleable(),
                 "enforced Bedrock host policy should disable the local Bedrock credentials toggle"
             );
+        });
+    })
+}
+
+const TEST_GCP_AUDIENCE: &str = "//iam.googleapis.com/projects/123456/locations/global/workloadIdentityPools/warp-pool/providers/warp-provider";
+const TEST_GCP_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
+
+fn workspace_with_gemini_enterprise_host(
+    team: &Team,
+    enabled: bool,
+    enablement_setting: HostEnablementSetting,
+) -> Workspace {
+    let mut workspace = workspace_for_test(team);
+    workspace.settings.llm_settings.enabled = true;
+    workspace.settings.llm_settings.host_configs.insert(
+        LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled,
+            enablement_setting,
+            gcp_audience: Some(TEST_GCP_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_GCP_SA_EMAIL.to_string()),
+        },
+    );
+    workspace
+}
+
+#[test]
+fn test_gemini_enterprise_credentials_default_off_when_admin_respects_user_setting() {
+    let team = team_for_test();
+    let workspace = workspace_with_gemini_enterprise_host(
+        &team,
+        true,
+        HostEnablementSetting::RespectUserSetting,
+    );
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                "respect-user-setting should default the local Gemini Enterprise credentials toggle to off"
+            );
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                "respect-user-setting should leave the local Gemini Enterprise credentials toggle editable"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_gemini_enterprise_credentials_respect_user_setting_honors_member_toggle() {
+    let team = team_for_test();
+    let workspace = workspace_with_gemini_enterprise_host(
+        &team,
+        true,
+        HostEnablementSetting::RespectUserSetting,
+    );
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .gemini_enterprise_credentials_enabled
+                .set_value(true, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                "respect-user-setting should honor an opted-in Gemini Enterprise credentials toggle"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_gemini_enterprise_credentials_enforced_by_admin() {
+    let team = team_for_test();
+    let workspace =
+        workspace_with_gemini_enterprise_host(&team, true, HostEnablementSetting::Enforce);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .gemini_enterprise_credentials_enabled
+                .set_value(false, ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                "enforced Gemini Enterprise host policy should ignore the local credentials toggle"
+            );
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_toggleable(),
+                "enforced Gemini Enterprise host policy should disable the local credentials toggle"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_gemini_enterprise_credentials_disabled_when_host_disabled() {
+    let team = team_for_test();
+    let workspace =
+        workspace_with_gemini_enterprise_host(&team, false, HostEnablementSetting::Enforce);
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_available_from_workspace(),
+                "a disabled Gemini Enterprise host should not be available from the workspace"
+            );
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                "a disabled Gemini Enterprise host should gate credentials off even under ENFORCE"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_gemini_enterprise_credentials_disabled_when_host_absent() {
+    let team = team_for_test();
+    // Bedrock-only workspace: proves the GEAP gate reads its own host entry.
+    let mut workspace = workspace_for_test(&team);
+    workspace.settings.llm_settings.enabled = true;
+    workspace.settings.llm_settings.host_configs.insert(
+        LLMModelHost::AwsBedrock,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            ..Default::default()
+        },
+    );
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                UserWorkspaces::as_ref(ctx)
+                    .gemini_enterprise_host_settings()
+                    .is_none(),
+                "a workspace without a Gemini Enterprise host entry should expose no settings"
+            );
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                "a workspace without a Gemini Enterprise host entry should gate credentials off"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_gemini_enterprise_credentials_disabled_when_logged_out() {
+    let team = team_for_test();
+    let workspace =
+        workspace_with_gemini_enterprise_host(&team, true, HostEnablementSetting::Enforce);
+
+    App::test((), |mut app| async move {
+        initialize_app_with_auth(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+            AuthStateProvider::new_logged_out_for_test(),
+        );
+
+        app.read(|ctx| {
+            assert!(
+                !UserWorkspaces::as_ref(ctx).is_gemini_enterprise_credentials_enabled(ctx),
+                "logged-out users should never mint or attach Gemini Enterprise credentials"
+            );
+        });
+    })
+}
+
+#[test]
+fn test_gemini_enterprise_host_settings_carries_federation_config() {
+    let team = team_for_test();
+    let workspace = workspace_with_gemini_enterprise_host(
+        &team,
+        true,
+        HostEnablementSetting::RespectUserSetting,
+    );
+
+    App::test((), |mut app| async move {
+        initialize_app(
+            &mut app,
+            CachedResources {
+                workspaces: vec![workspace],
+            },
+            Arc::new(MockTeamClient::new()),
+            Arc::new(MockWorkspaceClient::new()),
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let settings = user_workspaces
+                .gemini_enterprise_host_settings()
+                .expect("workspace should expose the Gemini Enterprise host settings");
+            assert_eq!(settings.gcp_audience.as_deref(), Some(TEST_GCP_AUDIENCE));
+            assert_eq!(settings.gcp_sa_email.as_deref(), Some(TEST_GCP_SA_EMAIL));
         });
     })
 }

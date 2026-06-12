@@ -53,8 +53,8 @@ use super::block_list::{
 };
 use super::model::{
     self, ActiveMCPServer, CurrentUserInformation, MCPEnvironmentVariables, NewActiveMCPServer,
-    NewApp, NewCommand, NewServerExperiment, NewTab, NewTeam, NewWindow, NewWorkspace,
-    NewWorkspaceMetadata, NewWorkspaceTeam, Project, Tab, Window,
+    NewApp, NewCommand, NewServerExperiment, NewTab, NewTabGroup, NewTeam, NewWindow, NewWorkspace,
+    NewWorkspaceMetadata, NewWorkspaceTeam, Project, Tab, TabGroup, Window,
     WorkspaceMetadata as WorkspaceMetadataModel, AI_DOCUMENT_PANE_KIND, AI_FACT_PANE_KIND,
     CODE_PANE_KIND, ENV_VAR_COLLECTION_PANE_KIND, EXECUTION_PROFILE_EDITOR_PANE_KIND,
     MCP_SERVER_PANE_KIND, NOTEBOOK_PANE_KIND, SETTINGS_PANE_KIND, TERMINAL_PANE_KIND,
@@ -73,8 +73,8 @@ use crate::app_state::{
     AIFactPaneSnapshot, AmbientAgentPaneSnapshot, AppState, BranchSnapshot, CodePaneSnapShot,
     CodePaneTabSnapshot, CodeReviewPaneSnapshot, EnvVarCollectionPaneSnapshot, LeafContents,
     LeafSnapshot, LeftPanelSnapshot, NotebookPaneSnapshot, PaneFlex, PaneNodeSnapshot,
-    RightPanelSnapshot, SettingsPaneSnapshot, SplitDirection, TabSnapshot, TerminalPaneSnapshot,
-    WindowSnapshot, WorkflowPaneSnapshot,
+    RightPanelSnapshot, SettingsPaneSnapshot, SplitDirection, TabGroupSnapshot, TabSnapshot,
+    TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::auth::auth_manager::PersistedCurrentUserInformation;
 use crate::auth::auth_state::AuthStateProvider;
@@ -103,6 +103,7 @@ use crate::terminal::history::PersistedCommand;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workflows::WorkflowId;
+use crate::workspace::tab_group::TabGroupId;
 use crate::workspaces::team::Team as TeamMetadata;
 use crate::workspaces::user_profiles::{user_profile_from_persistence, UserProfileWithUID};
 use crate::workspaces::workspace::{Workspace as WorkspaceMetadata, WorkspaceUid};
@@ -861,6 +862,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
         diesel::delete(schema::pane_branches::dsl::pane_branches).execute(conn)?;
         diesel::delete(schema::pane_nodes::dsl::pane_nodes).execute(conn)?;
         diesel::delete(schema::tabs::dsl::tabs).execute(conn)?;
+        diesel::delete(schema::tab_groups::dsl::tab_groups).execute(conn)?;
         diesel::delete(schema::windows::dsl::windows).execute(conn)?;
         diesel::delete(schema::active_mcp_servers::dsl::active_mcp_servers).execute(conn)?;
         diesel::delete(schema::panels::dsl::panels).execute(conn)?;
@@ -930,6 +932,39 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                 active_window_id = Some(window_id)
             }
 
+            // Insert tab groups first so we can map each `TabGroupId` to a
+            // DB row id when inserting the tabs below.
+            let mut tab_group_row_ids: HashMap<TabGroupId, i32> = HashMap::new();
+            if !window.tab_groups.is_empty() {
+                let new_tab_groups: Vec<NewTabGroup> = window
+                    .tab_groups
+                    .iter()
+                    .map(|group| NewTabGroup {
+                        window_id,
+                        name: group.name.clone(),
+                        color: match group.color {
+                            SelectedTabColor::Unset => None,
+                            _ => serde_yaml::to_string(&group.color).ok(),
+                        },
+                        collapsed: group.collapsed,
+                    })
+                    .collect();
+                diesel::insert_into(schema::tab_groups::dsl::tab_groups)
+                    .values(new_tab_groups)
+                    .execute(conn)?;
+
+                // SQLite assigns ids in insertion order, so the inserted rows
+                // share the order of `window.tab_groups`.
+                let inserted_ids: Vec<i32> = schema::tab_groups::dsl::tab_groups
+                    .filter(schema::tab_groups::columns::window_id.eq(window_id))
+                    .select(schema::tab_groups::columns::id)
+                    .order(schema::tab_groups::columns::id.asc())
+                    .load(conn)?;
+                for (group, row_id) in window.tab_groups.iter().zip(inserted_ids.iter()) {
+                    tab_group_row_ids.insert(group.id, *row_id);
+                }
+            }
+
             let tabs: Vec<NewTab> = window
                 .tabs
                 .iter()
@@ -943,6 +978,9 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                         SelectedTabColor::Unset => None,
                         _ => serde_yaml::to_string(&tab.selected_color).ok(),
                     },
+                    tab_group_id: tab
+                        .group_id
+                        .and_then(|group_id| tab_group_row_ids.get(&group_id).copied()),
                 })
                 .collect();
 
@@ -2412,137 +2450,172 @@ fn read_sqlite_data(
         .map(|p| (p.tab_id, p))
         .collect::<HashMap<_, _>>();
 
+    // Load tab groups grouped per window so we can resolve `tabs.tab_group_id`
+    // through a per-window row-id lookup.
+    let db_tab_groups = TabGroup::belonging_to(&db_windows)
+        .order_by(schema::tab_groups::columns::id.asc())
+        .load::<TabGroup>(conn)?
+        .grouped_by(&db_windows);
+
     let saved_windows: Vec<_> = db_windows
         .into_iter()
         .enumerate()
         .zip(db_tabs)
-        .map(|((idx, window), tabs_for_window)| {
-            let saved_tabs: Vec<_> = tabs_for_window
-                .into_iter()
-                .filter_map(|tab| {
-                    let root = read_root_node(conn, tab.id).ok()?;
-                    let panel = db_panels.get(&tab.id);
-
-                    let left_panel = panel
-                        .and_then(|p| p.left_panel.as_ref())
-                        .and_then(|s| serde_json::from_str::<LeftPanelSnapshot>(s).ok());
-
-                    let right_panel = panel
-                        .and_then(|p| p.right_panel.as_ref())
-                        .and_then(|s| serde_json::from_str::<RightPanelSnapshot>(s).ok());
-
-                    Some(TabSnapshot {
-                        root,
-                        custom_title: tab.custom_title,
-                        default_directory_color: None,
-                        selected_color: tab
-                            .color
-                            .as_deref()
-                            .and_then(|s| {
-                                serde_yaml::from_str::<SelectedTabColor>(s)
-                                    .ok()
-                                    .or_else(|| {
-                                        // Fall back to the old format which stored a bare AnsiColorIdentifier
-                                        serde_yaml::from_str::<AnsiColorIdentifier>(s)
-                                            .ok()
-                                            .map(SelectedTabColor::Color)
-                                    })
-                            })
-                            .unwrap_or_default(),
-                        left_panel,
-                        right_panel,
-                    })
-                })
-                .collect();
-
-            if active_window_id
-                .map(|window_id| window.id == window_id)
-                .unwrap_or(false)
-            {
-                active_window_index = Some(idx);
-            }
-
-            // Default active tab index to 0 if we overflow when converting.
-            let tab_index: usize = window.active_tab_index.try_into().unwrap_or(0);
-
-            let fullscreen_state_val =
-                FullscreenState::from_i32(window.fullscreen_state).unwrap_or_default();
-
-            // The origin and size of the bound should be all null or all non-null.
-            // Reject bounds smaller than the platform minimum window size so users
-            // with an already-corrupted warp.sqlite (see GH#10083) restore to
-            // default geometry instead of a sliver.
-            let bounds = match (
-                window.window_width,
-                window.window_height,
-                window.origin_x,
-                window.origin_y,
-            ) {
-                (Some(mut width), Some(mut height), Some(x), Some(y))
-                    if width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT =>
-                {
-                    // When fullscreen or maximized, the `inner_size` we snapshotted will be the
-                    // size of the full screen. This will cause problems with winit. When you set
-                    // maximized/fullscreen, setting the inner_size will by the size the window
-                    // takes _after_ the user toggles _out_ of fullscreen/maximized. Therefore, we
-                    // don't want to set the size to take the full screen because the window will
-                    // appear to remain in maximized/fullscreen. We multiply each dimension by 0.8
-                    // to prevent taking the full screen while choosing a reasonable size.
-                    if !cfg!(target_os = "macos") && fullscreen_state_val != FullscreenState::Normal
-                    {
-                        width *= 0.8;
-                        height *= 0.8;
-                    }
-                    Some(RectF::new(
-                        Vector2F::new(x, y),
-                        Vector2F::new(width, height),
-                    ))
-                }
-                _ => None,
-            };
-
-            let left_panel_width: Option<f32> = saved_tabs.get(tab_index).and_then(|tab| match tab
-                .left_panel
-                .as_ref()
-            {
-                Some(LeftPanelSnapshot { width, .. }) => Some(*width as f32),
-                _ => None,
-            });
-
-            let right_panel_width: Option<f32> =
-                saved_tabs
-                    .get(tab_index)
-                    .and_then(|tab| match tab.right_panel.as_ref() {
-                        Some(RightPanelSnapshot { width, .. }) => Some(*width as f32),
-                        _ => None,
+        .zip(db_tab_groups)
+        .map(
+            |(((idx, window), tabs_for_window), tab_groups_for_window)| {
+                // Mint a fresh `TabGroupId` per row and build a `row id -> TabGroupId`
+                // map so tabs can be reattached to their group below.
+                let mut tab_group_id_by_row_id: HashMap<i32, TabGroupId> = HashMap::new();
+                let mut tab_groups_snapshots: Vec<TabGroupSnapshot> = Vec::new();
+                for group in tab_groups_for_window {
+                    let tab_group_id = TabGroupId::new();
+                    tab_group_id_by_row_id.insert(group.id, tab_group_id);
+                    let color = group
+                        .color
+                        .as_deref()
+                        .and_then(|s| serde_yaml::from_str::<SelectedTabColor>(s).ok())
+                        .unwrap_or_default();
+                    tab_groups_snapshots.push(TabGroupSnapshot {
+                        id: tab_group_id,
+                        name: group.name,
+                        color,
+                        collapsed: group.collapsed,
                     });
+                }
+                let saved_tabs: Vec<_> = tabs_for_window
+                    .into_iter()
+                    .filter_map(|tab| {
+                        let root = read_root_node(conn, tab.id).ok()?;
+                        let panel = db_panels.get(&tab.id);
 
-            let window_left_panel_open = window.left_panel_open.unwrap_or_else(|| {
-                saved_tabs
-                    .get(tab_index)
-                    .and_then(|tab| tab.left_panel.as_ref())
-                    .is_some()
-            });
+                        let left_panel = panel
+                            .and_then(|p| p.left_panel.as_ref())
+                            .and_then(|s| serde_json::from_str::<LeftPanelSnapshot>(s).ok());
 
-            WindowSnapshot {
-                tabs: saved_tabs,
-                active_tab_index: tab_index,
-                quake_mode: window.quake_mode,
-                bounds,
-                universal_search_width: window.universal_search_width,
-                warp_ai_width: window.warp_ai_width,
-                voltron_width: window.voltron_width,
-                warp_drive_index_width: window.warp_drive_index_width,
-                left_panel_open: window_left_panel_open,
-                vertical_tabs_panel_open: window.vertical_tabs_panel_open.unwrap_or(false),
-                fullscreen_state: fullscreen_state_val,
-                left_panel_width,
-                right_panel_width,
-                agent_management_filters: window
-                    .agent_management_filters
-                    .and_then(|s| serde_json::from_str(&s).ok()),
-            }
-        })
+                        let right_panel = panel
+                            .and_then(|p| p.right_panel.as_ref())
+                            .and_then(|s| serde_json::from_str::<RightPanelSnapshot>(s).ok());
+
+                        let group_id = tab
+                            .tab_group_id
+                            .and_then(|row_id| tab_group_id_by_row_id.get(&row_id).copied());
+                        Some(TabSnapshot {
+                            root,
+                            custom_title: tab.custom_title,
+                            default_directory_color: None,
+                            selected_color: tab
+                                .color
+                                .as_deref()
+                                .and_then(|s| {
+                                    serde_yaml::from_str::<SelectedTabColor>(s)
+                                        .ok()
+                                        .or_else(|| {
+                                            // Fall back to the old format which stored a bare AnsiColorIdentifier
+                                            serde_yaml::from_str::<AnsiColorIdentifier>(s)
+                                                .ok()
+                                                .map(SelectedTabColor::Color)
+                                        })
+                                })
+                                .unwrap_or_default(),
+                            left_panel,
+                            right_panel,
+                            group_id,
+                        })
+                    })
+                    .collect();
+
+                if active_window_id
+                    .map(|window_id| window.id == window_id)
+                    .unwrap_or(false)
+                {
+                    active_window_index = Some(idx);
+                }
+
+                // Default active tab index to 0 if we overflow when converting.
+                let tab_index: usize = window.active_tab_index.try_into().unwrap_or(0);
+
+                let fullscreen_state_val =
+                    FullscreenState::from_i32(window.fullscreen_state).unwrap_or_default();
+
+                // The origin and size of the bound should be all null or all non-null.
+                // Reject bounds smaller than the platform minimum window size so users
+                // with an already-corrupted warp.sqlite (see GH#10083) restore to
+                // default geometry instead of a sliver.
+                let bounds = match (
+                    window.window_width,
+                    window.window_height,
+                    window.origin_x,
+                    window.origin_y,
+                ) {
+                    (Some(mut width), Some(mut height), Some(x), Some(y))
+                        if width >= MIN_WINDOW_WIDTH && height >= MIN_WINDOW_HEIGHT =>
+                    {
+                        // When fullscreen or maximized, the `inner_size` we snapshotted will be the
+                        // size of the full screen. This will cause problems with winit. When you set
+                        // maximized/fullscreen, setting the inner_size will by the size the window
+                        // takes _after_ the user toggles _out_ of fullscreen/maximized. Therefore, we
+                        // don't want to set the size to take the full screen because the window will
+                        // appear to remain in maximized/fullscreen. We multiply each dimension by 0.8
+                        // to prevent taking the full screen while choosing a reasonable size.
+                        if !cfg!(target_os = "macos")
+                            && fullscreen_state_val != FullscreenState::Normal
+                        {
+                            width *= 0.8;
+                            height *= 0.8;
+                        }
+                        Some(RectF::new(
+                            Vector2F::new(x, y),
+                            Vector2F::new(width, height),
+                        ))
+                    }
+                    _ => None,
+                };
+
+                let left_panel_width: Option<f32> =
+                    saved_tabs
+                        .get(tab_index)
+                        .and_then(|tab| match tab.left_panel.as_ref() {
+                            Some(LeftPanelSnapshot { width, .. }) => Some(*width as f32),
+                            _ => None,
+                        });
+
+                let right_panel_width: Option<f32> =
+                    saved_tabs
+                        .get(tab_index)
+                        .and_then(|tab| match tab.right_panel.as_ref() {
+                            Some(RightPanelSnapshot { width, .. }) => Some(*width as f32),
+                            _ => None,
+                        });
+
+                let window_left_panel_open = window.left_panel_open.unwrap_or_else(|| {
+                    saved_tabs
+                        .get(tab_index)
+                        .and_then(|tab| tab.left_panel.as_ref())
+                        .is_some()
+                });
+
+                WindowSnapshot {
+                    tabs: saved_tabs,
+                    active_tab_index: tab_index,
+                    quake_mode: window.quake_mode,
+                    bounds,
+                    universal_search_width: window.universal_search_width,
+                    warp_ai_width: window.warp_ai_width,
+                    voltron_width: window.voltron_width,
+                    warp_drive_index_width: window.warp_drive_index_width,
+                    left_panel_open: window_left_panel_open,
+                    vertical_tabs_panel_open: window.vertical_tabs_panel_open.unwrap_or(false),
+                    fullscreen_state: fullscreen_state_val,
+                    left_panel_width,
+                    right_panel_width,
+                    agent_management_filters: window
+                        .agent_management_filters
+                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    tab_groups: tab_groups_snapshots,
+                }
+            },
+        )
         .collect();
 
     let read_context = load_cloud_object_read_context(conn, current_user_id)?;

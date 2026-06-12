@@ -30,6 +30,9 @@ use crate::ai::auth_secret_types::auth_secret_types_for_harness;
 use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEditState;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::document::plan_publication::{
+    prepare_plan_publications, wait_for_plan_publications,
+};
 use crate::ai::local_harness_setup::local_harness_product_disabled_message;
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
@@ -45,7 +48,11 @@ pub struct RunAgentsSpawningSnapshot {
 }
 
 /// In-flight tracking per `RunAgents` action (idempotency guard).
-struct PendingRunAgents;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingRunAgents {
+    Publishing,
+    Spawning,
+}
 #[derive(Debug, Clone)]
 struct ExistingLaunchedAgent {
     name: String,
@@ -91,6 +98,23 @@ impl RunAgentsExecutor {
         self.pending.contains_key(action_id)
     }
 
+    /// Cancels a pending run so publication completion cannot fan out children.
+    pub(super) fn cancel_execution(
+        &mut self,
+        action_id: &AIAgentActionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if matches!(
+            self.pending.get(action_id),
+            Some(PendingRunAgents::Publishing)
+        ) {
+            self.pending.remove(action_id);
+            ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
+                action_id: action_id.clone(),
+            });
+        }
+    }
+
     fn record_launched_agents(
         &mut self,
         conversation_id: AIConversationId,
@@ -130,9 +154,7 @@ impl RunAgentsExecutor {
         )
     }
 
-    /// Fans out a prepared request into per-child dispatches and returns a
-    /// receiver for the aggregate `RunAgentsResult`. Validation failures
-    /// short-circuit synchronously.
+    /// Publishes parent plans and dispatches children after a bounded best-effort wait.
     fn dispatch_prepared_run_agents(
         &mut self,
         action_id: AIAgentActionId,
@@ -153,16 +175,54 @@ impl RunAgentsExecutor {
             let _ = sender.try_send(RunAgentsResult::Failure { error });
             return receiver;
         }
+        let pending_plan_publications = prepare_plan_publications(parent_conversation_id, ctx);
 
         let snapshot = RunAgentsSpawningSnapshot {
             agent_count: request.agent_run_configs.len(),
         };
-        self.pending.insert(action_id.clone(), PendingRunAgents);
+        self.pending
+            .insert(action_id.clone(), PendingRunAgents::Publishing);
         ctx.emit(RunAgentsExecutorEvent::SpawningStarted {
             action_id: action_id.clone(),
             snapshot,
         });
 
+        let action_id_for_wait = action_id.clone();
+        ctx.spawn(
+            async move {
+                // Wait briefly for each plan to become server-backed without blocking
+                // launch on a failed or slow publication. Resolves immediately when
+                // there is nothing to wait on.
+                wait_for_plan_publications(pending_plan_publications).await;
+                request
+            },
+            move |me, request, ctx| {
+                if !me.is_pending(&action_id_for_wait) {
+                    return;
+                }
+                me.dispatch_children_for_prepared_request(
+                    action_id_for_wait.clone(),
+                    request,
+                    parent_conversation_id,
+                    sender,
+                    ctx,
+                )
+            },
+        );
+
+        receiver
+    }
+
+    fn dispatch_children_for_prepared_request(
+        &mut self,
+        action_id: AIAgentActionId,
+        request: RunAgentsRequest,
+        parent_conversation_id: AIConversationId,
+        sender: async_channel::Sender<RunAgentsResult>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.pending
+            .insert(action_id.clone(), PendingRunAgents::Spawning);
         let parent_run_id = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&parent_conversation_id)
             .and_then(|c| c.run_id());
@@ -303,8 +363,6 @@ impl RunAgentsExecutor {
                 let _ = sender.try_send(result);
             },
         );
-
-        receiver
     }
 
     pub(super) fn execute(

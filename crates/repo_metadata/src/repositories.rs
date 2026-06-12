@@ -218,12 +218,38 @@ impl DetectedRepositories {
     }
 
     /// Given a local or remote path, return its corresponding repo root.
-    /// This does not run the check against the actual file system.
-    /// Instead it checks against our cached path to root mapping.
+    ///
+    /// No git detection is performed; roots are looked up in our cached
+    /// path-to-root mapping. Note that for local paths this still hits the
+    /// file system: the path is canonicalized first (resolving symlinks and
+    /// requiring it to exist) so it can match the canonicalized cached roots.
+    /// If the input is already canonicalized, prefer
+    /// [`Self::get_root_for_canonical_path`], which performs no I/O.
     pub fn get_root_for_path(&self, path: &LocalOrRemotePath) -> Option<LocalOrRemotePath> {
         match path {
             LocalOrRemotePath::Local(local_path) => {
                 let std_path = StandardizedPath::from_local_canonicalized(local_path).ok()?;
+                self.find_local_repository_root(&std_path)
+            }
+            LocalOrRemotePath::Remote(remote_path) => self.find_remote_repository_root(remote_path),
+        }
+    }
+
+    /// Given a local or remote path, return its corresponding repo root.
+    /// This does not run the check against the actual file system.
+    /// Instead it checks against our cached path to root mapping.
+    ///
+    /// Local paths must already be canonicalized (symlinks resolved); they
+    /// are only normalized here, without any filesystem I/O. A
+    /// non-canonical path may fail to match the canonicalized cached roots
+    /// — use [`Self::get_root_for_path`] for such paths instead.
+    pub fn get_root_for_canonical_path(
+        &self,
+        path: &LocalOrRemotePath,
+    ) -> Option<LocalOrRemotePath> {
+        match path {
+            LocalOrRemotePath::Local(local_path) => {
+                let std_path = StandardizedPath::try_from_local(local_path).ok()?;
                 self.find_local_repository_root(&std_path)
             }
             LocalOrRemotePath::Remote(remote_path) => self.find_remote_repository_root(remote_path),

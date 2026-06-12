@@ -170,14 +170,16 @@ elif [[ $RELEASE_CHANNEL = "dev" ]]; then
   BINARY_NAME="warp-dev"
   APP_NAME="WarpDev"
   FEATURES="$FEATURES,agent_mode_debug"
-  # Enable heap profiling using jemalloc through pprof.
-  FEATURES="$FEATURES,jemalloc_pprof"
+  # Enable heap usage tracking & profiling using jemalloc through pprof.
+  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "preview" ]]; then
   WARP_BIN="preview"
   BINARY_NAME="warp-preview"
   APP_NAME="WarpPreview"
   FEATURES="$FEATURES,preview_channel"
+  # Enable heap usage tracking & profiling using jemalloc through pprof.
+  FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "stable" ]]; then
   WARP_BIN="stable"
   BINARY_NAME="warp"
@@ -211,14 +213,8 @@ if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
     FEATURES="$FEATURES,warp_control_cli"
   fi
 elif [[ "$ARTIFACT" == "app" ]]; then
-  FEATURES="$FEATURES,gui"
-  if [[ "$RELEASE_CHANNEL" == "local" || "$RELEASE_CHANNEL" == "dev" ]]; then
-    FEATURES="$FEATURES,nld_classifier_v3,nld_heuristic_v2"
-  elif [[ "$RELEASE_CHANNEL" == "preview" ]]; then
-    FEATURES="$FEATURES,nld_classifier_v2,nld_heuristic_v2"
-  else
-    FEATURES="$FEATURES,nld_classifier_v1,nld_heuristic_v1"
-  fi
+  # All channels ship the v3 classifier and v2 heuristic.
+  FEATURES="$FEATURES,gui,nld_classifier_v3,nld_heuristic_v2"
 fi
 if [[ -n "$EXTRA_FEATURES" ]]; then
   FEATURES="$FEATURES,$EXTRA_FEATURES"

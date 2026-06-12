@@ -1069,6 +1069,20 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: true,
     }
+    // Whether to mint and attach Gemini Enterprise (GEAP) credentials to eligible agent
+    // requests, routing them through the workspace's Google Cloud project. Only consulted
+    // when the admin sets the GEAP host to RESPECT_USER_SETTING; ENFORCE bypasses it.
+    // Prefer [`UserWorkspaces::is_gemini_enterprise_credentials_enabled`] to interpret
+    // this setting.
+    gemini_enterprise_credentials_enabled: GeminiEnterpriseCredentialsEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "cloud_platform.third_party_api_keys.gemini_enterprise_credentials_enabled",
+        description: "Whether Warp should route eligible requests through your workspace's Gemini Enterprise Google Cloud project.",
+    }
     // Whether or not the user wants agent mode requests to use their saved rules.
     memory_enabled: MemoryEnabled {
         type: bool,

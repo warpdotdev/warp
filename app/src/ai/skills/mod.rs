@@ -4,6 +4,10 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 mod telemetry;
 pub use telemetry::{SkillOpenOrigin, SkillTelemetryEvent};
+#[cfg(feature = "local_fs")]
+mod bundled;
+#[cfg(all(feature = "local_fs", test))]
+pub use bundled::BundledSkillActivation;
 
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "local_fs"))] {
@@ -62,7 +66,5 @@ cfg_if::cfg_if! {
         pub use skill_manager::{
             read_skills_from_directories, SkillManager, SkillWatcher,
         };
-        #[cfg(test)]
-        pub use skill_manager::BundledSkillActivation;
     }
 }

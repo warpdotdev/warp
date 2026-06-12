@@ -11,6 +11,7 @@ fn wsl_env_allowlist_includes_client_version_without_notifications_flag() {
         vec![
             format!("{HONOR_PS1_NAME}/u"),
             format!("{USE_SSH_WRAPPER_NAME}/u"),
+            format!("{SSH_REUSE_CONTROL_MASTER_NAME}/u"),
             format!("{SHELL_DEBUG_MODE_NAME}/u"),
             format!("{TERM_PROGRAM_NAME}/u"),
             format!("{IS_LOCAL_SESSION_NAME}/u"),
@@ -18,6 +19,7 @@ fn wsl_env_allowlist_includes_client_version_without_notifications_flag() {
             format!("{CLIENT_VERSION_NAME}/u"),
             format!("{TERMINAL_SESSION_UUID_ENV}/u"),
             format!("{FOCUS_URL_ENV}/u"),
+            format!("{PROMPT_NODE_VERSION_ENABLED_NAME}/u"),
         ],
     );
 }
@@ -33,6 +35,7 @@ fn wsl_env_allowlist_includes_cli_agent_protocol_when_notifications_flag_is_enab
         vec![
             format!("{HONOR_PS1_NAME}/u"),
             format!("{USE_SSH_WRAPPER_NAME}/u"),
+            format!("{SSH_REUSE_CONTROL_MASTER_NAME}/u"),
             format!("{SHELL_DEBUG_MODE_NAME}/u"),
             format!("{TERM_PROGRAM_NAME}/u"),
             format!("{IS_LOCAL_SESSION_NAME}/u"),
@@ -40,6 +43,7 @@ fn wsl_env_allowlist_includes_cli_agent_protocol_when_notifications_flag_is_enab
             format!("{CLIENT_VERSION_NAME}/u"),
             format!("{TERMINAL_SESSION_UUID_ENV}/u"),
             format!("{FOCUS_URL_ENV}/u"),
+            format!("{PROMPT_NODE_VERSION_ENABLED_NAME}/u"),
             format!("{CLI_AGENT_PROTOCOL_VERSION_NAME}/u"),
             format!("{INITIAL_WORKING_DIR_NAME}/pu"),
         ],

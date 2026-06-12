@@ -21,6 +21,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::blocklist::PendingAttachment;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::auth_manager::LoginGatedFeature;
 use crate::drive::items::WarpDriveItemId;
@@ -153,6 +154,13 @@ pub enum WorkspaceAction {
         tab_index: usize,
         anchor: TabContextMenuAnchor,
     },
+    /// Toggles the multi-tab selection right-click menu.
+    /// Dispatched by the UI when the right-clicked tab is part of a multi-tab
+    /// selection (cmd-click or shift-click).
+    ToggleTabSelectionRightClickMenu {
+        tab_index: usize,
+        anchor: TabContextMenuAnchor,
+    },
     ToggleVerticalTabsPaneContextMenu {
         tab_index: usize,
         target: VerticalTabsPaneContextMenuTarget,
@@ -186,6 +194,26 @@ pub enum WorkspaceAction {
     },
     /// Removes the tab at the given index from its current group.
     RemoveTabFromGroup(usize),
+    /// Selects every tab between the active tab and the shift-clicked row (inclusive).
+    ShiftSelectTabRange {
+        locator: PaneViewLocator,
+    },
+    /// Toggles whether the tab at `locator` is part of the active multi-selection.
+    /// Dispatched on cmd-click of a vertical tab row.
+    ToggleTabMultiSelection {
+        locator: PaneViewLocator,
+    },
+    /// Clears the tab multi-selection. Dispatched from the UI when the user takes
+    /// an action that should cancel any active selections.
+    ClearTabMultiSelection,
+    /// Creates a new tab group from the current tab multi-selection.
+    NewTabGroupFromSelectedTabs,
+    /// Moves every selected tab into `group_id`.
+    MoveSelectedTabsToGroup {
+        group_id: TabGroupId,
+    },
+    /// Removes every selected tab from its group (requires a single shared group).
+    RemoveSelectedTabsFromGroup,
     ToggleTabGroupRightClickMenu {
         group_id: TabGroupId,
         anchor: TabContextMenuAnchor,
@@ -197,6 +225,17 @@ pub enum WorkspaceAction {
     CloseTabsOutsideGroup(TabGroupId),
     CloseTabsAboveGroup(TabGroupId),
     CloseTabsBelowGroup(TabGroupId),
+    /// Pins the tab at the given index. If the tab is part of a group, it
+    /// is first extracted from the group and then pinned as ungrouped.
+    PinTab(usize),
+    /// Unpins the tab at the given index.
+    UnpinTab(usize),
+    /// Pins the entire tab group: sets the group as pinned
+    /// and moves the group block to the end of the pinned region.
+    PinTabGroup(TabGroupId),
+    /// Unpins the entire tab group: clears the pinned flag on the group
+    /// and moves the group block to the start of the unpinned region.
+    UnpinTabGroup(TabGroupId),
     AddDefaultTab,
     AddTerminalTab {
         hide_homepage: bool,
@@ -533,6 +572,8 @@ pub enum WorkspaceAction {
         summarization_prompt: Option<String>,
         /// Initial prompt to send in the forked conversation (sent after summarization if enabled).
         initial_prompt: Option<String>,
+        /// Attachments (images/files) to send along with the initial prompt in the forked pane.
+        initial_attachments: Vec<PendingAttachment>,
         /// Where to open the forked conversation.
         destination: ForkedConversationDestination,
     },
@@ -836,6 +877,9 @@ impl WorkspaceAction {
             | NewTabGroupFromTab(_)
             | MoveTabToGroup { .. }
             | RemoveTabFromGroup(_)
+            | NewTabGroupFromSelectedTabs
+            | MoveSelectedTabsToGroup { .. }
+            | RemoveSelectedTabsFromGroup
             | UngroupTabs(_)
             | NewTabInGroup(_)
             | MoveTabGroupUp(_)
@@ -843,6 +887,10 @@ impl WorkspaceAction {
             | CloseTabsOutsideGroup(_)
             | CloseTabsAboveGroup(_)
             | CloseTabsBelowGroup(_)
+            | PinTab(_)
+            | UnpinTab(_)
+            | PinTabGroup(_)
+            | UnpinTabGroup(_)
             | ToggleTabColor { .. }
             | AddDefaultTab
             | AddTerminalTab { .. }
@@ -903,6 +951,7 @@ impl WorkspaceAction {
             | ToggleSyntaxHighlighting
             | OpenLaunchConfigSaveModal
             | ToggleTabRightClickMenu { .. }
+            | ToggleTabSelectionRightClickMenu { .. }
             | ToggleTabGroupRightClickMenu { .. }
             | ToggleVerticalTabsPaneContextMenu { .. }
             | OpenNewSessionMenu { .. }
@@ -1017,6 +1066,9 @@ impl WorkspaceAction {
             | OpenMCPServerCollection
             | FocusTerminalViewInWorkspace { .. }
             | FocusPane(..)
+            | ShiftSelectTabRange { .. }
+            | ToggleTabMultiSelection { .. }
+            | ClearTabMultiSelection
             | StartNewConversation { .. }
             | UndoRevertInCodeReviewPane { .. }
             | JumpToLatestToast

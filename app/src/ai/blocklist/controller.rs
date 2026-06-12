@@ -31,13 +31,14 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonE
 use self::response_stream::{ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::agent_view::{AgentViewController, AgentViewControllerEvent, AgentViewEntryOrigin};
-use super::context_model::BlocklistAIContextModel;
+use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::history_model::BlocklistAIHistoryModel;
 use super::input_model::InputConfig;
 use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
+use super::queued_query::{QueuedQueryId, QueuedQueryModel};
 use super::{BlocklistAIInputModel, InputType, ResponseStreamId};
 use crate::ai::agent::api::{self, ServerConversationToken};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
@@ -404,6 +405,9 @@ struct InputQuery {
     /// Additional referenced attachments to include in the query
     /// (e.g. file path references from shared session file uploads).
     additional_attachments: HashMap<String, AIAgentAttachment>,
+    /// When `Some`, this submission is a fired queued-prompt row; the send path resolves the
+    /// row's stored attachments by this id instead of the live input staging.
+    queued_query_id: Option<QueuedQueryId>,
 }
 
 impl InputQuery {
@@ -474,6 +478,8 @@ impl BlocklistAIController {
 
             let is_lrc_command_completed =
                 cancellation_reason.is_some_and(|reason| reason.is_lrc_command_completed());
+            let should_preserve_in_progress_status = cancellation_reason
+                .is_some_and(|reason| reason.should_preserve_in_progress_status());
             let should_trigger_follow_up_request = (!is_passive_code_diff
                 && !is_lrc_command_completed
                 && finished_action_results
@@ -481,6 +487,9 @@ impl BlocklistAIController {
                     .any(|result| result.result.should_trigger_request_upon_completion()))
                 || has_manual_follow_up;
             if !should_trigger_follow_up_request {
+                if should_preserve_in_progress_status {
+                    return;
+                }
                 // We also check if there's an in-flight req, because it's possible that this
                 // subscription callback was queued in response to auto-cancelling pending actions
                 // in the process of constructing a request. In such cases, we don't want to update
@@ -673,7 +682,19 @@ impl BlocklistAIController {
         }
 
         if let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str()) {
-            slash_command_request.send_request(self, is_queued_prompt, ctx);
+            // Only fired queued rows carry `queued_query_id`. For those rows, keep slash commands
+            // (e.g. queued `/compact`) on the conversation they were queued on; direct slash
+            // submissions still re-derive their target from the current UI selection.
+            let conversation_id_override = input_query
+                .queued_query_id
+                .is_some()
+                .then_some(conversation_id);
+            slash_command_request.send_request(
+                self,
+                input_query.queued_query_id,
+                conversation_id_override,
+                ctx,
+            );
             return;
         }
 
@@ -753,23 +774,41 @@ impl BlocklistAIController {
         }
 
         let additional_attachments = input_query.additional_attachments;
+        let queued_query_id = input_query.queued_query_id;
         let ai_input = match input_query.input_query {
             InputQueryType::UserSubmittedQueryFromInput {
                 static_query_type,
                 running_command,
                 ..
-            } => input_for_query(
-                query,
-                &task_id,
-                conversation_id,
-                static_query_type,
-                user_query_mode,
-                running_command,
-                additional_attachments,
-                self.context_model.as_ref(ctx),
-                self.active_session.as_ref(ctx),
-                ctx,
-            ),
+            } => {
+                // Resolve the attachment set for this submission. The direct-send branch
+                // preserves existing behavior: live input staging is still consumed by regular
+                // submissions, but fired queued rows read from their row-owned attachment set.
+                let prompt_attachments = match queued_query_id {
+                    Some(query_id) => QueuedQueryModel::as_ref(ctx)
+                        .attachments_for(conversation_id, query_id)
+                        .to_vec(),
+                    None => self
+                        .context_model
+                        .as_ref(ctx)
+                        .pending_attachments()
+                        .to_vec(),
+                };
+
+                input_for_query(
+                    query,
+                    &task_id,
+                    conversation_id,
+                    static_query_type,
+                    user_query_mode,
+                    running_command,
+                    additional_attachments,
+                    prompt_attachments,
+                    self.context_model.as_ref(ctx),
+                    self.active_session.as_ref(ctx),
+                    ctx,
+                )
+            }
             InputQueryType::AIInputType { ai_input } => ai_input,
         };
         inputs.push(ai_input);
@@ -908,6 +947,7 @@ impl BlocklistAIController {
             entrypoint_type,
             participant_id,
             /*is_queued_prompt*/ false,
+            /*queued_query_id*/ None,
             ctx,
         );
     }
@@ -922,6 +962,7 @@ impl BlocklistAIController {
         static_query_type: Option<StaticQueryType>,
         entrypoint_type: EntrypointType,
         participant_id: Option<ParticipantId>,
+        queued_query_id: QueuedQueryId,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_new_conversation_internal(
@@ -930,10 +971,12 @@ impl BlocklistAIController {
             entrypoint_type,
             participant_id,
             /*is_queued_prompt*/ true,
+            Some(queued_query_id),
             ctx,
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn send_user_query_in_new_conversation_internal(
         &mut self,
         query: String,
@@ -941,6 +984,7 @@ impl BlocklistAIController {
         entrypoint_type: EntrypointType,
         participant_id: Option<ParticipantId>,
         is_queued_prompt: bool,
+        queued_query_id: Option<QueuedQueryId>,
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = participant_id.or_else(|| self.get_sharer_participant_id());
@@ -977,6 +1021,7 @@ impl BlocklistAIController {
                         running_command: Some(running_command),
                     },
                     additional_attachments: HashMap::new(),
+                    queued_query_id,
                 },
                 entrypoint_type,
                 participant_id,
@@ -993,6 +1038,7 @@ impl BlocklistAIController {
                         running_command: None,
                     },
                     additional_attachments: HashMap::new(),
+                    queued_query_id,
                 },
                 entrypoint_type,
                 participant_id,
@@ -1018,6 +1064,7 @@ impl BlocklistAIController {
             HashMap::new(),
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
+            /*queued_query_id*/ None,
             ctx,
         );
     }
@@ -1038,6 +1085,7 @@ impl BlocklistAIController {
             HashMap::new(),
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
+            /*queued_query_id*/ None,
             ctx,
         );
     }
@@ -1051,6 +1099,7 @@ impl BlocklistAIController {
         query: String,
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
+        queued_query_id: QueuedQueryId,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1061,6 +1110,7 @@ impl BlocklistAIController {
             HashMap::new(),
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ true,
+            Some(queued_query_id),
             ctx,
         );
     }
@@ -1082,6 +1132,7 @@ impl BlocklistAIController {
             additional_attachments,
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
+            /*queued_query_id*/ None,
             ctx,
         );
     }
@@ -1105,6 +1156,7 @@ impl BlocklistAIController {
             HashMap::new(),
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
+            /*queued_query_id*/ None,
             ctx,
         );
     }
@@ -1119,6 +1171,7 @@ impl BlocklistAIController {
         additional_attachments: HashMap<String, AIAgentAttachment>,
         entrypoint_type: EntrypointType,
         is_queued_prompt: bool,
+        queued_query_id: Option<QueuedQueryId>,
         ctx: &mut ModelContext<Self>,
     ) {
         let is_viewer = self
@@ -1226,6 +1279,7 @@ impl BlocklistAIController {
                     running_command,
                 },
                 additional_attachments,
+                queued_query_id,
             },
             entrypoint_type,
             participant_id,
@@ -1250,6 +1304,7 @@ impl BlocklistAIController {
                     running_command: None,
                 },
                 additional_attachments: HashMap::new(),
+                queued_query_id: None,
             },
             EntrypointType::ZeroStateAgentModePromptSuggestion,
             participant_id,
@@ -1286,6 +1341,7 @@ impl BlocklistAIController {
                 which_task,
                 input_query: InputQueryType::AIInputType { ai_input },
                 additional_attachments: HashMap::new(),
+                queued_query_id: None,
             },
             EntrypointType::UserInitiated,
             participant_id,
@@ -1299,7 +1355,7 @@ impl BlocklistAIController {
         slash_command: SlashCommandRequest,
         ctx: &mut ModelContext<Self>,
     ) {
-        slash_command.send_request(self, /*is_queued_prompt*/ false, ctx);
+        slash_command.send_request(self, None, None, ctx);
     }
 
     /// Same as [`Self::send_slash_command_request`] but marks the emitted `SentRequest`
@@ -1308,9 +1364,11 @@ impl BlocklistAIController {
     pub fn send_queued_slash_command_request(
         &mut self,
         slash_command: SlashCommandRequest,
+        queued_query_id: QueuedQueryId,
+        conversation_id: Option<AIConversationId>,
         ctx: &mut ModelContext<Self>,
     ) {
-        slash_command.send_request(self, /*is_queued_prompt*/ true, ctx);
+        slash_command.send_request(self, Some(queued_query_id), conversation_id, ctx);
     }
 
     /// Mark a conversation to follow up after its actions complete and attempt to send immediately
@@ -1420,6 +1478,7 @@ impl BlocklistAIController {
                     },
                 },
                 additional_attachments: HashMap::new(),
+                queued_query_id: None,
             },
             EntrypointType::TriggerPassiveSuggestion {
                 trigger: trigger_type,
@@ -1576,8 +1635,14 @@ impl BlocklistAIController {
             );
             return false;
         };
-        let is_success = matches!(conversation.status(), ConversationStatus::Success);
-        if !owns || has_active_stream || !is_success {
+        // WaitingForEvents is treated as Success here: pending events
+        // drain via the next outbound request and the server-side
+        // supersede emits the resume signal.
+        let is_ready_status = matches!(
+            conversation.status(),
+            ConversationStatus::Success | ConversationStatus::WaitingForEvents,
+        );
+        if !owns || has_active_stream || !is_ready_status {
             log::info!(
                 "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?}",
                 conversation.status()
@@ -1790,6 +1855,11 @@ impl BlocklistAIController {
             return;
         };
 
+        // The resume request supersedes any in-flight wait_for_events.
+        self.action_model.update(ctx, |action_model, ctx| {
+            action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
+        });
+
         if self
             .send_request_input(
                 RequestInput::for_task(
@@ -1809,6 +1879,14 @@ impl BlocklistAIController {
             )
             .is_err()
         {
+            // TODO: surface retry exhaustion. The existing requeue
+            // re-emits `EventsReady` until `MAX_RETRY_ATTEMPTS` is hit,
+            // after which events are dropped silently and the wait has
+            // already been cancelled — the conversation can end up stuck
+            // with no executor pending entry, no watchdog, and no
+            // in-flight stream. Follow-up: park-on-exhaust the events
+            // and transition the conversation to `Error` so the next
+            // user resume can carry them along.
             OrchestrationEventService::handle(ctx).update(ctx, |svc, ctx| {
                 svc.requeue_awaiting_events(conversation_id, ctx);
             });
@@ -2291,6 +2369,21 @@ impl BlocklistAIController {
             &conversation_data.server_conversation_token,
         );
 
+        // Safety net: if the connected Grok subscription's OAuth token is
+        // nearing or past expiry, kick off a background refresh so upcoming
+        // requests can authenticate even when the proactive refresh loop
+        // isn't running. This request still carries the currently stored
+        // token; the server is the authority on its validity.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use ::ai::api_keys::ApiKeyManager;
+
+            let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.refresh_grok_tokens_if_needed(byo_allowed, ctx);
+            });
+        }
+
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_view_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
@@ -2384,7 +2477,10 @@ impl BlocklistAIController {
             ctx,
         );
 
-        if input_contains_user_query {
+        // Skip the context reset for a fired queued-prompt row (`is_queued_prompt`): its
+        // attachments came from the row, not the live staging, so the live `pending_attachments`
+        // belong to the user's next prompt and must be preserved.
+        if input_contains_user_query && !is_queued_prompt {
             // Get the pending document ID before clearing context
             let pending_document_id = self.context_model.as_ref(ctx).pending_document_id();
 
@@ -2737,12 +2833,13 @@ impl BlocklistAIController {
 
                 if let Some(stream_cancellation) = &cancellation {
                     // If this is a shared session, send a synthetic StreamFinished event to notify viewers
-                    // of any user-initiated cancellation. We skip FollowUpSubmitted because that's an internal
-                    // cancellation for continuing the conversation.
+                    // of any user-initiated cancellation. We skip internal cancellations that preserve
+                    // the conversation's InProgress status, such as follow-ups and CLI subagent user
+                    // takeover, because those do not end the conversation.
                     if FeatureFlag::AgentSharedSessions.is_enabled()
                         && !stream_cancellation
                             .reason
-                            .is_follow_up_for_same_conversation()
+                            .should_preserve_in_progress_status()
                     {
                         self.send_cancellation_to_viewers(ctx);
                     }
@@ -2757,7 +2854,11 @@ impl BlocklistAIController {
                         );
                     });
 
-                    if !was_passive_request {
+                    if !was_passive_request
+                        && !stream_cancellation
+                            .reason
+                            .should_preserve_in_progress_status()
+                    {
                         self.set_input_mode_for_cancellation(ctx);
                     }
                 } else if is_any_exchange_unfinished {
@@ -2765,14 +2866,9 @@ impl BlocklistAIController {
                         "generate_multi_agent_output stream ended without emitting StreamFinished event."
                     );
 
-                    let error_message = "Request did not successfully complete";
                     history_model.update(ctx, |history_model, ctx| {
                         history_model.mark_response_stream_completed_with_error(
-                            RenderableAIError::Other {
-                                error_message: error_message.to_string(),
-                                will_attempt_resume: false,
-                                waiting_for_network: false,
-                            },
+                            RenderableAIError::transient_network_error(false, false),
                             &stream_id,
                             conversation_id,
                             self.terminal_view_id,
@@ -3091,16 +3187,27 @@ fn input_for_query(
     user_query_mode: UserQueryMode,
     running_command: Option<RunningCommand>,
     additional_attachments: HashMap<String, AIAgentAttachment>,
+    prompt_attachments: Vec<PendingAttachment>,
     context_model: &BlocklistAIContextModel,
     active_session: &ActiveSession,
     app: &AppContext,
 ) -> AIAgentInput {
+    // Split the resolved attachment set into image context (sent inline) and file references.
+    let mut image_context = Vec::new();
+    let mut file_attachments = Vec::new();
+    for attachment in prompt_attachments {
+        match attachment {
+            PendingAttachment::Image(image) => image_context.push(AIAgentContext::Image(image)),
+            PendingAttachment::File(file) => file_attachments.push(file),
+        }
+    }
+
     let context = input_context_for_request(
         true,
         context_model,
         active_session,
         Some(conversation_id),
-        vec![],
+        image_context,
         app,
     );
     let intended_agent = BlocklistAIHistoryModel::as_ref(app)
@@ -3117,6 +3224,8 @@ fn input_for_query(
         });
     let mut referenced_attachments = parse_context_attachments(&query, context_model, app);
     referenced_attachments.extend(additional_attachments);
+    add_pending_file_attachments(&mut referenced_attachments, file_attachments);
+
     AIAgentInput::UserQuery {
         query,
         context,
@@ -3125,6 +3234,31 @@ fn input_for_query(
         user_query_mode,
         running_command,
         intended_agent,
+    }
+}
+
+pub(super) fn add_pending_file_attachments(
+    referenced_attachments: &mut HashMap<String, AIAgentAttachment>,
+    file_attachments: Vec<PendingFile>,
+) {
+    for file in file_attachments {
+        let attachment = AIAgentAttachment::FilePathReference {
+            file_id: uuid::Uuid::new_v4().to_string(),
+            file_name: file.file_name.clone(),
+            file_path: file.file_path.to_string_lossy().to_string(),
+        };
+        let mut key = file.file_name.clone();
+        if referenced_attachments.contains_key(&key) {
+            let mut suffix = 1;
+            loop {
+                key = format!("{} ({suffix})", file.file_name);
+                if !referenced_attachments.contains_key(&key) {
+                    break;
+                }
+                suffix += 1;
+            }
+        }
+        referenced_attachments.insert(key, attachment);
     }
 }
 

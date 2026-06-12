@@ -33,10 +33,9 @@ fn new_block_list(event_proxy: ChannelEventListener, mode: TypeaheadMode) -> Blo
         None,
         None,
         None,
-        false,
         None,
     )
-    .merge_from_bootstrapped_value(bootstrapped_value.clone(), false);
+    .merge_from_bootstrapped_value(bootstrapped_value.clone());
 
     block_list.bootstrapped(bootstrapped_value);
     block_list.early_output_mut().init_session(&session_info);
@@ -125,6 +124,7 @@ fn test_queued_typeahead_input_matching() {
     // it from typeahead.
     block_list.preexec(ansi::PreexecValue {
         command: "first".into(),
+        session_id: None,
     });
     assert_eq!(block_list.active_block().command_to_string(), "first");
     block_list.command_finished(Default::default());
@@ -168,6 +168,7 @@ fn test_queued_typeahead_shell_reported() {
     // it from background output, removing the background block in the process.
     block_list.preexec(ansi::PreexecValue {
         command: "first".into(),
+        session_id: None,
     });
     assert_eq!(block_list.active_block().command_to_string(), "first");
     assert!(block_list.background_block_mut().is_none());
@@ -185,6 +186,7 @@ fn test_queued_typeahead_shell_reported() {
     // Mimic the ESC-i keybinding, which clears the input buffer.
     block_list.input_buffer(ansi::InputBufferValue {
         buffer: "second".into(),
+        session_id: None,
     });
     // zsh appears to use `\r\e[J` (carriage return and clear from cursor to end of screen)
     // to clear the line. There are lots of ways of doing this, and it doesn't

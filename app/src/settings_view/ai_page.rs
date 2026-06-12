@@ -1,4 +1,5 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeys};
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
+use chrono::{DateTime, Local};
 use enum_iterator::all;
 use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
@@ -47,8 +48,8 @@ use super::settings_page::{
     HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
 };
 use super::{
-    flags, SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction,
-    SettingsSection, ToggleSettingActionPair,
+    editor_text_colors, flags, SettingActionPairContexts, SettingActionPairDescriptions,
+    SettingsAction, SettingsSection, ToggleSettingActionPair,
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
@@ -90,7 +91,9 @@ use crate::settings::{
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
-use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, DangerSecondaryTheme, SecondaryTheme,
+};
 use crate::view_components::{
     render_warning_box, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
     WarningBoxConfig,
@@ -133,7 +136,7 @@ use std::sync::LazyLock;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
-use crate::appearance::Appearance;
+use crate::appearance::{Appearance, AppearanceEvent};
 use crate::editor::{EditorView, Event as EditorEvent, TextOptions};
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::server::telemetry::{
@@ -170,7 +173,7 @@ const GIT_OPERATIONS_AUTOGEN_DESCRIPTION: &str =
     "Let AI generate commit messages and pull request titles and descriptions.";
 const WISPR_FLOW_URL: &str = "https://wisprflow.ai/";
 const CUSTOM_INFERENCE_LEARN_MORE_URL: &str =
-    "https://docs.warp.dev/support-and-community/plans-and-billing/bring-your-own-api-key/";
+    "https://docs.warp.dev/agent-platform/inference/custom-inference-endpoint/";
 const CUSTOM_INFERENCE_TERMS_URL: &str = "https://www.warp.dev/legal/terms-of-service";
 const CUSTOM_INFERENCE_INFO_TOOLTIP_MAX_WIDTH: f32 = 320.;
 
@@ -2102,6 +2105,118 @@ impl AISettingsPageView {
         }
     }
 
+    /// Kicks off the xAI (Grok) subscription OAuth flow: opens the consent
+    /// screen in the browser, runs a loopback PKCE callback server, exchanges
+    /// the resulting authorization code for OAuth tokens, and persists them via
+    /// `ApiKeyManager` (which then proactively refreshes them before expiry).
+    #[cfg(not(target_family = "wasm"))]
+    fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
+        use ::ai::grok_subscription::oauth;
+        use warp_core::safe_error;
+
+        use crate::view_components::{DismissibleToast, ToastLink};
+        use crate::workspace::WorkspaceAction;
+        use crate::ToastStack;
+
+        /// Object id shared by the connect-flow toasts so the completion toast
+        /// (success or error) automatically replaces the in-progress one.
+        const CONNECT_TOAST_OBJECT_ID: &str = "grok_oauth_connect_toast";
+
+        // Record attempt initiation on click (before we attempt to bind the
+        // loopback server). This ensures every terminal SuperGrokSubscriptionConnectFinished
+        // (including immediate bind failures) is paired with a preceding Initiated
+        // for funnel/drop-off analysis.
+        send_telemetry_from_ctx!(TelemetryEvent::SuperGrokSubscriptionConnectInitiated, ctx);
+
+        // Starting the attempt binds the loopback callback server before the
+        // browser opens, so a bind failure surfaces immediately, without a
+        // dangling browser tab.
+        let attempt = match oauth::OauthAttempt::start() {
+            Ok(attempt) => attempt,
+            Err(err) => {
+                safe_error!(
+                    safe: ("Failed to start Grok OAuth callback server"),
+                    full: ("Failed to start Grok OAuth callback server: {err:#}")
+                );
+                send_telemetry_from_ctx!(
+                    TelemetryEvent::SuperGrokSubscriptionConnectFinished {
+                        error: Some("bind_failed".to_string()),
+                    },
+                    ctx
+                );
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast =
+                        DismissibleToast::error(format!("Couldn't start Grok login: {err}"));
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                return;
+            }
+        };
+
+        // Open xAI's consent screen in the user's default browser.
+        let authorize_url = attempt.authorize_url();
+        ctx.open_url(&authorize_url);
+
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            // Persistent rather than ephemeral so the copy-URL fallback stays
+            // available when the browser fails to open. It can't linger
+            // forever: the completion toast below replaces it (shared object
+            // id), and the OAuth attempt itself times out when the callback
+            // never arrives.
+            let toast = DismissibleToast::default(
+                "Opening your browser to connect your SuperGrok subscription…".to_string(),
+            )
+            .with_object_id(CONNECT_TOAST_OBJECT_ID.to_string())
+            .with_link(
+                ToastLink::new("Copy URL".to_string())
+                    .with_onclick_action(WorkspaceAction::CopyTextToClipboard(authorize_url)),
+            );
+            toast_stack.add_persistent_toast(toast, window_id, ctx);
+        });
+
+        ctx.spawn(async move { attempt.finish().await }, |_, result, ctx| {
+            let window_id = ctx.window_id();
+            let toast = match result {
+                Ok(tokens) => {
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
+                        ctx
+                    );
+                    // Persist the tokens to secure storage and kick off the
+                    // proactive refresh loop so subsequent requests can
+                    // authenticate with the connected subscription.
+                    ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+                        manager.store_grok_tokens(tokens, ctx);
+                    });
+                    DismissibleToast::success("SuperGrok subscription connected".to_string())
+                }
+                Err(err) => {
+                    safe_error!(
+                        safe: ("Grok OAuth failed"),
+                        full: ("Grok OAuth failed: {err:#}")
+                    );
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::SuperGrokSubscriptionConnectFinished {
+                            error: Some("oauth_failed".to_string()),
+                        },
+                        ctx
+                    );
+                    DismissibleToast::error(format!("Couldn't connect SuperGrok: {err}"))
+                }
+            };
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    toast.with_object_id(CONNECT_TOAST_OBJECT_ID.to_string()),
+                    window_id,
+                    ctx,
+                );
+            });
+            ctx.notify();
+        });
+    }
+
     /// Set the active subpage and rebuild the widget list to show only relevant widgets.
     pub fn set_active_subpage(&mut self, subpage: Option<AISubpage>, ctx: &mut ViewContext<Self>) {
         if self.active_subpage != subpage {
@@ -2939,6 +3054,8 @@ pub enum AISettingsPageAction {
     // Custom inference
     OpenAddCustomEndpointModal,
     OpenEditCustomEndpointModal(usize),
+    ConnectGrokSubscription,
+    DisconnectGrokSubscription,
 
     #[cfg(feature = "local_fs")]
     SetConversationLayout(crate::util::file::external_editor::settings::OpenConversationPreference),
@@ -3748,6 +3865,24 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .agent_attribution_enabled
                         .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ConnectGrokSubscription => {
+                #[cfg(not(target_family = "wasm"))]
+                self.start_grok_oauth(ctx);
+            }
+            AISettingsPageAction::DisconnectGrokSubscription => {
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.set_grok_tokens(None, ctx);
+                });
+
+                let window_id = ctx.window_id();
+                crate::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast = crate::view_components::DismissibleToast::default(
+                        "SuperGrok subscription disconnected".to_string(),
+                    );
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
                 ctx.notify();
             }
@@ -7281,6 +7416,11 @@ struct ApiKeysWidget {
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
 
+    /// "Connect"/"Disconnect" buttons for the SuperGrok (xAI) subscription
+    /// row; which one renders depends on whether OAuth tokens are stored.
+    grok_connect_button: ViewHandle<ActionButton>,
+    grok_disconnect_button: ViewHandle<ActionButton>,
+
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
 
@@ -7388,10 +7528,76 @@ impl ApiKeysWidget {
             "AIzaSy..."
         );
 
+        // Editor text colors are snapshotted at construction via
+        // `text_colors_override`, so refresh them whenever the theme changes.
+        let api_key_editors = [
+            openai_api_key_editor.clone(),
+            anthropic_api_key_editor.clone(),
+            google_api_key_editor.clone(),
+        ];
+        ctx.subscribe_to_model(&Appearance::handle(ctx), move |_, _, event, ctx| {
+            if let AppearanceEvent::ThemeChanged = event {
+                let text_colors = editor_text_colors(Appearance::as_ref(ctx));
+                for editor in &api_key_editors {
+                    let colors = text_colors.clone();
+                    editor.update(ctx, move |editor, ctx| {
+                        editor.set_text_colors(colors, ctx);
+                    });
+                }
+            }
+        });
+
+        let grok_connect_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Connect", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ConnectGrokSubscription);
+                })
+        });
+        let grok_disconnect_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Disconnect", DangerSecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::DisconnectGrokSubscription);
+                })
+        });
+        for button in [&grok_connect_button, &grok_disconnect_button] {
+            button.update(ctx, |button, ctx| {
+                button.set_disabled(!(is_any_ai_enabled && is_byo_enabled), ctx);
+            });
+        }
+
+        // The Grok subscription is BYO auth, so keep the buttons' enablement
+        // in sync with the BYO API key policy, like the editors above.
+        let grok_buttons = [grok_connect_button.clone(), grok_disconnect_button.clone()];
+        ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
+            if let UserWorkspacesEvent::TeamsChanged = event {
+                let is_any_ai_enabled = AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
+                let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled(ctx);
+                for button in &grok_buttons {
+                    button.update(ctx, |button, ctx| {
+                        button.set_disabled(!(is_any_ai_enabled && is_byo_enabled), ctx);
+                    });
+                }
+                ctx.notify();
+            }
+        });
+
+        // Re-render the SuperGrok row whenever the stored tokens change (the
+        // connect flow completes, a disconnect, or a background refresh).
+        ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, ApiKeyManagerEvent::KeysUpdated) {
+                ctx.notify();
+            }
+        });
+
         Self {
             openai_api_key_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
+
+            grok_connect_button,
+            grok_disconnect_button,
 
             can_use_warp_credits_for_fallback: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -7644,6 +7850,94 @@ impl ApiKeysWidget {
         list.finish()
     }
 
+    /// The "Connect SuperGrok subscription" row: label and description on the
+    /// left, a Connect/Disconnect button on the right, and a "Connected on
+    /// ..." status line underneath while a subscription is connected.
+    fn render_grok_subscription_row(
+        &self,
+        appearance: &Appearance,
+        is_enabled: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let grok_tokens = ApiKeyManager::as_ref(app).grok_tokens();
+
+        let label = Text::new_inline(
+            "Connect SuperGrok subscription",
+            appearance.ui_font_family(),
+            CONTENT_FONT_SIZE,
+        )
+        .with_color(styles::header_font_color(is_enabled, app).into())
+        .finish();
+
+        let button = if grok_tokens.is_some() {
+            &self.grok_disconnect_button
+        } else {
+            &self.grok_connect_button
+        };
+
+        let header_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(1., label).finish())
+            .with_child(button.as_ref(app).render(app))
+            .finish();
+
+        let description = Container::new(
+            Text::new(
+                "Connect your SuperGrok subscription to use Grok models in the Warp Agent through your xAI account.",
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(styles::description_font_color(is_enabled, app).into())
+            .soft_wrap(true)
+            .finish(),
+        )
+        .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
+        .finish();
+
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(header_row)
+            .with_child(description);
+
+        if let Some(tokens) = grok_tokens {
+            let connected_text = match tokens.connected_at.map(DateTime::<Local>::from) {
+                Some(connected_at) => format!(
+                    "Connected on {}.",
+                    connected_at.format("%m/%d/%Y at %-I:%M%P")
+                ),
+                // Tokens stored before the connection time was tracked.
+                None => "Connected.".to_string(),
+            };
+            let check = ConstrainedBox::new(
+                Icon::Check
+                    .to_warpui_icon(appearance.theme().ansi_fg_green().into())
+                    .finish(),
+            )
+            .with_width(12.)
+            .with_height(12.)
+            .finish();
+            let status_text = Text::new_inline(
+                connected_text,
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(styles::description_font_color(is_enabled, app).into())
+            .finish();
+            column.add_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(4.)
+                    .with_child(check)
+                    .with_child(status_text)
+                    .finish(),
+            );
+        }
+
+        column.finish()
+    }
+
     fn render_warp_credit_fallback_toggle(
         &self,
         view: &AISettingsPageView,
@@ -7678,7 +7972,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint"
+        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription"
     }
 
     fn render(
@@ -7779,6 +8073,19 @@ impl SettingsWidget for ApiKeysWidget {
                     app,
                 ));
             }
+        }
+
+        // Entrypoint for connecting a SuperGrok (xAI) subscription via OAuth.
+        if FeatureFlag::SuperGrok.is_enabled() {
+            column.add_child(
+                Container::new(self.render_grok_subscription_row(
+                    appearance,
+                    provider_keys_enabled,
+                    app,
+                ))
+                .with_margin_top(16.)
+                .finish(),
+            );
         }
 
         // Warp credit fallback toggle (shown when BYO or custom inference is enabled)

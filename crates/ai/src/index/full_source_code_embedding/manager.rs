@@ -1138,6 +1138,7 @@ impl CodebaseIndexManager {
             .map(|(_, path)| path)
             .ok()
     }
+
     pub fn with_indexed_codebase<T>(
         &mut self,
         path: &Path,

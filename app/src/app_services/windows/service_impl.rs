@@ -32,7 +32,6 @@ impl ipc::ServiceImpl for UriServiceImpl {
     type Service = UriService;
 
     async fn handle_request(&self, request: Vec<Url>) -> () {
-        log::info!("Uri Service received request: {request:?}");
         if let Err(send_error) = self.tx.send(request).await {
             log::error!("Error sending urls to local stream: {send_error:#}");
         }

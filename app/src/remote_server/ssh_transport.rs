@@ -17,7 +17,7 @@ use remote_server::setup::{
     parse_uname_output, remote_server_daemon_dir, PreinstallCheckResult, RemotePlatform,
 };
 use remote_server::ssh::ssh_args;
-use remote_server::transport::{Connection, Error, InstallOutcome, RemoteTransport};
+use remote_server::transport::{Connection, ControlPath, Error, InstallOutcome, RemoteTransport};
 use warpui::r#async::executor;
 
 #[path = "ssh_transport/installation.rs"]
@@ -33,26 +33,41 @@ pub(crate) mod installation;
 pub struct SshTransport {
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
+    /// Whether Warp owns the ControlMaster behind `socket_path`. `false`
+    /// when the SSH wrapper attached to a master the user already had
+    /// running, in which case Warp must not run `ssh -O exit` against it
+    /// on teardown.
+    warp_owns_control_master: bool,
 }
 
 impl fmt::Debug for SshTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SshTransport")
             .field("socket_path", &self.socket_path)
+            .field("warp_owns_control_master", &self.warp_owns_control_master)
             .finish_non_exhaustive()
     }
 }
 
 impl SshTransport {
-    pub fn new(socket_path: PathBuf, auth_context: Arc<RemoteServerAuthContext>) -> Self {
+    pub fn new(
+        socket_path: PathBuf,
+        auth_context: Arc<RemoteServerAuthContext>,
+        warp_owns_control_master: bool,
+    ) -> Self {
         Self {
             socket_path,
             auth_context,
+            warp_owns_control_master,
         }
     }
 
     pub fn socket_path(&self) -> &PathBuf {
         &self.socket_path
+    }
+
+    pub fn warp_owns_control_master(&self) -> bool {
+        self.warp_owns_control_master
     }
 
     pub fn remote_daemon_socket_path(&self) -> String {
@@ -212,6 +227,7 @@ impl RemoteTransport for SshTransport {
         executor: Arc<executor::Background>,
     ) -> Pin<Box<dyn Future<Output = Result<Connection>> + Send>> {
         let socket_path = self.socket_path.clone();
+        let warp_owns_control_master = self.warp_owns_control_master;
         let remote_proxy_command = self.remote_proxy_command();
         Box::pin(async move {
             let mut args = ssh_args(&socket_path);
@@ -251,7 +267,15 @@ impl RemoteTransport for SshTransport {
                 failure_rx,
                 host_response_rx,
                 child,
-                control_path: Some(socket_path),
+                // Tag the socket with master ownership. Teardown only runs
+                // `ssh -O exit` against Warp-managed masters; a user-owned
+                // (external) master must be left running when the Warp
+                // session exits.
+                control_path: if warp_owns_control_master {
+                    ControlPath::WarpManaged(socket_path)
+                } else {
+                    ControlPath::UserOwned(socket_path)
+                },
                 stderr_tail,
             })
         })

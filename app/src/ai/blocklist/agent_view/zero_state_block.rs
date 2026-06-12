@@ -254,6 +254,10 @@ impl AgentViewZeroStateBlock {
                 Self::recent_conversations_for_working_directory(current_working_directory, ctx)
             })
             .unwrap_or_default();
+        let should_hide = matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff)
+            || is_local_to_cloud_handoff;
+        let is_oz_updates_expanded = !origin.is_cloud_agent()
+            && *AISettings::handle(ctx).as_ref(ctx).should_expand_oz_updates;
 
         Self {
             conversation_id,
@@ -263,13 +267,11 @@ impl AgentViewZeroStateBlock {
             terminal_model,
             current_working_directory,
             cached_recent_conversations,
-            should_hide: matches!(origin, AgentViewEntryOrigin::AcceptedPassiveCodeDiff)
-                || is_local_to_cloud_handoff,
+            should_hide,
             should_show_init_callout,
             has_parent_terminal,
             state_handles,
-            is_oz_updates_expanded: !origin.is_cloud_agent()
-                && *AISettings::handle(ctx).as_ref(ctx).should_expand_oz_updates,
+            is_oz_updates_expanded,
         }
     }
 
@@ -443,7 +445,7 @@ impl View for AgentViewZeroStateBlock {
         let active_session = self.active_session(app);
         let body = render_body(
             ZeroStateBodyProps {
-                origin: self.origin,
+                origin: self.origin.clone(),
                 has_parent_terminal: self.has_parent_terminal,
                 should_show_init_callout: self.should_show_init_callout,
                 recent_conversations: &self.cached_recent_conversations,
@@ -731,7 +733,11 @@ fn render_body(props: ZeroStateBodyProps<'_>, app: &AppContext) -> Vec<Box<dyn E
                         MessageItem::text("start a new agent conversation"),
                     ],
                     |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation);
+                        ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation {
+                            origin: AgentViewEntryOrigin::Input {
+                                was_prompt_autodetected: false,
+                            },
+                        });
                     },
                     state_handles.start_new_conversation.clone(),
                 )]),

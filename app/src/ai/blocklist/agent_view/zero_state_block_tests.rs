@@ -80,7 +80,7 @@ fn cwd_for_recent_conversations_prefers_active_block_pwd() {
     let mut terminal = prebootstrap_terminal_with_startup_path("/startup/path");
     terminal.precmd(PrecmdValue {
         pwd: Some("/active/path".to_owned()),
-        session_id: Some(0),
+        session_id: Some(123),
         ..Default::default()
     });
 
@@ -98,7 +98,12 @@ fn cwd_for_recent_conversations_uses_startup_path_before_bootstrap_for_local_ses
 #[test]
 fn cwd_for_recent_conversations_does_not_use_startup_path_for_pending_ssh_bootstrap() {
     let mut terminal = prebootstrap_terminal_with_startup_path("/startup/path");
-    terminal.ssh(SSHValue::default());
+
+    terminal.ssh(SSHValue {
+        session_id: Some(123),
+        remote_session_id: Some(456),
+        ..Default::default()
+    });
     let cwd = current_working_directory_for_zero_state(&terminal);
     assert_eq!(cwd, None);
 }

@@ -198,6 +198,15 @@ notify-debouncer-full = { git = "https://github.com/warpdotdev/notify", rev = "9
 nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
+opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
+  "gzip-http",
+  "http-proto",
+  "reqwest-blocking-client",
+  "trace",
+  "zstd-http",
+] }
+opentelemetry_sdk = { version = "0.32.1", default-features = false, features = ["trace"] }
 openh264 = "0.8"
 static_assertions = "1.1.0"
 url = "2.5.4"
@@ -261,7 +270,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 serde_with = "2.0.1"
 serde_yaml = "0.8"
-session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "c2226e8d9d2c87ac0bea4b01f98e0027355e1a5d" }
+session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "b30fdd06379a3d073b398eabd106abed5b443aae" }
 similar = { version = "2.7", features = ["inline"] }
 simplelog = "0.12.2"
 smallvec = "1.6.1"
@@ -277,6 +286,12 @@ toml_edit = "0.25.5"
 tower = "0.5.2"
 tower-http = "0.6.6"
 tracing = "0.1.40"
+tracing-futures = "0.2.5"
+tracing-opentelemetry = { version = "0.33.0", default-features = false }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = [
+  "registry",
+  "std",
+] }
 arborium = { version = "2", default-features = false, features = [
   "lang-rust",
   "lang-go",
@@ -319,7 +334,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "c67de64fc4949f693a679552dc88cebc9f7d0180" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "97d1b367b955c562812e0a1315a6ec7ee6a5389e" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -532,3 +547,7 @@ tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", re
 [patch."https://github.com/warpdotdev/warp-proto-apis.git"]
 # Uncomment for local development of warp-proto-apis
 # warp_multi_agent_api = { path = "../warp-proto-apis/apis/multi_agent/v1/gen/rust" }
+
+[patch."https://github.com/warpdotdev/session-sharing-protocol.git"]
+# Uncomment for local development of session-sharing-protocol
+# session-sharing-protocol = { path = "../session-sharing-protocol" }

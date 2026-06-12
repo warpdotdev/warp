@@ -331,13 +331,18 @@ impl CLISubagentController {
         // model lock before actually cancelling the conversation.
         drop(terminal_model);
 
-        // Only cancel conversation if user manually took control (not when agent transfers control).
+        // Cancel the in-flight stream to stop the CLI subagent monitoring loop.
+        // When the user manually takes over, we use CLISubagentUserTakeover so the
+        // conversation status stays InProgress — the agent will resume once the command
+        // finishes or the user hands control back. We do NOT use ManuallyCancelled here
+        // because that would mark the conversation (and ambient task) as cancelled,
+        // which is incorrect since the conversation is still proceeding.
         if should_cancel_conversation {
             if let Some(conversation_id) = conversation_id {
                 self.controller.update(ctx, |controller, ctx| {
                     controller.cancel_conversation_progress(
                         conversation_id,
-                        CancellationReason::ManuallyCancelled,
+                        CancellationReason::CLISubagentUserTakeover,
                         ctx,
                     );
                 });

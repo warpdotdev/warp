@@ -147,11 +147,9 @@ pub enum SshLikeCommand {
     DigitalOceanDroplet,
 }
 
-/// TMUX SSH Warpification can be triggered by any command that
-/// we determine to be an interactive SSH command. This enum
-/// represents the different types of SSH commands we support
-/// for TMUX Warpification. `Ssh` means a literal `ssh` command,
-/// where all other commands are categorized as SSH-like commands.
+/// Represents the different kinds of commands we recognize as starting an interactive SSH
+/// session. `Ssh` means a literal `ssh` command, where all other commands (e.g. `gcloud
+/// compute ssh`) are categorized as SSH-like commands.
 pub enum SshWarpifyCommand {
     Ssh,
     SshLike(SshLikeCommand),
@@ -159,7 +157,7 @@ pub enum SshWarpifyCommand {
 
 impl SshWarpifyCommand {
     /// Not a literal `ssh` command, but another command that starts an interactive SSH
-    /// session that we can Warpify with TMUX.
+    /// session.
     pub fn is_ssh_like_command(&self) -> bool {
         matches!(self, SshWarpifyCommand::SshLike(_))
     }
