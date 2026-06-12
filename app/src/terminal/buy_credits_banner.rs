@@ -31,8 +31,9 @@ use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::{OutOfCreditsBannerAction, TelemetryEvent};
-use crate::settings_view::create_discount_badge;
+use crate::settings_view::{create_discount_badge, SettingsSection};
 use crate::view_components::{Dropdown, DropdownAction};
+use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 #[derive(Default)]
@@ -42,6 +43,8 @@ struct MouseStates {
     manage_billing_button: MouseStateHandle,
     auto_reload_checkbox: MouseStateHandle,
     auto_reload_info_icon: MouseStateHandle,
+    byok_button: MouseStateHandle,
+    upgrade_button: MouseStateHandle,
 }
 
 pub struct BuyCreditsBanner {
@@ -506,6 +509,128 @@ impl BuyCreditsBanner {
             .finish()
     }
 
+    /// Renders the plan-gated state for Free users whose plan includes no
+    /// Warp-provided AI (REV-1625): offers BYOK setup and upgrade instead of a
+    /// credit purchase, since Free has no purchase path at this milestone.
+    fn render_free_plan_no_ai(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+
+        let alert_icon = Container::new(
+            ConstrainedBox::new(
+                Icon::AlertCircle
+                    .to_warpui_icon(theme.foreground())
+                    .finish(),
+            )
+            .with_height(16.)
+            .with_width(16.)
+            .finish(),
+        )
+        .with_margin_right(8.)
+        .finish();
+
+        let banner_text = Flex::column()
+            .with_children([
+                appearance
+                    .ui_builder()
+                    .paragraph("Free plan doesn't include Warp AI")
+                    .with_style(UiComponentStyles {
+                        font_size: Some(14.),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+                appearance
+                    .ui_builder()
+                    .paragraph(
+                        "Add your own API key or endpoint, or upgrade to a paid plan to keep \
+                         using AI in Warp.",
+                    )
+                    .with_style(UiComponentStyles {
+                        font_color: Some(theme.sub_text_color(theme.surface_1()).into()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            ])
+            .finish();
+
+        let byok_button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Secondary,
+                self.mouse_states.byok_button.clone(),
+            )
+            .with_style(UiComponentStyles {
+                font_weight: Some(Weight::Semibold),
+                padding: Some(Coords {
+                    top: 6.,
+                    bottom: 6.,
+                    left: 8.,
+                    right: 8.,
+                }),
+                ..Default::default()
+            })
+            .with_text_label("Use your own API key".to_string())
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(Action::OpenByokSettings);
+            })
+            .finish();
+
+        let upgrade_button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Accent,
+                self.mouse_states.upgrade_button.clone(),
+            )
+            .with_style(UiComponentStyles {
+                font_weight: Some(Weight::Semibold),
+                padding: Some(Coords {
+                    top: 6.,
+                    bottom: 6.,
+                    left: 8.,
+                    right: 8.,
+                }),
+                ..Default::default()
+            })
+            .with_text_label("Upgrade".to_string())
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(Action::OpenUpgradePage);
+            })
+            .finish();
+
+        let close_button = appearance
+            .ui_builder()
+            .close_button(16., self.mouse_states.close_button.clone())
+            .build()
+            .on_click(|ctx, _, _| ctx.dispatch_typed_action(Action::Close))
+            .finish();
+
+        let content = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_children([
+                alert_icon,
+                Shrinkable::new(1., Align::new(banner_text).left().finish()).finish(),
+                Container::new(byok_button).with_margin_right(8.).finish(),
+                Container::new(upgrade_button)
+                    .with_margin_right(8.)
+                    .finish(),
+                close_button,
+            ])
+            .finish();
+
+        Container::new(content)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+            .with_background_color(theme.surface_1().into())
+            .with_horizontal_padding(16.)
+            .with_vertical_padding(12.)
+            .with_horizontal_margin(8.)
+            .with_drop_shadow(DropShadow::default())
+            .finish()
+    }
+
     fn render_out_of_credits(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         // When the auto-reload checkbox is present, we need more horizontal space before we can
         // fit everything on one row.
@@ -839,6 +964,7 @@ impl View for BuyCreditsBanner {
             BuyCreditsBannerDisplayState::MonthlyLimitReached => {
                 self.render_auto_reload_blocked(appearance, app)
             }
+            BuyCreditsBannerDisplayState::FreePlanNoAi => self.render_free_plan_no_ai(appearance),
         }
     }
 }
@@ -850,6 +976,8 @@ pub enum Action {
     PurchaseAddonCredits { team_uid: ServerId },
     ManageBilling,
     ToggleAutoReload,
+    OpenByokSettings,
+    OpenUpgradePage,
 }
 
 impl warpui::TypedActionView for BuyCreditsBanner {
@@ -904,6 +1032,34 @@ impl warpui::TypedActionView for BuyCreditsBanner {
             }
             Action::ToggleAutoReload => {
                 self.auto_reload_enabled = !self.auto_reload_enabled;
+                ctx.notify();
+            }
+            Action::OpenByokSettings => {
+                // Deferred so dismissing the banner doesn't steal focus from the
+                // settings page this opens.
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
+                    search_query: "api".to_string(),
+                    section: Some(SettingsSection::WarpAgent),
+                });
+                AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.dismiss_buy_credits_banner(ctx);
+                });
+                ctx.notify();
+            }
+            Action::OpenUpgradePage => {
+                let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
+                    UserWorkspaces::upgrade_link_for_team(team.uid)
+                } else {
+                    let user_id = AuthStateProvider::as_ref(ctx)
+                        .get()
+                        .user_id()
+                        .unwrap_or_default();
+                    UserWorkspaces::upgrade_link(user_id)
+                };
+                ctx.open_url(&upgrade_url);
+                AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.dismiss_buy_credits_banner(ctx);
+                });
                 ctx.notify();
             }
         }

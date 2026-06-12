@@ -2,13 +2,16 @@ use std::sync::Arc;
 
 use ai::api_keys::ApiKeyManager;
 use chrono::Duration;
+use settings::{PrivatePreferences, PublicPreferences};
 use warp_core::features::FeatureFlag;
 use warp_graphql::billing::{AddonCreditsOption, OveragesPricing, PricingInfo};
 use warpui::{App, ModelHandle};
+use warpui_extras::user_preferences;
 
 use super::*;
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
+use crate::server::experiments::{ServerExperiment, ServerExperiments};
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::server_api::ServerApiProvider;
@@ -17,6 +20,7 @@ use crate::workspaces::workspace::{
     AiOverages, ByoApiKeyPolicy, CustomerType, EnterpriseCreditsAutoReloadPolicy,
     EnterprisePayAsYouGoPolicy, PurchaseAddOnCreditsPolicy, Workspace, WorkspaceUid,
 };
+use crate::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 
 fn create_test_workspace() -> (WorkspaceUid, Workspace) {
     let server_id: crate::server::ids::ServerId = 1_i64.into();
@@ -85,6 +89,23 @@ fn enable_auto_reload(workspace: &mut Workspace) {
         .settings
         .addon_credits_settings
         .selected_auto_reload_credit_denomination = Some(1000);
+}
+
+fn register_in_memory_preferences(app: &mut App) {
+    app.add_singleton_model(|_| {
+        PublicPreferences::new(Box::<user_preferences::in_memory::InMemoryPreferences>::default())
+    });
+    app.add_singleton_model(|_| {
+        PrivatePreferences::new(Box::<user_preferences::in_memory::InMemoryPreferences>::default())
+    });
+}
+
+/// Registers `ServerExperiments` (and its dependencies) seeded with the given arms.
+fn register_server_experiments(app: &mut App, experiments: Vec<ServerExperiment>) {
+    register_in_memory_preferences(app);
+    let global_resources = GlobalResourceHandles::mock(app);
+    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
+    app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(experiments, ctx));
 }
 
 #[test]
@@ -738,6 +759,155 @@ fn test_byo_api_key_disabled_for_anonymous_firebase_user() {
                 !model.has_any_ai_remaining(ctx),
                 "expected has_any_ai_remaining to be false for anonymous Firebase user even with BYO key and SoloUserByok enabled",
             );
+        });
+    });
+}
+
+#[test]
+fn test_free_plan_ai_gated_when_enrolled_zero_limit_free_user() {
+    App::test((), |mut app| async move {
+        register_server_experiments(&mut app, vec![ServerExperiment::FreeAiRemovalExperiment]);
+        // The default test workspace has CustomerType::Free.
+        let (_uid, workspace) = create_test_workspace();
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(0, 0);
+
+            assert!(
+                model.is_free_plan_ai_gated(ctx),
+                "expected the plan-gated state for an enrolled zero-limit Free user",
+            );
+            assert_eq!(
+                model.compute_buy_addon_credits_banner_display_state(ctx),
+                BuyCreditsBannerDisplayState::FreePlanNoAi,
+            );
+        });
+    });
+}
+
+#[test]
+fn test_free_plan_ai_gated_banner_hidden_while_bonus_grants_remain() {
+    App::test((), |mut app| async move {
+        register_server_experiments(&mut app, vec![ServerExperiment::FreeAiRemovalExperiment]);
+        let (_uid, workspace) = create_test_workspace();
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(0, 0);
+            model.bonus_grants = vec![BonusGrant {
+                created_at: Utc::now(),
+                cost_cents: 0,
+                expiration: Some(Utc::now() + chrono::Duration::days(7)),
+                grant_type: BonusGrantType::Any,
+                reason: "referral reward".to_string(),
+                user_facing_message: None,
+                request_credits_granted: 100,
+                request_credits_remaining: 100,
+                scope: BonusGrantScope::User,
+            }];
+
+            // The base entitlement is still gated, but grants keep AI usable, so the
+            // banner stays hidden until they are exhausted.
+            assert!(model.is_free_plan_ai_gated(ctx));
+            assert!(model.has_any_ai_remaining(ctx));
+            assert_eq!(
+                model.compute_buy_addon_credits_banner_display_state(ctx),
+                BuyCreditsBannerDisplayState::Hidden,
+            );
+        });
+    });
+}
+
+#[test]
+fn test_free_plan_not_gated_without_experiment_arm() {
+    App::test((), |mut app| async move {
+        // No FREE_AI_REMOVAL arm: a zero-limit Free user falls back to the legacy
+        // out-of-credits rendering.
+        register_server_experiments(&mut app, vec![]);
+        let (_uid, workspace) = create_test_workspace();
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(0, 0);
+
+            assert!(
+                !model.is_free_plan_ai_gated(ctx),
+                "a zero-limit Free user without the arm must fall back to legacy rendering",
+            );
+            assert_eq!(
+                model.compute_buy_addon_credits_banner_display_state(ctx),
+                BuyCreditsBannerDisplayState::Hidden,
+            );
+        });
+    });
+}
+
+#[test]
+fn test_free_plan_not_gated_for_paid_plan() {
+    App::test((), |mut app| async move {
+        register_server_experiments(&mut app, vec![ServerExperiment::FreeAiRemovalExperiment]);
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace.billing_metadata.customer_type = CustomerType::Build;
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(0, 0);
+
+            assert!(
+                !model.is_free_plan_ai_gated(ctx),
+                "paid plans must never enter the plan-gated state",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_free_plan_not_gated_with_base_limit_remaining() {
+    App::test((), |mut app| async move {
+        register_server_experiments(&mut app, vec![ServerExperiment::FreeAiRemovalExperiment]);
+        let (_uid, workspace) = create_test_workspace();
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(60, 10);
+
+            assert!(
+                !model.is_free_plan_ai_gated(ctx),
+                "a non-zero base allotment means the plan still includes Warp AI",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_free_plan_no_ai_denial_activates_and_refresh_clears_state() {
+    App::test((), |mut app| async move {
+        register_in_memory_preferences(&mut app);
+        app.add_singleton_model(crate::settings::AISettings::new_with_defaults);
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(0, 0);
+            model.note_free_plan_no_ai_denial(ctx);
+
+            // The denial reason activates the state directly, without consulting the
+            // experiments payload.
+            assert!(model.is_free_plan_ai_gated(ctx));
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            // A refresh reporting a non-zero base allotment clears the denial state
+            // (plan change or experiment rollback).
+            model.update_request_limit_info(RequestLimitInfo::new_for_test(150, 0), ctx);
+
+            assert!(!model.is_free_plan_ai_gated(ctx));
         });
     });
 }

@@ -90,6 +90,13 @@ impl TerminalView {
                 variant: CloudAgentCapacityModalVariant::OutOfCredits,
             });
         } else {
+            // REV-1625: arm the free-tier limit modal for Free users whose plan
+            // includes no Warp AI, so the cloud launch failure surfaces the
+            // BYOK/upgrade path (P6). The usage refresh below re-confirms the state
+            // and triggers the modal's MaybeOpen flow.
+            if AIRequestUsageModel::as_ref(ctx).is_free_plan_ai_gated(ctx) {
+                ctx.emit(crate::terminal::view::Event::FreeTierLimitCheckTriggered);
+            }
             AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
                 model.refresh_request_usage_async(ctx);
             });

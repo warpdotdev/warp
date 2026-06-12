@@ -10,8 +10,8 @@ use warpui::fonts::{Properties, Style};
 use warpui::{Action, AppContext, Element, SingletonEntity as _};
 
 use crate::ai::llms::{
-    is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
-    LLMInfo, LLMPreferences,
+    free_plan_gated_disable_reason, is_using_api_key_for_provider,
+    should_show_bedrock_icon_for_model, DisableReason, LLMId, LLMInfo, LLMPreferences,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
 
@@ -154,11 +154,18 @@ fn make_item_fields<A: Action + Clone>(
         MenuItemFields::new(label).with_icon(leading_icon)
     };
 
+    // REV-1625: Warp-provided models are locked behind upgrade when the Free plan
+    // includes no Warp AI.
+    let disable_reason = llm
+        .disable_reason
+        .clone()
+        .or_else(|| free_plan_gated_disable_reason(llm, app));
+
     item = item
         .with_on_select_action(action(llm))
-        .with_disabled(llm.disable_reason.is_some());
+        .with_disabled(disable_reason.is_some());
 
-    if let Some(reason) = &llm.disable_reason {
+    if let Some(reason) = &disable_reason {
         item = item
             .with_tooltip(reason.tooltip_text())
             .with_tooltip_position(MenuTooltipPosition::Above);

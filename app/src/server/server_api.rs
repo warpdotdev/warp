@@ -76,6 +76,11 @@ const WARP_ERROR_CODE_HEADER: &str = "X-Warp-Error-Code";
 /// So we use this to distinguish between the two cases.
 const WARP_ERROR_CODE_OUT_OF_CREDITS: &str = "OUT_OF_CREDITS";
 
+/// Structured denial reason attached to out-of-credits responses when the user's plan
+/// includes no Warp-provided AI (the Free plan after the FREE_AI_REMOVAL rollout).
+/// Old clients ignore the field and fall back to the generic out-of-credits rendering.
+pub const FREE_PLAN_NO_AI_DENIAL_REASON: &str = "FREE_PLAN_NO_AI";
+
 /// Error code indicating the user has reached their cloud agent concurrency limit.
 const WARP_ERROR_CODE_AT_CAPACITY: &str = "AT_CLOUD_AGENT_CAPACITY";
 
@@ -152,6 +157,8 @@ pub enum DeserializationError {
 struct OutOfCreditsResponse {
     #[serde(default, rename = "userDisplayMessage")]
     user_display_message: Option<String>,
+    #[serde(default, alias = "denialReason")]
+    denial_reason: Option<String>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -159,6 +166,9 @@ pub enum AIApiError {
     #[error("Request failed due to lack of AI quota.")]
     QuotaLimit {
         user_display_message: Option<String>,
+        /// Structured reason for the denial (e.g. [`FREE_PLAN_NO_AI_DENIAL_REASON`]),
+        /// when the server provides one.
+        denial_reason: Option<String>,
     },
 
     #[error("Warp is currently overloaded. Please try again later.")]
@@ -263,11 +273,15 @@ impl AIApiError {
             .and_then(|v| v.to_str().ok())
             == Some(WARP_ERROR_CODE_OUT_OF_CREDITS)
         {
-            let user_display_message = body
+            let response = body
                 .and_then(|body| serde_json::from_str::<OutOfCreditsResponse>(&body).ok())
-                .and_then(|r| r.user_display_message);
+                .unwrap_or(OutOfCreditsResponse {
+                    user_display_message: None,
+                    denial_reason: None,
+                });
             AIApiError::QuotaLimit {
-                user_display_message,
+                user_display_message: response.user_display_message,
+                denial_reason: response.denial_reason,
             }
         } else {
             AIApiError::ServerOverloaded
@@ -884,11 +898,15 @@ impl ServerApi {
             }
         }
         if status == StatusCode::TOO_MANY_REQUESTS && is_out_of_credits {
-            let user_display_message = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
+            let response = serde_json::from_str::<OutOfCreditsResponse>(&response_text)
                 .ok()
-                .and_then(|r| r.user_display_message);
+                .unwrap_or(OutOfCreditsResponse {
+                    user_display_message: None,
+                    denial_reason: None,
+                });
             return AIApiError::QuotaLimit {
-                user_display_message,
+                user_display_message: response.user_display_message,
+                denial_reason: response.denial_reason,
             }
             .into();
         }

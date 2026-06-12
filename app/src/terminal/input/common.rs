@@ -470,8 +470,10 @@ fn render_command_token_description(
 
 /// Conditionally adds the "buy credits" banner overlay.
 /// The overlay only is shown if all of the following is true:
-/// - The user is on a team that can purchase addon credits
-/// - The user is out of credits (or at their auto-reload limit)
+/// - The user is on a team that can purchase addon credits (not required for the
+///   plan-gated free state, which offers BYOK/upgrade instead of purchase)
+/// - The user is out of credits (or at their auto-reload limit), or their plan
+///   includes no Warp-provided AI
 /// - The input is focused
 /// - There is not a BYO API key for the current model
 pub(super) fn maybe_add_buy_credits_banner(
@@ -487,26 +489,26 @@ pub(super) fn maybe_add_buy_credits_banner(
         .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
         .is_some_and(|policy| policy.enabled);
 
-    // Show buy credits banner if billing policy allows purchasing, input is focused,
-    // and either:
+    // Show buy credits banner if the input is focused and either:
     // 1. OutOfCredits: for users that are not auto-reload enabled
     // 2. MonthlyLimitReached: Auto-reload enabled and is blocked by monthly limit
+    // 3. FreePlanNoAi: the Free plan includes no Warp-provided AI (REV-1625); not
+    //    gated on the purchase policy since the banner offers BYOK/upgrade instead
     let ai_request_usage = AIRequestUsageModel::as_ref(app);
-    let should_show_banner = !matches!(
-        ai_request_usage.compute_buy_addon_credits_banner_display_state(app),
-        BuyCreditsBannerDisplayState::Hidden
-    );
+    let should_show_banner =
+        match ai_request_usage.compute_buy_addon_credits_banner_display_state(app) {
+            BuyCreditsBannerDisplayState::Hidden => false,
+            BuyCreditsBannerDisplayState::FreePlanNoAi => true,
+            BuyCreditsBannerDisplayState::OutOfCredits
+            | BuyCreditsBannerDisplayState::MonthlyLimitReached => can_purchase_addon_credits,
+        };
     let is_using_api_key_for_current_model = is_using_api_key_for_provider(
         &LLMPreferences::as_ref(app)
             .get_active_base_model(app, Some(terminal_view_id))
             .provider,
         app,
     );
-    if can_purchase_addon_credits
-        && is_focused
-        && should_show_banner
-        && !is_using_api_key_for_current_model
-    {
+    if is_focused && should_show_banner && !is_using_api_key_for_current_model {
         add_buy_credits_banner_overlay(stack, buy_credits_banner, is_input_at_top);
     }
 }

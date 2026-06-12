@@ -30,7 +30,10 @@ const ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT: &str = "At Limit -";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT: &str = "Restricted due to payment issue";
 const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "Out of credits";
 
+const FREE_PLAN_NO_AI_PRIMARY_TEXT: &str = "Free plan doesn't include Warp AI";
+
 const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI credits";
+const FREE_PLAN_NO_AI_BYOK_ACTION_TEXT: &str = "Set up your own API key";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT: &str = "Manage billing";
 const OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT: &str = "Enable premium overages";
 const MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT: &str = "Increase monthly spend limit";
@@ -77,6 +80,10 @@ pub enum PromptAlertState {
     OveragesToggleableButNotEnabled,
     /// Overages are on, but the spend limit is too low.
     MonthlyOveragesSpendLimitReached,
+    /// The Free plan includes no Warp-provided AI (REV-1625). Distinct from
+    /// [`Self::RequestLimitReached`]: the user isn't "out" of anything; their plan
+    /// simply doesn't include it.
+    FreePlanNoAi,
     /// The user has reached the request limit.
     RequestLimitReached,
     /// No alert should be displayed.
@@ -179,6 +186,13 @@ impl PromptAlertView {
             return PromptAlertState::NoAlert;
         }
 
+        // REV-1625: the Free plan includes no Warp-provided AI. Without the experiment
+        // arm (or for any other zero-limit state), fall through to the legacy
+        // out-of-credits rendering below.
+        if request_usage_model.is_free_plan_ai_gated(app) {
+            return PromptAlertState::FreePlanNoAi;
+        }
+
         // Check if overages are available.
         if let Some(workspace) = workspace {
             let are_overages_toggleable = workspace.are_overages_toggleable();
@@ -244,6 +258,11 @@ impl PromptAlertView {
             PromptAlertState::DelinquentDueToPaymentIssue => {
                 text_fragments.push(FormattedTextFragment::plain_text(
                     DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT,
+                ));
+            }
+            PromptAlertState::FreePlanNoAi => {
+                text_fragments.push(FormattedTextFragment::plain_text(
+                    FREE_PLAN_NO_AI_PRIMARY_TEXT,
                 ));
             }
             PromptAlertState::OveragesToggleableButNotEnabled
@@ -346,6 +365,34 @@ impl PromptAlertView {
                     ));
                 }
             }
+            PromptAlertState::FreePlanNoAi => {
+                text_fragments.push(FormattedTextFragment::plain_text("  "));
+                let byok_available = UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app);
+                if byok_available {
+                    text_fragments.push(FormattedTextFragment::hyperlink_action(
+                        FREE_PLAN_NO_AI_BYOK_ACTION_TEXT,
+                        WorkspaceAction::ShowSettingsPageWithSearch {
+                            search_query: "api".to_string(),
+                            section: Some(SettingsSection::WarpAgent),
+                        },
+                    ));
+                    text_fragments.push(FormattedTextFragment::plain_text(" or "));
+                }
+                let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
+                    UserWorkspaces::upgrade_link_for_team(team.uid)
+                } else {
+                    let user_id = auth_state.user_id().unwrap_or_default();
+                    UserWorkspaces::upgrade_link(user_id)
+                };
+                text_fragments.push(FormattedTextFragment::hyperlink(
+                    if byok_available {
+                        "upgrade"
+                    } else {
+                        UPGRADE_TEXT
+                    },
+                    upgrade_url,
+                ));
+            }
             PromptAlertState::RequestLimitReached => {
                 text_fragments.push(FormattedTextFragment::plain_text("  "));
                 if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
@@ -407,6 +454,7 @@ fn does_alert_block_ai_requests(state: &PromptAlertState) -> bool {
         | PromptAlertState::DelinquentDueToPaymentIssue
         | PromptAlertState::OveragesToggleableButNotEnabled
         | PromptAlertState::MonthlyOveragesSpendLimitReached
+        | PromptAlertState::FreePlanNoAi
         | PromptAlertState::RequestLimitReached => true,
     }
 }

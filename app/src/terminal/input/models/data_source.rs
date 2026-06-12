@@ -25,8 +25,9 @@ use super::model_spec_scores::{
 };
 use crate::ai::execution_profiles::model_menu_items::is_auto;
 use crate::ai::llms::{
-    is_using_api_key_for_provider, should_show_bedrock_icon_for_model, DisableReason, LLMId,
-    LLMInfo, LLMPreferences, LLMProvider, LLMSpec,
+    free_plan_gated_disable_reason, is_using_api_key_for_provider,
+    should_show_bedrock_icon_for_model, DisableReason, LLMId, LLMInfo, LLMPreferences, LLMProvider,
+    LLMSpec,
 };
 use crate::auth::AuthStateProvider;
 use crate::features::FeatureFlag;
@@ -264,7 +265,11 @@ impl ModelSearchItem {
             None
         } else {
             llm.disable_reason.clone()
-        };
+        }
+        // REV-1625: Warp-provided models are locked behind upgrade when the Free plan
+        // includes no Warp AI (custom endpoints and BYOK providers are excluded inside
+        // the helper).
+        .or_else(|| free_plan_gated_disable_reason(llm, app));
         let is_custom_endpoint = LLMPreferences::as_ref(app)
             .custom_llm_info_for_id(&llm.id)
             .is_some();

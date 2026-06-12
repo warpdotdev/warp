@@ -643,6 +643,11 @@ pub enum RenderableAIError {
     QuotaLimit {
         #[serde(default)]
         user_display_message: Option<String>,
+        /// Structured reason for the denial (e.g.
+        /// [`crate::server::server_api::FREE_PLAN_NO_AI_DENIAL_REASON`]), when the
+        /// server provides one.
+        #[serde(default)]
+        denial_reason: Option<String>,
     },
     ServerOverloaded,
     InternalWarpError,
@@ -664,6 +669,18 @@ pub enum RenderableAIError {
 }
 
 impl RenderableAIError {
+    /// Returns `true` when this is a quota denial because the user's plan includes no
+    /// Warp-provided AI (REV-1625).
+    pub fn is_free_plan_no_ai_denial(&self) -> bool {
+        matches!(
+            self,
+            Self::QuotaLimit {
+                denial_reason: Some(reason),
+                ..
+            } if reason == crate::server::server_api::FREE_PLAN_NO_AI_DENIAL_REASON
+        )
+    }
+
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
     pub fn transient_network_error(will_attempt_resume: bool, waiting_for_network: bool) -> Self {
@@ -705,8 +722,10 @@ impl From<&AIApiError> for RenderableAIError {
         match value {
             AIApiError::QuotaLimit {
                 user_display_message,
+                denial_reason,
             } => Self::QuotaLimit {
                 user_display_message: user_display_message.clone(),
+                denial_reason: denial_reason.clone(),
             },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
             AIApiError::Transport(error)
@@ -729,6 +748,7 @@ impl Display for RenderableAIError {
         match self {
             Self::QuotaLimit {
                 user_display_message,
+                ..
             } => {
                 if let Some(message) = user_display_message {
                     write!(f, "{message}")

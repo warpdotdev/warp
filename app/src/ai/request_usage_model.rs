@@ -13,10 +13,11 @@ use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::auth::AuthStateProvider;
 use crate::pricing::PricingInfoModel;
+use crate::server::experiments::is_free_ai_removal_experiment_enabled;
 use crate::server::server_api::ai::AIClient;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::WorkspaceUid;
+use crate::workspaces::workspace::{CustomerType, WorkspaceUid};
 use crate::BlocklistAIHistoryModel;
 
 /// Threshold of ambient-only credits at which we surface upgrade/CTA UI.
@@ -34,6 +35,9 @@ pub enum BuyCreditsBannerDisplayState {
     Hidden,
     OutOfCredits,
     MonthlyLimitReached,
+    /// The Free plan includes no Warp-provided AI (REV-1625): offer BYOK/upgrade
+    /// instead of credit purchase.
+    FreePlanNoAi,
 }
 
 #[derive(Clone, Debug)]
@@ -177,6 +181,11 @@ pub struct AIRequestUsageModel {
 
     /// Whether the buy credits banner has been dismissed by the user.
     buy_addon_credits_banner_dismissed: bool,
+
+    /// Whether the server denied a request with the FREE_PLAN_NO_AI reason (REV-1625).
+    /// Activates the plan-gated state directly, independent of the cached limits.
+    /// Cleared when a usage refresh reports a non-zero base allotment.
+    saw_free_plan_no_ai_denial: bool,
 }
 
 impl Entity for AIRequestUsageModel {
@@ -205,6 +214,7 @@ impl AIRequestUsageModel {
             last_update_time: None,
             bonus_grants: vec![],
             buy_addon_credits_banner_dismissed: false,
+            saw_free_plan_no_ai_denial: false,
         }
     }
 
@@ -216,6 +226,7 @@ impl AIRequestUsageModel {
             request_limit_info: RequestLimitInfo::default(),
             bonus_grants: vec![],
             buy_addon_credits_banner_dismissed: false,
+            saw_free_plan_no_ai_denial: false,
         }
     }
 
@@ -251,6 +262,11 @@ impl AIRequestUsageModel {
     ) {
         self.last_update_time = Some(Instant::now());
         self.request_limit_info = request_limit_info;
+        // A non-zero base allotment means the FREE_PLAN_NO_AI denial no longer applies
+        // (plan change or experiment rollback).
+        if request_limit_info.limit > 0 || request_limit_info.is_unlimited {
+            self.saw_free_plan_no_ai_denial = false;
+        }
         cache_request_limit_info(request_limit_info, ctx);
 
         AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
@@ -369,6 +385,43 @@ impl AIRequestUsageModel {
     /// [`Self::has_any_ai_remaining`] instead.
     pub fn has_requests_remaining(&self) -> bool {
         self.requests_remaining() > 0
+    }
+
+    /// Returns `true` when the Free plan's Warp-provided AI has been removed for this
+    /// user (REV-1625): the base allotment is zero, the user is on the Free plan, and
+    /// they're enrolled in the FREE_AI_REMOVAL experiment arm. A server denial with the
+    /// FREE_PLAN_NO_AI reason also activates the state directly. When the signals
+    /// transiently disagree (experiments payload vs. limits refresh skew), this returns
+    /// `false` and surfaces fall back to the legacy out-of-credits rendering.
+    ///
+    /// Bonus grants and BYOK are intentionally not consulted here: this describes the
+    /// plan's base entitlement. Combine with [`Self::has_any_ai_remaining`] to decide
+    /// whether a gated surface should actually render.
+    pub fn is_free_plan_ai_gated(&self, ctx: &AppContext) -> bool {
+        if self.saw_free_plan_no_ai_denial {
+            return true;
+        }
+        // The cheap local checks run first so the experiment lookup only happens for
+        // zero-limit users.
+        if self.request_limit_info.limit > 0 || self.request_limit_info.is_unlimited {
+            return false;
+        }
+        let is_free_plan = UserWorkspaces::as_ref(ctx)
+            .current_workspace()
+            // Solo users without a workspace are on the Free plan.
+            .is_none_or(|workspace| workspace.billing_metadata.customer_type == CustomerType::Free);
+        is_free_plan && is_free_ai_removal_experiment_enabled(ctx)
+    }
+
+    /// Marks that the server denied a request because the plan includes no
+    /// Warp-provided AI (REV-1625).
+    pub fn note_free_plan_no_ai_denial(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.saw_free_plan_no_ai_denial {
+            return;
+        }
+        self.saw_free_plan_no_ai_denial = true;
+        ctx.emit(AIRequestUsageModelEvent::RequestUsageUpdated);
+        ctx.notify();
     }
 
     /// Returns `true` if the user meets one of the following conditions:
@@ -574,6 +627,19 @@ impl AIRequestUsageModel {
                     current_workspace.is_some_and(|workspace| workspace.uid == uid)
                 }
             });
+
+        // REV-1625: when the Free plan includes no Warp-provided AI, the banner offers
+        // BYOK/upgrade instead of credit purchase (which Free can't do at this milestone).
+        // Remaining grant balances keep working, so the banner stays hidden until they
+        // are exhausted.
+        if self.is_free_plan_ai_gated(ctx) {
+            return if has_non_ambient_bonus_credits {
+                BuyCreditsBannerDisplayState::Hidden
+            } else {
+                BuyCreditsBannerDisplayState::FreePlanNoAi
+            };
+        }
+
         if !policy_allows_purchasing
             || self.has_requests_remaining()
             || has_non_ambient_bonus_credits

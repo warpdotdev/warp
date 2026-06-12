@@ -23,8 +23,10 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::AuthStateProvider;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
+use crate::settings_view::SettingsSection;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::TelemetryEvent;
 
@@ -47,6 +49,7 @@ pub fn init(app: &mut AppContext) {
 struct StateHandles {
     close_button: MouseStateHandle,
     upgrade_button: MouseStateHandle,
+    byok_button: MouseStateHandle,
 }
 
 pub struct FreeTierLimitHitModal {
@@ -137,6 +140,21 @@ impl FreeTierLimitHitModal {
         let appearance = Appearance::handle(app).as_ref(app);
         let theme = appearance.theme();
 
+        // REV-1625: when the Free plan includes no Warp-provided AI, the user isn't
+        // "out" of anything — swap the headline and offer BYOK alongside upgrading.
+        let is_plan_gated = AIRequestUsageModel::as_ref(app).is_free_plan_ai_gated(app);
+        let (title_text, subtitle_text) = if is_plan_gated {
+            (
+                "Free plan doesn't include Warp AI",
+                "Add your own API key or endpoint, or upgrade your plan to keep using AI in Warp.",
+            )
+        } else {
+            (
+                "You’re out of credits",
+                "To continue using AI, please upgrade your plan.",
+            )
+        };
+
         Container::new(
             Flex::column()
                 .with_main_axis_size(MainAxisSize::Max)
@@ -148,7 +166,7 @@ impl FreeTierLimitHitModal {
                         .with_child(
                             Container::new(
                                 FormattedTextElement::from_str(
-                                    "You’re out of credits",
+                                    title_text,
                                     appearance.ui_font_family(),
                                     24.,
                                 )
@@ -165,7 +183,7 @@ impl FreeTierLimitHitModal {
                         .with_child(
                             Container::new(
                                 FormattedTextElement::from_str(
-                                    "To continue using AI, please upgrade your plan.",
+                                    subtitle_text,
                                     appearance.ui_font_family(),
                                     14.,
                                 )
@@ -314,31 +332,59 @@ impl FreeTierLimitHitModal {
                         )
                         .finish(),
                 )
-                .with_child(
-                    Align::new(
-                        appearance
-                            .ui_builder()
-                            .button(
-                                ButtonVariant::Accent,
-                                self.state_handles.upgrade_button.clone(),
-                            )
-                            .with_style(UiComponentStyles {
-                                font_size: Some(14.),
-                                height: Some(32.),
-                                width: Some(296.),
-                                ..Default::default()
-                            })
-                            .with_centered_text_label("Upgrade plan".to_string())
-                            .build()
-                            .with_cursor(Cursor::PointingHand)
-                            .on_click(move |ctx, _, _| {
-                                ctx.dispatch_typed_action(FreeTierLimitHitModalAction::OpenUpgrade)
-                            })
-                            .finish(),
-                    )
-                    .bottom_left()
-                    .finish(),
-                )
+                .with_child({
+                    let upgrade_button = appearance
+                        .ui_builder()
+                        .button(
+                            ButtonVariant::Accent,
+                            self.state_handles.upgrade_button.clone(),
+                        )
+                        .with_style(UiComponentStyles {
+                            font_size: Some(14.),
+                            height: Some(32.),
+                            width: Some(296.),
+                            ..Default::default()
+                        })
+                        .with_centered_text_label("Upgrade plan".to_string())
+                        .build()
+                        .with_cursor(Cursor::PointingHand)
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(FreeTierLimitHitModalAction::OpenUpgrade)
+                        })
+                        .finish();
+
+                    let mut buttons = Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_spacing(8.)
+                        .with_child(upgrade_button);
+                    if is_plan_gated {
+                        buttons.add_child(
+                            appearance
+                                .ui_builder()
+                                .button(
+                                    ButtonVariant::Secondary,
+                                    self.state_handles.byok_button.clone(),
+                                )
+                                .with_style(UiComponentStyles {
+                                    font_size: Some(14.),
+                                    height: Some(32.),
+                                    width: Some(296.),
+                                    ..Default::default()
+                                })
+                                .with_centered_text_label("Use your own API key".to_string())
+                                .build()
+                                .with_cursor(Cursor::PointingHand)
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(
+                                        FreeTierLimitHitModalAction::OpenByokSettings,
+                                    )
+                                })
+                                .finish(),
+                        );
+                    }
+
+                    Align::new(buttons.finish()).bottom_left().finish()
+                })
                 .finish(),
         )
         .with_background_color(blended_colors::neutral_1(theme))
@@ -455,6 +501,15 @@ impl TypedActionView for FreeTierLimitHitModal {
             FreeTierLimitHitModalAction::OpenUrl(url) => {
                 ctx.open_url(url);
             }
+            FreeTierLimitHitModalAction::OpenByokSettings => {
+                // Deferred so the close-driven refocus doesn't steal focus from the
+                // settings page this opens.
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
+                    search_query: "api".to_string(),
+                    section: Some(SettingsSection::WarpAgent),
+                });
+                ctx.emit(FreeTierLimitHitModalEvent::Close);
+            }
         }
     }
 }
@@ -470,4 +525,5 @@ pub enum FreeTierLimitHitModalAction {
     Close,
     OpenUpgrade,
     OpenUrl(String),
+    OpenByokSettings,
 }

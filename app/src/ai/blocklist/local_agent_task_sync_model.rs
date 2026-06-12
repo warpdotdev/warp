@@ -365,6 +365,7 @@ pub(crate) fn classify_renderable_error(
     match error {
         RenderableAIError::QuotaLimit {
             user_display_message,
+            ..
         } => (
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(

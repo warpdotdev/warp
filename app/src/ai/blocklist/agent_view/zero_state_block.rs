@@ -12,7 +12,8 @@ use warp_core::report_if_error;
 use warp_core::ui::Icon;
 use warpui::elements::{
     Clipped, Container, CornerRadius, CrossAxisAlignment, Flex, FormattedTextElement,
-    HighlightedHyperlink, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
+    HighlightedHyperlink, HyperlinkLens, MainAxisSize, MouseStateHandle, ParentElement, Radius,
+    Shrinkable, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::Keystroke;
@@ -32,9 +33,12 @@ use crate::ai::blocklist::agent_view::{
 };
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::conversation_navigation::ConversationNavigationData;
+use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
 use crate::changelog_model::{self, ChangelogModel};
 use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings_view::SettingsSection;
 use crate::terminal::event::BlockType;
 use crate::terminal::input::message_bar::common::render_standard_message;
 use crate::terminal::input::message_bar::{Message, MessageItem};
@@ -45,6 +49,8 @@ use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentVi
 use crate::terminal::view::TerminalAction;
 use crate::terminal::{self, prompt, TerminalModel};
 use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
 const OZ_UPDATES_SECTION_HEADER: &str = "What's new in Oz";
@@ -65,6 +71,7 @@ struct StateHandles {
     changelog_link: MouseStateHandle,
     recent_conversations: [MouseStateHandle; MAX_RECENT_CONVERSATION_COUNT],
     update_hyperlinks: Vec<HighlightedHyperlink>,
+    free_plan_gated_hyperlink: HighlightedHyperlink,
 }
 
 /// Zero state view shown when agent view is active but the conversation has no exchanges yet.
@@ -233,6 +240,12 @@ impl AgentViewZeroStateBlock {
             if should_rerender_for_oz_updates_visibility {
                 ctx.notify();
             }
+        });
+
+        // Re-render when usage data changes so the plan-gated callout (REV-1625)
+        // appears/disappears with the user's entitlement.
+        ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
         });
 
         let mut state_handles = StateHandles::default();
@@ -424,6 +437,19 @@ impl View for AgentViewZeroStateBlock {
         let mut content = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_children(render_title_and_description(header_props, app));
+
+        if !self.origin.is_cloud_agent() {
+            let request_usage = AIRequestUsageModel::as_ref(app);
+            if request_usage.is_free_plan_ai_gated(app) && !request_usage.has_any_ai_remaining(app)
+            {
+                content.add_child(
+                    Container::new(render_free_plan_gated_callout(&self.state_handles, app))
+                        .with_margin_top(8.)
+                        .with_margin_bottom(8.)
+                        .finish(),
+                );
+            }
+        }
 
         if !self.origin.is_cloud_agent() {
             if let Some(oz_updates_section) = render_oz_updates(
@@ -979,6 +1005,73 @@ fn render_recent_conversations_section(
             .with_child(conversations.finish())
             .finish(),
     )
+}
+
+/// Renders the plan-gated callout for Free users whose plan includes no
+/// Warp-provided AI (REV-1625): the user isn't out of credits — their plan simply
+/// doesn't include Warp AI — so this offers BYOK setup and upgrade instead.
+fn render_free_plan_gated_callout(
+    state_handles: &StateHandles,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+
+    let upgrade_url = if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
+        UserWorkspaces::upgrade_link_for_team(team.uid)
+    } else {
+        let user_id = AuthStateProvider::as_ref(app)
+            .get()
+            .user_id()
+            .unwrap_or_default();
+        UserWorkspaces::upgrade_link(user_id)
+    };
+
+    let fragments = vec![
+        FormattedTextFragment::plain_text("The Free plan doesn't include Warp-provided AI. "),
+        FormattedTextFragment::hyperlink_action(
+            "Set up your own API key",
+            WorkspaceAction::ShowSettingsPageWithSearch {
+                search_query: "api".to_string(),
+                section: Some(SettingsSection::WarpAgent),
+            },
+        ),
+        FormattedTextFragment::plain_text(" or "),
+        FormattedTextFragment::hyperlink("upgrade", upgrade_url),
+        FormattedTextFragment::plain_text(" to use AI in Warp."),
+    ];
+
+    let text = FormattedTextElement::new(
+        FormattedText::new([FormattedTextLine::Line(fragments)]),
+        appearance.monospace_font_size(),
+        appearance.ui_font_family(),
+        appearance.ui_font_family(),
+        theme
+            .main_text_color(agent_view_bg_color(app).into())
+            .into_solid(),
+        state_handles.free_plan_gated_hyperlink.clone(),
+    )
+    .with_hyperlink_font_color(theme.accent().into_solid())
+    .register_default_click_handlers_with_action_support(|hyperlink_lens, event, ctx| {
+        match hyperlink_lens {
+            HyperlinkLens::Url(url) => {
+                ctx.open_url(url);
+            }
+            HyperlinkLens::Action(action_ref) => {
+                if let Some(action) = action_ref.as_any().downcast_ref::<WorkspaceAction>() {
+                    event.dispatch_typed_action(action.clone());
+                }
+            }
+        }
+    })
+    .finish();
+
+    Container::new(text)
+        .with_vertical_padding(8.)
+        .with_horizontal_padding(12.)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .with_border(Border::all(1.).with_border_fill(theme.surface_overlay_2()))
+        .finish()
 }
 
 struct OzUpdatesProps<'a> {

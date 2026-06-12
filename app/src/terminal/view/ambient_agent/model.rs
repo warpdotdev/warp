@@ -32,6 +32,7 @@ use crate::ai::execution_profiles::{
 };
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -1495,7 +1496,15 @@ impl AmbientAgentViewModel {
             match ai_api_error {
                 AIApiError::QuotaLimit {
                     user_display_message,
+                    denial_reason,
                 } => {
+                    if denial_reason.as_deref()
+                        == Some(crate::server::server_api::FREE_PLAN_NO_AI_DENIAL_REASON)
+                    {
+                        AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.note_free_plan_no_ai_denial(ctx);
+                        });
+                    }
                     let error_message = user_display_message
                         .clone()
                         .unwrap_or_else(|| OUT_OF_CREDITS_TASK_FAILURE_MESSAGE.to_string());

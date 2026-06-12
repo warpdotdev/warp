@@ -3039,11 +3039,22 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
     let error_text = match props.error {
         RenderableAIError::QuotaLimit {
             user_display_message,
+            ..
         } => {
+            let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
             if let Some(message) = user_display_message {
                 format!("{ERROR_APOLOGY_TEXT}\n\n{message}")
+            } else if props.error.is_free_plan_no_ai_denial()
+                || ai_request_usage_model.is_free_plan_ai_gated(app)
+            {
+                // REV-1625: the Free plan includes no Warp-provided AI, so the
+                // "resets on <date>" copy would be wrong — nothing is coming back.
+                format!(
+                    "{ERROR_APOLOGY_TEXT}\n\nThe Free plan doesn't include Warp-provided AI. \
+                     Add your own API key or endpoint, or upgrade to a paid plan to use Warp's \
+                     AI features.",
+                )
             } else {
-                let ai_request_usage_model = AIRequestUsageModel::as_ref(app);
                 let formatted_next_refresh_time = ai_request_usage_model
                     .next_refresh_time()
                     .format("%B %d")

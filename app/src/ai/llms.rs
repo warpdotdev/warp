@@ -45,6 +45,23 @@ pub fn should_show_bedrock_icon_for_model(llm: &LLMInfo, app: &AppContext) -> bo
             .is_some_and(|config| config.enabled)
 }
 
+/// Returns the overlay disable reason for Warp-provided models when the Free plan
+/// includes no Warp AI (REV-1625): such models are locked behind upgrade, matching
+/// the premium-model lock treatment. Custom endpoints and providers with a BYO API
+/// key remain selectable. Callers should apply this after the model's own
+/// `disable_reason`.
+pub fn free_plan_gated_disable_reason(llm: &LLMInfo, app: &AppContext) -> Option<DisableReason> {
+    let is_custom_endpoint = LLMPreferences::as_ref(app)
+        .custom_llm_info_for_id(&llm.id)
+        .is_some();
+    if is_custom_endpoint || is_using_api_key_for_provider(&llm.provider, app) {
+        return None;
+    }
+    crate::ai::AIRequestUsageModel::as_ref(app)
+        .is_free_plan_ai_gated(app)
+        .then_some(DisableReason::RequiresUpgrade)
+}
+
 /// Key for cached LLM metadata in user preferences.
 ///
 /// Note: this key used to store a single [`AvailableLLMs`]
