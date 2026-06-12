@@ -63,31 +63,18 @@ pub fn ipynb_to_formatted_text(json: &str, gfm_tables: bool) -> Result<Formatted
     }
 
     let language = notebook.language();
-    let mut lines: Vec<FormattedTextLine> = Vec::new();
-
-    for cell in &notebook.cells {
-        match cell.cell_type.as_str() {
-            "markdown" => {
-                let source = cell.source.to_text();
-                push_markdown_block(&mut lines, source.trim_end_matches('\n'), gfm_tables);
-            }
-            "code" => {
-                let source = cell.source.to_text();
-                push_code_block(&mut lines, &language, source.trim_end_matches('\n'));
-                for output in &cell.outputs {
-                    push_output(&mut lines, output);
-                }
-            }
-            // Raw cells are passed through verbatim in Jupyter; render them as a
-            // plain (unhighlighted) code block so their contents can't inject
-            // unexpected markdown.
-            "raw" => {
-                let source = cell.source.to_text();
-                push_code_block(&mut lines, "", source.trim_end_matches('\n'));
-            }
-            // Unknown / future cell types are skipped rather than rendered raw.
-            _ => {}
-        }
+    // Convert each cell independently (a 1:1 map with an exact size hint), then
+    // size the final buffer from the per-cell line counts so it is allocated
+    // exactly once instead of growing incrementally.
+    let per_cell: Vec<Vec<FormattedTextLine>> = notebook
+        .cells
+        .iter()
+        .map(|cell| cell_lines(cell, &language, gfm_tables))
+        .collect();
+    let total_lines = per_cell.iter().map(Vec::len).sum();
+    let mut lines = Vec::with_capacity(total_lines);
+    for lines_for_cell in per_cell {
+        lines.extend(lines_for_cell);
     }
 
     Ok(FormattedText::new_trimmed(lines))
@@ -104,11 +91,36 @@ pub fn raw_fallback_formatted_text(content: &str) -> FormattedText {
     })])
 }
 
-/// Append a markdown cell, parsed into formatted text and separated from
-/// surrounding blocks by a line break. Empty cells are skipped.
-fn push_markdown_block(lines: &mut Vec<FormattedTextLine>, content: &str, gfm_tables: bool) {
+/// Convert a single notebook cell into its formatted-text lines.
+fn cell_lines(cell: &Cell, language: &str, gfm_tables: bool) -> Vec<FormattedTextLine> {
+    match cell.cell_type.as_str() {
+        "markdown" => {
+            let source = cell.source.to_text();
+            markdown_block_lines(source.trim_end_matches('\n'), gfm_tables)
+        }
+        "code" => {
+            let source = cell.source.to_text();
+            let mut lines = code_block_lines(language, source.trim_end_matches('\n'));
+            lines.extend(cell.outputs.iter().flat_map(output_lines));
+            lines
+        }
+        // Raw cells are passed through verbatim in Jupyter; render them as a
+        // plain (unhighlighted) code block so their contents can't inject
+        // unexpected markdown.
+        "raw" => {
+            let source = cell.source.to_text();
+            code_block_lines("", source.trim_end_matches('\n'))
+        }
+        // Unknown / future cell types are skipped rather than rendered raw.
+        _ => Vec::new(),
+    }
+}
+
+/// A markdown cell, parsed into formatted text and separated from surrounding
+/// blocks by a line break. Empty cells produce no lines.
+fn markdown_block_lines(content: &str, gfm_tables: bool) -> Vec<FormattedTextLine> {
     if content.is_empty() {
-        return;
+        return Vec::new();
     }
     let parse_fn = if gfm_tables {
         parse_markdown_with_gfm_tables
@@ -123,40 +135,44 @@ fn push_markdown_block(lines: &mut Vec<FormattedTextLine>, content: &str, gfm_ta
             FormattedTextFragment::plain_text(content),
         ])])
     });
-    lines.extend(parsed.lines);
+    let mut lines = Vec::from(parsed.lines);
     lines.push(FormattedTextLine::LineBreak);
+    lines
 }
 
-/// Append a code block with the given language tag (empty for none), separated
-/// from surrounding blocks by a line break.
-fn push_code_block(lines: &mut Vec<FormattedTextLine>, language: &str, content: &str) {
-    lines.push(FormattedTextLine::CodeBlock(CodeBlockText {
-        lang: language.to_string(),
-        code: content.to_string(),
-    }));
-    lines.push(FormattedTextLine::LineBreak);
+/// A code block with the given language tag (empty for none), separated from
+/// surrounding blocks by a line break.
+fn code_block_lines(language: &str, content: &str) -> Vec<FormattedTextLine> {
+    vec![
+        FormattedTextLine::CodeBlock(CodeBlockText {
+            lang: language.to_string(),
+            code: content.to_string(),
+        }),
+        FormattedTextLine::LineBreak,
+    ]
 }
 
-/// Append a single saved cell output.
-fn push_output(lines: &mut Vec<FormattedTextLine>, output: &Output) {
+/// The lines for a single saved cell output. Skipped outputs produce no lines.
+fn output_lines(output: &Output) -> Vec<FormattedTextLine> {
     match output.output_type.as_str() {
-        "stream" => {
-            if let Some(text) = &output.text {
-                push_text_output(lines, &text.to_text());
-            }
-        }
+        "stream" => match &output.text {
+            Some(text) => text_output_lines(&text.to_text()),
+            None => Vec::new(),
+        },
         "execute_result" | "display_data" => {
             let Some(data) = &output.data else {
-                return;
+                return Vec::new();
             };
             // Prefer images, then plain text. Other MIME types (text/html,
             // LaTeX, widgets, ...) are intentionally skipped in v1.
             if let Some(value) = data.get("image/png") {
-                push_image(lines, "image/png", value);
+                image_lines("image/png", value)
             } else if let Some(value) = data.get("image/jpeg") {
-                push_image(lines, "image/jpeg", value);
+                image_lines("image/jpeg", value)
             } else if let Some(value) = data.get("text/plain") {
-                push_text_output(lines, &value_to_text(value));
+                text_output_lines(&value_to_text(value))
+            } else {
+                Vec::new()
             }
         }
         "error" => {
@@ -166,49 +182,52 @@ fn push_output(lines: &mut Vec<FormattedTextLine>, output: &Output) {
                 .map(|tb| tb.join("\n"))
                 .unwrap_or_default();
             // ANSI escapes (common in colored tracebacks) are stripped centrally
-            // by `push_text_output`.
-            push_text_output(lines, &traceback);
+            // by `text_output_lines`.
+            text_output_lines(&traceback)
         }
         // Unknown output types are skipped.
-        _ => {}
+        _ => Vec::new(),
     }
 }
 
-/// Append a text output as a plain (unhighlighted) code block, truncating
-/// oversized output. Empty output is skipped.
+/// A text output as a plain (unhighlighted) code block, truncating oversized
+/// output. Empty output produces no lines.
 /// TODO: support UI to open the full text in another file, like VSCode
-fn push_text_output(lines: &mut Vec<FormattedTextLine>, text: &str) {
+fn text_output_lines(text: &str) -> Vec<FormattedTextLine> {
     let stripped = strip_ansi(text);
     let text = stripped.trim_end_matches('\n');
     if text.is_empty() {
-        return;
+        return Vec::new();
     }
     if text.chars().count() > MAX_TEXT_OUTPUT_CHARS {
         let truncated = format!(
             "{}\n[output truncated]",
             truncate_chars(text, MAX_TEXT_OUTPUT_CHARS)
         );
-        push_code_block(lines, "", &truncated);
+        code_block_lines("", &truncated)
     } else {
-        push_code_block(lines, "", text);
+        code_block_lines("", text)
     }
 }
 
-/// Append an embedded image output as a base64 data-URI image.
-fn push_image(lines: &mut Vec<FormattedTextLine>, mime: &str, value: &serde_json::Value) {
+/// An embedded image output as a base64 data-URI image. Empty payloads produce
+/// no lines.
+fn image_lines(mime: &str, value: &serde_json::Value) -> Vec<FormattedTextLine> {
     let base64: String = value_to_text(value)
         .chars()
         .filter(|c| !c.is_whitespace())
         .collect();
     if base64.is_empty() {
-        return;
+        return Vec::new();
     }
-    lines.push(FormattedTextLine::Image(FormattedImage {
-        alt_text: "output".to_string(),
-        source: format!("data:{mime};base64,{base64}"),
-        title: None,
-    }));
-    lines.push(FormattedTextLine::LineBreak);
+    vec![
+        FormattedTextLine::Image(FormattedImage {
+            alt_text: "output".to_string(),
+            source: format!("data:{mime};base64,{base64}"),
+            title: None,
+        }),
+        FormattedTextLine::LineBreak,
+    ]
 }
 
 /// Truncate a string to at most `max_chars` characters on a char boundary.
