@@ -233,6 +233,7 @@ pub mod testing {
         input: Vec<AIAgentInput>,
         output: Shared<AIAgentOutput>,
         model_id: LLMId,
+        is_streaming: bool,
     }
 
     impl FakeAIBlockModel {
@@ -241,6 +242,18 @@ pub mod testing {
                 input,
                 output: Shared::new(output),
                 model_id: "fake-llm".to_owned().into(),
+                is_streaming: false,
+            }
+        }
+
+        /// Builds a fake model whose status stays [`AIBlockOutputStatus::Pending`],
+        /// modeling a block that is still streaming output.
+        pub fn new_streaming(input: Vec<AIAgentInput>) -> Self {
+            Self {
+                input,
+                output: Shared::new(AIAgentOutput::default()),
+                model_id: "fake-llm".to_owned().into(),
+                is_streaming: true,
             }
         }
     }
@@ -249,8 +262,12 @@ pub mod testing {
         type View = AIBlock;
 
         fn status(&self, _app: &AppContext) -> AIBlockOutputStatus {
-            AIBlockOutputStatus::Complete {
-                output: self.output.clone(),
+            if self.is_streaming {
+                AIBlockOutputStatus::Pending
+            } else {
+                AIBlockOutputStatus::Complete {
+                    output: self.output.clone(),
+                }
             }
         }
 
