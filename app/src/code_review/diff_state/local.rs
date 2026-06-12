@@ -2181,7 +2181,9 @@ impl LocalDiffStateModel {
             } else if matches!(status, GitFileStatus::Untracked) {
                 // Get total size of the file
                 let num_lines =
-                    Self::num_lines_in_file_if_non_binary(&repo_path.join(file_path)).await?;
+                    Self::num_lines_in_file_if_non_binary(&repo_path.join(file_path))
+                        .await
+                        .unwrap_or(None);
                 (num_lines.unwrap_or(0), 0)
             } else {
                 (0, 0)
@@ -2836,7 +2838,8 @@ pub(crate) async fn diff_metadata_against_head(
         } else if matches!(status, GitFileStatus::Untracked) {
             let num_lines =
                 LocalDiffStateModel::num_lines_in_file_if_non_binary(&repo_path.join(file_path))
-                    .await?;
+                    .await
+                    .unwrap_or(None);
             (num_lines.unwrap_or(0), 0)
         } else {
             (0, 0)
