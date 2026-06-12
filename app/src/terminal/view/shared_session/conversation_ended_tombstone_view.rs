@@ -651,6 +651,7 @@ impl TypedActionView for ConversationEndedTombstoneView {
                 ctx.dispatch_typed_action(&WorkspaceAction::ContinueConversationLocally {
                     conversation_id: *conversation_id,
                     initial_prompt: None,
+                    initial_attachments: vec![],
                     destination: ForkedConversationDestination::SplitPane,
                 });
             }

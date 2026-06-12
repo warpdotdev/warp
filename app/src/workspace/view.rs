@@ -15145,7 +15145,7 @@ impl Workspace {
                 FORK_PREFIX,
                 true,
                 title_override.as_deref(),
-                Some(PendingConversationHandoff::LocalToCloud),
+                None,
                 ctx,
             )
         }) {
@@ -24420,6 +24420,7 @@ impl TypedActionView for Workspace {
             ContinueConversationLocally {
                 conversation_id,
                 initial_prompt,
+                initial_attachments,
                 destination,
             } => {
                 self.fork_ai_conversation(
@@ -24428,7 +24429,7 @@ impl TypedActionView for Workspace {
                     false,
                     None,
                     initial_prompt.clone(),
-                    vec![],
+                    initial_attachments.clone(),
                     *destination,
                     Some(PendingConversationHandoff::CloudToLocal),
                     ctx,

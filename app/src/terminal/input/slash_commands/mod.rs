@@ -1043,10 +1043,13 @@ impl Input {
                     AgentManagementTelemetryEvent::SlashCommandContinueLocally,
                     ctx
                 );
+                let initial_attachments =
+                    self.maybe_take_attachments_for_initial_prompt(argument, ctx);
 
                 ctx.dispatch_typed_action(&WorkspaceAction::ContinueConversationLocally {
                     conversation_id,
                     initial_prompt: argument.cloned(),
+                    initial_attachments,
                     destination,
                 });
             }
