@@ -50,9 +50,9 @@ When Warp Control and bundled skills are enabled, Warp exposes a built-in `warpc
 The skill is unavailable when the `WarpControlCli` feature flag is disabled. Disabled skills are omitted from agent skill discovery and cannot be read through a stale direct skill reference.
 ## Scripting setting
 Warp adds a new top-level Settings pane page named **Scripting**. The page contains a single toggle for local control:
-- **Enabled** (default): same-user processes may request exact-action credentials from the broker and send control requests to the loopback listener.
-- **Disabled**: no same-user process can receive local-control credentials. The control listener does not accept requests. Discovery records contain no actionable endpoint.
-The authoritative value is stored in protected local storage (macOS Keychain, or owner-only secure storage on Linux). It is never synced, never appears in `settings.toml` or generated schemas, and cannot be changed by `warpctrl`, config files, or direct protocol requests. Only the Warp app through Settings > Scripting can change it. The default is enabled. Disabling Scripting immediately prevents new credential issuance and invalidates outstanding credentials.
+- **Enabled** (default on internal dogfood channels): same-user processes may request exact-action credentials from the broker and send control requests to the loopback listener.
+- **Disabled** (default on Stable, Preview, OSS, and Integration channels): no same-user process can receive local-control credentials. The control listener does not accept requests. Discovery records contain no actionable endpoint.
+The authoritative value is stored in protected local storage (macOS Keychain, or owner-only secure storage on Linux). It is never synced, never appears in `settings.toml` or generated schemas, and cannot be changed by `warpctrl`, config files, or direct protocol requests. Only the Warp app through Settings > Scripting can change it. The default is channel-based: enabled on internal dogfood builds, disabled on public channels until the user opts in. Disabling Scripting immediately prevents new credential issuance and invalidates outstanding credentials.
 ## Close behavior
 `window.close`, `tab.close`, and `pane.close` execute after the same exact-action credential validation as the other 81 actions. They flow through Warp's normal close behavior, so existing warnings for unsaved files, running processes, shared sessions, and similar app state remain authoritative and may cancel the close.
 ## Input staging

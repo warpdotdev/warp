@@ -1,7 +1,7 @@
 # warpctrl security architecture
 `warpctrl` is a local-control CLI for an already-running Warp app instance. The design is external-only: all callers are same-user processes. There is no inside-Warp/outside-Warp distinction, no verified-terminal invocation context, and no authenticated-user identity layer.
 The security architecture has five layers:
-1. **Protected enablement:** A single Scripting setting (enabled by default, disableable by the user) stored in protected local storage.
+1. **Protected enablement:** A single Scripting setting stored in protected local storage. It defaults to enabled on internal dogfood channels (Dev, Local) and to disabled on all other channels (Stable, Preview, OSS, Integration), where the user must opt in through Settings > Scripting.
 2. **Owner-only discovery:** Per-user filesystem discovery with owner-only permissions finds compatible instances without granting control authority.
 3. **Same-user credential broker:** A Unix-domain socket authenticates the OS user through kernel peer credentials and issues short-lived exact-action credentials. The broker authenticates the OS user, not the calling application.
 4. **Loopback HTTP transport:** An instance-local listener on `127.0.0.1` carries typed requests with broker-issued credentials.
@@ -14,7 +14,7 @@ Exact-action credentials are safety and intent mechanisms. They let a script or 
 - Prevent other OS users from controlling a Warp instance they do not own.
 - Support multiple running Warp processes without a shared global port or credential.
 - Separate discovery metadata from control authority.
-- Require Scripting to be enabled (the default) before any control requests are accepted.
+- Require Scripting to be enabled before any control requests are accepted. Scripting defaults to enabled only on internal dogfood channels; public channels default to disabled and require explicit opt-in.
 - Keep credentials out of plaintext discovery records and mint them only in memory.
 - Authorize every action by its exact typed identity in the app bridge.
 - Route close actions through normal Warp close behavior so existing app warnings for unsaved files, running processes, and shared sessions remain authoritative.
@@ -23,7 +23,7 @@ Exact-action credentials are safety and intent mechanisms. They let a script or 
 - Fail closed on platforms without owner-only discovery and authenticated broker transport.
 - Preserve deterministic targeting so a request never silently mutates or reads the wrong target.
 ## Honest same-user limitations
-The broker authenticates the connecting process's OS user through kernel peer credentials. It does not prove that the caller is the official `warpctrl` binary, Warp-signed code, or a human-approved invocation. When Scripting is enabled (the default), any process running as the same OS user can:
+The broker authenticates the connecting process's OS user through kernel peer credentials. It does not prove that the caller is the official `warpctrl` binary, Warp-signed code, or a human-approved invocation. When Scripting is enabled, any process running as the same OS user can:
 - Connect to the broker socket and request credentials for any of the 84 actions.
 - Invoke `warpctrl` as a confused deputy.
 The architecture therefore provides a **meaningful hard boundary** against:
@@ -55,8 +55,8 @@ A hostile same-user process that can automate the Warp UI, read local state, or 
 - Remote control over network transports (requires a separate security design).
 ## Protected enablement
 Scripting has a single setting:
-- **Enabled** (default): same-user processes may request exact-action credentials and send control requests.
-- **Disabled**: no credentials are issued, no control requests are accepted, discovery records contain no actionable endpoint.
+- **Enabled** (default on internal dogfood channels): same-user processes may request exact-action credentials and send control requests.
+- **Disabled** (default on Stable, Preview, OSS, and Integration channels): no credentials are issued, no control requests are accepted, discovery records contain no actionable endpoint.
 The authoritative value is stored in the most secure local storage available:
 - **macOS:** Keychain, constrained to Warp-signed code where the platform supports it.
 - **Linux:** Platform secret service where available; owner-only file fallback with the weaker same-user protection explicitly documented.
@@ -64,7 +64,7 @@ The setting is:
 - Local-only: never synced through Settings Sync, Warp Drive, or server-backed preferences.
 - Private: never appears in `settings.toml`, generated schemas, or any user-editable settings surface.
 - App-controlled: only the running Warp app through Settings > Scripting can change it. `warpctrl`, shell scripts, config files, registry edits, `defaults write`, and direct protocol requests cannot enable or change it.
-- Default-enabled: when no valid protected value is available, defaults to enabled.
+- Channel-default: when no valid protected value is available, the mode defaults to enabled on internal dogfood channels (Dev, Local) and disabled on all other channels.
 Disabling Scripting immediately prevents new credential issuance and invalidates outstanding credentials. The control listener rejects all requests with `local_control_disabled`.
 ## Discovery registry
 Each enabled Warp process writes a discovery record in a secure per-user directory.

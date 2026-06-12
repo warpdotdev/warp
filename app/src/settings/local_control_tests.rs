@@ -2,11 +2,14 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use settings::{PrivatePreferences, PublicPreferences, Setting as _, SettingsManager, SyncToCloud};
+use warp_core::channel::{Channel, ChannelState};
 use warpui::SingletonEntity as _;
 use warpui_extras::secure_storage::{self, AppContextExt as _};
 use warpui_extras::user_preferences;
 
-use super::{LocalControlMode, LocalControlModeSetting, LocalControlSettings};
+use super::{
+    default_mode_for_channel, LocalControlMode, LocalControlModeSetting, LocalControlSettings,
+};
 
 #[derive(Default)]
 struct InMemorySecureStorage {
@@ -58,12 +61,38 @@ fn default_settings() -> LocalControlSettings {
 }
 
 #[test]
-fn defaults_enable_warp_control() {
+fn default_mode_is_enabled_only_on_dogfood_channels() {
+    assert_eq!(
+        default_mode_for_channel(Channel::Dev),
+        LocalControlMode::Enabled
+    );
+    assert_eq!(
+        default_mode_for_channel(Channel::Local),
+        LocalControlMode::Enabled
+    );
+    for channel in [
+        Channel::Stable,
+        Channel::Preview,
+        Channel::Oss,
+        Channel::Integration,
+    ] {
+        assert_eq!(
+            default_mode_for_channel(channel),
+            LocalControlMode::Disabled,
+            "{channel} must require explicit opt-in"
+        );
+    }
+}
+
+#[test]
+fn unset_mode_follows_channel_default() {
     let settings = default_settings();
 
-    assert_eq!(LocalControlMode::default(), LocalControlMode::Enabled);
-    assert_eq!(settings.mode(), LocalControlMode::Enabled);
-    assert!(settings.is_enabled());
+    assert_eq!(LocalControlMode::default(), LocalControlMode::Disabled);
+    assert_eq!(
+        settings.mode(),
+        default_mode_for_channel(ChannelState::channel())
+    );
 }
 
 #[test]
@@ -143,7 +172,7 @@ fn mode_does_not_migrate_from_private_preferences() {
         app.read(|ctx| {
             assert_eq!(
                 LocalControlSettings::as_ref(ctx).mode(),
-                LocalControlMode::Enabled
+                default_mode_for_channel(ChannelState::channel())
             );
             let private_value = LocalControlModeSetting::preferences_for_setting(ctx)
                 .read_value(LocalControlModeSetting::storage_key())
@@ -183,6 +212,15 @@ fn cloud_sync_cannot_disable_local_control() {
             LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings
                     .local_control_mode
+                    .set_value(LocalControlMode::Enabled, ctx)
+            })
+        })
+        .expect("local control should enable");
+
+        app.update(|ctx| {
+            LocalControlSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .local_control_mode
                     .set_value_from_cloud_sync(LocalControlMode::Disabled, ctx)
             })
         })
@@ -193,8 +231,11 @@ fn cloud_sync_cannot_disable_local_control() {
             assert_eq!(settings.mode(), LocalControlMode::Enabled);
             let stored = ctx
                 .secure_storage()
-                .read_value(LocalControlModeSetting::storage_key());
-            assert!(matches!(stored, Err(secure_storage::Error::NotFound)));
+                .read_value(LocalControlModeSetting::storage_key())
+                .expect("explicitly enabled mode should remain stored securely");
+            let mode = serde_json::from_str::<LocalControlMode>(&stored)
+                .expect("stored local-control mode should deserialize");
+            assert_eq!(mode, LocalControlMode::Enabled);
         });
     });
 }

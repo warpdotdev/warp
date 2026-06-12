@@ -168,7 +168,7 @@ When disabled:
 - The `warpctrl` wrapper returns a structured `no_instance` or feature-disabled error.
 When enabled:
 - Settings > Scripting page is rendered.
-- All local-control infrastructure starts when Scripting is enabled (the default).
+- All local-control infrastructure starts when Scripting is enabled (the default on internal dogfood channels; public channels require explicit opt-in through Settings > Scripting).
 - `resources/bundled/skills/warpctrl/SKILL.md` teaches the built-in agent and users how to discover and invoke the allowlisted CLI surface.
 - The skill manager maps `warpctrl` to `FeatureFlag::WarpControlCli` through `BundledSkillActivation`. Both skill listing and direct bundled-skill reads enforce the activation state.
 ### 11. First slice: discovery + `tab.create`
@@ -176,7 +176,7 @@ The first implementation slice proves the end-to-end architecture:
 - Shared protocol types and error envelopes.
 - `FeatureFlag::WarpControlCli` and Cargo feature.
 - Settings > Scripting page with enabled/disabled toggle.
-- Protected local-only mode storage (defaults enabled).
+- Protected local-only mode storage (channel-based default: enabled on dogfood channels, disabled on public channels).
 - Discovery registry and CLI instance selection.
 - `warpctrl` wrapper entrypoint with `--warpctrl` control-mode dispatch.
 - Per-process credential broker (Unix socket, peer credential check).

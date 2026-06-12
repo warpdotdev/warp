@@ -52,6 +52,38 @@ fn test_resolve_file_target_warp_uses_default_layout() {
     assert_eq!(target, FileTarget::CodeEditor(EditorLayout::NewTab));
 }
 
+/// `file.open` from local control relies on this resolver never routing to an
+/// external editor or the system default app, even when user settings prefer one.
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_to_open_in_warp_never_leaves_warp() {
+    use crate::util::file::external_editor::settings::{
+        OpenCodePanelsFileEditor, OpenConversationLayoutPreference, OpenFileEditor, OpenFileLayout,
+        PreferMarkdownViewer, PreferTabbedEditorView,
+    };
+
+    let settings = EditorSettings {
+        open_file_editor: OpenFileEditor::new(Some(EditorChoice::ExternalEditor(Editor::VSCode))),
+        open_code_panels_file_editor: OpenCodePanelsFileEditor::new(Some(
+            EditorChoice::ExternalEditor(Editor::VSCode),
+        )),
+        open_file_layout: OpenFileLayout::new(None),
+        prefer_markdown_viewer: PreferMarkdownViewer::new(Some(false)),
+        prefer_tabbed_editor_view: PreferTabbedEditorView::new(None),
+        open_conversation_layout_preference: OpenConversationLayoutPreference::new(None),
+    };
+    for path in ["README.md", "data.txt", "main.rs", "image.png", "script.sh"] {
+        let target = resolve_file_target_to_open_in_warp(Path::new(path), &settings, None);
+        assert!(
+            matches!(
+                target,
+                FileTarget::CodeEditor(_) | FileTarget::MarkdownViewer(_)
+            ),
+            "{path} must resolve to an in-Warp surface, got {target:?}"
+        );
+    }
+}
+
 #[test]
 #[cfg(feature = "local_fs")]
 fn test_resolve_file_target_binary_is_system_generic() {
