@@ -14,6 +14,11 @@ pub fn onboarding_bottom_nav(
     next_button: Option<Box<dyn Element>>,
 ) -> Box<dyn Element> {
     let dots = progress_dots::progress_dots(step_count, step_index, appearance);
+    // Nudge the dots left of true center to offset the right-side button(s),
+    // whose hover/background state gives that edge more visual weight. The dots
+    // sit between two equal-flex slots, so a right margin shifts them by half
+    // its width — 16px yields the intended ~8px visual offset.
+    let dots = Container::new(dots).with_margin_right(16.).finish();
 
     let back_button = back_button.unwrap_or_else(|| Empty::new().finish());
     let next_button = next_button.unwrap_or_else(|| Empty::new().finish());

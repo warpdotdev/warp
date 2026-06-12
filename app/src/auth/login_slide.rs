@@ -1,5 +1,8 @@
 use std::cell::Cell;
 
+use onboarding::components::feature_optout_dialog::{
+    render_feature_optout_dialog, FeatureOptOutDialog,
+};
 use onboarding::slides::{layout, slide_content};
 use onboarding::{OnboardingIntention, AI_FEATURES, WARP_DRIVE_FEATURES};
 use pathfinder_color::ColorU;
@@ -12,10 +15,10 @@ use warp_core::ui::Icon;
 use warpui::actions::StandardAction;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Align, Border, CacheOption, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement,
-    HighlightedHyperlink, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
+    Align, CacheOption, ChildAnchor, ClippedScrollStateHandle, Container, CornerRadius,
+    CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Image,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
 };
 use warpui::fonts::Weight;
 use warpui::keymap::{FixedBinding, Keystroke};
@@ -894,22 +897,27 @@ impl LoginSlideView {
     // ------------------------------------------------------------------
 
     fn render_skip_dialog(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let dialog_surface = theme.surface_1();
-        let dialog_surface_solid = dialog_surface.into_solid();
-        let border_color = internal_colors::neutral_4(theme);
-
         let is_terminal = matches!(self.intention, OnboardingIntention::Terminal);
-        let title_text = if is_terminal {
-            "Are you sure you want to disable Warp Drive?"
+        let (title, body, features, cancel_label): (
+            &'static str,
+            &'static str,
+            &'static [&'static str],
+            &'static str,
+        ) = if is_terminal {
+            (
+                    "Are you sure you want to disable Warp Drive?",
+                    "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
+                    WARP_DRIVE_FEATURES,
+                    "Enable Warp Drive",
+                )
         } else {
-            "Are you sure you want to disable AI features?"
+            (
+                    "Are you sure you want to disable AI features?",
+                    "Warp is better with AI. By continuing, you won't have access to any of the following features:",
+                    AI_FEATURES,
+                    "Enable AI features",
+                )
         };
-        let title = FormattedTextElement::from_str(title_text, appearance.ui_font_family(), 16.)
-            .with_color(internal_colors::text_main(theme, dialog_surface_solid))
-            .with_weight(Weight::Bold)
-            .with_line_height_ratio(1.25)
-            .finish();
 
         // Close button with ESC keyboard-shortcut badge.
         let escape = Keystroke::parse("escape").unwrap_or_default();
@@ -928,75 +936,7 @@ impl LoginSlideView {
             },
         );
 
-        let title_row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(Shrinkable::new(1., title).finish())
-            .with_child(close_button)
-            .finish();
-
-        let body_text_str = if is_terminal {
-            "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:"
-        } else {
-            "Warp is better with AI. By continuing, you won't have access to any of the following features:"
-        };
-        let body_text =
-            FormattedTextElement::from_str(body_text_str, appearance.ui_font_family(), 14.)
-                .with_color(internal_colors::text_main(theme, dialog_surface_solid))
-                .with_weight(Weight::Normal)
-                .with_line_height_ratio(1.2)
-                .finish();
-
-        let feature_row_color: ColorU = theme.foreground().into();
-        let feature_x_fill: ThemeFill = ThemeFill::Solid(theme.ansi_fg_red());
-        let mut feature_list =
-            Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        let feature_items: &[&str] = if is_terminal {
-            WARP_DRIVE_FEATURES
-        } else {
-            AI_FEATURES
-        };
-        for &item in feature_items {
-            let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(feature_x_fill).finish())
-                .with_width(16.)
-                .with_height(16.)
-                .finish();
-            let text_el = FormattedTextElement::from_str(item, appearance.ui_font_family(), 14.)
-                .with_color(feature_row_color)
-                .with_weight(Weight::Normal)
-                .with_alignment(TextAlignment::Left)
-                .with_line_height_ratio(1.0)
-                .finish();
-            let row = Flex::row()
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(icon_el)
-                .with_child(Container::new(text_el).with_margin_left(4.).finish())
-                .finish();
-            feature_list = feature_list.with_child(
-                Container::new(row)
-                    .with_padding_top(4.)
-                    .with_padding_bottom(4.)
-                    .finish(),
-            );
-        }
-
-        let body_section = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(body_text)
-            .with_child(
-                Container::new(feature_list.finish())
-                    .with_margin_top(12.)
-                    .finish(),
-            )
-            .finish();
-
-        let cancel_label = if is_terminal {
-            "Enable Warp Drive"
-        } else {
-            "Enable AI features"
-        };
-        let login_button = self.dialog_login_button.render(
+        let cancel_button = self.dialog_login_button.render(
             appearance,
             button::Params {
                 content: button::Content::Label(cancel_label.into()),
@@ -1011,7 +951,7 @@ impl LoginSlideView {
         );
 
         let dialog_enter = Keystroke::parse("enter").unwrap_or_default();
-        let skip_confirm_button = self.dialog_skip_button.render(
+        let confirm_button = self.dialog_skip_button.render(
             appearance,
             button::Params {
                 content: button::Content::Label("Skip for now".into()),
@@ -1026,51 +966,17 @@ impl LoginSlideView {
             },
         );
 
-        let footer = Container::new(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::End)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(login_button)
-                .with_child(
-                    Container::new(skip_confirm_button)
-                        .with_margin_left(8.)
-                        .finish(),
-                )
-                .finish(),
+        render_feature_optout_dialog(
+            appearance,
+            FeatureOptOutDialog {
+                title,
+                body,
+                features,
+                close_button,
+                cancel_button,
+                confirm_button,
+            },
         )
-        .with_border(Border::top(1.).with_border_color(border_color))
-        .with_horizontal_padding(24.)
-        .with_vertical_padding(12.)
-        .finish();
-
-        let dialog = Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(
-                Container::new(title_row)
-                    .with_horizontal_padding(24.)
-                    .with_padding_top(24.)
-                    .with_padding_bottom(12.)
-                    .finish(),
-            )
-            .with_child(
-                Container::new(body_section)
-                    .with_horizontal_padding(24.)
-                    .with_padding_bottom(16.)
-                    .finish(),
-            )
-            .with_child(footer)
-            .finish();
-
-        ConstrainedBox::new(
-            Container::new(dialog)
-                .with_background(dialog_surface)
-                .with_border(Border::all(1.).with_border_color(border_color))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-                .finish(),
-        )
-        .with_width(460.)
-        .finish()
     }
 }
 

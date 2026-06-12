@@ -150,9 +150,6 @@ impl ServerExperiment {
 /// under which the Free plan includes no Warp-provided agent AI. This is the single
 /// source of truth for the arm check; callers gating Free-plan behavior must combine
 /// it with their own plan/billing checks.
-// TODO(REV-1625): remove this allow once the stacked onboarding/gated-state PRs consume
-// the helper.
-#[allow(dead_code)]
 pub fn is_free_ai_removal_experiment_enabled(ctx: &AppContext) -> bool {
     ServerExperiments::handle(ctx)
         .as_ref(ctx)
