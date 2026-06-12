@@ -335,7 +335,6 @@ pub struct DiffMetadata {
     pub has_head_commit: bool,
     pub unpushed_commits: Vec<Commit>,
     pub upstream_ref: Option<String>,
-    pub pr_info: Option<PrInfo>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -391,7 +390,7 @@ pub enum DiffStateModelEvent {
     /// Branch list received from the backend (local git or remote server).
     BranchesReceived(Vec<BranchEntry>),
     /// A remote git operation completed. The model has already applied any
-    /// successful delta / PR info to the cached metadata.
+    /// successful metadata delta to the cached metadata.
     GitOpCompleted(GitOpResult),
     /// An AI-generated commit message arrived from the remote daemon (issued
     /// at commit-dialog open). `Ok` carries the message, `Err` the error
@@ -822,19 +821,6 @@ impl DiffStateModel {
         }
     }
 
-    /// Fetches PR info for the current branch. Remote repos issue the
-    /// `GetPrInfo` RPC; the result lands in `metadata.pr_info` and emits
-    /// `MetadataRefreshed`. Local repos source PR info from
-    /// `GitRepoStatusModel`, so this is a no-op for them.
-    pub(crate) fn fetch_pr_info(&self, ctx: &mut ModelContext<Self>) {
-        match self {
-            Self::Local(_) => {}
-            Self::Remote(model) => model.update(ctx, |model, ctx| {
-                model.fetch_pr_info(ctx);
-            }),
-        }
-    }
-
     /// Fetches the committed branch files (`merge_base(HEAD, main)..HEAD`) for
     /// the Create PR dialog's Changes box. Both backends deliver the result via
     /// `DiffStateModelEvent::BranchCommittedFilesReceived`: the local model
@@ -849,15 +835,6 @@ impl DiffStateModel {
             Self::Remote(model) => model.update(ctx, |model, ctx| {
                 model.fetch_committed_branch_files(ctx);
             }),
-        }
-    }
-
-    /// PR info for the current branch, for remote repos only. Local repos
-    /// source PR info from `GitRepoStatusModel`, so this returns `None`.
-    pub(crate) fn pr_info(&self, ctx: &AppContext) -> Option<PrInfo> {
-        match self {
-            Self::Local(_) => None,
-            Self::Remote(m) => m.as_ref(ctx).pr_info().cloned(),
         }
     }
 

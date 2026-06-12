@@ -763,21 +763,38 @@ fn repository_info_from_gh_output(output: &str) -> Result<RepositoryInfo> {
 pub async fn get_repository_info(
     repo_path: &Path,
     path_env: Option<&str>,
-) -> Result<RepositoryInfo> {
-    let stdout = run_gh_command(
+) -> Result<Option<RepositoryInfo>> {
+    if run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
+
+    match run_gh_command(
         repo_path,
         &["repo", "view", "--json", "name,owner"],
         path_env,
     )
-    .await?;
-    repository_info_from_gh_output(&stdout)
+    .await
+    {
+        Ok(stdout) => repository_info_from_gh_output(&stdout).map(Some),
+        Err(e) => {
+            let msg = e.to_string();
+            if is_github_repo_not_applicable_error(&msg) {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(not(feature = "local_fs"))]
 pub async fn get_repository_info(
     _repo_path: &Path,
     _path_env: Option<&str>,
-) -> Result<RepositoryInfo> {
+) -> Result<Option<RepositoryInfo>> {
     Err(anyhow!("Not supported without local_fs"))
 }
 
@@ -908,12 +925,19 @@ fn is_no_pr_for_branch_error(error_msg: &str) -> bool {
 
 #[cfg(feature = "local_fs")]
 fn is_pr_lookup_not_applicable_error(error_msg: &str) -> bool {
+    is_no_pr_for_branch_error(error_msg) || is_github_repo_not_applicable_error(error_msg)
+}
+
+/// Classifies `gh` failures that authoritatively mean the current repository
+/// has no GitHub repository context (no GitHub remotes / not a GitHub repo),
+/// rather than a transient fetch failure. Shared by the PR and repository
+/// lookups.
+#[cfg(feature = "local_fs")]
+fn is_github_repo_not_applicable_error(error_msg: &str) -> bool {
     let lower = error_msg.to_lowercase();
-    is_no_pr_for_branch_error(error_msg)
-        || lower.contains(
-            "none of the git remotes configured for this repository point to a known github host",
-        )
-        || lower.contains("no github remotes")
+    lower.contains(
+        "none of the git remotes configured for this repository point to a known github host",
+    ) || lower.contains("no github remotes")
         || lower.contains("not a github repository")
         || lower.contains("could not determine base repo")
 }

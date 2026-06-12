@@ -18,6 +18,7 @@ use warp_core::{safe_error, SessionId};
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::platform::TerminationMode;
 use warpui::r#async::{Spawnable, SpawnableOutput, SpawnedFutureHandle};
@@ -34,12 +35,13 @@ use super::diff_state_tracker::{
 };
 use super::proto::{
     client_message, delete_file_response, discard_files_response, get_diff_state_response,
-    get_fragment_metadata_from_hash_response, git_commit_chain_response, git_create_pr_response,
+    get_fragment_metadata_from_hash_response, get_git_hub_pr_info_response,
+    get_git_hub_repo_info_response, git_commit_chain_response, git_create_pr_response,
     git_generate_commit_message_response, git_get_committed_branch_files_response,
-    git_get_pr_info_response, git_push_response, host_scoped_request, notification,
-    resolve_conflict_response, run_command_response, save_buffer_response, server_message,
-    session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
-    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
+    git_push_response, host_scoped_request, notification, resolve_conflict_response,
+    run_command_response, save_buffer_response, server_message, session_scoped_request,
+    write_file_response, Abort, Authenticate, BranchInfo, BufferEdit, BufferUpdatedPush,
+    ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
     CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
     DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
     DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
@@ -47,22 +49,27 @@ use super::proto::{
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
-    GetFragmentMetadataFromHashSuccess, GitCommitChainMode, GitCommitChainRequest,
-    GitCommitChainResponse, GitCommitChainSuccess, GitCreatePrRequest, GitCreatePrResponse,
+    GetFragmentMetadataFromHashSuccess, GetGitHubPrInfoRequest, GetGitHubPrInfoResponse,
+    GetGitHubPrInfoSuccess, GetGitHubRepoInfoRequest, GetGitHubRepoInfoResponse,
+    GetGitHubRepoInfoSuccess, GitCommitChainMode, GitCommitChainRequest, GitCommitChainResponse,
+    GitCommitChainSuccess, GitCreatePrRequest, GitCreatePrResponse,
     GitGenerateCommitMessageRequest, GitGenerateCommitMessageResponse,
     GitGetCommittedBranchFilesRequest, GitGetCommittedBranchFilesResponse,
-    GitGetCommittedBranchFilesSuccess, GitGetPrInfoRequest, GitGetPrInfoResponse,
-    GitGetPrInfoSuccess, GitOpDelta, GitOpError, GitPushRequest, GitPushResponse, IndexCodebase,
-    Initialize, InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
+    GitGetCommittedBranchFilesSuccess, GitHubPrInfoPush, GitHubRepositoryInfoPush, GitOpDelta,
+    GitOpError, GitPushRequest, GitPushResponse, GitStatusPush, IndexCodebase, Initialize,
+    InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
-    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
-    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
-    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
-    TextEdit, UploadHandoffSnapshot, WriteFile, WriteFileResponse, WriteFileSuccess,
+    RepositoryInfo, ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess,
+    ResyncCodebase, RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse,
+    RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage,
+    SessionBootstrapped, TextEdit, UpdateGitStatus, UploadHandoffSnapshot, WriteFile,
+    WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
 use crate::code_review::diff_state::{CommitChainMode, DiffMode, FileStatusInfo};
+use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusModel};
+use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::shell::ShellType;
@@ -244,6 +251,26 @@ pub struct ServerModel {
     /// In-flight host-scoped requests whose response may be delivered on
     /// a different connection if the originating connection disconnects.
     host_scoped_requests: HashMap<RequestId, ConnectionId>,
+    /// Per-repo local git status models tracked on the daemon, keyed by repo
+    /// path. Created when `NavigatedToDirectory` resolves a git root or a
+    /// client requests a snapshot; each is subscribed so watcher ticks
+    /// broadcast `GitStatusPush` to every connection.
+    git_status_models: HashMap<StandardizedPath, ModelHandle<GitRepoStatusModel>>,
+    /// Per-repo local GitHub-info models tracked on the daemon, keyed by repo
+    /// path. Created lazily on the first GitHub-info notification; each is
+    /// subscribed so `gh`-driven changes broadcast PR-info and repository-info
+    /// pushes to every connection.
+    github_repo_models: HashMap<StandardizedPath, ModelHandle<GitHubRepoModel>>,
+    /// Connections subscribed (via navigation) to each repo's git status,
+    /// keyed by repo path. A repo's git-status *and* GitHub-info models live
+    /// while this set is non-empty and are evicted once the last connection
+    /// unsubscribes (navigates away or disconnects). Mirrors
+    /// `RemoteDiffStateManager`'s per-key connection sets, keyed by repo only.
+    git_status_subscribers: HashMap<StandardizedPath, HashSet<ConnectionId>>,
+    /// Each connection's current git repo (a connection is in at most one repo
+    /// at a time), so a navigation can move its subscription and a disconnect
+    /// can drop it.
+    git_status_repo_by_conn: HashMap<ConnectionId, StandardizedPath>,
 }
 
 impl Entity for ServerModel {
@@ -272,6 +299,10 @@ impl ServerModel {
             buffers: ServerBufferTracker::new(),
             diff_states: ctx.add_model(|_| RemoteDiffStateManager::new()),
             host_scoped_requests: HashMap::new(),
+            git_status_models: HashMap::new(),
+            github_repo_models: HashMap::new(),
+            git_status_subscribers: HashMap::new(),
+            git_status_repo_by_conn: HashMap::new(),
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -669,6 +700,10 @@ impl ServerModel {
         self.diff_states
             .update(ctx, |mgr, _| mgr.remove_connection(conn_id));
 
+        // Drop this connection's git-status / GitHub-info subscription. The
+        // per-repo models are evicted once no connection remains in the repo.
+        self.unsubscribe_git_status(conn_id);
+
         let remaining = self.connection_senders.len();
         log::info!("Daemon: connection {conn_id} deregistered — {remaining} active remaining");
         if remaining == 0 {
@@ -763,14 +798,17 @@ impl ServerModel {
                     Some(host_scoped_request::Message::GitCreatePr(m)) => {
                         self.handle_create_pr(m, &request_id, conn_id, ctx)
                     }
-                    Some(host_scoped_request::Message::GitGetPrInfo(m)) => {
-                        self.handle_get_pr_info(m, &request_id, conn_id, ctx)
-                    }
                     Some(host_scoped_request::Message::GitGenerateCommitMessage(m)) => {
                         self.handle_generate_git_commit_message(m, &request_id, conn_id, ctx)
                     }
                     Some(host_scoped_request::Message::GitGetCommittedBranchFiles(m)) => {
                         self.handle_get_committed_branch_files(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetGithubPrInfo(m)) => {
+                        self.handle_get_github_pr_info(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::GetGithubRepositoryInfo(m)) => {
+                        self.handle_get_github_repo_info(m, &request_id, conn_id, ctx)
                     }
                     None => {
                         log::warn!(
@@ -844,6 +882,9 @@ impl ServerModel {
                     }
                     Some(notification::Message::UnsubscribeDiffState(m)) => {
                         self.handle_unsubscribe_diff_state(m, conn_id, ctx);
+                    }
+                    Some(notification::Message::UpdateGitStatus(m)) => {
+                        self.handle_update_git_status(m, conn_id, ctx);
                     }
                     None => {
                         log::warn!("Notification with no inner message (request_id={request_id})");
@@ -1888,6 +1929,14 @@ impl ServerModel {
                     StandardizedPath::from_local_canonicalized(Path::new(&indexed_path))
                 {
                     if is_git {
+                        // Navigation is the interest signal: record this
+                        // connection as subscribed to the repo, ensure the
+                        // per-repo git-status model exists, and opportunistically
+                        // push its current value before relying on watcher ticks
+                        // or explicit get-status notifications.
+                        me.subscribe_git_status(conn_id_for_response, &root_path);
+                        me.subscribe_to_git_status_updates(&root_path, ctx);
+                        me.push_git_status(&root_path, ctx);
                         let already_sent = me
                             .snapshot_sent_roots_by_connection
                             .get(&conn_id_for_response)
@@ -1899,6 +1948,11 @@ impl ServerModel {
                             );
                             return;
                         }
+                    } else {
+                        // Navigated out of any git repo: drop this connection's
+                        // subscription so the previously-current repo's models
+                        // are evicted once no connection remains in it.
+                        me.unsubscribe_git_status(conn_id_for_response);
                     }
 
                     let id = RepositoryIdentifier::local(root_path.clone());
@@ -3068,53 +3122,6 @@ impl ServerModel {
         HandlerOutcome::Async(Some(handle))
     }
 
-    /// Handles `GitGetPrInfoRequest` — runs `gh pr view` on the remote
-    /// filesystem. This is the remote PR get/view command.
-    fn handle_get_pr_info(
-        &mut self,
-        msg: GitGetPrInfoRequest,
-        request_id: &RequestId,
-        conn_id: ConnectionId,
-        ctx: &mut ModelContext<Self>,
-    ) -> HandlerOutcome {
-        let repo_path = match requested_repo_path(&msg.repo_path) {
-            Ok(p) => p,
-            Err(e) => return invalid_request_response(e),
-        };
-        log::info!(
-            "Handling GetPrInfo repo={} (request_id={request_id})",
-            msg.repo_path
-        );
-        let path_future = Self::interactive_path_future(ctx);
-        let request_id_for_response = request_id.clone();
-        let handle = self.spawn_request_handler(
-            request_id.clone(),
-            async move {
-                let path_env = path_future.await;
-                git_actions::get_pr(&repo_path, path_env.as_deref()).await
-            },
-            move |me, result, _ctx| {
-                let message = match result {
-                    Ok(pr) => server_message::Message::GitGetPrInfoResponse(GitGetPrInfoResponse {
-                        result: Some(git_get_pr_info_response::Result::Success(
-                            GitGetPrInfoSuccess {
-                                pr_info: pr.as_ref().map(super::proto::PrInfo::from),
-                            },
-                        )),
-                    }),
-                    Err(e) => server_message::Message::GitGetPrInfoResponse(GitGetPrInfoResponse {
-                        result: Some(git_get_pr_info_response::Result::Error(GitOpError {
-                            message: format!("{e:#}"),
-                        })),
-                    }),
-                };
-                me.send_server_message(Some(conn_id), Some(&request_id_for_response), message);
-            },
-            ctx,
-        );
-        HandlerOutcome::Async(Some(handle))
-    }
-
     /// Handles `GitGetCommittedBranchFilesRequest` — computes the committed
     /// branch diff (`merge_base(HEAD, main)..HEAD`) on the remote filesystem
     /// and returns the per-file change entries for the Create PR dialog's
@@ -3227,6 +3234,321 @@ impl ServerModel {
             ctx,
         );
         HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Subscribes the daemon to per-repo local git status updates. On first
+    /// creation it wires model events to broadcast a `GitStatusPush`. No-op if
+    /// already subscribed, or when the repo is not yet a watched repository;
+    /// the next navigation or explicit snapshot request will try again.
+    fn subscribe_to_git_status_updates(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.git_status_models.contains_key(repo_path) {
+            return;
+        }
+        let repo = LocalOrRemotePath::Local(repo_path.to_local_path_lossy());
+        let handle = match GitRepoModels::handle(ctx)
+            .update(ctx, |factory, ctx| factory.subscribe(&repo, ctx))
+        {
+            Ok(handle) => handle,
+            Err(e) => {
+                log::warn!("Daemon: git status subscribe failed for {repo_path}: {e}");
+                return;
+            }
+        };
+
+        let path_for_sub = repo_path.clone();
+        ctx.subscribe_to_model(&handle, move |me, _event, ctx| {
+            let proto_metadata = {
+                let Some(handle) = me.git_status_models.get(&path_for_sub) else {
+                    return;
+                };
+                let Some(metadata) = handle.as_ref(ctx).metadata(ctx) else {
+                    return;
+                };
+                metadata.into()
+            };
+            me.send_server_message(
+                None,
+                None,
+                server_message::Message::GitStatusPush(GitStatusPush {
+                    repo_path: path_for_sub.to_string(),
+                    metadata: Some(proto_metadata),
+                }),
+            );
+        });
+
+        self.git_status_models.insert(repo_path.clone(), handle);
+    }
+
+    /// Subscribe `conn` to `repo`'s git status (navigation in), moving it off
+    /// any repo it was previously in. Pure bookkeeping — the caller ensures the
+    /// per-repo git-status model exists via `subscribe_to_git_status_updates`.
+    fn subscribe_git_status(&mut self, conn: ConnectionId, repo: &StandardizedPath) {
+        match self.git_status_repo_by_conn.get(&conn) {
+            Some(prev) if prev == repo => return,
+            Some(prev) => {
+                let prev = prev.clone();
+                self.drop_subscription(&prev, conn);
+            }
+            None => {}
+        }
+        self.git_status_repo_by_conn.insert(conn, repo.clone());
+        self.git_status_subscribers
+            .entry(repo.clone())
+            .or_default()
+            .insert(conn);
+    }
+
+    /// Unsubscribe `conn` from its current repo (navigation out of git, or
+    /// disconnect). A connection is in at most one repo, so this single method
+    /// also serves as the disconnect sweep.
+    fn unsubscribe_git_status(&mut self, conn: ConnectionId) {
+        if let Some(repo) = self.git_status_repo_by_conn.remove(&conn) {
+            self.drop_subscription(&repo, conn);
+        }
+    }
+
+    /// Remove one `(repo, conn)` subscription, evicting the per-repo git-status
+    /// and GitHub-info models once the repo has no subscribers left. The local
+    /// models' `Drop` impls reclaim the filesystem watcher and the `gh` timer.
+    fn drop_subscription(&mut self, repo: &StandardizedPath, conn: ConnectionId) {
+        let Some(subscribers) = self.git_status_subscribers.get_mut(repo) else {
+            return;
+        };
+        subscribers.remove(&conn);
+        if subscribers.is_empty() {
+            self.git_status_subscribers.remove(repo);
+            // Drop the GitHub model first so it releases its strong handle to
+            // the sibling git-status model, then drop the git-status model.
+            self.github_repo_models.remove(repo);
+            self.git_status_models.remove(repo);
+        }
+    }
+
+    /// Handles `UpdateGitStatus` notification (fire-and-forget).
+    fn handle_update_git_status(
+        &mut self,
+        msg: UpdateGitStatus,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                log::warn!("Invalid repo_path for UpdateGitStatus: {e}");
+                return;
+            }
+        };
+
+        self.subscribe_git_status(conn_id, &std_path);
+        self.subscribe_to_git_status_updates(&std_path, ctx);
+        self.push_git_status(&std_path, ctx);
+    }
+
+    fn push_git_status(&mut self, repo_path: &StandardizedPath, ctx: &mut ModelContext<Self>) {
+        let Some(handle) = self.git_status_models.get(repo_path) else {
+            return;
+        };
+        let Some(metadata) = handle.as_ref(ctx).metadata(ctx) else {
+            return;
+        };
+        let proto_metadata = metadata.into();
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::GitStatusPush(GitStatusPush {
+                repo_path: repo_path.to_string(),
+                metadata: Some(proto_metadata),
+            }),
+        );
+    }
+
+    /// Handles `GetGitHubPrInfoRequest` host-scoped request.
+    fn handle_get_github_pr_info(
+        &mut self,
+        msg: GetGitHubPrInfoRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                return invalid_request_response(format!(
+                    "Invalid repo_path for GetGitHubPrInfoRequest: {e}"
+                ));
+            }
+        };
+
+        // Ensure the per-repo model exists so its own lifecycle (creation
+        // fetch, 60s timer, branch change) keeps broadcasting PR-info pushes
+        // to all connections. We deliberately do NOT trigger `refresh_pr_info`
+        // here: the `get_pr_for_branch` fetch below already produces this
+        // request's fresh result for the direct response, so triggering the
+        // model too would run a redundant `gh pr view`.
+        self.subscribe_to_github_info_updates(&std_path, ctx);
+
+        let repo_path = std_path.to_local_path_lossy();
+        let path_future = Self::interactive_path_future(ctx);
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let path_env = path_future.await;
+                git::get_pr_for_branch(&repo_path, path_env.as_deref()).await
+            },
+            move |me, result, _ctx| {
+                let result = match result {
+                    Ok(pr_info) => {
+                        get_git_hub_pr_info_response::Result::Success(GetGitHubPrInfoSuccess {
+                            pr_info: pr_info.as_ref().map(super::proto::PrInfo::from),
+                        })
+                    }
+                    Err(e) => get_git_hub_pr_info_response::Result::Error(GitOpError {
+                        message: format!("{e:#}"),
+                    }),
+                };
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::GetGithubPrInfoResponse(GetGitHubPrInfoResponse {
+                        result: Some(result),
+                    }),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `GetGitHubRepoInfoRequest` host-scoped request.
+    fn handle_get_github_repo_info(
+        &mut self,
+        msg: GetGitHubRepoInfoRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                return invalid_request_response(format!(
+                    "Invalid repo_path for GetGitHubRepoInfoRequest: {e}"
+                ));
+            }
+        };
+
+        // Ensure the per-repo model exists so its own lifecycle (creation
+        // fetch, 60s timer) keeps broadcasting repository-info pushes to all
+        // connections. We deliberately do NOT trigger `refresh_repository_info`
+        // here: the `get_repository_info` fetch below already produces this
+        // request's fresh result for the direct response, so triggering the
+        // model too would run a redundant `gh repo view`.
+        self.subscribe_to_github_info_updates(&std_path, ctx);
+
+        let repo_path = std_path.to_local_path_lossy();
+        let path_future = Self::interactive_path_future(ctx);
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move {
+                let path_env = path_future.await;
+                git::get_repository_info(&repo_path, path_env.as_deref()).await
+            },
+            move |me, result, _ctx| {
+                let result = match result {
+                    Ok(repository_info) => {
+                        get_git_hub_repo_info_response::Result::Success(GetGitHubRepoInfoSuccess {
+                            repository_info: repository_info.as_ref().map(RepositoryInfo::from),
+                        })
+                    }
+                    Err(e) => get_git_hub_repo_info_response::Result::Error(GitOpError {
+                        message: format!("{e:#}"),
+                    }),
+                };
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::GetGithubRepoInfoResponse(GetGitHubRepoInfoResponse {
+                        result: Some(result),
+                    }),
+                );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn push_github_pr_info(&mut self, repo_path: &StandardizedPath, ctx: &mut ModelContext<Self>) {
+        let Some(handle) = self.github_repo_models.get(repo_path) else {
+            return;
+        };
+        let pr_info = handle.as_ref(ctx).pr_info(ctx).map(Into::into);
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::GithubPrInfoPush(GitHubPrInfoPush {
+                repo_path: repo_path.to_string(),
+                pr_info,
+            }),
+        );
+    }
+
+    fn push_github_repository_info(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(handle) = self.github_repo_models.get(repo_path) else {
+            return;
+        };
+        let repository_info = handle.as_ref(ctx).repository_info(ctx).map(Into::into);
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::GithubRepositoryInfoPush(GitHubRepositoryInfoPush {
+                repo_path: repo_path.to_string(),
+                repository_info,
+            }),
+        );
+    }
+
+    /// Subscribes the daemon to per-repo local GitHub info updates. On first
+    /// creation it wires model events to broadcast separate PR-info and
+    /// repository-info pushes. No-op if already subscribed, or when the repo is
+    /// not yet a watched repository
+    /// (the client requests another snapshot on `HostConnected`).
+    fn subscribe_to_github_info_updates(
+        &mut self,
+        repo_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.github_repo_models.contains_key(repo_path) {
+            return;
+        }
+        let repo = LocalOrRemotePath::Local(repo_path.to_local_path_lossy());
+        let handle = match GitRepoModels::handle(ctx).update(ctx, |factory, ctx| {
+            factory.subscribe_github_repo(&repo, ctx)
+        }) {
+            Ok(handle) => handle,
+            Err(e) => {
+                log::warn!("Daemon: github repo subscribe failed for {repo_path}: {e}");
+                return;
+            }
+        };
+
+        let path_for_sub = repo_path.clone();
+        ctx.subscribe_to_model(&handle, move |me, event, ctx| match event {
+            GitHubRepoEvent::PrInfoChanged => me.push_github_pr_info(&path_for_sub, ctx),
+            GitHubRepoEvent::RepositoryInfoChanged => {
+                me.push_github_repository_info(&path_for_sub, ctx)
+            }
+        });
+
+        self.github_repo_models.insert(repo_path.clone(), handle);
     }
 
     /// Returns a future resolving to the host's interactive login-shell PATH

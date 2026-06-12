@@ -1,3 +1,7 @@
+#[cfg(feature = "local_fs")]
+use std::path::PathBuf;
+
+use warp_util::remote_path::RemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 #[cfg(feature = "local_fs")]
@@ -5,7 +9,10 @@ mod local;
 #[cfg(feature = "local_fs")]
 pub use local::LocalGitHubRepoModel;
 
-#[cfg(all(test, feature = "local_fs"))]
+mod remote;
+pub use remote::RemoteGitHubRepoModel;
+
+#[cfg(feature = "local_fs")]
 use crate::code_review::git_repo_model::GitRepoStatusModel;
 use crate::util::git::{PrInfo, RepositoryInfo};
 
@@ -19,21 +26,55 @@ pub enum GitHubRepoEvent {
     RepositoryInfoChanged,
 }
 
-/// Unified per-repo GitHub-info model. PR 1 only contains the local backend;
-/// remote support is added in the stacked PR.
+// ── Unified GitHubRepoModel (local or remote backend) ───────────────────────
+
+/// Unified per-repo GitHub-info model that dispatches to a local or remote
+/// backend, mirroring [`crate::code_review::git_repo_model::GitRepoStatusModel`].
+///
+/// Consumers (prompt chips, code review, agent context) hold a
+/// `ModelHandle<GitHubRepoModel>` and subscribe to its [`GitHubRepoEvent`]s
+/// without caring whether the repository is local or on an SSH host.
 pub enum GitHubRepoModel {
     #[cfg(feature = "local_fs")]
     Local(ModelHandle<LocalGitHubRepoModel>),
+    Remote(ModelHandle<RemoteGitHubRepoModel>),
 }
-
 impl Entity for GitHubRepoModel {
     type Event = GitHubRepoEvent;
 }
-
 impl GitHubRepoModel {
+    /// Creates the per-repo GitHub-info model for a local repository, backed
+    /// by the `gh`-driven [`LocalGitHubRepoModel`].
+    ///
+    /// The local backend tracks the current branch via the sibling
+    /// `git_status` model, fetching PR info on creation, on branch change,
+    /// and on a periodic timer.
+    #[cfg(feature = "local_fs")]
+    pub(super) fn new_local(
+        repo_path: PathBuf,
+        git_status: ModelHandle<GitRepoStatusModel>,
+        ctx: &mut AppContext,
+    ) -> ModelHandle<Self> {
+        let inner = ctx.add_model(|ctx| LocalGitHubRepoModel::new(repo_path, git_status, ctx));
+        ctx.add_model(|ctx| {
+            ctx.subscribe_to_model(&inner, Self::forward_event);
+            Self::Local(inner)
+        })
+    }
+
+    /// Creates the per-repo GitHub-info model for a repository on an SSH
+    /// host, backed by the push-receiving [`RemoteGitHubRepoModel`].
+    pub(super) fn new_remote(remote_path: RemotePath, ctx: &mut AppContext) -> ModelHandle<Self> {
+        let inner = ctx.add_model(|ctx| RemoteGitHubRepoModel::new(remote_path, ctx));
+        ctx.add_model(|ctx| {
+            ctx.subscribe_to_model(&inner, Self::forward_event);
+            Self::Remote(inner)
+        })
+    }
+
     /// Re-emit a sub-model event so subscribers of the unified model observe
     /// the same `GitHubRepoEvent`s regardless of backend.
-    pub(crate) fn forward_event(&mut self, event: &GitHubRepoEvent, ctx: &mut ModelContext<Self>) {
+    fn forward_event(&mut self, event: &GitHubRepoEvent, ctx: &mut ModelContext<Self>) {
         match event {
             GitHubRepoEvent::PrInfoChanged => ctx.emit(GitHubRepoEvent::PrInfoChanged),
             GitHubRepoEvent::RepositoryInfoChanged => {
@@ -47,6 +88,7 @@ impl GitHubRepoModel {
         match self {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.as_ref(ctx).pr_info(),
+            Self::Remote(m) => m.as_ref(ctx).pr_info(),
         }
     }
 
@@ -55,6 +97,7 @@ impl GitHubRepoModel {
         match self {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.as_ref(ctx).repository_info(),
+            Self::Remote(m) => m.as_ref(ctx).repository_info(),
         }
     }
 
@@ -63,6 +106,7 @@ impl GitHubRepoModel {
         match self {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.as_ref(ctx).is_refreshing_pr_info(),
+            Self::Remote(m) => m.as_ref(ctx).is_refreshing_pr_info(),
         }
     }
 
@@ -71,6 +115,7 @@ impl GitHubRepoModel {
         match self {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.update(ctx, |m, ctx| m.refresh_pr_info(ctx)),
+            Self::Remote(m) => m.update(ctx, |m, ctx| m.refresh_pr_info(ctx)),
         }
     }
 
@@ -79,14 +124,13 @@ impl GitHubRepoModel {
         match self {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.update(ctx, |m, ctx| m.refresh_repository_info(ctx)),
+            Self::Remote(m) => m.update(ctx, |m, ctx| m.refresh_repository_info(ctx)),
         }
     }
-}
 
-#[cfg(all(test, feature = "local_fs"))]
-impl GitHubRepoModel {
     /// Wraps an inert local-backend test model in the unified enum.
-    pub(crate) fn new_local_for_test(
+    #[cfg(all(test, feature = "local_fs"))]
+    pub(crate) fn new_for_test(
         git_status: ModelHandle<GitRepoStatusModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
@@ -95,6 +139,7 @@ impl GitHubRepoModel {
         Self::Local(inner)
     }
 
+    #[cfg(all(test, feature = "local_fs"))]
     pub(crate) fn set_pr_info_for_test(
         &mut self,
         pr_info: Option<PrInfo>,
@@ -102,9 +147,11 @@ impl GitHubRepoModel {
     ) {
         match self {
             Self::Local(m) => m.update(ctx, |m, ctx| m.set_pr_info_for_test(pr_info, ctx)),
+            Self::Remote(_) => unreachable!("remote test models are not used"),
         }
     }
 
+    #[cfg(all(test, feature = "local_fs"))]
     pub(crate) fn set_repository_info_for_test(
         &mut self,
         repository_info: Option<RepositoryInfo>,
@@ -114,6 +161,7 @@ impl GitHubRepoModel {
             Self::Local(m) => m.update(ctx, |m, ctx| {
                 m.set_repository_info_for_test(repository_info, ctx)
             }),
+            Self::Remote(_) => unreachable!("remote test models are not used"),
         }
     }
 }

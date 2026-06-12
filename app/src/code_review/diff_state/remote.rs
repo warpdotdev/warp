@@ -197,13 +197,6 @@ impl RemoteDiffStateModel {
             } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
                 self.handle_create_pr_response(result, ctx);
             }
-            RemoteServerManagerEvent::GetPrInfoResponse {
-                host_id,
-                repo_path,
-                result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
-                self.handle_get_pr_info_response(result, ctx);
-            }
             RemoteServerManagerEvent::GenerateCommitMessageResponse {
                 host_id,
                 repo_path,
@@ -479,18 +472,7 @@ impl RemoteDiffStateModel {
         let branch_changed =
             previous_branch.is_some_and(|prev| prev != metadata.current_branch_name.as_str());
 
-        // PR info is owned by the separate GetPrInfo / CreatePr channel
-        // (`apply_pr_info`), not the diff-state sync: the daemon's
-        // `load_metadata_for_repo` always sends `pr_info: None`. A wholesale
-        // replace would therefore wipe the fetched value and revert the
-        // header's PR button on the next server push. Preserve the cached value
-        // when the sync doesn't carry one and the branch is unchanged — PR info
-        // is branch-specific, so a branch change clears it (the view re-fetches
-        // on `CurrentBranchChanged`).
-        let mut metadata = metadata.clone();
-        if !branch_changed && metadata.pr_info.is_none() {
-            metadata.pr_info = self.metadata.as_ref().and_then(|m| m.pr_info.clone());
-        }
+        let metadata = metadata.clone();
         self.metadata = Some(metadata.clone());
 
         // Only emit CurrentBranchChanged when there was a previous branch to
@@ -649,9 +631,9 @@ impl RemoteDiffStateModel {
     ) {
         let domain_result = match result {
             Ok(success) => {
-                // Apply the delta and any created-PR info in a single metadata
-                // mutation so the header re-renders from one
-                // `MetadataRefreshed` rather than two.
+                // Apply the delta before emitting the completion event so the
+                // header updates immediately. PR info is returned in the event
+                // result and refreshed through the shared `GitHubRepoModel`.
                 let commits = success
                     .delta
                     .unpushed_commits
@@ -662,9 +644,6 @@ impl RemoteDiffStateModel {
                 let metadata = self.metadata.get_or_insert_with(DiffMetadata::default);
                 metadata.unpushed_commits = commits;
                 metadata.upstream_ref = success.delta.upstream_ref.clone();
-                if let Some(ref pr) = pr_info {
-                    metadata.pr_info = Some(pr.clone());
-                }
                 ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(
                     metadata.clone(),
                 )));
@@ -700,37 +679,12 @@ impl RemoteDiffStateModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let domain_result = match result {
-            Ok(proto_pr) => {
-                let pr_info = PrInfo::from(proto_pr);
-                // Reuse the shared PR-info applier (sets metadata.pr_info and
-                // emits MetadataRefreshed).
-                self.apply_pr_info(Some(pr_info.clone()), ctx);
-                Ok(pr_info)
-            }
+            Ok(proto_pr) => Ok(PrInfo::from(proto_pr)),
             Err(msg) => Err(msg.clone()),
         };
         ctx.emit(DiffStateModelEvent::GitOpCompleted(
             super::GitOpResult::PrCreated(domain_result),
         ));
-    }
-
-    /// Handles a `GetPrInfoResponse`: applies the fetched PR info (or clears
-    /// it when there is no open PR) so the header reflects real PR state.
-    /// Errors are logged and leave the cached value untouched.
-    fn handle_get_pr_info_response(
-        &mut self,
-        result: &Result<Option<remote_server::proto::PrInfo>, String>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        match result {
-            Ok(proto_pr) => {
-                let pr_info = proto_pr.as_ref().map(PrInfo::from);
-                self.apply_pr_info(pr_info, ctx);
-            }
-            Err(msg) => {
-                log::warn!("RemoteDiffStateModel: GetPrInfo failed: {msg}");
-            }
-        }
     }
 
     /// Handles a `GetCommittedBranchFilesResponse`: converts the proto entries
@@ -799,17 +753,6 @@ impl RemoteDiffStateModel {
         let repo_path = self.remote_path.path.clone();
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.git_generate_commit_message(host_id, repo_path, include_unstaged, branch_name, ctx);
-        });
-    }
-
-    /// Fetches PR info for the current branch via the remote `GetPrInfo`
-    /// command. The result arrives as a `GetPrInfoResponse` manager event,
-    /// handled in `handle_manager_event`, which applies it to metadata.
-    pub fn fetch_pr_info(&self, ctx: &mut ModelContext<Self>) {
-        let host_id = self.remote_path.host_id.clone();
-        let repo_path = self.remote_path.path.clone();
-        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.git_get_pr_info(host_id, repo_path, ctx);
         });
     }
 
@@ -927,23 +870,6 @@ impl RemoteDiffStateModel {
         ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(
             metadata.clone(),
         )));
-    }
-
-    /// Applies PR info fetched via the remote `GetPrInfo` / `CreatePr` command
-    /// to the cached metadata and emits `MetadataRefreshed`. This is the
-    /// remote source of PR info (the local `GitRepoStatusModel` has no remote
-    /// equivalent yet).
-    pub fn apply_pr_info(&mut self, pr_info: Option<PrInfo>, ctx: &mut ModelContext<Self>) {
-        let metadata = self.metadata.get_or_insert_with(DiffMetadata::default);
-        metadata.pr_info = pr_info;
-        ctx.emit(DiffStateModelEvent::MetadataRefreshed(Box::new(
-            metadata.clone(),
-        )));
-    }
-
-    /// Returns the cached PR info for the current branch, if any.
-    pub fn pr_info(&self) -> Option<&PrInfo> {
-        self.metadata.as_ref().and_then(|m| m.pr_info.as_ref())
     }
 }
 

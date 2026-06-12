@@ -24,9 +24,10 @@ use crate::client::InitializeParams;
 use crate::client::RemoteServerClient;
 use crate::codebase_index_proto::RemoteCodebaseIndexStatus;
 use crate::proto::{
-    diff_state, get_diff_state_response, CodebaseIndexLimits, DiffMode, DiffState,
-    DiffStateErrorValue, DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot,
-    FileStatusInfo, GetDiffStateResponse, GitOpDelta, TextEdit,
+    diff_state, get_diff_state_response, get_git_hub_pr_info_response,
+    get_git_hub_repo_info_response, CodebaseIndexLimits, DiffMode, DiffState, DiffStateErrorValue,
+    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, FileStatusInfo,
+    GetDiffStateResponse, GitOpDelta, GitStatusMetadata, RepositoryInfo, TextEdit,
 };
 use crate::repo_metadata_proto::proto_load_repo_metadata_directory_response_to_update;
 #[cfg(not(target_family = "wasm"))]
@@ -136,7 +137,6 @@ pub enum RemoteServerOperation {
     CommitChain,
     Push,
     CreatePr,
-    GetPrInfo,
     GenerateCommitMessage,
 }
 
@@ -283,6 +283,9 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
         ClientEvent::DiffStateSnapshotReceived { .. } => "diff_state_snapshot",
         ClientEvent::DiffStateMetadataUpdateReceived { .. } => "diff_state_metadata_update",
         ClientEvent::DiffStateFileDeltaReceived { .. } => "diff_state_file_delta",
+        ClientEvent::GitStatusPushReceived { .. } => "git_status_push",
+        ClientEvent::GitHubPrInfoPushReceived { .. } => "github_pr_info_push",
+        ClientEvent::GitHubRepositoryInfoPushReceived { .. } => "github_repository_info_push",
         ClientEvent::MessageDecodingError => "message_decoding_error",
     }
 }
@@ -574,13 +577,6 @@ pub enum RemoteServerManagerEvent {
         repo_path: StandardizedPath,
         result: Result<String, String>,
     },
-    /// Response to a standalone get-PR-info (`gh pr view`). `Ok(None)` means
-    /// there is no open PR for the current branch.
-    GetPrInfoResponse {
-        host_id: HostId,
-        repo_path: StandardizedPath,
-        result: Result<Option<crate::proto::PrInfo>, String>,
-    },
     /// Response to a committed-branch-files request (backs the Create PR
     /// dialog's Changes box). Carries the committed per-file entries
     /// (`merge_base(HEAD, main)..HEAD`) on success.
@@ -588,6 +584,43 @@ pub enum RemoteServerManagerEvent {
         host_id: HostId,
         repo_path: StandardizedPath,
         result: Result<Vec<crate::proto::FileChangeEntry>, String>,
+    },
+
+    // --- Git status events (forwarded from ClientEvent push channel) ---
+    /// Response to a PR-info refresh request. `Ok(None)` means the lookup
+    /// completed and the current branch has no PR.
+    GetGitHubPrInfoResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<Option<crate::proto::PrInfo>, String>,
+    },
+    /// Response to a repository-info refresh request.
+    GetGitHubRepoInfoResponse {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        result: Result<Option<crate::proto::RepositoryInfo>, String>,
+    },
+    /// An aggregate git status push (branch + diff stats) was pushed by the
+    /// server. Consumed by `RemoteGitRepoStatusModel` to drive the tab /
+    /// prompt chips for remote repositories.
+    GitStatusPushReceived {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        metadata: GitStatusMetadata,
+    },
+    /// PR info for the current branch was pushed by the server. Consumed by
+    /// `RemoteGitHubRepoModel` to drive PR chips for remote repositories.
+    GitHubPrInfoPushReceived {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        pr_info: Option<crate::proto::PrInfo>,
+    },
+    /// Repository name/owner info was pushed by the server. Consumed by
+    /// `RemoteGitHubRepoModel` to drive repository chips for remote repositories.
+    GitHubRepositoryInfoPushReceived {
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        repository_info: Option<RepositoryInfo>,
     },
 
     // --- Setup events ---
@@ -687,8 +720,12 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::GitPushResponse { .. }
             | RemoteServerManagerEvent::CreatePrResponse { .. }
             | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
-            | RemoteServerManagerEvent::GetPrInfoResponse { .. }
-            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. } => None,
+            | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
+            | RemoteServerManagerEvent::GetGitHubPrInfoResponse { .. }
+            | RemoteServerManagerEvent::GetGitHubRepoInfoResponse { .. }
+            | RemoteServerManagerEvent::GitStatusPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
+            | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => None,
             RemoteServerManagerEvent::CodebaseIndexStatusUpdated {
                 session_id: Some(session_id),
                 ..
@@ -1090,38 +1127,6 @@ impl HostRequestHandle {
         }
     }
 
-    /// Looks up the PR for the current branch (`gh pr view`) on the remote
-    /// host. `Ok(None)` means there is no open PR.
-    pub async fn git_get_pr_info(
-        &self,
-        repo_path: &StandardizedPath,
-    ) -> Result<Option<crate::proto::PrInfo>, HostRequestError> {
-        let msg = self
-            .send(crate::proto::host_scoped_request::Message::GitGetPrInfo(
-                crate::proto::GitGetPrInfoRequest {
-                    repo_path: repo_path.to_string(),
-                },
-            ))
-            .await?;
-        match msg.message {
-            Some(crate::proto::server_message::Message::GitGetPrInfoResponse(resp)) => {
-                match resp.result {
-                    Some(crate::proto::git_get_pr_info_response::Result::Success(success)) => {
-                        Ok(success.pr_info)
-                    }
-                    Some(crate::proto::git_get_pr_info_response::Result::Error(e)) => {
-                        Err(HostRequestError::OperationFailed(e.message))
-                    }
-                    None => Err(HostRequestError::UnexpectedResponse),
-                }
-            }
-            other => {
-                log::error!("Unexpected response variant for GetPrInfo: {other:?}");
-                Err(HostRequestError::UnexpectedResponse)
-            }
-        }
-    }
-
     /// Lists the committed branch files (`merge_base(HEAD, main)..HEAD`) for
     /// the current branch on the remote host. Committed-only — excludes
     /// uncommitted and untracked changes, so it matches what a PR would carry.
@@ -1190,6 +1195,71 @@ impl HostRequestHandle {
             }
             other => {
                 log::error!("Unexpected response variant for GenerateCommitMessage: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Fetches PR info for the current branch on the remote host. `Ok(None)`
+    /// means the lookup completed and the branch has no PR.
+    pub async fn get_github_pr_info(
+        &self,
+        repo_path: &StandardizedPath,
+    ) -> Result<Option<crate::proto::PrInfo>, HostRequestError> {
+        let msg = self
+            .send(crate::proto::host_scoped_request::Message::GetGithubPrInfo(
+                crate::proto::GetGitHubPrInfoRequest {
+                    repo_path: repo_path.to_string(),
+                },
+            ))
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GetGithubPrInfoResponse(resp)) => {
+                match resp.result {
+                    Some(get_git_hub_pr_info_response::Result::Success(success)) => {
+                        Ok(success.pr_info)
+                    }
+                    Some(get_git_hub_pr_info_response::Result::Error(e)) => {
+                        Err(HostRequestError::OperationFailed(e.message))
+                    }
+                    None => Err(HostRequestError::UnexpectedResponse),
+                }
+            }
+            other => {
+                log::error!("Unexpected response variant for GetGitHubPrInfo: {other:?}");
+                Err(HostRequestError::UnexpectedResponse)
+            }
+        }
+    }
+
+    /// Fetches repository name/owner info on the remote host.
+    pub async fn get_github_repo_info(
+        &self,
+        repo_path: &StandardizedPath,
+    ) -> Result<Option<crate::proto::RepositoryInfo>, HostRequestError> {
+        let msg = self
+            .send(
+                crate::proto::host_scoped_request::Message::GetGithubRepositoryInfo(
+                    crate::proto::GetGitHubRepoInfoRequest {
+                        repo_path: repo_path.to_string(),
+                    },
+                ),
+            )
+            .await?;
+        match msg.message {
+            Some(crate::proto::server_message::Message::GetGithubRepoInfoResponse(resp)) => {
+                match resp.result {
+                    Some(get_git_hub_repo_info_response::Result::Success(success)) => {
+                        Ok(success.repository_info)
+                    }
+                    Some(get_git_hub_repo_info_response::Result::Error(e)) => {
+                        Err(HostRequestError::OperationFailed(e.message))
+                    }
+                    None => Err(HostRequestError::UnexpectedResponse),
+                }
+            }
+            other => {
+                log::error!("Unexpected response variant for GetGitHubRepositoryInfo: {other:?}");
                 Err(HostRequestError::UnexpectedResponse)
             }
         }
@@ -3224,38 +3294,6 @@ impl RemoteServerManager {
             .detach();
     }
 
-    /// Fetches PR info for the current branch on the remote host and emits
-    /// `GetPrInfoResponse` with the result (`Ok(None)` = no open PR).
-    pub fn git_get_pr_info(
-        &mut self,
-        host_id: HostId,
-        repo_path: StandardizedPath,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let handle = self.host_request_handle(&host_id);
-
-        let repo_path_for_event = repo_path.clone();
-        let host_id_for_event = host_id.clone();
-        let spawner = self.spawner.clone();
-        ctx.background_executor()
-            .spawn(async move {
-                let result = handle
-                    .git_get_pr_info(&repo_path)
-                    .await
-                    .map_err(|e| e.to_string());
-                let _ = spawner
-                    .spawn(move |_me, ctx| {
-                        ctx.emit(RemoteServerManagerEvent::GetPrInfoResponse {
-                            host_id: host_id_for_event,
-                            repo_path: repo_path_for_event,
-                            result,
-                        });
-                    })
-                    .await;
-            })
-            .detach();
-    }
-
     /// Fetches the committed branch files (`merge_base(HEAD, main)..HEAD`) for
     /// the current branch on the remote host and emits
     /// `GetCommittedBranchFilesResponse` with the result.
@@ -3279,6 +3317,78 @@ impl RemoteServerManager {
                 let _ = spawner
                     .spawn(move |_me, ctx| {
                         ctx.emit(RemoteServerManagerEvent::GetCommittedBranchFilesResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Sends an `UpdateGitStatus` notification (fire-and-forget) to the
+    /// remote server for the given host.
+    pub fn update_git_status(&self, host_id: HostId, repo_path: &StandardizedPath) {
+        if let Some(client) = self.client_for_host(&host_id) {
+            client.update_git_status(repo_path);
+        } else {
+            log::debug!("Remote server update_git_status: no client for host={host_id}");
+        }
+    }
+
+    /// Fetches PR info for the current branch on the remote host and emits a
+    /// host-scoped response event.
+    pub fn get_github_pr_info(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = handle
+                    .get_github_pr_info(&repo_path)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::GetGitHubPrInfoResponse {
+                            host_id: host_id_for_event,
+                            repo_path: repo_path_for_event,
+                            result,
+                        });
+                    })
+                    .await;
+            })
+            .detach();
+    }
+
+    /// Fetches repository name/owner info on the remote host and emits a
+    /// host-scoped response event.
+    pub fn get_github_repo_info(
+        &mut self,
+        host_id: HostId,
+        repo_path: StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let handle = self.host_request_handle(&host_id);
+        let repo_path_for_event = repo_path.clone();
+        let host_id_for_event = host_id.clone();
+        let spawner = self.spawner.clone();
+        ctx.background_executor()
+            .spawn(async move {
+                let result = handle
+                    .get_github_repo_info(&repo_path)
+                    .await
+                    .map_err(|e| e.to_string());
+                let _ = spawner
+                    .spawn(move |_me, ctx| {
+                        ctx.emit(RemoteServerManagerEvent::GetGitHubRepoInfoResponse {
                             host_id: host_id_for_event,
                             repo_path: repo_path_for_event,
                             result,
@@ -3415,6 +3525,33 @@ impl RemoteServerManager {
                     repo_path,
                     mode,
                     delta,
+                });
+            }
+            ClientEvent::GitStatusPushReceived {
+                repo_path,
+                metadata,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::GitStatusPushReceived {
+                    host_id,
+                    repo_path,
+                    metadata,
+                });
+            }
+            ClientEvent::GitHubPrInfoPushReceived { repo_path, pr_info } => {
+                ctx.emit(RemoteServerManagerEvent::GitHubPrInfoPushReceived {
+                    host_id,
+                    repo_path,
+                    pr_info,
+                });
+            }
+            ClientEvent::GitHubRepositoryInfoPushReceived {
+                repo_path,
+                repository_info,
+            } => {
+                ctx.emit(RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived {
+                    host_id,
+                    repo_path,
+                    repository_info,
                 });
             }
             ClientEvent::Disconnected => {

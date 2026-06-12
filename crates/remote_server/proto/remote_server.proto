@@ -46,9 +46,10 @@ message HostScopedRequest {
     GitCommitChainRequest git_commit_chain = 15;
     GitPushRequest git_push = 16;
     GitCreatePrRequest git_create_pr = 17;
-    GitGetPrInfoRequest git_get_pr_info = 18;
-    GitGenerateCommitMessageRequest git_generate_commit_message = 19;
-    GitGetCommittedBranchFilesRequest git_get_committed_branch_files = 20;
+    GitGenerateCommitMessageRequest git_generate_commit_message = 18;
+    GitGetCommittedBranchFilesRequest git_get_committed_branch_files = 19;
+    GetGitHubPrInfoRequest get_github_pr_info = 20;
+    GetGitHubRepoInfoRequest get_github_repository_info = 21;
   }
 }
 
@@ -79,6 +80,7 @@ message Notification {
     BufferEdit buffer_edit = 5;
     CloseBuffer close_buffer = 6;
     UnsubscribeDiffState unsubscribe_diff_state = 7;
+    UpdateGitStatus update_git_status = 8;
   }
 }
 // Top-level envelope for all server → client messages.
@@ -115,9 +117,13 @@ message ServerMessage {
     GitCommitChainResponse git_commit_chain_response = 27;
     GitPushResponse git_push_response = 28;
     GitCreatePrResponse git_create_pr_response = 29;
-    GitGetPrInfoResponse git_get_pr_info_response = 30;
-    GitGenerateCommitMessageResponse git_generate_commit_message_response = 31;
-    GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 32;
+    GitGenerateCommitMessageResponse git_generate_commit_message_response = 30;
+    GitGetCommittedBranchFilesResponse git_get_committed_branch_files_response = 31;
+    GitStatusPush git_status_push = 32;
+    GitHubPrInfoPush github_pr_info_push = 33;
+    GetGitHubPrInfoResponse get_github_pr_info_response = 34;
+    GetGitHubRepoInfoResponse get_github_repo_info_response = 35;
+    GitHubRepositoryInfoPush github_repository_info_push = 36;
   }
 }
 

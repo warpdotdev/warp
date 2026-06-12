@@ -521,8 +521,8 @@ fn test_externally_driven_chip_skips_periodic_timer() {
                 )
                 .unwrap()
         });
-        let git_status = app
-            .add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
+        let git_status =
+            app.add_model(move |ctx| GitRepoStatusModel::new_for_test(repo_handle, None, ctx));
 
         let sessions = app.add_model(|_| Sessions::new_for_test());
         let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
@@ -589,7 +589,7 @@ fn test_git_status_change_updates_chip_value() {
             stats_against_head: DiffStats::default(),
         };
         let git_status = app.add_model(move |ctx| {
-            GitRepoStatusModel::new_local_for_test(repo_handle, Some(initial_metadata), ctx)
+            GitRepoStatusModel::new_for_test(repo_handle, Some(initial_metadata), ctx)
         });
 
         let sessions = app.add_model(|_| Sessions::new_for_test());
@@ -667,7 +667,7 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
         });
 
         let git_status = app.add_model(move |ctx| {
-            GitRepoStatusModel::new_local_for_test(
+            GitRepoStatusModel::new_for_test(
                 repo_handle,
                 Some(GitStatusMetadata {
                     current_branch_name: "feature-a".to_string(),
@@ -679,7 +679,7 @@ fn test_git_status_pr_info_updates_github_pr_chip_value() {
         });
         let github_repo_model = {
             let git_status = git_status.clone();
-            app.add_model(move |ctx| GitHubRepoModel::new_local_for_test(git_status, ctx))
+            app.add_model(move |ctx| GitHubRepoModel::new_for_test(git_status, ctx))
         };
 
         let sessions = app.add_model(|_| Sessions::new_for_test());

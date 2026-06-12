@@ -78,13 +78,6 @@ pub async fn create_pr(
     }
 }
 
-/// Fetches PR info for the current branch (the "view PR" action). Returns
-/// `Ok(None)` when the branch has no open PR.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-pub async fn get_pr(repo_path: &Path, path_env: Option<&str>) -> anyhow::Result<Option<PrInfo>> {
-    git::get_pr_for_branch(repo_path, path_env).await
-}
-
 /// Generates an AI commit message for the working-tree changes.
 /// Bails when there's nothing to summarize (empty diff) or the model returns an empty message.
 pub async fn generate_commit_message(
