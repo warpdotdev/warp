@@ -1,0 +1,16 @@
+[package]
+name = "warp_ssh_diagnostics"
+version = "0.1.0"
+edition = "2021"
+authors = ["Warp Team <dev@warp.dev>"]
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+command.workspace = true
+instant.workspace = true
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true

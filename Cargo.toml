@@ -92,6 +92,7 @@ warp_ripgrep = { path = "crates/warp_ripgrep" }
 warp_search_core = { path = "crates/warp_search_core" }
 warp_server_auth = { path = "crates/warp_server_auth" }
 warp_server_client = { path = "crates/warp_server_client" }
+warp_ssh_diagnostics = { path = "crates/warp_ssh_diagnostics" }
 warp_terminal = { path = "crates/warp_terminal" }
 warp_util = { path = "crates/warp_util" }
 warp_web_event_bus = { path = "crates/warp_web_event_bus" }
