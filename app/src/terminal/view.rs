@@ -20889,6 +20889,15 @@ impl TerminalView {
                     active_session.cancel_active_commands();
                 }
 
+                // Clear any block selections for user-sourced commands so that focus can
+                // return to the input box once the command completes. Otherwise, the
+                // lingering selection forces `redetermine_global_focus` to keep the
+                // terminal focused after the block finishes. AI-sourced commands keep
+                // their selections, since selected blocks act as conversation context.
+                if !event.source.is_ai_command() {
+                    self.clear_selected_blocks(ctx);
+                }
+
                 // Don't steal focus from other parts of the app.
                 if ctx.is_self_or_child_focused() {
                     self.focus_terminal(ctx);
