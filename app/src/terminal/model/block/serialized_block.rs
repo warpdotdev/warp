@@ -229,6 +229,39 @@ impl SerializedBlock {
         SerializedBlock::default()
     }
 
+    /// Serialize this block as a JSON string for session transcript storage.
+    ///
+    /// Unlike [`Self::to_json`], the command and output bytes are stored as UTF-8 strings
+    /// (not base64-encoded), which keeps the content human-readable and allows server-side
+    /// regex-based secret redaction before the block is persisted to GCS.
+    pub fn to_transcript_json(&self) -> serde_json::Result<String> {
+        #[derive(serde::Serialize)]
+        struct Transcript<'a> {
+            id: &'a BlockId,
+            command: std::borrow::Cow<'a, str>,
+            output: std::borrow::Cow<'a, str>,
+            exit_code: warp_core::command::ExitCode,
+            did_execute: bool,
+            pwd: &'a Option<String>,
+            git_head: &'a Option<String>,
+            git_branch_name: &'a Option<String>,
+            completed_ts: &'a Option<chrono::DateTime<chrono::Local>>,
+            start_ts: &'a Option<chrono::DateTime<chrono::Local>>,
+        }
+        serde_json::to_string(&Transcript {
+            id: &self.id,
+            command: String::from_utf8_lossy(&self.stylized_command),
+            output: String::from_utf8_lossy(&self.stylized_output),
+            exit_code: self.exit_code,
+            did_execute: self.did_execute,
+            pwd: &self.pwd,
+            git_head: &self.git_head,
+            git_branch_name: &self.git_branch_name,
+            completed_ts: &self.completed_ts,
+            start_ts: &self.start_ts,
+        })
+    }
+
     /// Serialize this block to JSON bytes.
     ///
     /// The command and output contents are base64-encoded. This is *not* the default serde behavior,

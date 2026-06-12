@@ -132,11 +132,9 @@ impl BlockClient for ServerApi {
         serialized_block: &SerializedBlock,
         shared_session_id: &str,
     ) -> Result<(), anyhow::Error> {
-        let serialized_json_bytes = serialized_block
-            .to_json()
-            .map_err(|e| anyhow!("Failed to serialize block: {e}"))?;
-        let serialized_json =
-            String::from_utf8(serialized_json_bytes).map_err(|e| anyhow!("{e}"))?;
+        let serialized_json = serialized_block
+            .to_transcript_json()
+            .map_err(|e| anyhow!("Failed to serialize block for transcript: {e}"))?;
 
         let variables = ShareBlockToSessionVariables {
             block: BlockInput {
