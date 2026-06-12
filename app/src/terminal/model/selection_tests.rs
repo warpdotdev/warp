@@ -180,6 +180,32 @@ fn extend_to_nearest_boundary_shrinks_inside_selection() {
 }
 
 #[test]
+fn extend_to_nearest_boundary_shrinks_same_row_by_column() {
+    let mut selection = Selection::new(SelectionType::Simple, Point::new(10, 2), Side::Left);
+    selection.update(Point::new(10, 20), Side::Right);
+
+    selection.extend_to_nearest_boundary(Point::new(10, 4), Side::Left);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(10, 4), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(10, 20), Side::Right)
+    );
+
+    selection.extend_to_nearest_boundary(Point::new(10, 18), Side::Right);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(10, 4), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(10, 18), Side::Right)
+    );
+}
+
+#[test]
 fn extend_to_nearest_boundary_handles_reversed_selection() {
     let mut selection = Selection::new(SelectionType::Simple, Point::new(20, 2), Side::Right);
     selection.update(Point::new(10, 2), Side::Left);
