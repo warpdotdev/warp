@@ -62,7 +62,10 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::import::model::ImportedConfigModel;
-use crate::settings::{AliasExpansionSettings, AppEditorSettings, InputBoxType, PrivacySettings};
+use crate::settings::{
+    AliasExpansionSettings, AppEditorSettings, InputBoxType, LongRunningCommandSubmissionMode,
+    PrivacySettings, PromptSubmissionMode,
+};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 #[cfg(windows)]
 use crate::system::SystemInfo;
@@ -1728,10 +1731,11 @@ fn prompt_submission_auto_queues_during_agent_controlled_lrc() {
     });
 }
 
-/// With the auto-queue-during-LRC setting off, a submission during an agent-controlled LRC is
-/// not queued (it falls through to the normal submission path, as today).
+/// With the LRC submission mode set to send immediately, a submission during an
+/// agent-controlled LRC is not queued (it falls through to the normal submission path, as
+/// today).
 #[test]
-fn prompt_submission_is_not_queued_during_lrc_when_setting_disabled() {
+fn prompt_submission_is_not_queued_during_lrc_when_set_to_send_immediately() {
     App::test((), |mut app| async move {
         let _agent_view = FeatureFlag::AgentView.override_enabled(false);
         let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
@@ -1742,8 +1746,8 @@ fn prompt_submission_is_not_queued_during_lrc_when_setting_disabled() {
         select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
-                .auto_queue_prompts_during_long_running_commands
-                .set_value(false, ctx);
+                .long_running_command_submission_mode
+                .set_value(LongRunningCommandSubmissionMode::SendImmediately, ctx);
         });
         let input = terminal.read(&app, |view, _| view.input().clone());
 
@@ -1755,6 +1759,94 @@ fn prompt_submission_is_not_queued_during_lrc_when_setting_disabled() {
 
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+/// With the default submission mode set to Queue, the LRC machinery is inert: a submission
+/// during an agent-controlled LRC still queues, but as a regular queued row (generic origin)
+/// that waits for the end of the full response rather than the end of the command.
+#[test]
+fn prompt_submission_during_lrc_with_queue_default_uses_generic_origin() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_controlled_lrc(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .default_prompt_submission_mode
+                .set_value(PromptSubmissionMode::Queue, ctx);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("queue me", ctx);
+            input.input_enter(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::AutoQueueToggle);
+        });
+    });
+}
+
+/// When the long-running command finishes, every `LrcAutoQueue` row fires to the agent in
+/// queue order; rows with other origins stay queued for the normal end-of-response drain.
+#[test]
+fn lrc_queued_prompts_fire_when_command_finishes() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_controlled_lrc(&mut app, &terminal);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new("first".to_owned(), QueuedQueryOrigin::LrcAutoQueue),
+                ctx,
+            );
+            model.append(
+                conversation_id,
+                QueuedQuery::new("keep me".to_owned(), QueuedQueryOrigin::QueueSlashCommand),
+                ctx,
+            );
+            model.append(
+                conversation_id,
+                QueuedQuery::new("second".to_owned(), QueuedQueryOrigin::LrcAutoQueue),
+                ctx,
+            );
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if matches!(event, super::Event::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        assert_eq!(*ai_query_count.borrow(), 2);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "keep me");
         });
     });
 }

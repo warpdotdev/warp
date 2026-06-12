@@ -13913,7 +13913,10 @@ impl Input {
             editor.clear_buffer(ctx);
         });
 
-        let origin = if queued_for_lrc {
+        // Only prompt rows get the LrcAutoQueue origin (sent when the command finishes);
+        // command rows can't be delivered to the agent, so they keep the generic origin
+        // and the existing queued-command drain semantics.
+        let origin = if queued_for_lrc && !is_command {
             QueuedQueryOrigin::LrcAutoQueue
         } else {
             QueuedQueryOrigin::AutoQueueToggle

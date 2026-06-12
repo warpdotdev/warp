@@ -6,7 +6,9 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment};
 use crate::features::FeatureFlag;
-use crate::settings::{AISettings, AISettingsChangedEvent, PromptSubmissionMode};
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, LongRunningCommandSubmissionMode, PromptSubmissionMode,
+};
 use crate::terminal::model::block::Block;
 
 /// A globally unique identifier for a single queued prompt row.
@@ -243,7 +245,7 @@ impl QueuedQueryModel {
 
         // Cache the default submission mode and refresh whenever the AI setting
         // changes. The render path consults the cache instead of dereferencing
-        // the setting on every call. The auto-queue-during-LRC setting is read by
+        // the setting on every call. The LRC submission-mode setting is read by
         // callers directly, but its changes also re-emit `DefaultModeChanged` so
         // the chip and ghost text re-render with the new effective state.
         let default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
@@ -253,7 +255,7 @@ impl QueuedQueryModel {
                 this.default_mode = AISettings::as_ref(ctx).default_prompt_submission_mode;
                 ctx.emit(QueuedQueryEvent::DefaultModeChanged);
             }
-            AISettingsChangedEvent::AutoQueuePromptsDuringLongRunningCommands { .. } => {
+            AISettingsChangedEvent::LongRunningCommandSubmissionMode { .. } => {
                 ctx.emit(QueuedQueryEvent::DefaultModeChanged);
             }
             _ => {}
@@ -743,17 +745,23 @@ impl QueuedQueryModel {
 }
 
 /// Returns true when the agent is in control of `active_block`'s long-running command on
-/// behalf of `conversation_id` and
-/// [`AISettings::auto_queue_prompts_during_long_running_commands`] is enabled — the
-/// conditions under which queue mode is auto-enabled. Feeds the `lrc_auto_queue_active`
-/// parameter of [`QueuedQueryModel::is_queue_next_prompt_enabled`].
+/// behalf of `conversation_id` and the settings call for queueing during the command —
+/// the conditions under which queue mode is auto-enabled. Feeds the
+/// `lrc_auto_queue_active` parameter of [`QueuedQueryModel::is_queue_next_prompt_enabled`].
+///
+/// Requires [`AISettings::default_prompt_submission_mode`] to be `Interrupt`: in `Queue`
+/// mode prompts already queue until the full response finishes, so the LRC-scoped
+/// machinery (per-command toggle, send-on-command-finish) stays inert.
 pub(crate) fn is_lrc_auto_queue_active(
     active_block: &Block,
     conversation_id: AIConversationId,
     app: &AppContext,
 ) -> bool {
+    let ai_settings = AISettings::as_ref(app);
     FeatureFlag::QueueSlashCommand.is_enabled()
-        && *AISettings::as_ref(app).auto_queue_prompts_during_long_running_commands
+        && ai_settings.default_prompt_submission_mode == PromptSubmissionMode::Interrupt
+        && ai_settings.long_running_command_submission_mode
+            == LongRunningCommandSubmissionMode::QueueUntilCommandCompletes
         && active_block.is_agent_in_control()
         && active_block.ai_conversation_id() == Some(conversation_id)
 }

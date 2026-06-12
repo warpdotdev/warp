@@ -5574,6 +5574,31 @@ impl TerminalView {
         }
     }
 
+    /// Sends every prompt that was auto-queued during an agent-controlled long-running command
+    /// ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order. Invoked when the
+    /// command finishes — these rows were queued "until the command finishes", unlike other
+    /// queued rows, which wait for the end of the full response.
+    pub(crate) fn send_lrc_queued_prompts(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let rows: Vec<(QueuedQueryId, String)> = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .filter(|row| row.origin() == QueuedQueryOrigin::LrcAutoQueue)
+            .map(|row| (row.id(), row.text().to_owned()))
+            .collect();
+        for (query_id, text) in rows {
+            self.input.update(ctx, |input, ctx| {
+                input.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+            });
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.remove_fired_row(conversation_id, query_id, ctx);
+            });
+        }
+    }
+
     /// Drains one queued prompt when the cloud setup phase completes for a promptless handoff run
     /// (a prompt will not be auto-sent by the worker so there's no normal event to initiate a queued prompt sending).
     pub(crate) fn maybe_drain_queue_after_promptless_setup(&mut self, ctx: &mut ViewContext<Self>) {
@@ -6629,11 +6654,13 @@ impl TerminalView {
                 self.cli_subagent_views.remove(block_id);
 
                 // The command ended — drop any LRC-scoped auto-queue override so the
-                // conversation reverts to its pre-command queue state.
+                // conversation reverts to its pre-command queue state, then deliver the
+                // prompts that were queued "until the command finishes".
                 if let Some(conversation_id) = conversation_id {
                     QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                         model.clear_queue_next_lrc_prompt_override(*conversation_id, ctx);
                     });
+                    self.send_lrc_queued_prompts(*conversation_id, ctx);
                 }
 
                 if FeatureFlag::AgentView.is_enabled() {

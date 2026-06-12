@@ -45,9 +45,9 @@ use super::settings_page::{
     build_sub_header, build_toggle_element, render_body_item_label,
     render_body_item_label_with_icon, render_custom_size_header, render_dropdown_item,
     render_dropdown_item_label, render_full_pane_width_ai_button, render_input_list,
-    render_separator, render_settings_info_banner, AdditionalInfo, InputListItem,
-    LocalOnlyIconState, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
-    SettingsWidget, ToggleState, HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
+    render_separator, render_settings_info_banner, InputListItem, LocalOnlyIconState, MatchData,
+    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState,
+    HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
 };
 use super::{
     editor_text_colors, flags, SettingActionPairContexts, SettingActionPairDescriptions,
@@ -81,11 +81,11 @@ use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
-    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled,
-    AutoQueuePromptsDuringLongRunningCommands, AwsBedrockAutoLogin, AwsBedrockCredentialsEnabled,
-    CanUseWarpCreditsForFallback, CodeSettings, CodebaseContextEnabled, FileBasedMcpEnabled,
-    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
-    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
+    AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
+    AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
+    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
+    IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled,
+    LongRunningCommandSubmissionMode, MemoryEnabled, NLDInTerminalEnabled,
     NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
     RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
@@ -391,20 +391,33 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             })
             .collect();
         app.register_fixed_bindings(mode_bindings);
+
+        // The LRC submission mode only applies (and is only shown) when the default
+        // prompt submission mode is Interrupt, so its palette entries are gated on it.
+        let lrc_mode_bindings: Vec<FixedBinding> = LongRunningCommandSubmissionMode::iter()
+            .map(|mode| {
+                let context_flag = match mode {
+                    LongRunningCommandSubmissionMode::SendImmediately => {
+                        flags::LRC_SUBMISSION_SEND_IMMEDIATELY
+                    }
+                    LongRunningCommandSubmissionMode::QueueUntilCommandCompletes => {
+                        flags::LRC_SUBMISSION_QUEUE_UNTIL_COMMAND_COMPLETES
+                    }
+                };
+                FixedBinding::empty(
+                    mode.command_palette_description(),
+                    builder(SettingsAction::AI(
+                        AISettingsPageAction::SetLongRunningCommandSubmissionMode(mode),
+                    )),
+                    ai_context.clone()
+                        & id!(flags::PROMPT_SUBMISSION_INTERRUPT)
+                        & !id!(context_flag),
+                )
+                .with_group(bindings::BindingGroup::WarpAi.as_str())
+            })
+            .collect();
+        app.register_fixed_bindings(lrc_mode_bindings);
     }
-    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "auto-queue prompts during long-running commands",
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleAutoQueuePromptsDuringLrc,
-            )),
-            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-            flags::AUTO_QUEUE_PROMPTS_DURING_LRC_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::QueueSlashCommand.is_enabled())],
-        app,
-    );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![ToggleSettingActionPair::new(
             "natural language autosuggestions",
@@ -691,6 +704,7 @@ pub struct AISettingsPageView {
     thinking_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     orchestration_message_display_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     default_prompt_submission_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
+    lrc_submission_mode_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     #[cfg(feature = "local_fs")]
     conversation_layout_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
 
@@ -862,6 +876,17 @@ impl AISettingsPageView {
             default_prompt_submission_mode_dropdown.update(ctx, |dropdown, ctx| {
                 dropdown.set_selected_by_action(
                     AISettingsPageAction::SetPromptSubmissionMode(current_mode),
+                    ctx,
+                );
+            });
+        }
+
+        let lrc_submission_mode_dropdown = OtherAIWidget::create_lrc_submission_mode_dropdown(ctx);
+        {
+            let current_mode = AISettings::as_ref(ctx).long_running_command_submission_mode;
+            lrc_submission_mode_dropdown.update(ctx, |dropdown, ctx| {
+                dropdown.set_selected_by_action(
+                    AISettingsPageAction::SetLongRunningCommandSubmissionMode(current_mode),
                     ctx,
                 );
             });
@@ -1288,6 +1313,18 @@ impl AISettingsPageView {
                         .update(ctx, |dropdown, ctx| {
                             dropdown.set_selected_by_action(
                                 AISettingsPageAction::SetPromptSubmissionMode(current_mode),
+                                ctx,
+                            );
+                        });
+                }
+                AISettingsChangedEvent::LongRunningCommandSubmissionMode { .. } => {
+                    let current_mode = AISettings::as_ref(ctx).long_running_command_submission_mode;
+                    me.lrc_submission_mode_dropdown
+                        .update(ctx, |dropdown, ctx| {
+                            dropdown.set_selected_by_action(
+                                AISettingsPageAction::SetLongRunningCommandSubmissionMode(
+                                    current_mode,
+                                ),
                                 ctx,
                             );
                         });
@@ -1839,6 +1876,7 @@ impl AISettingsPageView {
             thinking_display_mode_dropdown,
             orchestration_message_display_mode_dropdown,
             default_prompt_submission_mode_dropdown,
+            lrc_submission_mode_dropdown,
             #[cfg(feature = "local_fs")]
             conversation_layout_dropdown,
             profile_views,
@@ -3167,6 +3205,7 @@ pub enum AISettingsPageAction {
     SetThinkingDisplayMode(ThinkingDisplayMode),
     SetOrchestrationMessageDisplayMode(OrchestrationMessageDisplayMode),
     SetPromptSubmissionMode(PromptSubmissionMode),
+    SetLongRunningCommandSubmissionMode(LongRunningCommandSubmissionMode),
     AttemptLoginGatedUpgrade,
     RemoveCLIAgentToolbarEnabledCommand(String),
     RemoveFromCommandExecutionAllowlist(AgentModeCommandExecutionPredicate),
@@ -3209,7 +3248,6 @@ pub enum AISettingsPageAction {
     ToggleCloudAgentComputerUse,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
-    ToggleAutoQueuePromptsDuringLrc,
     ToggleAgentAttribution,
 
     // Custom inference
@@ -3512,14 +3550,6 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
-            AISettingsPageAction::ToggleAutoQueuePromptsDuringLrc => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .auto_queue_prompts_during_long_running_commands
-                        .toggle_and_save_value(ctx));
-                });
-                ctx.notify();
-            }
             AISettingsPageAction::ToggleUseAgentToolbar => {
                 match AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings
@@ -3648,6 +3678,14 @@ impl TypedActionView for AISettingsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .default_prompt_submission_mode
+                        .set_value(*mode, ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetLongRunningCommandSubmissionMode(mode) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .long_running_command_submission_mode
                         .set_value(*mode, ctx));
                 });
                 ctx.notify();
@@ -6003,8 +6041,6 @@ struct AIInputWidget {
     show_input_hint_toggle: SwitchStateHandle,
     show_agent_tips_toggle: SwitchStateHandle,
     include_agent_commands_in_history_toggle: SwitchStateHandle,
-    auto_queue_during_lrc_toggle: SwitchStateHandle,
-    auto_queue_during_lrc_info_tooltip: MouseStateHandle,
 }
 
 impl SettingsWidget for AIInputWidget {
@@ -6101,41 +6137,28 @@ impl SettingsWidget for AIInputWidget {
                 &view.default_prompt_submission_mode_dropdown,
             ));
 
-            let auto_queue_during_lrc_label = render_body_item_label::<AISettingsPageAction>(
-                "Auto-queue prompts during long-running commands".into(),
-                Some(styles::header_font_color(is_any_ai_enabled, app)),
-                Some(AdditionalInfo {
-                    mouse_state: self.auto_queue_during_lrc_info_tooltip.clone(),
-                    on_click_action: None,
-                    secondary_text: None,
-                    tooltip_override_text: Some(
-                        "While an agent is driving a long-running command, submitted prompts \
-                         are queued instead of sent to the agent immediately. Press Enter on \
-                         an empty input to send the next queued prompt."
-                            .to_owned(),
+            // Only meaningful in Interrupt mode: with Queue selected, prompts already
+            // queue until the end of the full response, so the LRC mode is hidden.
+            if ai_settings.default_prompt_submission_mode == PromptSubmissionMode::Interrupt {
+                widget_children.push(render_dropdown_item(
+                    appearance,
+                    "Default long-running command submission mode",
+                    Some(
+                        "What happens when you submit a prompt while an agent is driving a \
+                         long-running command. Queued prompts are sent to the agent when the \
+                         command finishes.",
                     ),
-                }),
-                LocalOnlyIconState::for_setting(
-                    AutoQueuePromptsDuringLongRunningCommands::storage_key(),
-                    AutoQueuePromptsDuringLongRunningCommands::sync_to_cloud(),
-                    &mut view.local_only_icon_tooltip_states.borrow_mut(),
-                    app,
-                ),
-                ToggleState::Enabled,
-                appearance,
-            );
-            widget_children.push(build_toggle_element(
-                auto_queue_during_lrc_label,
-                render_ai_feature_switch(
-                    self.auto_queue_during_lrc_toggle.clone(),
-                    *ai_settings.auto_queue_prompts_during_long_running_commands,
-                    is_any_ai_enabled,
-                    AISettingsPageAction::ToggleAutoQueuePromptsDuringLrc,
-                    app,
-                ),
-                appearance,
-                None,
-            ));
+                    None,
+                    LocalOnlyIconState::for_setting(
+                        LongRunningCommandSubmissionMode::storage_key(),
+                        LongRunningCommandSubmissionMode::sync_to_cloud(),
+                        &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                        app,
+                    ),
+                    (!is_any_ai_enabled).then(|| appearance.theme().disabled_ui_text_color()),
+                    &view.lrc_submission_mode_dropdown,
+                ));
+            }
         }
 
         Flex::column().with_children(widget_children).finish()
@@ -6769,6 +6792,29 @@ impl OtherAIWidget {
                 )
             })
             .collect();
+
+        ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(AI_SETTINGS_DROPDOWN_WIDTH);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown.set_menu_max_height(AI_SETTINGS_DROPDOWN_MAX_HEIGHT, ctx);
+            dropdown.add_items(items, ctx);
+            dropdown
+        })
+    }
+
+    fn create_lrc_submission_mode_dropdown(
+        ctx: &mut ViewContext<AISettingsPageView>,
+    ) -> ViewHandle<Dropdown<AISettingsPageAction>> {
+        let items: Vec<DropdownItem<AISettingsPageAction>> =
+            LongRunningCommandSubmissionMode::iter()
+                .map(|mode| {
+                    DropdownItem::new(
+                        mode.display_name(),
+                        AISettingsPageAction::SetLongRunningCommandSubmissionMode(mode),
+                    )
+                })
+                .collect();
 
         ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
