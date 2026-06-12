@@ -25,6 +25,7 @@ pub(crate) mod conversation_details_panel;
 pub(crate) mod conversation_navigation;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
+pub(crate) mod discover_models;
 pub(crate) mod document;
 pub(crate) mod get_relevant_files;
 pub mod harness_availability;
