@@ -14618,6 +14618,7 @@ dependencies = [
  "instant",
  "inventory",
  "ipc",
+ "ipynb_parser",
  "is_executable",
  "iso8601-duration",
  "itertools 0.14.0",

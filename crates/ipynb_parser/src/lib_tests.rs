@@ -346,6 +346,31 @@ fn test_missing_cells_is_error() {
 }
 
 #[test]
+fn test_validate_notebook_matches_render_errors() {
+    // `validate_notebook` must agree with `ipynb_to_formatted_text` about what
+    // counts as a renderable notebook, so callers can use it as a cheap
+    // pre-check before deciding to render or fall back to a raw view.
+    assert!(validate_notebook(r#"{"nbformat": 4, "cells": []}"#).is_ok());
+    assert!(matches!(
+        validate_notebook("{ not valid json"),
+        Err(IpynbError::Parse(_))
+    ));
+    assert!(matches!(
+        validate_notebook(r#"{"nbformat": 3, "cells": []}"#),
+        Err(IpynbError::UnsupportedFormat { nbformat: Some(3) })
+    ));
+    assert!(matches!(
+        validate_notebook(r#"{"some": "json", "cells": []}"#),
+        Err(IpynbError::UnsupportedFormat { nbformat: None })
+    ));
+    // Missing required `cells` is a deserialization error, like the renderer.
+    assert!(matches!(
+        validate_notebook(r#"{"nbformat": 4}"#),
+        Err(IpynbError::Parse(_))
+    ));
+}
+
+#[test]
 fn test_raw_cell_rendered_as_plain_block() {
     let json = r#"{
         "nbformat": 4,
