@@ -214,7 +214,7 @@ static NSView *get_titlebar_container_view(NSWindow *window) {
     return [titleBarView superview];
 }
 
-static BOOL event_is_over_standard_window_button(NSWindow *window, NSEvent *event) {
+static NSButton *standard_window_button_at_event(NSWindow *window, NSEvent *event) {
     NSWindowButton buttons[] = {
         NSWindowCloseButton,
         NSWindowMiniaturizeButton,
@@ -225,13 +225,13 @@ static BOOL event_is_over_standard_window_button(NSWindow *window, NSEvent *even
         NSButton *button = [window standardWindowButton:buttons[i]];
         if (button && !button.hidden) {
             NSPoint point = [button convertPoint:event.locationInWindow fromView:nil];
-            if ([button hitTest:point]) {
-                return YES;
+            if (NSPointInRect(point, button.bounds)) {
+                return button;
             }
         }
     }
 
-    return NO;
+    return nil;
 }
 
 static BOOL event_is_over_resize_edge(NSWindow *window, NSEvent *event) {
@@ -249,11 +249,6 @@ static BOOL event_is_over_resize_edge(NSWindow *window, NSEvent *event) {
     return point.x <= RESIZE_EDGE_THICKNESS || point.y <= RESIZE_EDGE_THICKNESS ||
            point.x >= NSMaxX(bounds) - RESIZE_EDGE_THICKNESS ||
            point.y >= NSMaxY(bounds) - RESIZE_EDGE_THICKNESS;
-}
-
-static BOOL event_is_over_native_window_chrome(NSWindow *window, NSEvent *event) {
-    return event_is_over_standard_window_button(window, event) ||
-           event_is_over_resize_edge(window, event);
 }
 
 // Configures titlebar height and traffic light button constraints for a window.
@@ -446,11 +441,17 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
 
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
-        case NSEventTypeLeftMouseDown:
-            _leftMouseDownStartedInNativeWindowChrome =
-                event_is_over_native_window_chrome(self, event);
+        case NSEventTypeLeftMouseDown: {
+            NSButton *windowButton = standard_window_button_at_event(self, event);
+            if (windowButton) {
+                [windowButton mouseDown:event];
+                _leftMouseDownStartedInNativeWindowChrome = NO;
+                break;
+            }
+            _leftMouseDownStartedInNativeWindowChrome = event_is_over_resize_edge(self, event);
             [super sendEvent:event];
             break;
+        }
 
         // In some cases, NSWindow's default sendEvent: implementation will dispatch a MouseDown
         // event and subsequent MouseDragged events to the content view, but then dispatch the
