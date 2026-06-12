@@ -2308,6 +2308,7 @@ pub struct TerminalViewRenderContext {
     pub link_tool_tip: Option<GridHighlightedLink>,
     pub is_terminal_focused: bool,
     pub is_terminal_selecting: bool,
+    pub is_extending_block_text_selection: bool,
     pub is_context_menu_open: bool,
     pub is_waterfall_gap_mode: bool,
     pub pane_state: SplitPaneState,
@@ -2502,6 +2503,8 @@ pub struct TerminalView {
 
     /// Whether there is an active text selection.
     is_selecting: bool,
+    /// Whether the active block-list text selection gesture began from Shift+Click Extend.
+    is_extending_block_text_selection: bool,
 
     context_menu: ViewHandle<Menu<TerminalAction>>,
 
@@ -4257,6 +4260,7 @@ impl TerminalView {
             alt_screen_scroll_top: Lines::zero(),
             horizontal_clipped_scroll_state: Default::default(),
             is_selecting: false,
+            is_extending_block_text_selection: false,
             context_menu_state: None,
             context_menu,
             hovered_secret: None,
@@ -6588,6 +6592,7 @@ impl TerminalView {
                         // selection visuals don't persist after switching selection focus to the
                         // CLI subagent view.
                         me.is_selecting = false;
+                        me.is_extending_block_text_selection = false;
                         me.block_text_selection_start_position = None;
                         me.clear_selected_text_except(Some(view.id()), ctx);
                         ctx.notify();
@@ -17714,6 +17719,9 @@ impl TerminalView {
             SelectAction::Update {
                 point, side, delta, ..
             } => self.update_alt_selection(*point, *side, delta, ctx),
+            SelectAction::Extend { point, side, .. } => {
+                self.extend_alt_selection(*point, *side, ctx)
+            }
             SelectAction::End => {
                 self.end_alt_selection(ctx);
             }
@@ -17738,6 +17746,7 @@ impl TerminalView {
             .alt_screen_mut()
             .start_selection(point, selection_type, side);
         self.is_selecting = true;
+        self.is_extending_block_text_selection = false;
 
         ctx.notify();
     }
@@ -17756,9 +17765,26 @@ impl TerminalView {
         ctx.notify();
     }
 
+    fn extend_alt_selection(&mut self, point: Point, side: Side, ctx: &mut ViewContext<Self>) {
+        if self.model.lock().alt_screen().selection().is_none() {
+            // Extend is only dispatched for an existing selection; direct action invocations
+            // without one are ignored.
+            return;
+        }
+
+        self.model
+            .lock()
+            .alt_screen_mut()
+            .extend_selection(point, side);
+        self.is_selecting = true;
+        self.is_extending_block_text_selection = false;
+        ctx.notify();
+    }
+
     fn end_alt_selection(&mut self, ctx: &mut ViewContext<Self>) {
         if self.is_selecting {
             self.is_selecting = false;
+            self.is_extending_block_text_selection = false;
             self.maybe_copy_selection_to_clipboard(ctx);
             ctx.notify();
         } else {
@@ -17769,6 +17795,7 @@ impl TerminalView {
     fn end_text_selection(&mut self, ctx: &mut ViewContext<Self>) {
         if self.is_selecting {
             self.is_selecting = false;
+            self.is_extending_block_text_selection = false;
             self.block_text_selection_start_position = None;
 
             let selected_text = {
@@ -18076,6 +18103,11 @@ impl TerminalView {
                 delta,
                 position,
             } => self.update_block_text_selection(*point, *side, *delta, *position, ctx),
+            BlockTextSelectAction::Extend {
+                point,
+                side,
+                position,
+            } => self.extend_block_text_selection(*point, *side, *position, ctx),
             BlockTextSelectAction::End => {
                 self.end_text_selection(ctx);
             }
@@ -18481,6 +18513,7 @@ impl TerminalView {
             .block_list_mut()
             .start_selection(point, selection_type, side);
         self.is_selecting = true;
+        self.is_extending_block_text_selection = false;
 
         if self.rich_content_views.is_empty() {
             ctx.notify();
@@ -18572,6 +18605,43 @@ impl TerminalView {
 
         // Clear the selected block index on mouse drag.
         self.clear_selected_blocks(ctx);
+        self.model
+            .lock()
+            .block_list_mut()
+            .extend_selection_to_nearest_boundary(point, side);
+
+        ctx.notify();
+    }
+
+    /// Extends the existing block-text selection to `point`, keeping the
+    /// original anchor (head) fixed and moving only the tail. This backs
+    /// iTerm-style shift+left-click selection extension. If there is no existing
+    /// selection to extend, falls back to starting a new simple selection at
+    /// `point` so the gesture always does something sensible.
+    fn extend_block_text_selection(
+        &mut self,
+        point: BlockListPoint,
+        side: Side,
+        _position: Vector2F,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let has_selection = self.model.lock().block_list().selection().is_some();
+        if !has_selection {
+            // Extend is only dispatched when a selection already exists. Ignore direct
+            // invocations that arrive without a selection instead of creating a surprising one.
+            return;
+        }
+
+        // This is an explicit selection gesture, not a drag, so there's no
+        // text-vs-block drag ambiguity to debounce.
+        self.block_text_selection_start_position = None;
+        self.is_selecting = true;
+        self.is_extending_block_text_selection = true;
+
+        // Text and block selections are mutually exclusive context sources;
+        // extending a text selection clears any block selection.
+        self.clear_selected_blocks(ctx);
+
         self.model
             .lock()
             .block_list_mut()
@@ -19870,6 +19940,7 @@ impl TerminalView {
         // rich content view component (i.e. `CodeEditorView`), setting `is_selecting` to false
         // will prevent the selection from "spilling" into neighbouring blocks.
         self.is_selecting = false;
+        self.is_extending_block_text_selection = false;
 
         // TODO(Simon): This doesn't work as intended for nested inline SelectableAreas.
         // This includes inline action headers, requested commands, and env var collection blocks.
@@ -23130,6 +23201,7 @@ impl TerminalView {
                 .expect("terminal should upgrade")
                 .is_focused(app),
             is_terminal_selecting: self.is_selecting(),
+            is_extending_block_text_selection: self.is_extending_block_text_selection,
             is_context_menu_open: self.is_context_menu_open(),
             is_waterfall_gap_mode: self.is_waterfall_gap_mode(model, app),
             pane_state,
