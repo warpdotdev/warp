@@ -719,6 +719,25 @@ impl<T: EventLoopSender> PtyController<T> {
             return;
         }
 
+        // Drop tmux commands whose target control-mode session has
+        // gone away (e.g. the underlying SSH transport dropped and
+        // killed the remote tmux). Without this guard the literal
+        // bytes `new-window -d ... '(builtin echo -n "^^^..."; cmd;
+        // builtin echo "|||$?$$$")|command cat; command sleep 1'`
+        // fall through to the local zsh, which prints
+        // `command not found: new-window` plus the inner
+        // instrumentation cmd for every emission (see #9900). The
+        // bytes were destined for tmux control mode, not the user's
+        // local shell, so silently dropping is the correct fallback.
+        if self.tmux_control_mode.is_none() && raw_tmux_command {
+            log::warn!(
+                "Dropping tmux control-mode command sent without an active \
+                 control-mode session (likely after the remote SSH/tmux \
+                 transport closed)."
+            );
+            return;
+        }
+
         let bytes_to_write = match &mut self.tmux_control_mode {
             None => bytes_to_write,
             Some(_) if raw_tmux_command => bytes_to_write,
