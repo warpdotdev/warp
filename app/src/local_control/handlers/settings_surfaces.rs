@@ -245,11 +245,7 @@ fn setting_summary(key: &str, value: Value, value_type: &str) -> SettingSummary 
 }
 
 pub(super) fn public_theme_name(theme: &ThemeKind) -> String {
-    match theme {
-        ThemeKind::Custom(custom) | ThemeKind::CustomBase16(custom) => custom.name(),
-        ThemeKind::InMemory(_) => "In-memory theme".to_owned(),
-        _ => theme.to_string(),
-    }
+    theme.to_string()
 }
 
 fn active_theme_kind(
