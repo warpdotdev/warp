@@ -1427,6 +1427,51 @@ fn test_link_at_offset_uses_cached_cell_links() {
     assert_eq!(table.link_at_offset(CharOffset::from(3)), None);
 }
 
+#[test]
+fn test_first_hidden_section_line_range() {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    // A hidden section spanning 87 lines at the top of the file, followed by a
+    // visible paragraph. Because the hidden block is first, its start line is 0,
+    // so its full range is 0..87 — exactly what a bar double-click would expand.
+    content.push(BlockItem::Hidden(HiddenBlockConfig::new(
+        LineCount(87),
+        CharOffset::from(3066),
+        BlockLocation::Start,
+    )));
+    content.push(mock_paragraph(18.2, 0., 10));
+    render_state.set_content(content);
+
+    assert_eq!(
+        render_state.content().first_hidden_section_line_range(),
+        Some(LineCount(0)..LineCount(87)),
+        "first hidden section should resolve to its full line range"
+    );
+}
+
+#[test]
+fn test_first_hidden_section_line_range_none_without_hidden_sections() {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    content.push(mock_paragraph(18.2, 0., 10));
+    content.push(mock_paragraph(18.2, 0., 6));
+    render_state.set_content(content);
+
+    assert_eq!(
+        render_state.content().first_hidden_section_line_range(),
+        None,
+        "a diff with no hidden sections should resolve to None"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // CharCell (TUI) layout helper tests
 // ─────────────────────────────────────────────────────────────────────────────
