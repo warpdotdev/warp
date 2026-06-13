@@ -3,10 +3,12 @@ use std::ops::Range;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui_core::elements::{
-    Container, CrossAxisAlignment, Empty, Flex, Hoverable, MouseStateHandle, ParentElement,
+    ChildAnchor, Container, CrossAxisAlignment, Empty, Flex, Hoverable, MouseStateHandle,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
 };
 use warpui_core::geometry::vector::vec2f;
 use warpui_core::platform::Cursor;
+use warpui_core::ui_components::components::UiComponent;
 use warpui_core::{
     AfterLayoutContext, AppContext, Element, LayoutContext, SingletonEntity, SizeConstraint,
     WeakViewHandle,
@@ -40,19 +42,43 @@ impl RenderableHiddenSection {
         let theme = appearance.theme();
         let base_background = internal_colors::fg_overlay_1(theme);
         let hover_background = internal_colors::fg_overlay_2(theme);
+        let ui_builder = appearance.ui_builder();
 
         let element = Hoverable::new(mouse_state, move |state| {
             let row = Flex::row()
                 .with_child(Empty::new().finish())
                 .with_cross_axis_alignment(CrossAxisAlignment::Center);
-            let background = if state.is_hovered() {
+            let hovered = state.is_hovered();
+            let background = if hovered {
                 hover_background
             } else {
                 base_background
             };
-            Container::new(row.finish())
+            let bar = Container::new(row.finish())
                 .with_background(background)
-                .finish()
+                .finish();
+
+            if !hovered {
+                return bar;
+            }
+
+            // On hover, float a tooltip explaining the double-click gesture,
+            // centered just below the bar (mirrors how `Button` shows its tooltip).
+            let mut stack = Stack::new().with_child(bar);
+            let tooltip = ui_builder
+                .tool_tip("Double-click to expand".to_string())
+                .build()
+                .finish();
+            stack.add_positioned_overlay_child(
+                tooltip,
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 8.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomMiddle,
+                    ChildAnchor::TopMiddle,
+                ),
+            );
+            stack.finish()
         })
         // A single click on the bar does nothing, but registering the handler makes the
         // Hoverable consume the press so it does not fall through to text selection.
