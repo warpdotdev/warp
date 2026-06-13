@@ -332,6 +332,9 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     // macOS from cascading or clamping the window position while a tab-drag preview window is
     // being created and positioned under the cursor.
     BOOL _suppressFrameConstraintsDuringDrag;
+    // If the current left-mouse sequence started on native AppKit window chrome
+    // (traffic lights or resize edges), do not steal its drag/up events for contentView.
+    BOOL _leftMouseDownShouldUseAppKit;
 }
 
 @synthesize testMode;
@@ -401,21 +404,73 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     return [super constrainFrameRect:frameRect toScreen:screen];
 }
 
+- (BOOL)eventIsInsideView:(NSView *)view event:(NSEvent *)event {
+    if (!view) return NO;
+
+    NSPoint pointInWindow = [event locationInWindow];
+    NSPoint pointInView = [view convertPoint:pointInWindow fromView:nil];
+    return NSPointInRect(pointInView, [view bounds]);
+}
+
+- (BOOL)eventIsOnStandardWindowButton:(NSEvent *)event {
+    return [self eventIsInsideView:[self standardWindowButton:NSWindowCloseButton] event:event] ||
+           [self eventIsInsideView:[self standardWindowButton:NSWindowMiniaturizeButton]
+                             event:event] ||
+           [self eventIsInsideView:[self standardWindowButton:NSWindowZoomButton] event:event];
+}
+
+- (BOOL)eventIsOnResizeEdge:(NSEvent *)event {
+    if ((self.styleMask & NSWindowStyleMaskResizable) == 0) return NO;
+
+    NSView *contentView = self.contentView;
+    if (!contentView) return NO;
+
+    NSPoint pointInWindow = [event locationInWindow];
+    NSPoint pointInContent = [contentView convertPoint:pointInWindow fromView:nil];
+    NSRect bounds = contentView.bounds;
+
+    // If AppKit is targeting something outside the content view, do not redirect it.
+    if (!NSPointInRect(pointInContent, bounds)) return YES;
+
+    // Let AppKit keep ownership of resize-edge/corner drags. This is intentionally small so
+    // normal pane/tab dragging inside the custom titlebar still goes through the Warp workaround.
+    static const CGFloat RESIZE_EDGE_THICKNESS = 6.0;
+    return pointInContent.x <= RESIZE_EDGE_THICKNESS ||
+           pointInContent.y <= RESIZE_EDGE_THICKNESS ||
+           pointInContent.x >= NSMaxX(bounds) - RESIZE_EDGE_THICKNESS ||
+           pointInContent.y >= NSMaxY(bounds) - RESIZE_EDGE_THICKNESS;
+}
+
+- (BOOL)eventShouldUseAppKitWindowChromeHandling:(NSEvent *)event {
+    return [self eventIsOnStandardWindowButton:event] || [self eventIsOnResizeEdge:event];
+}
+
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
+        case NSEventTypeLeftMouseDown:
+            _leftMouseDownShouldUseAppKit = [self eventShouldUseAppKitWindowChromeHandling:event];
+            [super sendEvent:event];
+            break;
+
         // In some cases, NSWindow's default sendEvent: implementation will dispatch a MouseDown
         // event and subsequent MouseDragged events to the content view, but then dispatch the
         // remaining MouseDragged events and MouseUp event elsewhere.
-        // This is inconsistent with the Cocoa event architecture documentation
-        // (https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/EventArchitecture/EventArchitecture.html),
-        // but it's unclear how or why the events get redirected.
-        // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
-        // custom dispatching.
+        // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we keep the custom
+        // dispatching, except when the gesture belongs to AppKit's native window chrome.
         case NSEventTypeLeftMouseUp:
-            [self.contentView mouseUp:event];
+            if (_leftMouseDownShouldUseAppKit || self.inLiveResize) {
+                _leftMouseDownShouldUseAppKit = NO;
+                [super sendEvent:event];
+            } else {
+                [self.contentView mouseUp:event];
+            }
             break;
         case NSEventTypeLeftMouseDragged:
-            [self.contentView mouseDragged:event];
+            if (_leftMouseDownShouldUseAppKit || self.inLiveResize) {
+                [super sendEvent:event];
+            } else {
+                [self.contentView mouseDragged:event];
+            }
             break;
 
         // The NSWindow's default sendEvent: implementation does not propagate RightMouseDown events
