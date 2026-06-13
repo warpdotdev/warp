@@ -434,14 +434,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    welcome_panes (id) {
-        id -> Integer,
-        kind -> Text,
-        startup_directory -> Nullable<Text>,
-    }
-}
-
-diesel::table! {
     windows (id) {
         id -> Integer,
         active_tab_index -> Integer,
