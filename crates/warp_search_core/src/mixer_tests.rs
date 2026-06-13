@@ -276,7 +276,7 @@ fn test_initial_results_timeout_and_appends_late_async_results_without_reorderin
                     result: TestSearchItem {
                         id: "late_async".to_string(),
                         priority_tier: 0,
-                        score: 0.0,
+                        score: 100.0,
                     },
                 },
                 [QueryFilter::Actions],
@@ -328,8 +328,8 @@ fn test_initial_results_timeout_and_appends_late_async_results_without_reorderin
             );
         });
 
-        // When the async source finishes later, its results are appended to the end without
-        // reordering the already-visible sync results.
+        // When the async source finishes later, its results are placed at the low-priority edge
+        // without reordering the already-visible sync results.
         Timer::after(Duration::from_millis(200)).await;
 
         app.read(|app| {
@@ -341,7 +341,7 @@ fn test_initial_results_timeout_and_appends_late_async_results_without_reorderin
                     .iter()
                     .map(|result| result.accept_result().id)
                     .collect::<Vec<_>>(),
-                vec!["sync", "late_async"]
+                vec!["late_async", "sync"]
             );
         });
     });
