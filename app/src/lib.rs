@@ -1173,7 +1173,21 @@ pub(crate) fn initialize_app(
     });
 
     let server_api = server_api_provider.as_ref(ctx).get();
+    #[cfg(not(target_family = "wasm"))]
+    if let Ok(run_id) = std::env::var(warp_cli::OZ_RUN_ID_ENV) {
+        match run_id.parse() {
+            Ok(task_id) => server_api.set_ambient_agent_task_id(Some(task_id)),
+            Err(err) => log::warn!("Ignoring invalid {}: {err}", warp_cli::OZ_RUN_ID_ENV),
+        }
+    }
     let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
+    #[cfg(not(target_family = "wasm"))]
+    // Refresh starts only after the authenticated server client exists; tracing initialization
+    // remains responsible for deciding whether this process opted in to cloud-agent export.
+    tracing::start_auth_refresh(
+        server_api_provider.as_ref(ctx).get_managed_secrets_client(),
+        ctx,
+    );
 
     ctx.add_singleton_model(|_ctx| AuthStateProvider::new(auth_state.clone()));
 
@@ -1897,6 +1911,8 @@ pub(crate) fn initialize_app(
 
     // SkillManager is used to cache SKILL.md files for all active terminal views and their working directories
     ctx.add_singleton_model(SkillManager::new);
+    #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+    ai::skills::wire_remote_bundled_skills(ctx);
 
     // CloudViewModel subscribes to UpdateManager so that it can be notified when objects are
     // created on the server.

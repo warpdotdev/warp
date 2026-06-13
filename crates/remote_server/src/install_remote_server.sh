@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# Installs the Warp remote server binary on a remote host.
+# Installs the Warp remote server binary on a remote host, plus the
+# artifact's `resources/` tree (bundled skills, settings schema) at a
+# global, version-independent location:
+#
+#   {install_dir}/
+#   ├── {binary_name}{version_suffix}   ← the executable
+#   └── bundled_resources/              ← the artifact's resources tree
+#
+# Resources are deliberately decoupled from the binary version: the last
+# install wins. An older daemon that is still running parsed its skills at
+# startup, so a slightly newer resources tree underneath it is accepted.
 #
 # Placeholders (substituted at runtime by setup.rs):
 #   {download_base_url}         — e.g. https://app.warp.dev/download/cli
@@ -8,6 +18,7 @@
 #   {binary_name}               — e.g. oz | oz-dev | oz-preview
 #   {version_query}             — e.g. &version=v0.2026... (empty when no release tag)
 #   {version_suffix}            — e.g. -v0.2026...        (empty when no release tag)
+#   {bundled_resources_dir_name} — global resources directory name (e.g. bundled_resources)
 #   {no_http_client_exit_code}  — exit code when neither curl nor wget is available
 #   {staging_tarball_path}      — path to a pre-uploaded tarball (SCP fallback; empty normally)
 set -e
@@ -79,7 +90,23 @@ fi
 
 tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 
-bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' | head -n1)
+# The executable and its resources are siblings in the artifact. Exclude the
+# resources tree from the search: bundled skills may ship companion files
+# whose names also start with `oz`.
+bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' ! -path '*/resources/*' | head -n1)
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
 chmod +x "$bin"
+
+# Install the resources tree at the global, version-independent location
+# the daemon reads. `$tmpdir` lives inside `$install_dir`, so the `mv` is a
+# same-filesystem rename. Installed before the binary so an interrupted
+# install never leaves a new binary without its resources — the binary miss
+# re-triggers this script. A tarball without resources is not an error: the
+# daemon simply has no bundled skills.
+resources="$(dirname "$bin")/resources"
+if [ -d "$resources" ]; then
+  rm -rf "$install_dir/{bundled_resources_dir_name}"
+  mv "$resources" "$install_dir/{bundled_resources_dir_name}"
+fi
+
 mv "$bin" "$install_dir/{binary_name}{version_suffix}"

@@ -199,10 +199,10 @@ nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
 opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"] }
+opentelemetry-http = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
   "gzip-http",
   "http-proto",
-  "reqwest-blocking-client",
   "trace",
   "zstd-http",
 ] }
@@ -311,6 +311,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-jq",
   "lang-hcl",
   "lang-lua",
+  "lang-nix",
   "lang-ruby",
   "lang-php",
   "lang-toml",

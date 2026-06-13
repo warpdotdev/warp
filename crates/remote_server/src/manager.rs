@@ -283,6 +283,7 @@ fn client_event_kind(event: &ClientEvent) -> &'static str {
         ClientEvent::DiffStateSnapshotReceived { .. } => "diff_state_snapshot",
         ClientEvent::DiffStateMetadataUpdateReceived { .. } => "diff_state_metadata_update",
         ClientEvent::DiffStateFileDeltaReceived { .. } => "diff_state_file_delta",
+        ClientEvent::BundledSkillsSnapshotReceived { .. } => "bundled_skills_snapshot",
         ClientEvent::MessageDecodingError => "message_decoding_error",
     }
 }
@@ -462,6 +463,14 @@ pub enum RemoteServerManagerEvent {
     /// The last session for this host was disconnected or deregistered.
     /// Downstream features should tear down per-host models.
     HostDisconnected { host_id: HostId },
+    /// The daemon pushed its pre-parsed bundled skill catalog. Sent after
+    /// a connection initializes (when the daemon has already parsed) and
+    /// broadcast when daemon-side parsing completes; a newer snapshot for
+    /// the same host replaces the previous one.
+    BundledSkillsSnapshot {
+        host_id: HostId,
+        skills: Vec<crate::proto::BundledSkillProto>,
+    },
 
     // --- Repo metadata events (forwarded from ClientEvent push channel) ---
     /// Response to a `navigate_to_directory` request.
@@ -671,6 +680,7 @@ impl RemoteServerManagerEvent {
             | RemoteServerManagerEvent::GetBranchesResponse { session_id, .. } => Some(*session_id),
             RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
+            | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
             | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
@@ -3416,6 +3426,9 @@ impl RemoteServerManager {
                     mode,
                     delta,
                 });
+            }
+            ClientEvent::BundledSkillsSnapshotReceived { skills } => {
+                ctx.emit(RemoteServerManagerEvent::BundledSkillsSnapshot { host_id, skills });
             }
             ClientEvent::Disconnected => {
                 // Handled by the drain loop's completion callback.

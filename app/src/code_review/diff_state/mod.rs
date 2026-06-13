@@ -209,6 +209,17 @@ impl FileDiff {
 #[derive(Debug)]
 pub struct FileDiffAndContent {
     pub file_diff: FileDiff,
+    /// Full file content at the diff base (HEAD or merge-base), used by the
+    /// code review editor to render inline diffs (`set_base`).
+    ///
+    /// `None` means no usable baseline exists and no editor is constructed:
+    /// binary files, non-file entries (e.g. nested repo/worktree directories),
+    /// failed `git show`, or content that was never loaded / was withheld on
+    /// the wire (reconstruction from cached `GitDiffData`, over-budget files).
+    ///
+    /// `Some("")` means a baseline exists but is empty: new/untracked files
+    /// that don't exist at the base (the diff correctly renders everything as
+    /// additions) or files genuinely empty at the base commit.
     pub content_at_head: Option<String>,
 }
 

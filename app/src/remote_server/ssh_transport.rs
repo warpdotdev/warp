@@ -286,7 +286,7 @@ impl RemoteTransport for SshTransport {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
         let socket_path = self.socket_path.clone();
         Box::pin(async move {
-            let cmd = format!("rm -f {}", remote_server::setup::remote_server_binary());
+            let cmd = remote_server::setup::remote_server_removal_command();
             log::info!("Removing stale remote server binary: {cmd}");
             let output = remote_server::ssh::run_ssh_command(
                 &socket_path,
