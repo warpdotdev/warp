@@ -27,6 +27,8 @@ pub(crate) mod conversation_rename;
 pub(crate) mod conversation_status_ui;
 pub(crate) mod conversation_utils;
 pub(crate) mod document;
+#[cfg(not(target_family = "wasm"))]
+pub mod geap_credentials;
 pub(crate) mod get_relevant_files;
 pub mod harness_availability;
 pub(crate) mod harness_display;

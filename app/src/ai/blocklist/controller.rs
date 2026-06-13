@@ -2373,7 +2373,9 @@ impl BlocklistAIController {
         // nearing or past expiry, kick off a background refresh so upcoming
         // requests can authenticate even when the proactive refresh loop
         // isn't running. This request still carries the currently stored
-        // token; the server is the authority on its validity.
+        // token; the server is the authority on its validity. The Gemini
+        // Enterprise (GEAP) analog re-arms a parked or never-armed WIF
+        // credential refresh chain the same way.
         #[cfg(not(target_family = "wasm"))]
         {
             use ::ai::api_keys::ApiKeyManager;
@@ -2381,6 +2383,7 @@ impl BlocklistAIController {
             let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
             ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                 manager.refresh_grok_tokens_if_needed(byo_allowed, ctx);
+                crate::ai::geap_credentials::refresh_geap_credentials_if_needed(manager, ctx);
             });
         }
 
