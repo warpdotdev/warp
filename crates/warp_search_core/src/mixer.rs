@@ -448,7 +448,7 @@ impl<T: Action + Clone> SearchMixer<T> {
     /// Commits buffered results from the current query, replacing the visible result set.
     /// After this, any late-arriving results are added directly to `results`.
     fn commit_pending_results(&mut self, ctx: &mut ModelContext<Self>) {
-            let Some(pending) = self.pending_results.take() else {
+        let Some(pending) = self.pending_results.take() else {
             return;
         };
         self.results = pending;
