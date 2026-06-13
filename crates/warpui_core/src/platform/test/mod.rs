@@ -1,5 +1,6 @@
 mod app;
 mod delegate;
+mod gui;
 
 pub use app::App;
 pub(crate) use delegate::WindowManager;

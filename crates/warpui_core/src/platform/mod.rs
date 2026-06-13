@@ -3,15 +3,16 @@ pub mod file_picker;
 pub mod keyboard;
 pub mod menu;
 
+mod gui;
+pub use gui::{FontDBExt, TextLayoutSystem};
+
 pub mod test;
 #[cfg(target_family = "wasm")]
 pub mod wasm;
 
 use std::any::Any;
 use std::collections::HashSet;
-use std::ops::Range;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -29,19 +30,15 @@ use serde::{Deserialize, Serialize};
 use warp_util::path::ShellFamily;
 
 use crate::accessibility::AccessibilityContent;
-use crate::fonts::canvas::RasterFormat;
-use crate::fonts::{
-    FamilyId, FontId, GlyphId, Metrics, Properties, RasterizedGlyph, SubpixelAlignment,
-};
+use crate::fonts::{FamilyId, FontId, GlyphId, Metrics, Properties};
 use crate::keymap::Keystroke;
 use crate::modals::{AlertDialog, ModalId};
 use crate::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
-use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, rendering, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
-    OptionalPlatformWindow, Scene, WindowId,
+    geometry, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
+    OptionalPlatformWindow, WindowId,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -95,8 +92,8 @@ pub struct WindowOptions {
     pub style: WindowStyle,
     pub background_blur_radius_pixels: Option<u8>,
     pub background_blur_texture: bool,
-    pub gpu_power_preference: GPUPowerPreference,
     pub backend_preference: Option<GraphicsBackend>,
+    pub gpu_power_preference: GPUPowerPreference,
     pub on_gpu_device_info_reported: Box<OnGPUDeviceSelected>,
     /// This is an identifier to distinguish different windows among one application. It is a no-op
     /// on all platforms except X11 Linux.
@@ -107,8 +104,8 @@ pub struct WindowOptions {
 
 impl std::fmt::Debug for WindowOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WindowOptions")
-            .field("bounds", &self.bounds)
+        let mut s = f.debug_struct("WindowOptions");
+        s.field("bounds", &self.bounds)
             .field("hide_title_bar", &self.hide_title_bar)
             .field("title", &self.title)
             .field("style", &self.style)
@@ -116,9 +113,9 @@ impl std::fmt::Debug for WindowOptions {
                 "background_blur_radius_pixels",
                 &self.background_blur_radius_pixels,
             )
-            .field("background_blur_texture", &self.background_blur_texture)
-            .field("gpu_power_preference", &self.gpu_power_preference)
-            .field("backend_preference", &self.backend_preference)
+            .field("background_blur_texture", &self.background_blur_texture);
+        s.field("gpu_power_preference", &self.gpu_power_preference);
+        s.field("backend_preference", &self.backend_preference)
             .field("window_instance", &self.window_instance)
             .finish()
     }
@@ -304,43 +301,16 @@ pub trait LoadedSystemFonts: 'static + Any + Send + Sync {
     fn as_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
-/// Trait that implements text layout. Implementors must be [`Send`] and
-/// [`Sync`] so that text can be laid out in a background thread.
-pub trait TextLayoutSystem: 'static + Send + Sync {
-    /// Lays out a single line of text.
-    fn layout_line(
-        &self,
-        text: &str,
-        line_style: LineStyle,
-        style_runs: &[(Range<usize>, StyleAndFont)],
-        max_width: f32,
-        clip_config: ClipConfig,
-    ) -> Line;
-
-    /// Lays out text into a series of lines that fit within the bounding box
-    /// defined by `max_width` and `max_height`.
-    #[allow(clippy::too_many_arguments)]
-    fn layout_text(
-        &self,
-        text: &str,
-        line_style: LineStyle,
-        style_runs: &[(Range<usize>, StyleAndFont)],
-        max_width: f32,
-        max_height: f32,
-        alignment: TextAlignment,
-        first_line_head_indent: Option<f32>,
-    ) -> TextFrame;
-}
-
 /// A trait for working with fonts.
 ///
-/// This interface provides a platform-agnostic API for loading fonts,
-/// retrieving font-related metrics, performing text shaping/layout, and
-/// rasterizing glyphs.
+/// This interface provides a platform-agnostic API for loading fonts and
+/// retrieving font-related metrics. The GUI-only capabilities (glyph
+/// rasterization and text shaping/layout) live on the backend-routed
+/// [`FontDBExt`] supertrait.
 ///
 /// Implementations of this trait can rely on callers to cache returned values
 /// where appropriate.
-pub trait FontDB: 'static {
+pub trait FontDB: 'static + FontDBExt {
     /// Loads a font family from the provided set of font data.
     ///
     /// Each bytestring should be decodable as a single font.
@@ -397,37 +367,12 @@ pub trait FontDB: 'static {
     /// horizontally.
     fn glyph_advance(&self, font_id: FontId, glyph_id: GlyphId) -> Result<Vector2I>;
 
-    /// Computes the size of the canvas needed to rasterize the glyph.
-    fn glyph_raster_bounds(
-        &self,
-        font_id: FontId,
-        size: f32,
-        glyph_id: GlyphId,
-        scale: Vector2F,
-        glyph_config: &rendering::GlyphConfig,
-    ) -> Result<RectI>;
-
     /// Computes the bounding box of a glyph with respect to surrounding glyphs.
     fn glyph_typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<RectI>;
-
-    /// Rasterizes a single glyph so it can be rendered to the screen.
-    #[allow(clippy::too_many_arguments)]
-    fn rasterize_glyph(
-        &self,
-        font_id: FontId,
-        size: f32,
-        glyph_id: GlyphId,
-        scale: Vector2F,
-        subpixel_alignment: SubpixelAlignment,
-        glyph_config: &rendering::GlyphConfig,
-        format: RasterFormat,
-    ) -> Result<RasterizedGlyph>;
 
     /// Returns the ID of the glyph which represents the given character in the
     /// given font.
     fn glyph_for_char(&self, font_id: FontId, char: char) -> Option<GlyphId>;
-
-    fn text_layout_system(&self) -> &dyn TextLayoutSystem;
 }
 
 #[derive(Clone, Copy, Debug, Default, num_derive::FromPrimitive, PartialEq, Eq)]
@@ -473,10 +418,6 @@ pub trait WindowContext {
     /// The maximum dimension size in pixels, either width or height, for a 2D-texture. `None`
     /// will be treated as unbounded.
     fn max_texture_dimension_2d(&self) -> Option<u32>;
-
-    /// Provides the window the next scene to render and asks it to schedule a
-    /// redraw.
-    fn render_scene(&self, scene: Rc<Scene>);
 
     /// Schedules a redraw of the window.
     fn request_redraw(&self);

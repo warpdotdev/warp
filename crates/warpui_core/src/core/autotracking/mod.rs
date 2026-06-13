@@ -100,7 +100,7 @@
 mod tracked;
 
 #[cfg(test)]
-#[path = "autotracking_tests.rs"]
+#[path = "autotracking_gui_tests.rs"]
 mod tests;
 
 use std::cell::UnsafeCell;

@@ -5,7 +5,7 @@ pub use self::context::*;
 pub use self::handle::*;
 use super::EntityId;
 use crate::accessibility::{AccessibilityContent, ActionAccessibilityContent};
-use crate::{keymap, Action, AppContext, CursorInfo, Element, Entity};
+use crate::{keymap, Action, AppContext, CursorInfo, Entity, RenderOutput};
 
 pub enum FocusContext {
     SelfFocused,
@@ -33,9 +33,9 @@ impl BlurContext {
 ///
 /// Conceptually, an implementation of [`View`] is analogous to a React
 /// component - a structure that holds instance state and can be asked to render
-/// itself, a process that produces a tree of rendering primitives (in [`warpui`](crate),
-/// these are structures that implement [`Element`]; in React, these are DOM
-/// elements).
+/// itself, a process that produces the active backend's [`RenderOutput`]: a
+/// tree of rendering primitives on the GUI backend (structures that implement
+/// `Element`), or an erased `Box<dyn Any>` element on the TUI backend.
 ///
 /// # Example
 ///
@@ -59,8 +59,8 @@ pub trait View: Entity {
     /// Returns a unique name for this implementation of View.
     fn ui_name() -> &'static str;
 
-    /// Produces an [`Element`] tree representation of this view.
-    fn render(&self, app: &AppContext) -> Box<dyn Element>;
+    /// Produces the [`RenderOutput`] representation of this view.
+    fn render(&self, app: &AppContext) -> RenderOutput;
 
     /// Handles the view or its descendent receiving focus.
     /// Which view received focus is indicated by the [`FocusContext`].
@@ -160,3 +160,7 @@ pub trait TypedActionView {
         ActionAccessibilityContent::default()
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

@@ -3,7 +3,7 @@ use anyhow::Result;
 use super::*;
 use crate::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use crate::fonts::{collect_glyph_indices, init_fonts, Properties};
-use crate::platform::FontDB as _;
+use crate::platform::{FontDB as _, FontDBExt as _};
 use crate::text_layout::{TextStyle, DEFAULT_TOP_BOTTOM_RATIO};
 
 const FONT_SIZE: f32 = 16.;

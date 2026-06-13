@@ -7,7 +7,7 @@ use crate::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use crate::fonts::{FamilyId, Properties, Style, Weight};
 #[cfg(target_os = "macos")]
 use crate::platform::mac::fonts::FontDB;
-use crate::platform::{FontDB as _, LineStyle};
+use crate::platform::{FontDB as _, FontDBExt as _, LineStyle};
 use crate::text_layout::{
     ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame, TextStyle, DEFAULT_TOP_BOTTOM_RATIO,
 };

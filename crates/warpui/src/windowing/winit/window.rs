@@ -1687,13 +1687,6 @@ impl platform::WindowContext for Window {
             .map(|resources| resources.resources.device.limits().max_texture_dimension_2d)
     }
 
-    fn render_scene(&self, scene: Rc<Scene>) {
-        self.scene.borrow_mut().replace(scene);
-        if let Some(inner) = self.inner.borrow_mut().as_mut() {
-            inner.window.request_redraw();
-        }
-    }
-
     fn request_redraw(&self) {
         let _ = self.scene.borrow_mut().take();
         if let Some(inner) = self.inner.borrow_mut().as_mut() {

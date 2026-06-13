@@ -87,7 +87,6 @@ fn test_weak_handle_fails_after_last_strong_handle_dropped_in_event_callback() {
 /// processing.
 #[test]
 fn test_weak_view_handle_fails_after_last_strong_handle_dropped_in_event_callback() {
-    use crate::elements::Empty;
     use crate::platform::WindowStyle;
 
     struct TargetView;
@@ -97,8 +96,8 @@ fn test_weak_view_handle_fails_after_last_strong_handle_dropped_in_event_callbac
     }
 
     impl super::super::View for TargetView {
-        fn render(&self, _: &AppContext) -> Box<dyn crate::Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {

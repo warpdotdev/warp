@@ -3,6 +3,7 @@ mod app;
 mod autotracking;
 mod entity;
 mod model;
+mod presentation;
 mod view;
 mod window;
 
@@ -25,14 +26,15 @@ pub use entity::*;
 use futures_util::future::BoxFuture;
 pub use model::*;
 use pathfinder_geometry::rect::RectF;
+pub use presentation::GuiPresenterState;
 use serde::{Deserialize, Serialize};
 pub use view::*;
 pub use window::*;
 
+use crate::elements::Element;
+use crate::keymap;
 use crate::platform::{self, FullscreenState, WindowBounds, WindowStyle};
 use crate::rendering::OnGPUDeviceSelected;
-use crate::{keymap, Element};
-
 /// A unique identifier for a display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayId(usize);
@@ -131,11 +133,20 @@ impl fmt::Display for TaskId {
 
 pub type OptionalPlatformWindow = Option<Rc<dyn platform::Window>>;
 
-type ActionCallback =
-    dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
+/// What a [`View`] renders to.
+pub type RenderOutput = Box<dyn Element>;
 
-type TypedActionCallback =
-    dyn FnMut(&mut dyn AnyView, &dyn Any, &mut AppContext, WindowId, EntityId);
+// The view callbacks receive the type-erased view state (`dyn Any`) so the
+// action registries are shared by GUI views and (with the `tui` feature) TUI
+// views; the callbacks downcast to the concrete view type they were
+// registered for.
+type ActionCallback =
+    dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, WindowId, EntityId) -> bool;
+
+type TypedActionCallback = dyn FnMut(&mut dyn Any, &dyn Any, &mut AppContext, WindowId, EntityId);
+
+/// Per-view-type action handlers, keyed by action name.
+type ActionHandlersByName = HashMap<String, Vec<Box<ActionCallback>>>;
 
 type GlobalActionCallback =
     dyn FnMut(&dyn Any, &'static std::panic::Location<'static>, &mut AppContext);
@@ -230,11 +241,14 @@ pub enum Effect {
     },
 }
 
+/// The object-safe, type-erased view object stored per window. Carries the
+/// render + focus/blur/keymap/a11y hooks the shared core needs without naming
+/// the concrete view type.
 pub trait AnyView {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn ui_name(&self) -> &'static str;
-    fn render(&self, app: &AppContext) -> Box<dyn Element>;
+    fn render(&self, app: &AppContext) -> RenderOutput;
     fn on_focus(
         &mut self,
         focus_ctx: &FocusContext,
@@ -294,7 +308,7 @@ where
         T::ui_name()
     }
 
-    fn render<'a>(&self, app: &AppContext) -> Box<dyn Element> {
+    fn render(&self, app: &AppContext) -> RenderOutput {
         View::render(self, app)
     }
 
@@ -538,13 +552,16 @@ type ModelFromFutureCallback = dyn FnOnce(&mut dyn Any, Box<dyn Any>, &mut AppCo
 type ModelFromStreamItemCallback = dyn FnMut(&mut dyn Any, Box<dyn Any>, &mut AppContext, EntityId);
 type ModelFromStreamDoneCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, EntityId);
 
+// The view task callbacks receive the type-erased view state (`dyn Any`),
+// shared by GUI and TUI views; the callbacks downcast to the concrete view
+// type they were registered for.
 type ViewFromFutureCallback =
-    dyn FnOnce(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+    dyn FnOnce(&mut dyn Any, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
 type ViewFromStreamItemCallback =
-    dyn FnMut(&mut dyn AnyView, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
+    dyn FnMut(&mut dyn Any, Box<dyn Any>, &mut AppContext, WindowId, EntityId);
 
-type ViewFromStreamDoneCallback = dyn FnOnce(&mut dyn AnyView, &mut AppContext, WindowId, EntityId);
+type ViewFromStreamDoneCallback = dyn FnOnce(&mut dyn Any, &mut AppContext, WindowId, EntityId);
 
 enum TaskCallback {
     ModelFromFuture {

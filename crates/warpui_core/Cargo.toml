@@ -8,6 +8,11 @@ license = "MIT"
 
 [features]
 traces = []
+# Purely additive: enables the TUI view/element layer alongside the
+# always-compiled GUI machinery. The default (GUI) build is unaffected, and
+# enabling this feature anywhere in a dependency graph does not change GUI
+# consumers (feature unification is harmless).
+tui = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = ["dep:minimp4", "dep:openh264"]
 # If enabled, writes named telemetry events to the info log.  Should never be

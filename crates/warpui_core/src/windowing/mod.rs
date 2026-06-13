@@ -1,8 +1,7 @@
+mod gui;
 pub mod state;
 
 mod system;
-
-use std::rc::Rc;
 
 use pathfinder_geometry::rect::RectF;
 pub use state::{State, StateEvent, WindowManager};
@@ -10,7 +9,7 @@ pub use system::{CreateWindowingSystemError, System};
 
 use crate::actions::StandardAction;
 use crate::platform::WindowContext;
-use crate::{AppContext, AppContextRefMut, CursorInfo, Event, Scene};
+use crate::{AppContext, AppContextRefMut, CursorInfo, Event};
 
 /// Result of dispatching an event through the UI framework.
 #[derive(Debug, Clone, Copy, Default)]
@@ -27,7 +26,6 @@ pub(crate) type StandardActionCallback = Box<dyn Fn(StandardAction, &mut AppCont
 pub(crate) type ActiveCursorPositionCallback = Box<dyn Fn(&mut AppContext) -> Option<CursorInfo>>;
 pub(crate) type MoveCallback = Box<dyn Fn(RectF, &mut AppContext)>;
 pub(crate) type FrameCallback = Box<dyn Fn(&mut AppContext)>;
-pub(crate) type BuildSceneCallback = Box<dyn Fn(&dyn WindowContext, &mut AppContext) -> Rc<Scene>>;
 
 /// A collection of callbacks that are used to update UI framework state in
 /// response to platform-level events.
@@ -39,7 +37,7 @@ pub struct WindowCallbacks {
     /// Notifies the UI framework that the window was resized.
     pub resize_callback: ResizeCallback,
     /// Requests that the UI framework construct a scene to render.
-    pub build_scene_callback: BuildSceneCallback,
+    pub build_scene_callback: gui::BuildSceneCallback,
     /// Notifies the UI framework that a frame was rendered.
     pub frame_callback: FrameCallback,
     /// Notifies the UI framework that a frame failed to draw.
@@ -86,10 +84,6 @@ impl<'a> WindowCallbackDispatcher<'a> {
 
     pub fn window_moved(&mut self, bounds: RectF) {
         (self.callbacks.move_callback)(bounds, &mut self.ctx)
-    }
-
-    pub fn build_scene(&mut self, window: &dyn WindowContext) -> Rc<Scene> {
-        (self.callbacks.build_scene_callback)(window, &mut self.ctx)
     }
 }
 

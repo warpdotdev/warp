@@ -568,6 +568,23 @@ impl crate::platform::FontDB for FontDB {
         Ok(self.font(font_id).advance(glyph_id)?.to_i32())
     }
 
+    fn glyph_typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<RectI> {
+        Ok(self.font(font_id).typographic_bounds(glyph_id)?.to_i32())
+    }
+
+    fn glyph_for_char(&self, font: FontId, char: char) -> Option<GlyphId> {
+        self.font(font).glyph_for_char(char)
+    }
+
+    fn family_id_for_name(&self, name: &str) -> Option<FamilyId> {
+        self.families
+            .iter()
+            .find(|(_, f)| f.name == name)
+            .map(|(id, _)| *id)
+    }
+}
+
+impl crate::platform::FontDBExt for FontDB {
     fn glyph_raster_bounds(
         &self,
         font_id: FontId,
@@ -578,10 +595,6 @@ impl crate::platform::FontDB for FontDB {
     ) -> Result<RectI> {
         self.rasterizer
             .glyph_raster_bounds(font_id, point_size, glyph_id, scale, glyph_config)
-    }
-
-    fn glyph_typographic_bounds(&self, font_id: FontId, glyph_id: GlyphId) -> Result<RectI> {
-        Ok(self.font(font_id).typographic_bounds(glyph_id)?.to_i32())
     }
 
     fn rasterize_glyph(
@@ -603,17 +616,6 @@ impl crate::platform::FontDB for FontDB {
             glyph_config,
             format,
         )
-    }
-
-    fn glyph_for_char(&self, font: FontId, char: char) -> Option<GlyphId> {
-        self.font(font).glyph_for_char(char)
-    }
-
-    fn family_id_for_name(&self, name: &str) -> Option<FamilyId> {
-        self.families
-            .iter()
-            .find(|(_, f)| f.name == name)
-            .map(|(id, _)| *id)
     }
 
     fn text_layout_system(&self) -> &dyn TextLayoutSystem {

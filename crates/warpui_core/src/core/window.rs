@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::core::view::AnyViewHandle;
-use crate::{AnyView, EntityId};
+use crate::core::AnyView;
+use crate::EntityId;
 
 /// A unique identifier for a window.
 ///
@@ -36,6 +37,10 @@ impl fmt::Display for WindowId {
 
 /// A structure holding all application state that is linked to a particular
 /// window.
+///
+/// Backend-neutral since the view-trait unification: `views` stores the single
+/// type-erased [`AnyView`] object, whose render output is the active backend's
+/// [`RenderOutput`](crate::RenderOutput).
 #[derive(Default)]
 pub(super) struct Window {
     /// The set of views owned by this window, keyed by view ID.

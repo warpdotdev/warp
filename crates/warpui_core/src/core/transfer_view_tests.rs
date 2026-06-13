@@ -15,8 +15,8 @@ fn test_transfer_view_to_window_updates_window_mapping() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -96,8 +96,8 @@ fn test_transfer_view_subscriptions_continue_working() {
     }
 
     impl View for EmitterView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -119,8 +119,8 @@ fn test_transfer_view_subscriptions_continue_working() {
     }
 
     impl View for SubscriberView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -190,8 +190,8 @@ fn test_transfer_view_app_subscriptions_continue_working() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -250,8 +250,8 @@ fn test_transfer_view_observations_continue_working() {
     }
 
     impl View for ObserverView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -329,8 +329,8 @@ fn test_on_window_transferred_callback_fires() {
     }
 
     impl View for TransferTrackingView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -395,8 +395,8 @@ fn test_weak_view_handle_upgrade_after_transfer() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -459,8 +459,8 @@ fn test_transfer_nonexistent_view_returns_false() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -495,8 +495,8 @@ fn test_transfer_to_same_window_is_noop() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -548,8 +548,8 @@ fn test_transfer_view_drop_and_reference_counting() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -624,8 +624,8 @@ fn test_transfer_structural_children_follows_parent() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -709,8 +709,8 @@ fn test_transfer_structural_grandchildren_follows_transitively() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -780,8 +780,8 @@ fn test_transfer_structural_children_does_not_move_unrelated_views() {
     }
 
     impl View for TestView {
-        fn render(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {

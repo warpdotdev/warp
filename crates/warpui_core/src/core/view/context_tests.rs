@@ -1,6 +1,5 @@
-use crate::elements::Empty;
 use crate::platform::WindowStyle;
-use crate::{App, AppContext, Element, Entity, TypedActionView};
+use crate::{App, AppContext, Entity, RenderOutput, TypedActionView};
 
 #[test]
 fn test_spawn_from_view() {
@@ -14,8 +13,8 @@ fn test_spawn_from_view() {
     }
 
     impl super::View for View {
-        fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render<'a>(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -75,8 +74,8 @@ fn test_spawn_abortable_from_view() {
     }
 
     impl super::View for View {
-        fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render<'a>(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {
@@ -142,8 +141,8 @@ fn test_view_spawner() {
     }
 
     impl super::View for View {
-        fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
+        fn render<'a>(&self, _: &AppContext) -> RenderOutput {
+            crate::test::empty_render_output()
         }
 
         fn ui_name() -> &'static str {

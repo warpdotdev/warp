@@ -3,49 +3,16 @@ use std::ops::Range;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 
-use crate::elements::{Point, ZIndex};
 use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 use crate::zoom::{Scale, ZoomFactor};
-use crate::EventContext;
 
 #[derive(Debug)]
 pub struct DispatchedEvent {
-    event: Event,
+    pub(crate) event: Event,
 }
 
 impl DispatchedEvent {
-    /// Filters out event types that most-likely shouldn't be handled if this
-    /// event is being received by an element at the given z-index
-    pub fn at_z_index(&self, z_index: ZIndex, ctx: &EventContext) -> Option<&Event> {
-        match self.event {
-            Event::KeyDown { .. } => Some(&self.event),
-            Event::ScrollWheel { position, .. }
-            | Event::LeftMouseDown { position, .. }
-            | Event::LeftMouseUp { position, .. }
-            | Event::LeftMouseDragged { position, .. }
-            | Event::MiddleMouseDown { position, .. }
-            | Event::RightMouseDown { position, .. }
-            | Event::BackMouseDown { position, .. }
-            | Event::ForwardMouseDown { position, .. } => {
-                if !ctx.is_covered(Point::from_vec2f(position, z_index)) {
-                    Some(&self.event)
-                } else {
-                    None
-                }
-            }
-            Event::MouseMoved { .. } => Some(&self.event),
-            Event::ModifierStateChanged { .. } => Some(&self.event),
-            Event::ModifierKeyChanged { .. } => Some(&self.event),
-            Event::TypedCharacters { .. } => Some(&self.event),
-            Event::DragAndDropFiles { .. } => Some(&self.event),
-            Event::DragFiles { .. } => Some(&self.event),
-            Event::DragFileExit => Some(&self.event),
-            Event::SetMarkedText { .. } => Some(&self.event),
-            Event::ClearMarkedText => Some(&self.event),
-        }
-    }
-
     /// Returns the raw event - note that an element at a higher z-index
     /// may already have handled it.
     pub fn raw_event(&self) -> &Event {

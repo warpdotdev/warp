@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::{RectF, RectI};
-use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{vec2f, Vector2F, Vector2I};
 
 use crate::accessibility::AccessibilityContent;
 use crate::clipboard::InMemoryClipboard;
@@ -18,13 +18,11 @@ use crate::notification::UserNotification;
 use crate::platform::file_picker::{FilePickerCallback, FilePickerConfiguration};
 use crate::platform::{
     self, Cursor, MicrophoneAccessState, RequestNotificationPermissionsCallback,
-    SendNotificationErrorCallback, TerminationMode, TextLayoutSystem, WindowFocusBehavior,
-    WindowOptions,
+    SendNotificationErrorCallback, TerminationMode, WindowFocusBehavior, WindowOptions,
 };
-use crate::text_layout::TextAlignment;
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId,
+    geometry, ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, WindowId,
 };
 
 pub struct AppDelegate {
@@ -469,8 +467,6 @@ impl platform::WindowContext for Window {
         Some(2048)
     }
 
-    fn render_scene(&self, _scene: Rc<Scene>) {}
-
     fn request_redraw(&self) {}
 
     fn request_frame_capture(
@@ -581,44 +577,12 @@ impl platform::FontDB for FontDB {
         None
     }
 
-    fn glyph_raster_bounds(
-        &self,
-        _font_id: crate::fonts::FontId,
-        _size: f32,
-        _glyph_id: crate::fonts::GlyphId,
-        _scale: Vector2F,
-        _glyph_config: &crate::rendering::GlyphConfig,
-    ) -> Result<pathfinder_geometry::rect::RectI> {
-        Ok(pathfinder_geometry::rect::RectI::default())
-    }
-
     fn glyph_typographic_bounds(
         &self,
         _font_id: crate::fonts::FontId,
         _glyph_id: crate::fonts::GlyphId,
     ) -> Result<RectI> {
         Ok(RectI::default())
-    }
-
-    fn rasterize_glyph(
-        &self,
-        _font_id: crate::fonts::FontId,
-        _size: f32,
-        _glyph_id: crate::fonts::GlyphId,
-        _scale: Vector2F,
-        _subpixel_alignment: crate::fonts::SubpixelAlignment,
-        _glyph_config: &crate::rendering::GlyphConfig,
-        _format: crate::fonts::canvas::RasterFormat,
-    ) -> Result<crate::fonts::RasterizedGlyph> {
-        Ok(crate::fonts::RasterizedGlyph {
-            canvas: crate::fonts::canvas::Canvas {
-                pixels: vec![],
-                size: vec2i(0, 0),
-                row_stride: 0,
-                format: crate::fonts::canvas::RasterFormat::Rgba32,
-            },
-            is_emoji: false,
-        })
     }
 
     fn glyph_for_char(
@@ -631,35 +595,5 @@ impl platform::FontDB for FontDB {
 
     fn family_id_for_name(&self, _name: &str) -> Option<FamilyId> {
         None
-    }
-
-    fn text_layout_system(&self) -> &dyn TextLayoutSystem {
-        self
-    }
-}
-
-impl platform::TextLayoutSystem for FontDB {
-    fn layout_line(
-        &self,
-        _text: &str,
-        line_style: platform::LineStyle,
-        _style_runs: &[(std::ops::Range<usize>, crate::text_layout::StyleAndFont)],
-        _max_width: f32,
-        _clip_config: crate::text_layout::ClipConfig,
-    ) -> crate::text_layout::Line {
-        crate::text_layout::Line::empty(line_style.font_size, line_style.line_height_ratio, 0)
-    }
-
-    fn layout_text(
-        &self,
-        _text: &str,
-        line_style: platform::LineStyle,
-        _style_runs: &[(std::ops::Range<usize>, crate::text_layout::StyleAndFont)],
-        _max_width: f32,
-        _max_height: f32,
-        _alignment: TextAlignment,
-        _first_line_head_indent: Option<f32>,
-    ) -> crate::text_layout::TextFrame {
-        crate::text_layout::TextFrame::empty(line_style.font_size, line_style.line_height_ratio)
     }
 }

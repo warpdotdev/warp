@@ -1046,10 +1046,6 @@ impl platform::WindowContext for Window {
         self.0.max_texture_dimension_2d()
     }
 
-    fn render_scene(&self, scene: Rc<Scene>) {
-        self.0.render_scene(scene)
-    }
-
     fn request_redraw(&self) {
         self.0.request_redraw();
     }
@@ -1191,13 +1187,6 @@ impl platform::WindowContext for WindowState {
     fn max_texture_dimension_2d(&self) -> Option<u32> {
         // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
         Some(8192)
-    }
-
-    fn render_scene(&self, scene: Rc<Scene>) {
-        *self.next_scene.borrow_mut() = Some(scene);
-        // `setNeedsDisplayAsync` is a custom WarpWindow selector.
-        // SAFETY: messaging a valid window.
-        let _: () = unsafe { msg_send![self.window(), setNeedsDisplayAsync] };
     }
 
     fn request_redraw(&self) {

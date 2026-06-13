@@ -256,8 +256,6 @@ impl platform::WindowContext for Window {
         Some(2048)
     }
 
-    fn render_scene(&self, _scene: Rc<crate::Scene>) {}
-
     fn request_redraw(&self) {}
 
     fn request_frame_capture(

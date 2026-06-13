@@ -843,6 +843,12 @@ impl platform::FontDB for FontDB {
             .glyph_typographic_bounds(font_id, glyph_id)
     }
 
+    fn glyph_for_char(&self, font_id: FontId, char: char) -> Option<GlyphId> {
+        self.text_layout_system.glyph_for_char(font_id, char)
+    }
+}
+
+impl platform::FontDBExt for FontDB {
     #[cfg(feature = "fontkit-rasterizer")]
     fn glyph_raster_bounds(
         &self,
@@ -923,10 +929,6 @@ impl platform::FontDB for FontDB {
             glyph_config,
             format,
         )
-    }
-
-    fn glyph_for_char(&self, font_id: FontId, char: char) -> Option<GlyphId> {
-        self.text_layout_system.glyph_for_char(font_id, char)
     }
 
     fn text_layout_system(&self) -> &dyn platform::TextLayoutSystem {

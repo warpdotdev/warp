@@ -28,7 +28,6 @@ pub struct Presenter {
     window_id: WindowId,
     scene: Option<Rc<Scene>>,
     rendered_views: HashMap<EntityId, Box<dyn Element>>,
-    parents: HashMap<EntityId, EntityId>,
     text_layout_cache: LayoutCache,
     position_cache: PositionCache,
     highlighted_view: Option<EntityId>,
@@ -306,7 +305,6 @@ impl Presenter {
             frame_count: 0,
             window_id,
             rendered_views: HashMap::new(),
-            parents: HashMap::new(),
             scene: None,
             text_layout_cache: LayoutCache::new(),
             position_cache: PositionCache::default(),
@@ -326,7 +324,6 @@ impl Presenter {
         }
         for view_id in invalidation.removed {
             self.rendered_views.remove(&view_id);
-            self.parents.remove(&view_id);
         }
     }
 
@@ -346,7 +343,13 @@ impl Presenter {
         let zoomed_window_size = window_size.scale_down(ctx.zoom_factor());
         let zoomed_scale_factor = scale_factor.scale_up(ctx.zoom_factor());
 
-        self.layout(zoomed_window_size, ctx);
+        // Collect the child-view embeddings discovered during layout and report
+        // them to the backend-neutral view hierarchy on the app context, which
+        // the shared core walks for ancestors/responder-chain/focus propagation.
+        // (Reported as a batch because the layout walk itself only has `&AppContext`.)
+        let mut view_embeddings = HashMap::new();
+        self.layout(zoomed_window_size, &mut view_embeddings, ctx);
+        ctx.report_view_embeddings(self.window_id, view_embeddings);
         // In theory, after_layout would be a good place for Elements to update app state with the
         // results of layout (for example, if a View stored the heights of its children to
         // implement scrolling). However, it's not safe to pass a AppContext to after_layout
@@ -374,11 +377,16 @@ impl Presenter {
         scene
     }
 
-    fn layout(&mut self, window_size: Vector2F, app: &AppContext) {
+    fn layout(
+        &mut self,
+        window_size: Vector2F,
+        parents: &mut HashMap<EntityId, EntityId>,
+        app: &AppContext,
+    ) {
         if let Some(root_view_id) = app.root_view_id(self.window_id) {
             let mut layout_ctx = LayoutContext {
                 rendered_views: &mut self.rendered_views,
-                parents: &mut self.parents,
+                parents,
                 text_layout_cache: &self.text_layout_cache,
                 view_stack: Vec::new(),
                 window_size,
@@ -463,35 +471,6 @@ impl Presenter {
         (scene, repaint_at, pending_assets)
     }
 
-    pub fn ancestors(&self, mut view_id: EntityId) -> Vec<EntityId> {
-        let mut chain = vec![view_id];
-        while let Some(parent_id) = self.parents.get(&view_id) {
-            view_id = *parent_id;
-            chain.push(view_id);
-        }
-        chain.reverse();
-        chain
-    }
-
-    /// Returns all descendant view IDs of the given root view.
-    /// This is computed by finding all views whose ancestor chain includes the root.
-    pub fn descendants(&self, root_view_id: EntityId) -> Vec<EntityId> {
-        self.parents
-            .keys()
-            .filter(|&&view_id| {
-                let mut current = view_id;
-                while let Some(&parent_id) = self.parents.get(&current) {
-                    if parent_id == root_view_id {
-                        return true;
-                    }
-                    current = parent_id;
-                }
-                false
-            })
-            .copied()
-            .collect()
-    }
-
     fn create_event_context<'a>(&'a mut self, font_cache: &'a fonts::Cache) -> EventContext<'a> {
         EventContext {
             scene: self.scene.clone(),
@@ -553,10 +532,6 @@ impl Presenter {
         self.frame_count
     }
 
-    pub(crate) fn parents(&self) -> HashMap<EntityId, EntityId> {
-        self.parents.clone()
-    }
-
     pub fn set_highlighted_view(&mut self, view_id: EntityId) {
         self.highlighted_view = Some(view_id);
     }
@@ -567,13 +542,6 @@ impl Presenter {
 
     pub fn text_layout_cache(&self) -> &LayoutCache {
         &self.text_layout_cache
-    }
-
-    /// Set the parent of a view.
-    /// This will be overwritten on the next layout pass, but is useful before the initial layout
-    /// of a view.
-    pub(crate) fn set_parent(&mut self, view_id: EntityId, parent_id: EntityId) {
-        self.parents.insert(view_id, parent_id);
     }
 }
 
@@ -764,6 +732,39 @@ impl EventContext<'_> {
 
     pub fn mark_descendant_draggable_initiated(&mut self) {
         self.descendant_draggable_initiated = true;
+    }
+}
+
+impl DispatchedEvent {
+    /// Filters out event types that most-likely shouldn't be handled if this
+    /// event is being received by an element at the given z-index
+    pub fn at_z_index(&self, z_index: ZIndex, ctx: &EventContext) -> Option<&Event> {
+        match self.event {
+            Event::KeyDown { .. } => Some(&self.event),
+            Event::ScrollWheel { position, .. }
+            | Event::LeftMouseDown { position, .. }
+            | Event::LeftMouseUp { position, .. }
+            | Event::LeftMouseDragged { position, .. }
+            | Event::MiddleMouseDown { position, .. }
+            | Event::RightMouseDown { position, .. }
+            | Event::BackMouseDown { position, .. }
+            | Event::ForwardMouseDown { position, .. } => {
+                if !ctx.is_covered(Point::from_vec2f(position, z_index)) {
+                    Some(&self.event)
+                } else {
+                    None
+                }
+            }
+            Event::MouseMoved { .. } => Some(&self.event),
+            Event::ModifierStateChanged { .. } => Some(&self.event),
+            Event::ModifierKeyChanged { .. } => Some(&self.event),
+            Event::TypedCharacters { .. } => Some(&self.event),
+            Event::DragAndDropFiles { .. } => Some(&self.event),
+            Event::DragFiles { .. } => Some(&self.event),
+            Event::DragFileExit => Some(&self.event),
+            Event::SetMarkedText { .. } => Some(&self.event),
+            Event::ClearMarkedText => Some(&self.event),
+        }
     }
 }
 
