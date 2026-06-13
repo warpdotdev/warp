@@ -22,8 +22,9 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::block::FinishReason;
 use crate::ai::blocklist::{
-    AutofireAction, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
-    PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel, QueuedQueryOrigin,
+    AutofireAction, BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    ConversationStatusUpdate, PendingAttachment, QueuedQuery, QueuedQueryId, QueuedQueryModel,
+    QueuedQueryOrigin, ResponseStreamId,
 };
 use crate::features::FeatureFlag;
 use crate::server::server_api::ai::SpawnAgentRequest;
@@ -1473,6 +1474,92 @@ fn multi_cycle_queue_keeps_each_rows_attachments_independent() {
             assert_eq!(
                 m.attachments_for(conv, second_id)[0].file_name(),
                 "second.png"
+            );
+        });
+    });
+}
+
+#[test]
+fn finish_reason_is_scoped_to_the_finished_conversation() {
+    // An orchestration pane hosts the lead and local child conversations in one view, so the
+    // most recent block in the pane can belong to a sibling conversation that is still
+    // mid-turn. The per-conversation lookup must report the finished conversation's own block
+    // as Complete (so its queued prompts drain) and the streaming sibling's as unfinished.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let finished_block =
+                view.insert_dummy_ai_block("review".to_owned(), "done".to_owned(), ctx);
+            let finished_conversation = finished_block.as_ref(ctx).conversation_id();
+            // Inserted after the finished block, so it is the last block in the pane and
+            // masks the pane-global `active_ai_block` / `last_ai_block` lookups.
+            let streaming_block = view.insert_dummy_streaming_ai_block("working".to_owned(), ctx);
+            let streaming_conversation = streaming_block.as_ref(ctx).conversation_id();
+            assert_ne!(finished_conversation, streaming_conversation);
+
+            assert_eq!(
+                view.finish_reason_for_conversation(finished_conversation, ctx),
+                Some(FinishReason::Complete)
+            );
+            assert_eq!(
+                view.finish_reason_for_conversation(streaming_conversation, ctx),
+                None
+            );
+            // A conversation with no blocks in this pane has no finish reason.
+            assert_eq!(
+                view.finish_reason_for_conversation(AIConversationId::new(), ctx),
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn finished_receiving_output_drains_queue_when_sibling_block_masks_turn_end() {
+    // End-to-end through the controller-event path: `FinishedReceivingOutput` for a finished
+    // conversation must drain that conversation's queue even when a sibling conversation's
+    // still-streaming block is the most recent block in the pane (orchestration panes host the
+    // lead and local child conversations in one view).
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let finished_block =
+                view.insert_dummy_ai_block("review".to_owned(), "done".to_owned(), ctx);
+            let finished_conversation = finished_block.as_ref(ctx).conversation_id();
+            // Inserted after the finished block, so it is the last block in the pane and
+            // masks the pane-global `active_ai_block` / `last_ai_block` lookups.
+            let streaming_block = view.insert_dummy_streaming_ai_block("working".to_owned(), ctx);
+            let streaming_conversation = streaming_block.as_ref(ctx).conversation_id();
+            assert_ne!(finished_conversation, streaming_conversation);
+
+            QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.append(finished_conversation, user_query("queued follow up"), ctx);
+                model.append(
+                    streaming_conversation,
+                    user_query("sibling stays queued"),
+                    ctx,
+                );
+            });
+
+            view.handle_ai_controller_event(
+                view.ai_controller.clone(),
+                &BlocklistAIControllerEvent::FinishedReceivingOutput {
+                    stream_id: ResponseStreamId::new_for_test(),
+                    conversation_id: finished_conversation,
+                },
+                ctx,
+            );
+
+            // The finished conversation's queued prompt fired; the still-streaming sibling's
+            // queue is untouched.
+            let model = QueuedQueryModel::as_ref(ctx);
+            assert!(model.queue(finished_conversation).is_empty());
+            assert_eq!(model.queue(streaming_conversation).len(), 1);
+            assert_eq!(
+                model.queue(streaming_conversation)[0].text(),
+                "sibling stays queued"
             );
         });
     });
