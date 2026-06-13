@@ -278,3 +278,47 @@ fn test_parse_git_status_file_without_spaces_still_works() {
     assert_eq!(result[0].0, "simple.txt");
     assert_eq!(result[0].1, GitFileStatus::Modified);
 }
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn repository_updates_are_deferred_while_index_is_locked() {
+    use repo_metadata::{RepositoryUpdate, TargetFile};
+
+    let mut remote_ref_update = RepositoryUpdate {
+        remote_ref_updated: true,
+        ..RepositoryUpdate::default()
+    };
+    assert!(
+        LocalDiffStateModelRepositorySubscriber::should_defer_update_while_index_locked(
+            &remote_ref_update,
+            true,
+        )
+    );
+
+    remote_ref_update.remote_ref_updated = false;
+    remote_ref_update
+        .modified
+        .insert(TargetFile::new("src/main.rs".into(), false));
+    assert!(
+        LocalDiffStateModelRepositorySubscriber::should_defer_update_while_index_locked(
+            &remote_ref_update,
+            true,
+        )
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn repository_updates_flow_after_index_lock_is_released() {
+    use repo_metadata::RepositoryUpdate;
+
+    let update = RepositoryUpdate {
+        index_lock_detected: true,
+        ..RepositoryUpdate::default()
+    };
+    assert!(
+        !LocalDiffStateModelRepositorySubscriber::should_defer_update_while_index_locked(
+            &update, false,
+        )
+    );
+}
