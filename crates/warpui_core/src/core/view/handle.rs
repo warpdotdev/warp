@@ -6,9 +6,8 @@ use std::sync::{Arc, Weak};
 use parking_lot::Mutex;
 
 use super::context::ViewContext;
-use super::View;
 use crate::core::RefCounts;
-use crate::{AppContext, EntityId, WindowId};
+use crate::{AppContext, Entity, EntityId, WindowId};
 
 /// A strong reference to a particular [`View`] instance within the application.
 ///
@@ -24,7 +23,7 @@ pub struct ViewHandle<T> {
     ref_counts: Weak<Mutex<RefCounts>>,
 }
 
-impl<T: View> ViewHandle<T> {
+impl<T: Entity> ViewHandle<T> {
     pub(in crate::core) fn new(
         window_id: WindowId,
         view_id: EntityId,
@@ -177,7 +176,7 @@ impl AnyViewHandle {
         TypeId::of::<T>() == self.view_type
     }
 
-    pub fn downcast<T: View>(self) -> Option<ViewHandle<T>> {
+    pub fn downcast<T: Entity>(self) -> Option<ViewHandle<T>> {
         if self.is::<T>() {
             if let Some(ref_counts) = self.ref_counts.upgrade() {
                 return Some(ViewHandle::new(self.window_id, self.view_id, &ref_counts));
@@ -202,7 +201,7 @@ impl Clone for AnyViewHandle {
     }
 }
 
-impl<T: View> From<&ViewHandle<T>> for AnyViewHandle {
+impl<T: Entity> From<&ViewHandle<T>> for AnyViewHandle {
     fn from(handle: &ViewHandle<T>) -> Self {
         if let Some(ref_counts) = handle.ref_counts.upgrade() {
             ref_counts.lock().inc_entity(handle.view_id);
@@ -216,7 +215,7 @@ impl<T: View> From<&ViewHandle<T>> for AnyViewHandle {
     }
 }
 
-impl<T: View> From<ViewHandle<T>> for AnyViewHandle {
+impl<T: Entity> From<ViewHandle<T>> for AnyViewHandle {
     fn from(handle: ViewHandle<T>) -> Self {
         (&handle).into()
     }
@@ -240,7 +239,7 @@ pub struct WeakViewHandle<T> {
     view_type: PhantomData<T>,
 }
 
-impl<T: View> WeakViewHandle<T> {
+impl<T: Entity> WeakViewHandle<T> {
     pub(super) fn new(view_id: EntityId) -> Self {
         Self {
             view_id,
@@ -296,23 +295,23 @@ unsafe impl<T> Send for WeakViewHandle<T> {}
 unsafe impl<T> Sync for WeakViewHandle<T> {}
 
 pub trait ViewAsRef {
-    fn view<T: View>(&self, handle: &ViewHandle<T>) -> &T;
+    fn view<T: Entity>(&self, handle: &ViewHandle<T>) -> &T;
 
     /// Try to get a reference to the view. Returns `None` if the view is
     /// currently borrowed (e.g., during a circular reference scenario).
-    fn try_view<T: View>(&self, handle: &ViewHandle<T>) -> Option<&T>;
+    fn try_view<T: Entity>(&self, handle: &ViewHandle<T>) -> Option<&T>;
 }
 
 pub trait ReadView: ViewAsRef {
     fn read_view<T, F, S>(&self, handle: &ViewHandle<T>, read: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&T, &AppContext) -> S;
 }
 
 pub trait UpdateView: ReadView {
     fn update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S;
 }

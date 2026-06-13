@@ -12,7 +12,7 @@ use instant::Instant;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 
-use super::{autotracking, AddWindowOptions, App, AppContext, ClosedWindowData, EventMunger};
+use super::{AddWindowOptions, App, AppContext, ClosedWindowData, EventMunger};
 use crate::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use crate::event::KeyState;
 use crate::fonts::{self, ExternalFontFamily, FallbackFontModel, RequestedFallbackFontSource};
@@ -25,7 +25,6 @@ use crate::windowing::{WindowCallbacks, WindowManager};
 use crate::{
     rendering, AccessibilityData, CursorInfo, EntityId, Event,
     NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, Scene, SingletonEntity, WindowId,
-    WindowInvalidation,
 };
 
 impl App {
@@ -549,25 +548,6 @@ impl AppContext {
         );
 
         self.invalidate_all_views_for_window(window_id);
-    }
-
-    /// Collects invalidations for the given window from all sources: manual
-    /// and autotracking.
-    ///
-    /// This operation is destructive: It will clear the caches for both manual and autotracked
-    /// invalidations.
-    ///
-    /// GUI-only for now; the M8 TUI runtime may move this back into shared code
-    /// once it drives its own draw loop.
-    fn take_all_invalidations_for_window(&mut self, window_id: WindowId) -> WindowInvalidation {
-        let mut invalidations = self
-            .window_invalidations
-            .remove(&window_id)
-            .unwrap_or_default();
-        invalidations
-            .updated
-            .extend(autotracking::take_invalidations_for_window(window_id));
-        invalidations
     }
 
     /// Builds a new scene for the given window.

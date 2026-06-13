@@ -35,7 +35,7 @@ pub struct ViewContext<'a, T: ?Sized> {
     view_type: PhantomData<T>,
 }
 
-impl<'a, T: View> ViewContext<'a, T> {
+impl<'a, T: Entity> ViewContext<'a, T> {
     pub(in crate::core) fn new(
         app: &'a mut AppContext,
         window_id: WindowId,
@@ -97,7 +97,7 @@ impl<'a, T: View> ViewContext<'a, T> {
             .check_view_or_child_focused(self.window_id, &self.view_id)
     }
 
-    pub fn focus<S: View>(&mut self, handle: &ViewHandle<S>) {
+    pub fn focus<S: Entity>(&mut self, handle: &ViewHandle<S>) {
         let handle: AnyViewHandle = handle.into();
         self.app.pending_effects.push_back(Effect::Focus {
             window_id: handle.window_id(self.app),
@@ -138,6 +138,29 @@ impl<'a, T: View> ViewContext<'a, T> {
             .add_typed_action_view_with_parent(self.window_id, build_view, self.view_id)
     }
 
+    /// The TUI counterpart of [`Self::add_view`].
+    #[cfg(feature = "tui")]
+    pub fn add_tui_view<S, F>(&mut self, build_view: F) -> ViewHandle<S>
+    where
+        S: crate::TuiView,
+        F: FnOnce(&mut ViewContext<S>) -> S,
+    {
+        self.app.add_tui_view(self.window_id, build_view)
+    }
+
+    /// The TUI counterpart of [`Self::add_typed_action_view`]: the new view is
+    /// recorded as a structural child of this context's view, so it joins the
+    /// shared responder chain.
+    #[cfg(feature = "tui")]
+    pub fn add_typed_action_tui_view<V, F>(&mut self, build_view: F) -> ViewHandle<V>
+    where
+        V: TypedActionView + crate::TuiView,
+        F: FnOnce(&mut ViewContext<V>) -> V,
+    {
+        self.app
+            .add_typed_action_tui_view_with_parent(self.window_id, build_view, self.view_id)
+    }
+
     pub fn add_option_view<S, F>(&mut self, build_view: F) -> Option<ViewHandle<S>>
     where
         S: View,
@@ -173,7 +196,7 @@ impl<'a, T: View> ViewContext<'a, T> {
 
     pub fn subscribe_to_view<V, F>(&mut self, handle: &ViewHandle<V>, mut callback: F)
     where
-        V: View,
+        V: Entity,
         V::Event: 'static,
         F: 'static + FnMut(&mut T, ViewHandle<V>, &V::Event, &mut ViewContext<T>),
     {
@@ -846,7 +869,7 @@ impl<V> ReadModel for ViewContext<'_, V> {
     }
 }
 
-impl<V: View> UpdateModel for ViewContext<'_, V> {
+impl<V: Entity> UpdateModel for ViewContext<'_, V> {
     fn update_model<T, F, S>(&mut self, handle: &ModelHandle<T>, update: F) -> S
     where
         T: Entity,
@@ -856,37 +879,37 @@ impl<V: View> UpdateModel for ViewContext<'_, V> {
     }
 }
 
-impl<V: View> ViewAsRef for ViewContext<'_, V> {
-    fn view<T: View>(&self, handle: &ViewHandle<T>) -> &T {
+impl<V: Entity> ViewAsRef for ViewContext<'_, V> {
+    fn view<T: Entity>(&self, handle: &ViewHandle<T>) -> &T {
         self.app.view(handle)
     }
 
-    fn try_view<T: View>(&self, handle: &ViewHandle<T>) -> Option<&T> {
+    fn try_view<T: Entity>(&self, handle: &ViewHandle<T>) -> Option<&T> {
         self.app.try_view(handle)
     }
 }
 
-impl<V: View> UpdateView for ViewContext<'_, V> {
+impl<V: Entity> UpdateView for ViewContext<'_, V> {
     fn update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
         self.app.update_view(handle, update)
     }
 }
 
-impl<V: View> ReadView for ViewContext<'_, V> {
+impl<V: Entity> ReadView for ViewContext<'_, V> {
     fn read_view<T, F, S>(&self, handle: &ViewHandle<T>, read: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&T, &AppContext) -> S,
     {
         self.app.read_view(handle, read)
     }
 }
 
-impl<V: View> GetSingletonModelHandle for ViewContext<'_, V> {
+impl<V: Entity> GetSingletonModelHandle for ViewContext<'_, V> {
     fn get_singleton_model_handle<T: crate::SingletonEntity>(&self) -> ModelHandle<T> {
         self.app.get_singleton_model_handle()
     }

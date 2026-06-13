@@ -28,7 +28,7 @@ use crate::actions::StandardAction;
 use crate::app_focus_telemetry::AppFocusInfo;
 use crate::assets::asset_cache::{AssetCache, AssetHandle, AssetSource};
 use crate::assets::AssetProvider;
-use crate::core::{ActionType, Window};
+use crate::core::{ActionType, StoredView, Window};
 use crate::fonts::{self, FallbackFontModel};
 use crate::image_cache::{self, ImageCache};
 use crate::keymap::{
@@ -442,7 +442,7 @@ impl UpdateModel for App {
 impl UpdateView for App {
     fn update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
         self.as_mut().update_view(handle, update)
@@ -452,7 +452,7 @@ impl UpdateView for App {
 impl ReadView for App {
     fn read_view<T, F, S>(&self, handle: &ViewHandle<T>, read: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&T, &AppContext) -> S,
     {
         let state = self.0.borrow();
@@ -469,11 +469,11 @@ impl ViewAsRef for App {
     // That effort is currently unjustified because we want
     // to ideally strip the *AsRef, Read* and Update* implementations
     // from [`App`].
-    fn view<T: View>(&self, _handle: &ViewHandle<T>) -> &T {
+    fn view<T: Entity>(&self, _handle: &ViewHandle<T>) -> &T {
         unimplemented!("Read from [`App::read_view`] instead");
     }
 
-    fn try_view<T: View>(&self, _handle: &ViewHandle<T>) -> Option<&T> {
+    fn try_view<T: Entity>(&self, _handle: &ViewHandle<T>) -> Option<&T> {
         unimplemented!("Read from [`App::read_view`] instead");
     }
 }
@@ -924,6 +924,27 @@ impl AppContext {
             })
     }
 
+    /// Collects invalidations for the given window from all sources: manual
+    /// and autotracking.
+    ///
+    /// This operation is destructive: it will clear the caches for both manual
+    /// and autotracked invalidations. Drained by the GUI presenter's
+    /// `build_scene` and (with the `tui` feature) by the TUI runtime's draw
+    /// loop.
+    pub(crate) fn take_all_invalidations_for_window(
+        &mut self,
+        window_id: WindowId,
+    ) -> WindowInvalidation {
+        let mut invalidations = self
+            .window_invalidations
+            .remove(&window_id)
+            .unwrap_or_default();
+        invalidations
+            .updated
+            .extend(autotracking::take_invalidations_for_window(window_id));
+        invalidations
+    }
+
     fn invalidate_all_views_for_window(&mut self, window_id: WindowId) {
         let Some(window) = self.windows.get(&window_id) else {
             return;
@@ -1144,7 +1165,7 @@ impl AppContext {
     /// View + Action combination.
     fn add_typed_action<V>(&mut self)
     where
-        V: TypedActionView + View,
+        V: TypedActionView + Entity,
     {
         let handler = Box::new(
             |view: &mut dyn Any,
@@ -1274,7 +1295,7 @@ impl AppContext {
             .collect::<Vec<ModelHandle<M>>>()
     }
 
-    pub fn root_view<T: View>(&self, window_id: WindowId) -> Option<ViewHandle<T>> {
+    pub fn root_view<T: Entity>(&self, window_id: WindowId) -> Option<ViewHandle<T>> {
         self.windows
             .get(&window_id)
             .and_then(|window| window.root_view.as_ref())
@@ -1882,7 +1903,7 @@ impl AppContext {
     /// The "responder chain" is the view hierarchy to match against with bindings.
     /// This prefers the focused view and its ancestors; if no view is focused it
     /// dispatches to the root view.
-    fn get_responder_chain(&self, window_id: WindowId) -> Vec<EntityId> {
+    pub(crate) fn get_responder_chain(&self, window_id: WindowId) -> Vec<EntityId> {
         if let Some(focused) = self.focused_view_id(window_id) {
             self.view_ancestors(window_id, focused)
         } else if let Some(root) = self.root_view_id(window_id) {
@@ -2020,7 +2041,7 @@ impl AppContext {
         on_completion_callback: F,
     ) where
         F: 'static + Send + Sync + FnOnce(&mut T, RequestPermissionsOutcome, &mut ViewContext<T>),
-        T: View,
+        T: Entity,
     {
         self.platform_delegate
             .request_desktop_notification_permissions(Box::new(
@@ -2032,8 +2053,7 @@ impl AppContext {
                     {
                         let mut view_context = ViewContext::new(ctx, window_id, view_id);
                         on_completion_callback(
-                            view.as_mut()
-                                .as_any_mut()
+                            view.as_any_mut()
                                 .downcast_mut()
                                 .expect("Should be able to downcast to mutable view."),
                             request_permissions_outcome,
@@ -2078,7 +2098,7 @@ impl AppContext {
         on_error_callback: F,
     ) where
         F: 'static + Send + Sync + FnOnce(&mut T, NotificationSendError, &mut ViewContext<T>),
-        T: View,
+        T: Entity,
     {
         self.platform_delegate.send_desktop_notification(
             content,
@@ -2091,8 +2111,7 @@ impl AppContext {
                 {
                     let mut view_context = ViewContext::new(ctx, window_id, view_id);
                     on_error_callback(
-                        view.as_mut()
-                            .as_any_mut()
+                        view.as_any_mut()
                             .downcast_mut()
                             .expect("Should be able to downcast to mutable view."),
                         notification_error,
@@ -2331,7 +2350,9 @@ impl AppContext {
         let mut ctx = ViewContext::new(self, window_id, view_id);
         let handle = if let Some(view) = build_view(&mut ctx) {
             if let Some(window) = self.windows.get_mut(&window_id) {
-                window.views.insert(view_id, Box::new(view));
+                window
+                    .views
+                    .insert(view_id, StoredView::Gui(Box::new(view)));
             } else {
                 panic!("Window does not exist");
             }
@@ -2408,8 +2429,26 @@ impl AppContext {
             .windows
             .get_mut(&window_id)
             .expect("Window does not exist");
-        window.views.insert(view_id, Box::new(view));
+        window
+            .views
+            .insert(view_id, StoredView::Gui(Box::new(view)));
 
+        self.register_typed_action_view_internal::<V>(window_id, view_id, parent_view_id)
+    }
+
+    /// Shared post-insert registration for typed-action views — both GUI and
+    /// (with the `tui` feature) TUI: records the view-to-window mapping and
+    /// optional structural parentage, registers the view type's action handler,
+    /// marks the view for redraw, and produces its handle.
+    fn register_typed_action_view_internal<V>(
+        &mut self,
+        window_id: WindowId,
+        view_id: EntityId,
+        parent_view_id: Option<EntityId>,
+    ) -> ViewHandle<V>
+    where
+        V: TypedActionView + Entity,
+    {
         // Register in view_to_window mapping
         self.view_to_window.insert(view_id, window_id);
 
@@ -2437,6 +2476,144 @@ impl AppContext {
         let handle = ViewHandle::new(window_id, view_id, &self.ref_counts);
         self.flush_effects();
         handle
+    }
+
+    /// Adds a TUI view to the given window. The TUI counterpart of
+    /// [`Self::add_view`]: the view is stored in the same per-window registry
+    /// and shares all of the neutral machinery (handles + ref counts, focus,
+    /// subscriptions/observations, drop/transfer).
+    #[cfg(feature = "tui")]
+    pub fn add_tui_view<T, F>(&mut self, window_id: WindowId, build_view: F) -> ViewHandle<T>
+    where
+        T: crate::TuiView,
+        F: FnOnce(&mut ViewContext<T>) -> T,
+    {
+        let view_id = EntityId::new();
+        self.pending_flushes += 1;
+        let mut ctx = ViewContext::new(self, window_id, view_id);
+        let view = build_view(&mut ctx);
+        let window = self
+            .windows
+            .get_mut(&window_id)
+            .expect("Window does not exist");
+        window
+            .views
+            .insert(view_id, StoredView::Tui(Box::new(view)));
+        self.view_to_window.insert(view_id, window_id);
+        self.window_invalidations
+            .entry(window_id)
+            .or_default()
+            .updated
+            .insert(view_id);
+        let handle = ViewHandle::new(window_id, view_id, &self.ref_counts);
+        self.flush_effects();
+        handle
+    }
+
+    /// Adds a TUI view that handles typed actions. The TUI counterpart of
+    /// [`Self::add_typed_action_view`]: the handler is registered in the same
+    /// `typed_actions` registry, so dispatch through the shared responder
+    /// chain reaches TUI views exactly like GUI views.
+    #[cfg(feature = "tui")]
+    pub fn add_typed_action_tui_view<V, F>(
+        &mut self,
+        window_id: WindowId,
+        build_view: F,
+    ) -> ViewHandle<V>
+    where
+        V: TypedActionView + crate::TuiView,
+        F: FnOnce(&mut ViewContext<V>) -> V,
+    {
+        self.add_typed_action_tui_view_internal(window_id, build_view, None)
+    }
+
+    /// [`Self::add_typed_action_tui_view`] with creation-time structural
+    /// parentage, mirroring [`Self::add_typed_action_view_with_parent`].
+    #[cfg(feature = "tui")]
+    pub(crate) fn add_typed_action_tui_view_with_parent<V, F>(
+        &mut self,
+        window_id: WindowId,
+        build_view: F,
+        parent_view_id: EntityId,
+    ) -> ViewHandle<V>
+    where
+        V: TypedActionView + crate::TuiView,
+        F: FnOnce(&mut ViewContext<V>) -> V,
+    {
+        self.add_typed_action_tui_view_internal(window_id, build_view, Some(parent_view_id))
+    }
+
+    #[cfg(feature = "tui")]
+    fn add_typed_action_tui_view_internal<V, F>(
+        &mut self,
+        window_id: WindowId,
+        build_view: F,
+        parent_view_id: Option<EntityId>,
+    ) -> ViewHandle<V>
+    where
+        V: TypedActionView + crate::TuiView,
+        F: FnOnce(&mut ViewContext<V>) -> V,
+    {
+        self.pending_flushes += 1;
+
+        let view_id = EntityId::new();
+        let mut ctx = ViewContext::new(self, window_id, view_id);
+        let view = build_view(&mut ctx);
+        let window = self
+            .windows
+            .get_mut(&window_id)
+            .expect("Window does not exist");
+        window
+            .views
+            .insert(view_id, StoredView::Tui(Box::new(view)));
+
+        self.register_typed_action_view_internal::<V>(window_id, view_id, parent_view_id)
+    }
+
+    /// Creates a new TUI window with the view returned by `build_root_view` as
+    /// its root view. The TUI counterpart of [`Self::add_window`], reduced to
+    /// the backend-neutral subset: window-id + bounds bookkeeping, root-view
+    /// construction, and focus. No presenter, platform window, or
+    /// scene/event callbacks — the [`runtime::TuiRuntime`](crate::runtime::TuiRuntime)
+    /// owns the draw + input loop for the window.
+    #[cfg(feature = "tui")]
+    pub fn add_tui_window<T, F>(
+        &mut self,
+        options: AddWindowOptions,
+        build_root_view: F,
+    ) -> (WindowId, ViewHandle<T>)
+    where
+        T: crate::TuiView + TypedActionView,
+        F: FnOnce(&mut ViewContext<T>) -> T,
+    {
+        let AddWindowOptions {
+            window_bounds,
+            anchor_new_windows_from_closed_position,
+            ..
+        } = options;
+
+        let window_id = WindowId::new();
+
+        // Store the window bounds before creating the root view, in case it
+        // uses this value.
+        self.window_bounds.insert(window_id, window_bounds.bounds());
+        self.next_window_bounds_map
+            .insert(window_id, anchor_new_windows_from_closed_position);
+        // Clear the next window bounds if they were set - we don't want to
+        // start from the last closed position after a new window has been
+        // created.
+        self.next_window_bounds = None;
+
+        self.windows.insert(window_id, Window::default());
+        let root_handle = self.add_typed_action_tui_view(window_id, build_root_view);
+        let root_view_id = root_handle.id();
+        self.windows
+            .get_mut(&window_id)
+            .expect("this window was just inserted and should still exist")
+            .root_view = Some((&root_handle).into());
+        self.focus(window_id, root_view_id);
+
+        (window_id, root_handle)
     }
 
     /// Transfers a single view from one window to another.
@@ -3462,7 +3639,7 @@ impl UpdateModel for AppContext {
 impl UpdateView for AppContext {
     fn update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
         self.pending_flushes += 1;
@@ -3538,7 +3715,7 @@ impl AppContext {
     }
 
     /// Returns all the views of type `T` within `window_id`.
-    pub fn views_of_type<T: View>(&self, window_id: WindowId) -> Option<Vec<ViewHandle<T>>> {
+    pub fn views_of_type<T: Entity>(&self, window_id: WindowId) -> Option<Vec<ViewHandle<T>>> {
         let ref_counts = &self.ref_counts;
         self.windows.get(&window_id).map(|window| {
             window
@@ -3551,7 +3728,7 @@ impl AppContext {
     }
 
     /// Returns the view of type `T` within `window_id` with the given `entity_id`.
-    pub fn view_with_id<T: View>(
+    pub fn view_with_id<T: Entity>(
         &self,
         window_id: WindowId,
         entity_id: EntityId,
@@ -3607,31 +3784,69 @@ impl AppContext {
             .unwrap_or_default()
     }
 
-    /// Renders the given view to the active backend's [`RenderOutput`], tracking
-    /// any `Tracked` reads as rendering dependencies.
+    /// Renders the given GUI view to its [`RenderOutput`], tracking any
+    /// `Tracked` reads as rendering dependencies.
     pub fn render_view(&self, window_id: WindowId, view_id: EntityId) -> Result<RenderOutput> {
         // surfacing the error of a missing window earlier
         let window = self
             .windows
             .get(&window_id)
             .ok_or_else(|| anyhow!("window not found"))?;
-        window
-            .views
-            .get(&view_id)
-            .map(|view| autotracking::render_view(window_id, view_id, || view.render(self)))
-            .ok_or_else(|| anyhow!("view not found"))
+        match window.views.get(&view_id) {
+            Some(StoredView::Gui(view)) => {
+                Ok(autotracking::render_view(window_id, view_id, || {
+                    view.render(self)
+                }))
+            }
+            #[cfg(feature = "tui")]
+            Some(StoredView::Tui(_)) => Err(anyhow!("view is not a GUI view")),
+            None => Err(anyhow!("view not found")),
+        }
     }
 
+    // This feeds the GUI presenter, so TUI views in the shared registry are
+    // skipped: they are rendered by the TUI presenter via `render_tui_view`
+    // instead. Revisit if a window ever mixes rendered worlds. The clippy
+    // allow is needed because the filter half of `filter_map` is only
+    // exercised when the additive `tui` feature adds the non-GUI variant.
+    #[allow(clippy::unnecessary_filter_map)]
     pub fn render_views(&self, window_id: WindowId) -> Result<HashMap<EntityId, RenderOutput>> {
         self.windows
             .get(&window_id)
             .map(|w| {
                 w.views
                     .iter()
-                    .map(|(id, view)| (*id, view.render(self)))
+                    .filter_map(|(id, view)| match view {
+                        StoredView::Gui(view) => Some((*id, view.render(self))),
+                        #[cfg(feature = "tui")]
+                        StoredView::Tui(_) => None,
+                    })
                     .collect::<HashMap<_, _>>()
             })
             .ok_or_else(|| anyhow!("window not found"))
+    }
+
+    /// Renders the given TUI view to a [`TuiElement`](crate::elements::tui::TuiElement),
+    /// tracking any `Tracked` reads as rendering dependencies.
+    #[cfg(feature = "tui")]
+    pub fn render_tui_view(
+        &self,
+        window_id: WindowId,
+        view_id: EntityId,
+    ) -> Result<Box<dyn crate::elements::tui::TuiElement>> {
+        let window = self
+            .windows
+            .get(&window_id)
+            .ok_or_else(|| anyhow!("window not found"))?;
+        match window.views.get(&view_id) {
+            Some(StoredView::Tui(view)) => {
+                Ok(autotracking::render_view(window_id, view_id, || {
+                    view.render(self)
+                }))
+            }
+            Some(StoredView::Gui(_)) => Err(anyhow!("view is not a TUI view")),
+            None => Err(anyhow!("view not found")),
+        }
     }
 }
 
@@ -3668,7 +3883,7 @@ impl ReadModel for AppContext {
 }
 
 impl ViewAsRef for AppContext {
-    fn view<T: View>(&self, handle: &ViewHandle<T>) -> &T {
+    fn view<T: Entity>(&self, handle: &ViewHandle<T>) -> &T {
         let window_id = handle.window_id(self);
         if let Some(window) = self.windows.get(&window_id) {
             if let Some(view) = window.views.get(&handle.id()) {
@@ -3688,7 +3903,7 @@ impl ViewAsRef for AppContext {
 
     /// Returns the backing view, or None if materializing the view would
     /// otherwise produce a circular view reference.
-    fn try_view<T: View>(&self, handle: &ViewHandle<T>) -> Option<&T> {
+    fn try_view<T: Entity>(&self, handle: &ViewHandle<T>) -> Option<&T> {
         let window_id = handle.window_id(self);
         self.windows
             .get(&window_id)?
@@ -3702,7 +3917,7 @@ impl ViewAsRef for AppContext {
 impl ReadView for AppContext {
     fn read_view<T, F, S>(&self, handle: &ViewHandle<T>, read: F) -> S
     where
-        T: View,
+        T: Entity,
         F: FnOnce(&T, &AppContext) -> S,
     {
         read(self.view(handle), self)
