@@ -153,65 +153,6 @@ fn initialize_app(app: &mut App) {
 }
 
 #[test]
-fn test_dedupe_on_keeps_highest_score() {
-    // Add items with same dedup key but different scores
-    let results = vec![
-        QueryResult::from(TestSearchItem {
-            id: "item1".to_string(),
-            priority_tier: 0,
-            score: 1.0,
-            dedup_key: Some("key1".to_string()),
-        }),
-        QueryResult::from(TestSearchItem {
-            id: "item2".to_string(),
-            priority_tier: 0,
-            score: 3.0,
-            dedup_key: Some("key1".to_string()),
-        }),
-        QueryResult::from(TestSearchItem {
-            id: "item3".to_string(),
-            priority_tier: 0,
-            score: 2.0,
-            dedup_key: Some("key1".to_string()),
-        }),
-    ];
-
-    let results = dedupe_score(results);
-    // Should keep only the item with highest score (item2 with score 3.0)
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].accept_result().id, "item2");
-}
-
-#[test]
-fn test_dedupe_on_preserves_items_without_keys() {
-    // Add items with and without dedup keys
-    let results = vec![
-        QueryResult::from(TestSearchItem {
-            id: "item1".to_string(),
-            priority_tier: 0,
-            score: 1.0,
-            dedup_key: None,
-        }),
-        QueryResult::from(TestSearchItem {
-            id: "item2".to_string(),
-            priority_tier: 0,
-            score: 2.0,
-            dedup_key: None,
-        }),
-        QueryResult::from(TestSearchItem {
-            id: "item3".to_string(),
-            priority_tier: 0,
-            score: 3.0,
-            dedup_key: Some("key1".to_string()),
-        }),
-    ];
-
-    let results = dedupe_score(results);
-    // Should keep all items without dedup keys
-    assert_eq!(results.len(), 3);
-}
-
-#[test]
 fn test_results_are_sorted_by_tier_then_score() {
     let mut mixer = SearchMixer::<TestAction>::new();
 

@@ -26,8 +26,6 @@ pub(super) mod notebook_pane;
 pub(super) mod settings_pane;
 pub(super) mod terminal_pane;
 pub mod view;
-pub(super) mod welcome_pane;
-pub(crate) mod welcome_view;
 pub mod workflow_pane;
 
 use std::any::Any;
@@ -42,7 +40,6 @@ use warpui::{
     Action, AppContext, Element, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
     View, ViewContext, ViewHandle, WeakModelHandle,
 };
-use welcome_view::WelcomeView;
 
 pub use self::view::{PaneHeaderAction, PaneHeaderCustomAction, PaneView, PaneViewEvent};
 use super::{ActivationReason, LeafContents, PaneGroup, PaneGroupAction};
@@ -72,7 +69,6 @@ use crate::workflows::workflow_view::WorkflowView;
 
 pub(super) fn init(app: &mut AppContext) {
     self::view::init(app);
-    welcome_view::init(app);
     get_started_view::init(app);
 }
 
@@ -148,7 +144,6 @@ pub(crate) enum IPaneType {
     ExecutionProfileEditor,
     GetStarted,
     NetworkLog,
-    Welcome,
     DeferredPlaceholder,
     /// A pane type only for tests.
     #[cfg(test)]
@@ -172,7 +167,6 @@ impl Display for IPaneType {
             IPaneType::ExecutionProfileEditor => write!(f, "Execution Profile Editor"),
             IPaneType::GetStarted => write!(f, "GetStarted"),
             IPaneType::NetworkLog => write!(f, "Network Log"),
-            IPaneType::Welcome => write!(f, "Welcome"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
             IPaneType::Dummy => write!(f, "Dummy"),
@@ -259,10 +253,6 @@ impl PaneId {
         ctx: &ViewContext<PaneView<ExecutionProfileEditorView>>,
     ) -> Self {
         Self::new_from_ctx(IPaneType::ExecutionProfileEditor, ctx)
-    }
-
-    pub fn from_welcome_pane_ctx(ctx: &ViewContext<PaneView<WelcomeView>>) -> Self {
-        Self::new_from_ctx(IPaneType::Welcome, ctx)
     }
 
     pub fn from_get_started_pane_ctx(ctx: &ViewContext<PaneView<GetStartedView>>) -> Self {
@@ -362,10 +352,6 @@ impl PaneId {
         get_started_pane_view: &ViewHandle<PaneView<GetStartedView>>,
     ) -> Self {
         Self::new(IPaneType::GetStarted, get_started_pane_view)
-    }
-
-    pub fn from_welcome_pane_view(welcome_pane_view: &ViewHandle<PaneView<WelcomeView>>) -> Self {
-        Self::new(IPaneType::Welcome, welcome_pane_view)
     }
 
     /// Creates a [`PaneId`] from a [`PaneView<NetworkLogView>`] entity ID.
@@ -489,9 +475,6 @@ impl PaneId {
             }
             IPaneType::NetworkLog => {
                 ChildView::<PaneView<NetworkLogView>>::with_id(self.0.pane_view_id).finish()
-            }
-            IPaneType::Welcome => {
-                ChildView::<PaneView<WelcomeView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::DeferredPlaceholder => warpui::elements::Empty::new().finish(),
             #[cfg(test)]

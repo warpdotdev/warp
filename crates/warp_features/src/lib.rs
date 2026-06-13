@@ -370,10 +370,6 @@ pub enum FeatureFlag {
     /// Gates the bundled skill-based implementation of PR comment fetching.
     PRCommentsSkill,
 
-    /// An entrypoint pane type to launch other pane types from a search palette. The default view
-    /// when creating a tab.
-    WelcomeTab,
-
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStartedTab,
 
