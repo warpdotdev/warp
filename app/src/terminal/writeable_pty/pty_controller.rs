@@ -734,6 +734,12 @@ fn bytes_to_execute_command(
     is_bracketed_paste_enabled: bool,
 ) -> Vec<u8> {
     let mut command_bytes = shell_type.kill_buffer_bytes().to_vec();
+    let command = match shell_type {
+        ShellType::Bash | ShellType::Zsh | ShellType::Fish => {
+            LINEFEED_REGEX.replace_all(command, "\n")
+        }
+        ShellType::PowerShell => Cow::Borrowed(command),
+    };
 
     // Only execute the command via bracketed paste if the command is not empty. Some ZSH
     // bracketed paste magic functions return errors if bracketed paste is used without text
@@ -789,6 +795,10 @@ fn wrap_bytes_in_bracketed_paste(bytes: impl IntoIterator<Item = u8>) -> impl It
         .chain(bytes)
         .chain(escape_sequences::BRACKETED_PASTE_END.iter().copied())
 }
+
+#[cfg(test)]
+#[path = "pty_controller_command_bytes_tests.rs"]
+mod command_bytes_tests;
 
 #[derive(Error, Debug)]
 pub enum EventLoopSendError {
