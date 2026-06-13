@@ -1418,6 +1418,16 @@ fn layout_temporary_block(content: String, layout: &TextLayout) -> ParagraphBloc
 /// Links cannot be auto-linked and break up potential URLs.
 fn highlight_urls(runs: &[StyledBufferRun]) -> Vec<ParsedUrl> {
     let mut state = UrlDetectionState::default();
+    let mut custom_scheme_segments = Vec::new();
+    let mut current_custom_scheme_segment_start = 0;
+    let mut current_custom_scheme_segment = String::new();
+
+    let flush_custom_scheme_segment =
+        |segments: &mut Vec<(usize, String)>, segment_start: usize, segment: &mut String| {
+            if !segment.is_empty() {
+                segments.push((segment_start, std::mem::take(segment)));
+            }
+        };
 
     for content in runs {
         let (run_content, has_newline) = if let Some(content) = content.run.strip_suffix('\n') {
@@ -1430,12 +1440,22 @@ fn highlight_urls(runs: &[StyledBufferRun]) -> Vec<ParsedUrl> {
 
         if content.text_styles.is_link() || content.text_styles.is_placeholder() {
             state.reset();
+            flush_custom_scheme_segment(
+                &mut custom_scheme_segments,
+                current_custom_scheme_segment_start,
+                &mut current_custom_scheme_segment,
+            );
             // If this run is already a link, it cannot contain additional URLs. Likewise,
             // placeholders act as URL boundaries.
             // However, we still need to track positions within the overall block's text.
             state.frame_offset += run_content.chars().count();
             continue;
         }
+
+        if current_custom_scheme_segment.is_empty() {
+            current_custom_scheme_segment_start = state.frame_offset;
+        }
+        current_custom_scheme_segment.push_str(run_content);
 
         let mut run_length = 0;
         for (i, c) in run_content.chars().enumerate() {
@@ -1476,12 +1496,135 @@ fn highlight_urls(runs: &[StyledBufferRun]) -> Vec<ParsedUrl> {
 
         if has_newline {
             state.reset();
+            flush_custom_scheme_segment(
+                &mut custom_scheme_segments,
+                current_custom_scheme_segment_start,
+                &mut current_custom_scheme_segment,
+            );
         }
     }
 
     state.finish_url();
+    flush_custom_scheme_segment(
+        &mut custom_scheme_segments,
+        current_custom_scheme_segment_start,
+        &mut current_custom_scheme_segment,
+    );
 
-    state.urls
+    let mut urls = state.urls;
+    for (segment_start, segment) in custom_scheme_segments {
+        let new_urls = detect_custom_scheme_urls(segment_start, &segment)
+            .into_iter()
+            .filter(|candidate| {
+                !urls
+                    .iter()
+                    .any(|url| ranges_overlap(&candidate.url_range, &url.url_range))
+            })
+            .collect_vec();
+        urls.extend(new_urls);
+    }
+    urls.sort_by_key(|url| url.url_range.start);
+    urls
+}
+
+fn detect_custom_scheme_urls(segment_start: usize, segment: &str) -> Vec<ParsedUrl> {
+    let chars = segment.chars().collect_vec();
+    let mut urls = Vec::new();
+    let mut index = 0;
+
+    while index < chars.len() {
+        if !is_url_scheme_start(chars[index])
+            || index
+                .checked_sub(1)
+                .is_some_and(|prev| is_url_scheme_char(chars[prev]))
+        {
+            index += 1;
+            continue;
+        }
+
+        let scheme_start = index;
+        index += 1;
+        while index < chars.len() && is_url_scheme_char(chars[index]) {
+            index += 1;
+        }
+
+        let scheme_end = index;
+        if chars.get(index..index + 3) != Some(&[':', '/', '/']) {
+            continue;
+        }
+
+        let scheme = chars[scheme_start..scheme_end]
+            .iter()
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if matches!(scheme.as_str(), "http" | "https") {
+            continue;
+        }
+
+        index += 3;
+        while index < chars.len() && is_custom_scheme_url_body_char(chars[index]) {
+            index += 1;
+        }
+
+        let mut url_end = trim_custom_scheme_url_end(&chars, index);
+        if url_end <= scheme_end + 3 {
+            continue;
+        }
+
+        while has_unmatched_trailing_closer(&chars[scheme_start..url_end]) {
+            url_end -= 1;
+        }
+
+        if url_end <= scheme_end + 3 {
+            continue;
+        }
+
+        let link = chars[scheme_start..url_end].iter().collect();
+        urls.push(ParsedUrl::new(
+            segment_start + scheme_start..segment_start + url_end,
+            link,
+        ));
+    }
+
+    urls
+}
+
+fn is_url_scheme_start(c: char) -> bool {
+    c.is_ascii_alphabetic()
+}
+
+fn is_url_scheme_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.' | '_')
+}
+
+fn is_custom_scheme_url_body_char(c: char) -> bool {
+    !c.is_whitespace() && !matches!(c, '<' | '>' | '"' | '\'' | '`')
+}
+
+fn trim_custom_scheme_url_end(chars: &[char], mut end: usize) -> usize {
+    while end > 0 && matches!(chars[end - 1], '.' | ',' | ';' | '!' | '?') {
+        end -= 1;
+    }
+    end
+}
+
+fn has_unmatched_trailing_closer(chars: &[char]) -> bool {
+    let Some(last) = chars.last() else {
+        return false;
+    };
+
+    let (opener, closer) = match last {
+        ')' => ('(', ')'),
+        ']' => ('[', ']'),
+        '}' => ('{', '}'),
+        _ => return false,
+    };
+
+    chars.iter().filter(|&&c| c == closer).count() > chars.iter().filter(|&&c| c == opener).count()
+}
+
+fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
 }
 
 /// State helper for highlighting URLs.
