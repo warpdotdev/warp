@@ -1745,10 +1745,6 @@ impl GridHandler {
         action: KittyAction,
         metadata: &mut HashMap<u32, StoredImageMetadata>,
     ) -> Result<(), KittyError> {
-        if !FeatureFlag::KittyImages.is_enabled() {
-            return Err(KittyError::KittyFeatureDisabled);
-        }
-
         match action {
             KittyAction::StoreOnly(action) => {
                 let metadata = match metadata.get(&action.image_id) {
