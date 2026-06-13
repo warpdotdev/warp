@@ -332,6 +332,29 @@ impl<'a> RenderContentTreeRef<'a> {
         }
     }
 
+    /// The full line range of the first collapsed hidden section, or `None` if
+    /// there are none. Resolves the range the same way a hidden-section bar
+    /// does — the `Hidden` block's `start_line` plus its hidden line count —
+    /// so tests can fully expand the first section the bar would.
+    pub fn first_hidden_section_line_range(&self) -> Option<Range<LineCount>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        cursor.descend_to_first_item(&self.0, |_| true);
+        loop {
+            let range = {
+                let positioned = cursor.positioned_item()?;
+                if matches!(positioned.item, BlockItem::Hidden(_)) {
+                    Some(positioned.start_line..positioned.start_line + positioned.item.lines())
+                } else {
+                    None
+                }
+            };
+            if let Some(range) = range {
+                return Some(range);
+            }
+            cursor.next();
+        }
+    }
+
     pub fn is_entire_range_of_type(
         &self,
         range: &Range<CharOffset>,
