@@ -960,7 +960,6 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.set_show_dock_icon_on_launch(show_dock_icon);
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
         app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
-        app_builder.set_status_item_menu_builder(app_menus::status_item_menu);
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

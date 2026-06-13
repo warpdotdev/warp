@@ -35,7 +35,7 @@ use crate::user_config::WarpConfig;
 use crate::util::bindings::{self, trigger_to_keystroke, CustomAction};
 use crate::util::links;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::{auth, report_if_error, GlobalResourceHandlesProvider};
+use crate::{auth, report_if_error};
 
 type CheckmarkStatusGetter = dyn 'static + Fn(&mut AppContext) -> bool;
 
@@ -94,44 +94,6 @@ pub fn dock_menu() -> Menu {
     )
 }
 
-pub fn status_item_menu(ctx: &mut AppContext) -> Menu {
-    let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
-    Menu::new(
-        "Warp",
-        vec![
-            MenuItem::Custom(CustomMenuItem::new(
-                "Show Warp",
-                move |ctx| {
-                    ctx.dispatch_global_action(
-                        "root_view:show_primary_window",
-                        &global_resource_handles,
-                    );
-                },
-                no_updates,
-                None,
-            )),
-            MenuItem::Custom(CustomMenuItem::new(
-                "New Window",
-                move |ctx| {
-                    open_new_window(ctx);
-                },
-                no_updates,
-                Some(Keystroke::parse("cmd-n").expect("Valid keystroke")),
-            )),
-            MenuItem::Separator,
-            MenuItem::Custom(CustomMenuItem::new(
-                "Settings",
-                move |ctx| {
-                    ctx.dispatch_global_action("root_view:open_settings_from_status_item", &());
-                },
-                no_updates,
-                Some(Keystroke::parse("cmd-,").expect("Valid keystroke")),
-            )),
-            MenuItem::Separator,
-            MenuItem::Standard(StandardAction::Quit),
-        ],
-    )
-}
 
 fn custom_shortcut(action: CustomAction) -> Option<Keystroke> {
     trigger_to_keystroke(&Trigger::Custom(action.into()))

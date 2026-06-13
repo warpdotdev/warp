@@ -44,31 +44,6 @@ BOOL isDarkMode() {
     return name == NSAppearanceNameDarkAqua;
 }
 
-NSImage *WarpStatusItemTemplateImage() {
-    NSBundle *bundle = [NSBundle mainBundle];
-    NSString *bundleIdentifier = [bundle bundleIdentifier];
-    if (bundleIdentifier == nil || [bundleIdentifier isEqualToString:@""]) {
-        return nil;
-    }
-
-    NSString *imagePath = [bundle pathForResource:@"warp_status_item_icon"
-                                           ofType:@"pdf"
-                                      inDirectory:@"bundled/status_item"];
-    if (imagePath == nil) {
-        return nil;
-    }
-
-    NSImage *image = [[[NSImage alloc] initWithContentsOfFile:imagePath] autorelease];
-    if (image == nil) {
-        NSLog(@"Warp: failed to load status item image at %@", imagePath);
-        return nil;
-    }
-
-    [image setTemplate:YES];
-    [image setSize:NSMakeSize(18, 18)];
-    return image;
-}
-
 NSArray *getFilePathsFromPasteboard() {
     NSPasteboard *pb = [NSPasteboard generalPasteboard];
     NSArray *types = [pb types];
@@ -149,8 +124,6 @@ NSUInteger activeScreenId() {
     // being hidden.  This allows us to hide the app before running any
     // slower termination logic.
     BOOL terminateOnHide;
-
-    NSStatusItem *statusItem;
 }
 
 - (id)init {
@@ -228,11 +201,6 @@ NSUInteger activeScreenId() {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
     [internetReachable stopNotifier];
     [internetReachable release];
-    if (statusItem) {
-        [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
-        [statusItem release];
-        statusItem = nil;
-    }
     [super dealloc];
 }
 
@@ -470,71 +438,10 @@ NSUInteger activeScreenId() {
 }
 
 - (BOOL)setDockIconVisible:(BOOL)visible {
-    if (visible) {
-        if (![NSApp setActivationPolicy:NSApplicationActivationPolicyRegular]) {
-            NSLog(@"Warp: failed to restore Regular activation policy; keeping status item as fallback");
-            return NO;
-        }
-        if (statusItem) {
-            [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
-            [statusItem release];
-            statusItem = nil;
-        }
-        return YES;
-    }
-
-    if (!self.statusItemMenu) {
-        NSLog(@"Warp: refusing to hide Dock icon because no status item menu is configured");
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-        return NO;
-    }
-
-    if (!statusItem) {
-        statusItem =
-            [[[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength] retain];
-        if (!statusItem) {
-            NSLog(@"Warp: failed to create status item; keeping Dock icon visible");
-            [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-            return NO;
-        }
-        NSStatusBarButton *button = statusItem.button;
-        if (!button) {
-            NSLog(@"Warp: failed to access status item button; keeping Dock icon visible");
-            [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
-            [statusItem release];
-            statusItem = nil;
-            [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-            return NO;
-        }
-
-        NSImage *image = WarpStatusItemTemplateImage();
-        if (image) {
-            button.image = image;
-            button.imagePosition = NSImageOnly;
-            button.imageScaling = NSImageScaleProportionallyDown;
-            button.title = @"";
-            button.toolTip = @"Warp";
-        } else {
-            NSLog(@"Warp: using text fallback for status item because icon image was unavailable");
-            button.image = nil;
-            button.title = @"Warp";
-        }
-    }
-
-    statusItem.menu = self.statusItemMenu;
-    statusItem.visible = YES;
-    NSLog(@"Warp: status item is visible while Dock icon is hidden");
-    if (![NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory]) {
-        NSLog(@"Warp: failed to switch to Accessory activation policy; keeping Dock icon visible");
-        [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
-        [statusItem release];
-        statusItem = nil;
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-        return NO;
-    }
-    return YES;
+    NSApplicationActivationPolicy policy = visible ? NSApplicationActivationPolicyRegular
+                                                     : NSApplicationActivationPolicyAccessory;
+    return [NSApp setActivationPolicy:policy];
 }
-
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))completionHandler {

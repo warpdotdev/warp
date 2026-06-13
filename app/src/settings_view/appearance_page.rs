@@ -2809,7 +2809,7 @@ impl SettingsWidget for CustomAppIconWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "customize custom app icon icons dock cmd tab app switcher menu bar status bar"
+        "customize custom app icon icons dock cmd tab app switcher"
     }
 
     fn render(

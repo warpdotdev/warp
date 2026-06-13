@@ -262,13 +262,6 @@ pub fn init(app: &mut AppContext) {
 
     app.add_global_action("root_view:open_from_restored", open_from_restored);
     app.add_global_action("root_view:open_new", open_new);
-    // When macOS Dock/Cmd-Tab visibility is disabled, the status item menu is
-    // the required recovery surface for foregrounding Warp or opening Settings.
-    app.add_global_action("root_view:show_primary_window", show_primary_window);
-    app.add_global_action(
-        "root_view:open_settings_from_status_item",
-        open_settings_from_status_item,
-    );
     app.add_global_action("root_view:open_new_with_shell", open_new_with_shell);
     app.add_global_action("root_view:open_new_from_path", |arg, ctx| {
         let _ = open_new_from_path(arg, ctx);
@@ -989,45 +982,6 @@ fn open_settings_page_in_new_window(section: &SettingsSection, ctx: &mut AppCont
     });
 }
 
-fn open_settings_page_in_normal_window(section: SettingsSection, ctx: &mut AppContext) {
-    let quake_window_id = get_quake_mode_state(ctx).map(|state| state.window_id);
-    let existing_window_id = select_normal_window_id(
-        quake_window_id,
-        ctx.windows().frontmost_window_id(),
-        ctx.window_ids(),
-    );
-
-    let existing_root_handle = existing_window_id.and_then(|window_id| {
-        ctx.root_view(window_id)
-            .map(|root_handle| (window_id, root_handle))
-    });
-    let (window_id, root_handle) = match existing_root_handle {
-        Some((window_id, root_handle)) => (window_id, root_handle),
-        None => open_new_window_get_handles(None, ctx),
-    };
-
-    root_handle.update(ctx, |root_view, ctx| {
-        if let AuthOnboardingState::Terminal(workspace_view_handle) =
-            &root_view.auth_onboarding_state
-        {
-            ctx.dispatch_typed_action_for_view(
-                window_id,
-                workspace_view_handle.id(),
-                &WorkspaceAction::ShowSettingsPage(section),
-            );
-            ctx.windows().show_window_and_focus_app(window_id);
-        } else {
-            log::error!("Auth not complete before trying to open settings page {section:?}");
-        }
-    });
-}
-
-fn open_settings_from_status_item(_: &(), ctx: &mut AppContext) {
-    open_settings_page_in_normal_window(SettingsSection::Appearance, ctx);
-}
-
-/// MCP servers need to wait for initial load to complete, so we have this action in addition
-/// to the general-purpose [`open_settings_page_in_new_window`].
 fn open_mcp_settings_in_new_window(args: &OpenMCPSettingsArgs, ctx: &mut AppContext) {
     let autoinstall = args.autoinstall.clone();
     let root_handle = open_new_window_get_handles(None, ctx).1;
@@ -1473,102 +1427,6 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
     };
 }
 
-fn show_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx: &mut AppContext) {
-    let state = get_quake_mode_state(ctx);
-    match state {
-        None => {
-            send_telemetry_from_app_ctx!(TelemetryEvent::OpenQuakeModeWindow, ctx);
-            create_quake_mode_window(global_resource_handles, ctx);
-        }
-        Some(state) => {
-            if matches!(state.window_state, WindowState::Hidden) {
-                send_telemetry_from_app_ctx!(TelemetryEvent::OpenQuakeModeWindow, ctx);
-
-                if KeysSettings::as_ref(ctx)
-                    .quake_mode_settings
-                    .pin_screen
-                    .is_none()
-                {
-                    fit_quake_mode_window_within_active_screen(
-                        &KeysSettings::as_ref(ctx)
-                            .quake_mode_settings
-                            .value()
-                            .clone(),
-                        QuakeModeMoveTrigger::ActiveScreenSetting,
-                        ctx,
-                    );
-                }
-            }
-
-            ctx.windows().show_window_and_focus_app(state.window_id);
-
-            let mut quake_mode_state = QUAKE_STATE.lock();
-            if let Some(state) = quake_mode_state.as_mut() {
-                state.window_state = WindowState::PendingOpen;
-            }
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum PrimaryWindowAction {
-    ShowQuakeWindow,
-    FocusNormalWindow(WindowId),
-    OpenNormalWindow,
-}
-
-fn select_normal_window_id(
-    quake_window_id: Option<WindowId>,
-    frontmost_window_id: Option<WindowId>,
-    window_ids: impl IntoIterator<Item = WindowId>,
-) -> Option<WindowId> {
-    frontmost_window_id
-        .filter(|window_id| Some(*window_id) != quake_window_id)
-        .or_else(|| {
-            window_ids
-                .into_iter()
-                .find(|window_id| Some(*window_id) != quake_window_id)
-        })
-}
-
-fn select_primary_window_action(
-    quake_mode_enabled: bool,
-    quake_window_id: Option<WindowId>,
-    frontmost_window_id: Option<WindowId>,
-    window_ids: impl IntoIterator<Item = WindowId>,
-) -> PrimaryWindowAction {
-    if quake_mode_enabled {
-        return PrimaryWindowAction::ShowQuakeWindow;
-    }
-
-    select_normal_window_id(quake_window_id, frontmost_window_id, window_ids)
-        .map(PrimaryWindowAction::FocusNormalWindow)
-        .unwrap_or(PrimaryWindowAction::OpenNormalWindow)
-}
-
-fn show_primary_window(global_resource_handles: &GlobalResourceHandles, ctx: &mut AppContext) {
-    let quake_window_id = get_quake_mode_state(ctx).map(|state| state.window_id);
-    match select_primary_window_action(
-        *KeysSettings::as_ref(ctx).quake_mode_enabled,
-        quake_window_id,
-        ctx.windows().frontmost_window_id(),
-        ctx.window_ids(),
-    ) {
-        PrimaryWindowAction::ShowQuakeWindow => {
-            show_quake_mode_window(global_resource_handles, ctx)
-        }
-        PrimaryWindowAction::FocusNormalWindow(window_id) => {
-            ctx.windows().show_window_and_focus_app(window_id);
-        }
-        PrimaryWindowAction::OpenNormalWindow => open_new(&(), ctx),
-    }
-}
-
-/// This action will show or hide all of Warp's windows except the quake window
-///
-/// - If Warp is active and has any windows, hide those windows.
-/// - If Warp is hidden, show all windows.
-/// - If Warp is active but has 0 normal windows, create a new window with a new session.
 fn show_or_hide_non_quake_mode_windows(_: &(), ctx: &mut AppContext) {
     let quake_window_id = get_quake_mode_state(ctx).map(|state| state.window_id);
     let non_quake_mode_window_ids = ctx
