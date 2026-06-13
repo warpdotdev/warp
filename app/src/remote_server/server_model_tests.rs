@@ -17,6 +17,12 @@ use crate::code_review::diff_state::DiffMode;
 use crate::remote_server::diff_state_tracker::DiffModelKey;
 
 fn test_model(app: &mut App) -> ServerModel {
+    // Tests default to the in-process policy so no test can accidentally arm
+    // a real grace timer that terminates the test app.
+    test_model_with_lifetime_policy(app, false)
+}
+
+fn test_model_with_lifetime_policy(app: &mut App, manages_process_lifetime: bool) -> ServerModel {
     ServerModel {
         connection_senders: HashMap::new(),
         snapshot_sent_roots_by_connection: HashMap::new(),
@@ -30,6 +36,7 @@ fn test_model(app: &mut App) -> ServerModel {
         buffers: ServerBufferTracker::new(),
         diff_states: app.add_model(|_| RemoteDiffStateManager::new()),
         host_scoped_requests: HashMap::new(),
+        manages_process_lifetime,
     }
 }
 
@@ -314,6 +321,65 @@ fn host_scoped_response_fails_over_when_target_missing() {
             .expect("alternate should receive failover response");
         assert_eq!(received.request_id, request_id.to_string());
         assert!(!model.host_scoped_requests.contains_key(&request_id));
+    });
+}
+
+// ── Process lifetime policy ────────────────────────────────────────
+
+#[test]
+fn grace_timer_starts_when_lifetime_managed() {
+    App::test((), |mut app| async move {
+        let model = test_model_with_lifetime_policy(&mut app, true);
+        let handle = app.add_model(move |_| model);
+
+        handle.update(&mut app, |me, ctx| me.start_grace_timer(ctx));
+
+        let started = handle.read(&app, |me, _| me.grace_timer_cancel.is_some());
+        assert!(started, "standalone daemon should arm the grace timer");
+
+        // Abort the timer so it doesn't outlive the test.
+        handle.update(&mut app, |me, _| {
+            if let Some(timer) = me.grace_timer_cancel.take() {
+                timer.abort();
+            }
+        });
+    });
+}
+
+#[test]
+fn grace_timer_skipped_when_lifetime_not_managed() {
+    App::test((), |mut app| async move {
+        let model = test_model_with_lifetime_policy(&mut app, false);
+        let handle = app.add_model(move |_| model);
+
+        handle.update(&mut app, |me, ctx| me.start_grace_timer(ctx));
+
+        let started = handle.read(&app, |me, _| me.grace_timer_cancel.is_some());
+        assert!(
+            !started,
+            "in-process daemon must not arm the grace timer — it would kill the agent run"
+        );
+    });
+}
+
+#[test]
+fn deregister_last_connection_skips_grace_timer_when_lifetime_not_managed() {
+    App::test((), |mut app| async move {
+        let model = test_model_with_lifetime_policy(&mut app, false);
+        let handle = app.add_model(move |_| model);
+        let conn: ConnectionId = uuid::Uuid::new_v4();
+
+        let (conn_tx, _conn_rx) = async_channel::unbounded();
+        handle.update(&mut app, |me, ctx| {
+            me.register_connection(conn, conn_tx, ctx);
+            me.deregister_connection(conn, ctx);
+        });
+
+        let started = handle.read(&app, |me, _| me.grace_timer_cancel.is_some());
+        assert!(
+            !started,
+            "losing the last connection must not arm the grace timer in in-process mode"
+        );
     });
 }
 

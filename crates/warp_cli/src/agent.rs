@@ -404,6 +404,19 @@ pub struct RunAgentArgs {
         conflicts_with_all = ["prompt", "saved_prompt", "file"]
     )]
     pub skip_initial_turn: bool,
+
+    /// Also run the long-lived remote development server daemon inside this
+    /// process, serving coding features (file tree, buffers, diffs, git ops)
+    /// alongside the agent run. The process stays alive after the agent run
+    /// completes so coding clients can keep using it.
+    #[arg(long = "remote-server-daemon", hide = true)]
+    pub remote_server_daemon: bool,
+
+    /// Identity key partitioning the in-process remote-server daemon's socket
+    /// and data directories. Optional; an absent key maps to the shared
+    /// "empty" identity directory.
+    #[arg(long = "identity-key", hide = true, requires = "remote_server_daemon")]
+    pub identity_key: Option<String>,
 }
 
 impl RunAgentArgs {

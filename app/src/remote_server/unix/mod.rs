@@ -35,18 +35,43 @@ pub fn run_daemon(identity_key: String) -> anyhow::Result<()> {
     });
 
     // Clean up socket and PID files after the event loop exits.
-    let socket_path = proxy::socket_path(&identity_key);
-    let pid_path = proxy::pid_path(&identity_key);
-    let _ = std::fs::remove_file(&socket_path);
-    let _ = std::fs::remove_file(&pid_path);
+    cleanup_daemon_files(&identity_key);
     log::info!("Daemon exiting");
     result
+}
+
+/// Removes the daemon's socket and PID files for the given identity key.
+/// Called after the event loop exits, in both standalone daemon mode and
+/// combined single-process mode (`oz agent run --remote-server-daemon`).
+pub(crate) fn cleanup_daemon_files(identity_key: &str) {
+    let socket_path = proxy::socket_path(identity_key);
+    let pid_path = proxy::pid_path(identity_key);
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_file(&pid_path);
 }
 
 /// Called from `launch()` inside the headless AppBuilder callback.
 /// Binds the Unix domain socket, writes the PID file, spawns the
 /// accept loop, and registers the `ServerModel` singleton.
 pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
+    launch_daemon_internal(identity_key, true, ctx);
+}
+
+/// Combined single-process mode (`oz agent run --remote-server-daemon`):
+/// binds the daemon socket alongside the agent run in this process.
+///
+/// The `ServerModel` does not manage process lifetime — the agent-run path
+/// owns shutdown — and daemon startup telemetry is skipped since this
+/// process already reports CLI startup telemetry.
+pub(crate) fn launch_in_process_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
+    launch_daemon_internal(identity_key, false, ctx);
+}
+
+fn launch_daemon_internal(
+    identity_key: &str,
+    manages_process_lifetime: bool,
+    ctx: &mut warpui::AppContext,
+) {
     let socket_path = proxy::socket_path(identity_key);
     let pid_path = proxy::pid_path(identity_key);
 
@@ -82,15 +107,20 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
     // and `TelemetryCollector` is already running its periodic flush.
     // The flush sends directly to Rudderstack using a baked-in write
     // key — no user auth token is required.
-    let timing_data =
-        warp_core::interval_timer::IntervalTimer::handle(ctx).update(ctx, |timer, _| {
-            timer.mark_interval_end("DAEMON_SOCKET_BOUND");
-            timer.compute_stats()
-        });
-    send_telemetry_from_app_ctx!(
-        TelemetryEvent::RemoteServerDaemonStartup { timing_data },
-        ctx
-    );
+    //
+    // Skipped in combined single-process mode: that process is an agent run
+    // first and reports CLI startup telemetry instead.
+    if manages_process_lifetime {
+        let timing_data =
+            warp_core::interval_timer::IntervalTimer::handle(ctx).update(ctx, |timer, _| {
+                timer.mark_interval_end("DAEMON_SOCKET_BOUND");
+                timer.compute_stats()
+            });
+        send_telemetry_from_app_ctx!(
+            TelemetryEvent::RemoteServerDaemonStartup { timing_data },
+            ctx
+        );
+    }
 
     let _ = std::fs::write(&pid_path, std::process::id().to_string());
 
@@ -129,7 +159,7 @@ pub(crate) fn launch_daemon(identity_key: &str, ctx: &mut warpui::AppContext) {
         })
         .detach();
 
-        ServerModel::new(ctx)
+        ServerModel::new_with_lifetime_policy(manages_process_lifetime, ctx)
     });
 }
 

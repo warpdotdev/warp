@@ -655,6 +655,10 @@ impl AgentDriverRunner {
             let bedrock_role_region = args.bedrock_role_region.clone();
             let has_task_id = args.task_id.is_some();
             let args_harness = args.harness;
+            // Combined single-process mode (`--remote-server-daemon`): the
+            // in-process daemon keeps serving coding clients after the agent
+            // run completes, so the driver must not terminate the process.
+            let keep_process_alive_on_completion = args.remote_server_daemon;
             // `--conversation` path (user-invoked local resume): validate before any task side
             // effects so mismatches fail fast. The `--task-id` path derives its conversation id
             // from the server-side task metadata inside `build_driver_options_and_task`. Both
@@ -772,6 +776,7 @@ impl AgentDriverRunner {
                         output_format,
                         share_requests,
                         task,
+                        keep_process_alive_on_completion,
                     );
                 })
                 .await?;
@@ -1419,6 +1424,10 @@ impl AgentDriverRunner {
     }
 
     /// Create the AgentDriver and start running the task.
+    ///
+    /// When `keep_process_alive_on_completion` is set (combined single-process
+    /// mode with an in-process remote-server daemon), successful completion
+    /// leaves the process running instead of terminating it.
     #[tracing::instrument(skip_all, fields(tags.cloud_agent = true))]
     fn create_and_run_driver(
         ctx: &mut AppContext,
@@ -1426,6 +1435,7 @@ impl AgentDriverRunner {
         output_format: OutputFormat,
         share_requests: Option<Vec<ShareRequest>>,
         task: driver::Task,
+        keep_process_alive_on_completion: bool,
     ) {
         maybe_warn_team_api_key(ctx);
 
@@ -1444,9 +1454,16 @@ impl AgentDriverRunner {
                 tracing::info_span!("AgentDriver::run", tags.cloud_agent = true, ?task.model, ?task.harness);
             let agent_future = driver.run(task, ctx).instrument(span);
 
-            ctx.spawn(agent_future, |_, result, ctx| match result {
+            ctx.spawn(agent_future, move |_, result, ctx| match result {
                 Ok(()) => {
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    if keep_process_alive_on_completion {
+                        log::info!(
+                            "Agent run complete; keeping process alive for the \
+                             in-process remote-server daemon"
+                        );
+                    } else {
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    }
                 }
                 Err(err) => {
                     report_fatal_error(err.into(), ctx);

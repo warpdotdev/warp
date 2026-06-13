@@ -715,7 +715,7 @@ pub fn run() -> Result<()> {
                     _ => (false, None),
                 };
 
-                return run_internal(LaunchMode::CommandLine {
+                let result = run_internal(LaunchMode::CommandLine {
                     command: cmd.as_ref().clone(),
                     global_options: GlobalOptions {
                         output_format: args.output_format(),
@@ -725,6 +725,21 @@ pub fn run() -> Result<()> {
                     is_sandboxed,
                     computer_use_override,
                 });
+
+                // Combined single-process mode: remove the in-process daemon's
+                // socket and PID files now that the event loop has exited.
+                #[cfg(unix)]
+                if let warp_cli::CliCommand::Agent(warp_cli::agent::AgentCommand::Run(run_args)) =
+                    cmd.as_ref()
+                {
+                    if run_args.remote_server_daemon {
+                        crate::remote_server::unix::cleanup_daemon_files(
+                            run_args.identity_key.as_deref().unwrap_or_default(),
+                        );
+                    }
+                }
+
+                return result;
             }
             warp_cli::Command::DumpDebugInfo => {
                 return debug_dump::run();
@@ -2632,6 +2647,25 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
                 if #[cfg(target_family = "wasm")] {
                     panic!("Cannot execute CLI command {command:?} on the web");
                 } else {
+                    // Combined single-process mode: bind the remote-server
+                    // daemon socket alongside the agent run so coding clients
+                    // can connect to this process.
+                    if let CliCommand::Agent(AgentCommand::Run(run_args)) = &command {
+                        if run_args.remote_server_daemon {
+                            cfg_if::cfg_if! {
+                                if #[cfg(unix)] {
+                                    remote_server::unix::launch_in_process_daemon(
+                                        run_args.identity_key.as_deref().unwrap_or_default(),
+                                        ctx,
+                                    );
+                                } else {
+                                    log::error!(
+                                        "--remote-server-daemon is not supported on this platform"
+                                    );
+                                }
+                            }
+                        }
+                    }
                     if let Err(err) = crate::ai::agent_sdk::run(ctx, command.clone(), global_options.clone()) {
                         eprintln!("{err:#}");
                         report_error!(err);

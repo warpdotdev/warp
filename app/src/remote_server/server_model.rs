@@ -265,6 +265,12 @@ pub struct ServerModel {
     /// In-flight host-scoped requests whose response may be delivered on
     /// a different connection if the originating connection disconnects.
     host_scoped_requests: HashMap<RequestId, ConnectionId>,
+    /// Whether this model owns process shutdown. `true` for the standalone
+    /// daemon, which exits after [`GRACE_PERIOD`] with no connections;
+    /// `false` when the daemon runs in-process alongside an `oz agent run`
+    /// (`--remote-server-daemon`), where terminating would also kill the
+    /// co-resident agent run.
+    manages_process_lifetime: bool,
 }
 
 impl Entity for ServerModel {
@@ -275,6 +281,19 @@ impl SingletonEntity for ServerModel {}
 
 impl ServerModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        Self::new_with_lifetime_policy(true, ctx)
+    }
+
+    /// Creates a `ServerModel` with an explicit process-lifetime policy.
+    ///
+    /// `manages_process_lifetime` is `true` for the standalone daemon, which
+    /// owns process shutdown via the no-connection grace timer. It is `false`
+    /// when the daemon runs in-process with an `oz agent run`
+    /// (`--remote-server-daemon`), where the agent-run path owns shutdown.
+    pub fn new_with_lifetime_policy(
+        manages_process_lifetime: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         let host_id = uuid::Uuid::new_v4().to_string();
         log::info!(
             "Daemon started: PID={}, host_id={}",
@@ -294,6 +313,7 @@ impl ServerModel {
             buffers: ServerBufferTracker::new(),
             diff_states: ctx.add_model(|_| RemoteDiffStateManager::new()),
             host_scoped_requests: HashMap::new(),
+            manages_process_lifetime,
         };
         // Subscribe to FileModel and RepoMetadataModel events
         // file operation results and repo metadata pushes are forwarded to all
@@ -730,7 +750,6 @@ impl ServerModel {
         let remaining = self.connection_senders.len();
         log::info!("Daemon: connection {conn_id} deregistered — {remaining} active remaining");
         if remaining == 0 {
-            log::info!("Daemon: grace timer started ({GRACE_PERIOD:?})");
             self.start_grace_timer(ctx);
         }
         ctx.notify();
@@ -741,7 +760,16 @@ impl ServerModel {
     /// running its abort handle is cancelled before the new one is stored.
     /// When a proxy connects, `register_connection` aborts the handle,
     /// preventing the shutdown.
+    ///
+    /// No-ops when this model does not manage process lifetime (in-process
+    /// daemon mode), since terminating would also kill the co-resident
+    /// agent run.
     fn start_grace_timer(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.manages_process_lifetime {
+            log::debug!("Daemon: skipping grace timer (process lifetime managed externally)");
+            return;
+        }
+        log::info!("Daemon: grace timer started ({GRACE_PERIOD:?})");
         if let Some(handle) = self.grace_timer_cancel.take() {
             handle.abort();
         }

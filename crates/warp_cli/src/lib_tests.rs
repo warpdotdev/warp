@@ -114,6 +114,72 @@ fn agent_run_rejects_bedrock_role_region_without_role() {
 }
 
 #[test]
+fn agent_run_accepts_remote_server_daemon_flag() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--remote-server-daemon",
+        "--identity-key",
+        "test-identity",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert!(run_args.remote_server_daemon);
+    assert_eq!(run_args.identity_key.as_deref(), Some("test-identity"));
+}
+
+#[test]
+fn agent_run_accepts_remote_server_daemon_without_identity_key() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--remote-server-daemon",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert!(run_args.remote_server_daemon);
+    assert_eq!(run_args.identity_key, None);
+}
+
+#[test]
+fn agent_run_rejects_identity_key_without_remote_server_daemon() {
+    let err = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--identity-key",
+        "test-identity",
+    ])
+    .expect_err("--identity-key must require --remote-server-daemon");
+    assert!(
+        err.to_string().contains("--remote-server-daemon"),
+        "expected error to reference --remote-server-daemon, got: {err}"
+    );
+}
+
+#[test]
 fn model_list_parses() {
     let args = Args::try_parse_from(["warp", "model", "list"]).unwrap();
 
