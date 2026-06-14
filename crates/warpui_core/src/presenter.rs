@@ -376,6 +376,17 @@ impl Presenter {
 
     fn layout(&mut self, window_size: Vector2F, app: &AppContext) {
         if let Some(root_view_id) = app.root_view_id(self.window_id) {
+            // Parent links for rendered views are layout-derived. Clear the
+            // previous frame's links before walking the current tree so views
+            // that are conditionally no longer rendered do not keep a stale
+            // responder-chain path through removed parents.
+            for view_id in self.rendered_views.keys() {
+                self.parents.remove(view_id);
+            }
+            for (child_id, parent_id) in app.structural_view_parents() {
+                self.parents.entry(child_id).or_insert(parent_id);
+            }
+
             let mut layout_ctx = LayoutContext {
                 rendered_views: &mut self.rendered_views,
                 parents: &mut self.parents,
