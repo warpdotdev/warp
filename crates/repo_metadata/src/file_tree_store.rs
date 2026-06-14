@@ -358,7 +358,7 @@ impl From<Entry> for FileTreeEntry {
 #[derive(Debug, Clone)]
 pub struct FileTreeState {
     /// The entry representing the file tree structure.
-    pub entry: FileTreeEntry,
+    pub entry: Arc<FileTreeEntry>,
     /// Gitignore rules applicable to this repository.
     pub gitignores: Vec<Gitignore>,
 
@@ -375,7 +375,7 @@ impl FileTreeState {
         repository: Option<ModelHandle<Repository>>,
     ) -> Self {
         Self {
-            entry: entry.into(),
+            entry: Arc::new(entry.into()),
             gitignores,
             repository,
         }
@@ -384,7 +384,7 @@ impl FileTreeState {
     /// Creates a new FileTreeState for a lazily-loaded standalone path.
     pub fn new_lazy_loaded(entry: Entry) -> Self {
         Self {
-            entry: entry.into(),
+            entry: Arc::new(entry.into()),
             gitignores: vec![],
             repository: None,
         }
@@ -396,7 +396,7 @@ impl FileTreeState {
     /// `apply_repo_metadata_update` rather than from a local `Entry`.
     pub fn from_file_tree_entry(entry: FileTreeEntry) -> Self {
         Self {
-            entry,
+            entry: Arc::new(entry),
             gitignores: vec![],
             repository: None,
         }

@@ -616,7 +616,7 @@ impl LocalRepoMetadataModel {
                             model.repositories.get_mut(&repo_path)
                         {
                             let mut update = Self::apply_file_tree_mutations(
-                                &mut state.entry,
+                                Arc::make_mut(&mut state.entry),
                                 mutations,
                                 lazy_load,
                                 true,
@@ -984,8 +984,7 @@ impl LocalRepoMetadataModel {
         };
 
         let mut gitignores = state.gitignores.clone();
-        state
-            .entry
+        Arc::make_mut(&mut state.entry)
             .load_at_path(dir_path, &mut gitignores)
             .map_err(RepoMetadataError::BuildTree)?;
 

@@ -181,7 +181,7 @@ impl RemoteRepoMetadataModel {
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(id) {
-            state.entry = entry;
+            state.entry = Arc::new(entry);
             ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
                 id: id.clone(),
                 update_type: MetadataUpdateType::FullReplace,
@@ -250,7 +250,7 @@ impl RemoteRepoMetadataModel {
         };
 
         if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get_mut(&id) {
-            state.entry.apply_repo_metadata_update(update);
+            Arc::make_mut(&mut state.entry).apply_repo_metadata_update(update);
             ctx.emit(RemoteRepositoryMetadataEvent::FileTreeEntryUpdated {
                 id: id.clone(),
                 update_type: MetadataUpdateType::IncrementalUpdate(update.clone()),
