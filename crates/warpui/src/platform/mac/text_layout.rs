@@ -814,7 +814,11 @@ fn line_from_ct_line(
         }
     }
 
-    let caret_positions = caret_positions_for_line(&line, char_offset, utf16_offset_to_char_idx);
+    let caret_positions = if line_style.skip_caret_positions {
+        vec![]
+    } else {
+        caret_positions_for_line(&line, char_offset, utf16_offset_to_char_idx)
+    };
 
     Line {
         width,

@@ -1885,6 +1885,7 @@ impl Element for FormattedTextElement {
                         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                         fixed_width_tab_size: matches!(line, FormattedTextLine::CodeBlock(_))
                             .then_some(4),
+                        skip_caret_positions: false,
                     },
                     styles.as_slice(),
                     text_frame_width,
@@ -1906,6 +1907,7 @@ impl Element for FormattedTextElement {
                         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                         fixed_width_tab_size: matches!(line, FormattedTextLine::CodeBlock(_))
                             .then_some(4),
+                        skip_caret_positions: false,
                     },
                     styles.as_slice(),
                     text_frame_width,

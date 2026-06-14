@@ -225,6 +225,7 @@ impl ViewSnapshot {
                     line_height_ratio: self.line_height_ratio,
                     baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                     fixed_width_tab_size: None,
+                    skip_caret_positions: false,
                 },
                 &[(
                     0..text.chars().count(),
@@ -259,6 +260,7 @@ impl ViewSnapshot {
                             line_height_ratio: self.line_height_ratio,
                             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                             fixed_width_tab_size: None,
+                            skip_caret_positions: false,
                         },
                         &[(
                             0..line.chars().count(),
@@ -531,6 +533,7 @@ impl ViewSnapshot {
                         line_height_ratio,
                         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                         fixed_width_tab_size: None,
+                        skip_caret_positions: false,
                     },
                     &style_runs,
                     max_width,
@@ -584,6 +587,7 @@ impl ViewSnapshot {
                 line_height_ratio: self.line_height_ratio,
                 baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
                 fixed_width_tab_size: None,
+                skip_caret_positions: false,
             },
             &[(
                 0..self.line_len(row, app)? as usize,

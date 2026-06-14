@@ -30,6 +30,7 @@ fn test_fixed_width_tab_size_matches_spaces_width() -> Result<()> {
         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
         fixed_width_tab_size: Some(4),
+        skip_caret_positions: false,
     };
 
     let tabbed_line = font_db.text_layout_system().layout_line(
@@ -163,6 +164,7 @@ fn test_leading_newline_caret_positions() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..26,
@@ -211,6 +213,7 @@ fn test_multiline_caret_positions() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..26,
@@ -269,6 +272,7 @@ fn test_layout_str_infinite_height() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..12,
@@ -296,6 +300,7 @@ fn test_layout_str() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (
@@ -338,6 +343,7 @@ fn test_layout_str_with_style() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (
@@ -400,6 +406,7 @@ fn test_multiline_glyph_indices() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..26,
@@ -439,6 +446,7 @@ fn test_layout_mixed_ltr_rtl_text() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -469,6 +477,7 @@ fn test_char_indices() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -513,6 +522,7 @@ fn test_caret_positions() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -569,6 +579,7 @@ fn test_layout_text() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -617,6 +628,7 @@ fn test_layout_text_first_line_head_indent() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -663,6 +675,7 @@ fn test_layout_text_large_first_line_head_indent() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -722,6 +735,7 @@ fn test_layout_text_last_line_clipped() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -764,6 +778,7 @@ fn test_layout_text_first_line_indent_small() -> Result<()> {
         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
         fixed_width_tab_size: None,
+        skip_caret_positions: false,
     };
     let style_runs = [(
         0..text.encode_utf16().count(),
@@ -917,6 +932,7 @@ fn test_layout_text_first_line_indent_medium() -> Result<()> {
         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
         fixed_width_tab_size: None,
+        skip_caret_positions: false,
     };
     let style_runs = [(
         0..text.encode_utf16().count(),
@@ -1028,6 +1044,7 @@ fn test_layout_text_first_line_indent_large() -> Result<()> {
         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
         fixed_width_tab_size: None,
+        skip_caret_positions: false,
     };
     let style_runs = [(
         0..text.encode_utf16().count(),
@@ -1190,6 +1207,7 @@ fn test_layout_text_first_line_indent_small_bidirectional() -> Result<()> {
         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
         fixed_width_tab_size: None,
+        skip_caret_positions: false,
     };
     let style_runs = [(
         0..text.encode_utf16().count(),
@@ -1273,6 +1291,7 @@ fn test_layout_text_first_line_indent_medium_bidirectional() -> Result<()> {
         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
         fixed_width_tab_size: None,
+        skip_caret_positions: false,
     };
     let style_runs = [(
         0..text.encode_utf16().count(),
@@ -1340,6 +1359,7 @@ fn test_layout_text_first_line_indent_large_bidirectional() -> Result<()> {
         line_height_ratio: DEFAULT_UI_LINE_HEIGHT_RATIO,
         baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
         fixed_width_tab_size: None,
+        skip_caret_positions: false,
     };
     let style_runs = [(
         0..text.encode_utf16().count(),

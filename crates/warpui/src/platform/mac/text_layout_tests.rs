@@ -29,6 +29,7 @@ fn test_char_indices_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (
@@ -87,6 +88,7 @@ fn test_caret_positions_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (
@@ -211,6 +213,7 @@ fn test_emoji_caret_positions() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..12,
@@ -265,6 +268,7 @@ fn test_bidi_caret_positions() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(
             0..text.encode_utf16().count(),
@@ -318,6 +322,7 @@ fn test_layout_text_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (
@@ -377,6 +382,7 @@ fn test_layout_text_first_line_head_indent_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (
@@ -443,6 +449,7 @@ fn test_tab_stops_affect_line_width() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(0..strings.chars().count(), style)],
         &font_db,
@@ -456,6 +463,7 @@ fn test_tab_stops_affect_line_width() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: Some(tab_size),
+            skip_caret_positions: false,
         },
         &[(0..tabbed.chars().count(), style)],
         &font_db,
@@ -500,6 +508,7 @@ fn test_tab_stops_do_not_drift_over_long_runs() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[(0..strings.chars().count(), style)],
         &font_db,
@@ -516,6 +525,7 @@ fn test_tab_stops_do_not_drift_over_long_runs() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: Some(tab_size),
+            skip_caret_positions: false,
         },
         &[(0..tabbed.chars().count(), style)],
         &font_db,
@@ -551,6 +561,7 @@ fn test_layout_text_large_first_line_head_indent_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (
@@ -609,6 +620,7 @@ fn test_layout_text_last_line_clipped_ligatures() -> Result<()> {
             line_height_ratio: 1.2,
             baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
             fixed_width_tab_size: None,
+            skip_caret_positions: false,
         },
         &[
             (

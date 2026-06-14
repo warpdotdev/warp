@@ -85,6 +85,10 @@ pub struct LineStyle {
     ///
     /// `None` leaves tab stop behavior up to the backend defaults.
     pub fixed_width_tab_size: Option<u8>,
+    /// When true, skip computing caret positions during text layout.
+    /// Caret positions are only needed for interactive text (editable fields,
+    /// text selection). Display-only text can skip them to save memory.
+    pub skip_caret_positions: bool,
 }
 
 pub struct WindowOptions {
