@@ -389,7 +389,7 @@ impl AIContextMenu {
                     .and_then(|window_id| ActiveSession::as_ref(app).working_directory(window_id))
                     .is_some_and(|dir| {
                         DetectedRepositories::as_ref(app)
-                            .get_root_for_path(dir)
+                            .get_root_for_canonical_path(dir)
                             .is_some()
                     })
             }

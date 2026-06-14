@@ -22,7 +22,6 @@ pub mod bootstrap;
 pub mod completions;
 pub mod header_grid;
 pub mod rich_content;
-pub mod tmux;
 
 pub mod early_output;
 pub mod find;

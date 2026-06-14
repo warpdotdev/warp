@@ -310,6 +310,18 @@ pub struct ForkConversationResponse {
     pub forked_conversation_id: String,
 }
 
+/// Request body for `POST /agent/conversations/{conversation_id}/rename`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RenameConversationRequest {
+    pub title: String,
+}
+
+/// Response body for `POST /agent/conversations/{conversation_id}/rename`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RenameConversationResponse {
+    pub title: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RunFollowupRequest {
     pub message: String,
@@ -847,6 +859,13 @@ pub(crate) fn build_fork_conversation_url(conversation_id: &str) -> String {
     )
 }
 
+pub(crate) fn build_rename_conversation_url(conversation_id: &str) -> String {
+    format!(
+        "agent/conversations/{}/rename",
+        urlencoding::encode(conversation_id)
+    )
+}
+
 struct ListRunsResponse {
     runs: Vec<AmbientAgentTask>,
 }
@@ -1096,6 +1115,13 @@ pub trait AIClient: 'static + Send + Sync {
         conversation_id: String,
         title: Option<String>,
     ) -> anyhow::Result<ForkConversationResponse, anyhow::Error>;
+
+    /// Rename a server-side conversation and return the normalized title.
+    async fn rename_conversation(
+        &self,
+        conversation_id: String,
+        title: String,
+    ) -> anyhow::Result<RenameConversationResponse, anyhow::Error>;
 
     async fn list_ambient_agent_tasks(
         &self,
@@ -1957,6 +1983,18 @@ impl AIClient for ServerApi {
         Ok(response)
     }
 
+    async fn rename_conversation(
+        &self,
+        conversation_id: String,
+        title: String,
+    ) -> anyhow::Result<RenameConversationResponse, anyhow::Error> {
+        let request = RenameConversationRequest { title };
+        let response: RenameConversationResponse = self
+            .post_public_api(&build_rename_conversation_url(&conversation_id), &request)
+            .await?;
+        Ok(response)
+    }
+
     async fn list_ambient_agent_tasks(
         &self,
         limit: i32,
@@ -2787,6 +2825,9 @@ impl From<warp_graphql::queries::get_feature_model_choices::LlmModelHost> for LL
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::CustomEndpoint => {
                 LLMModelHost::CustomEndpoint
+            }
+            warp_graphql::queries::get_feature_model_choices::LlmModelHost::GeminiEnterprise => {
+                LLMModelHost::GeminiEnterprise
             }
             warp_graphql::queries::get_feature_model_choices::LlmModelHost::Other(value) => {
                 report_error!(

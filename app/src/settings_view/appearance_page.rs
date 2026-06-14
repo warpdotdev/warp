@@ -90,10 +90,10 @@ use crate::window_settings::{
 };
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
-    DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
-    ShowCodeReviewButton, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
-    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
-    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
+    canonical_directory_key, DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs,
+    PreserveActiveTabColor, ShowCodeReviewButton, ShowIndicatorsButton,
+    ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition, TabSettings,
+    TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
     WorkspaceDecorationVisibility,
 };
 use crate::workspace::WorkspaceAction;
@@ -4905,8 +4905,7 @@ fn build_directory_delete_buttons(
 fn add_directory_tab_color_path(path: PathBuf, ctx: &mut ViewContext<AppearanceSettingsPageView>) {
     TabSettings::handle(ctx).update(ctx, |settings, ctx| {
         let current = settings.directory_tab_colors.value();
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-        let key = canonical.to_string_lossy().to_string();
+        let key = canonical_directory_key(&path);
         let dominated_by_existing = current
             .0
             .get(&key)

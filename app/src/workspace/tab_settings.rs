@@ -201,8 +201,7 @@ settings::macros::implement_setting_for_enum!(
 impl DirectoryTabColors {
     /// Returns the configured tab color for a directory using longest-prefix matching.
     /// Returns `None` if no configured directory is a prefix of `dir`.
-    pub fn color_for_directory(&self, dir: &Path) -> Option<DirectoryTabColor> {
-        let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    pub fn color_for_directory(&self, canonical_dir: &Path) -> Option<DirectoryTabColor> {
         self.0
             .iter()
             .filter_map(|(configured_path, color)| {
@@ -221,11 +220,17 @@ impl DirectoryTabColors {
     /// Returns a new value with the given directory's color updated.
     pub fn with_color(&self, path: &Path, color: DirectoryTabColor) -> Self {
         let mut map = self.0.clone();
-
-        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        map.insert(canonical.to_string_lossy().to_string(), color);
+        map.insert(canonical_directory_key(path), color);
         Self(map)
     }
+}
+
+/// Canonicalizes `path` into the string key used in [`DirectoryTabColors`].
+pub fn canonical_directory_key(path: &Path) -> String {
+    dunce::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
 }
 
 #[derive(

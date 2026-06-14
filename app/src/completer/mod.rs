@@ -494,9 +494,8 @@ printf '%b' '\0' &&
 find . -maxdepth 1 -not -type d -print0
             "#
     )
-    // Ensure all newlines are escaped, and that the command is a single line.
-    // ls_script_for_dir should not contain newlines, as we need to run it as a
-    // single line for TMUX control mode at this time.
+    // Ensure all newlines are escaped, and that the command is a single line, since some
+    // in-band executors run commands a single line at a time.
     .replace("\n", " ");
 
     Some(command)

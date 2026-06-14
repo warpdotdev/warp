@@ -8,8 +8,8 @@
 //! 2. Before using either reference, the client validates that the endpoint is
 //!    loopback and that the broker filename is derived from the selected
 //!    instance ID.
-//! 3. The client requests a credential for one action and invocation context
-//!    over the owner-only broker socket. On Unix, the server authenticates the
+//! 3. The client requests a credential for one action over the owner-only
+//!    broker socket. On Unix, the server authenticates the
 //!    connecting process through kernel-reported peer credentials before
 //!    issuing a short-lived, action-scoped credential.
 //! 4. The client keeps that credential in memory and presents it as a bearer
@@ -34,7 +34,7 @@ use crate::auth::{CredentialRequest, ScopedCredential};
 use crate::discovery::InstanceRecord;
 use crate::protocol::{
     Action, ActionKind, ControlError, ControlResponse, ErrorCode, ErrorResponseEnvelope,
-    InvocationContext, RequestEnvelope, ResponseEnvelope,
+    RequestEnvelope, ResponseEnvelope,
 };
 
 /// Requests an action-scoped credential and sends one authenticated control request.
@@ -44,15 +44,11 @@ pub fn send_request(
     request: &RequestEnvelope,
 ) -> Result<ResponseEnvelope, ControlError> {
     instance.validate_local_control_authority()?;
-    let credential = request_credential(
-        instance,
-        request.action.kind,
-        InvocationContext::OutsideWarp,
-    )?;
+    let credential = request_credential(instance, request.action.kind)?;
     let endpoint = instance.endpoint.as_ref().ok_or_else(|| {
         ControlError::new(
             ErrorCode::LocalControlDisabled,
-            "outside-Warp local control endpoint is disabled for this instance",
+            "local control endpoint is disabled for this instance",
         )
     })?;
     let client = reqwest::blocking::Client::new();
@@ -98,14 +94,10 @@ pub fn send_request(
     instance: &InstanceRecord,
     request: &RequestEnvelope,
 ) -> Result<ResponseEnvelope, ControlError> {
-    request_credential(
-        instance,
-        request.action.kind,
-        InvocationContext::OutsideWarp,
-    )?;
+    request_credential(instance, request.action.kind)?;
     Err(ControlError::new(
         ErrorCode::LocalControlDisabled,
-        "outside-Warp local control requires a native HTTP transport",
+        "local control requires a native HTTP transport",
     ))
 }
 #[cfg(unix)]
@@ -175,18 +167,17 @@ fn request_credential_over_owner_ipc(
 ) -> Result<String, ControlError> {
     Err(ControlError::new(
         ErrorCode::LocalControlDisabled,
-        "outside-Warp local control requires an owner-authenticated credential broker",
+        "local control requires an owner-authenticated credential broker",
     ))
 }
 
-/// Requests and decodes a short-lived credential for one action and invocation context.
+/// Requests and decodes a short-lived credential for one exact action.
 pub fn request_credential(
     instance: &InstanceRecord,
     action: crate::protocol::ActionKind,
-    invocation_context: InvocationContext,
 ) -> Result<ScopedCredential, ControlError> {
     instance.validate_local_control_authority()?;
-    let request = CredentialRequest::new(action, invocation_context);
+    let request = CredentialRequest::new(action);
     let text = request_credential_over_owner_ipc(instance, &request)?;
     if let Ok(credential) = serde_json::from_str::<ScopedCredential>(&text) {
         return Ok(credential);

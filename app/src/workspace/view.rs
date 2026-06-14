@@ -125,8 +125,9 @@ use super::action::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::auto_handoff::AutoCloudHandoffController;
+pub(crate) use super::close_session_confirmation_dialog::OpenDialogSource;
 use super::close_session_confirmation_dialog::{
-    CloseSessionConfirmationDialog, CloseSessionConfirmationEvent, OpenDialogSource,
+    CloseSessionConfirmationDialog, CloseSessionConfirmationEvent,
 };
 use super::delete_conversation_confirmation_dialog::{
     DeleteConversationConfirmationDialog, DeleteConversationConfirmationEvent,
@@ -886,7 +887,6 @@ enum DefaultSessionModeBehavior {
 struct CodeReviewPaneContext {
     repo_path: Option<LocalOrRemotePath>,
     diff_state_model: ModelHandle<DiffStateModel>,
-    terminal_view: WeakViewHandle<TerminalView>,
 }
 
 /// Parameters for updating the right panel's 'state.
@@ -3498,6 +3498,7 @@ impl Workspace {
             let is_relevant_update = matches!(
                 event,
                 BlocklistAIHistoryEvent::SetActiveConversation { .. }
+                    | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
                     | BlocklistAIHistoryEvent::RestoredConversations { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
@@ -3554,6 +3555,7 @@ impl Workspace {
                 | BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. }
                 | BlocklistAIHistoryEvent::SplitConversation { .. }
                 | BlocklistAIHistoryEvent::RestoredConversations { .. }
+                | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
                 | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
         ) && event.terminal_view_id().is_some_and(|terminal_view_id| {
             self.workspace_contains_terminal_view(terminal_view_id, ctx)
@@ -5444,21 +5446,19 @@ impl Workspace {
     /// If the CWD is within a directory that has a configured color, applies it.
     /// If the CWD moves outside all configured directories, the directory color is cleared.
     fn sync_codebase_tab_color(tab: &mut TabData, ctx: &mut ViewContext<Self>) {
-        let cwd = tab
+        let Some(cwd) = tab
             .pane_group
             .as_ref(ctx)
             .active_session_view(ctx)
-            .and_then(|tv| tv.as_ref(ctx).pwd_if_local(ctx));
-
-        let Some(cwd) = cwd else {
+            .and_then(|tv| tv.as_ref(ctx).canonical_session_pwd_if_local(ctx))
+        else {
             return;
         };
 
-        let cwd_path = Path::new(&cwd);
         let color = TabSettings::as_ref(ctx)
             .directory_tab_colors
             .value()
-            .color_for_directory(cwd_path)
+            .color_for_directory(cwd.as_path())
             .and_then(|c| c.ansi_color());
 
         tab.default_directory_color = color;
@@ -8957,40 +8957,33 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         // If context is provided, use it directly. Otherwise, derive from active pane group.
-        let context_data: Option<(
-            Option<LocalOrRemotePath>,
-            ModelHandle<DiffStateModel>,
-            WeakViewHandle<TerminalView>,
-        )> = if let Some(context) = context {
-            Some((
-                context.repo_path.clone(),
-                context.diff_state_model.clone(),
-                context.terminal_view.clone(),
-            ))
-        } else {
-            let active_pane_group = self.active_tab_pane_group().clone();
-            // Read repo_path and terminal_view from the pane group (immutable context).
-            let read_result = active_pane_group.read(ctx, |pane_group, ctx| {
-                pane_group.active_session_view(ctx).map(|terminal_view| {
-                    let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
-                    let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
-                    (repo_path, preferred_session, terminal_view.downgrade())
-                })
-            });
-            // Resolve DiffStateModel outside the read closure (needs mutable context).
-            read_result.and_then(|(repo_path, preferred_session, terminal_view)| {
-                let diff_state_model = repo_path.as_ref().and_then(|rp| {
-                    self.working_directories_model.update(ctx, |model, ctx| {
-                        model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
+        let context_data: Option<(Option<LocalOrRemotePath>, ModelHandle<DiffStateModel>)> =
+            if let Some(context) = context {
+                Some((context.repo_path.clone(), context.diff_state_model.clone()))
+            } else {
+                let active_pane_group = self.active_tab_pane_group().clone();
+                // Read repo_path and preferred session from the pane group (immutable context).
+                let read_result = active_pane_group.read(ctx, |pane_group, ctx| {
+                    pane_group.active_session_view(ctx).map(|terminal_view| {
+                        let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
+                        let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
+                        (repo_path, preferred_session)
                     })
-                })?;
-                Some((repo_path, diff_state_model, terminal_view))
-            })
-        };
+                });
+                // Resolve DiffStateModel outside the read closure (needs mutable context).
+                read_result.and_then(|(repo_path, preferred_session)| {
+                    let diff_state_model = repo_path.as_ref().and_then(|rp| {
+                        self.working_directories_model.update(ctx, |model, ctx| {
+                            model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
+                        })
+                    })?;
+                    Some((repo_path, diff_state_model))
+                })
+            };
 
-        if let Some((repo, diff_state_model, terminal_view)) = context_data {
+        if let Some((repo, diff_state_model)) = context_data {
             self.right_panel_view.update(ctx, |right_pane_view, ctx| {
-                right_pane_view.open_code_review(repo, diff_state_model, terminal_view, ctx);
+                right_pane_view.open_code_review(repo, diff_state_model, ctx);
             });
         } else {
             self.right_panel_view.update(ctx, |right_panel_view, ctx| {
@@ -9033,7 +9026,6 @@ impl Workspace {
         let context = CodeReviewPaneContext {
             repo_path: repo_location,
             diff_state_model,
-            terminal_view: panel_context.terminal_view.clone(),
         };
 
         self.open_right_panel(
@@ -9133,21 +9125,17 @@ impl Workspace {
         let target_open_state =
             pane_group_handle.read(ctx, |pane_group, _| !pane_group.right_panel_open);
 
-        // Read repo_path and terminal_view from pane group (immutable context).
+        // Read repo_path and preferred session from pane group (immutable context).
         let read_result = pane_group_handle.read(ctx, |pane_group, ctx| {
             pane_group.active_session_view(ctx).map(|terminal_view| {
                 let repo_path = terminal_view.as_ref(ctx).current_repo_path().cloned();
                 let preferred_session = terminal_view.as_ref(ctx).active_block_session_id();
-                (repo_path, preferred_session, terminal_view.downgrade())
+                (repo_path, preferred_session)
             })
         });
         // Resolve DiffStateModel outside the read closure (needs mutable context).
         let context = read_result.and_then(
-            |(repo_path, preferred_session, terminal_view): (
-                Option<LocalOrRemotePath>,
-                Option<SessionId>,
-                WeakViewHandle<TerminalView>,
-            )| {
+            |(repo_path, preferred_session): (Option<LocalOrRemotePath>, Option<SessionId>)| {
                 let diff_state_model = repo_path.as_ref().and_then(|rp| {
                     self.working_directories_model.update(ctx, |model, ctx| {
                         model.get_or_create_diff_state_model(rp.clone(), preferred_session, ctx)
@@ -9156,7 +9144,6 @@ impl Workspace {
                 Some(CodeReviewPaneContext {
                     repo_path,
                     diff_state_model,
-                    terminal_view,
                 })
             },
         );
@@ -9573,8 +9560,22 @@ impl Workspace {
             items
         };
 
+        let pin_section = if FeatureFlag::PinnedTabs.is_enabled() {
+            let (label, action) = if self.tab_groups.get(&group_id).is_some_and(|g| g.pinned) {
+                ("Unpin group", WorkspaceAction::UnpinTabGroup(group_id))
+            } else {
+                ("Pin group", WorkspaceAction::PinTabGroup(group_id))
+            };
+            vec![MenuItemFields::new(label)
+                .with_on_select_action(action)
+                .into_item()]
+        } else {
+            vec![]
+        };
+
         let mut menu_items = vec![];
         for section_items in [
+            pin_section,
             vec![
                 MenuItemFields::new("Ungroup tabs")
                     .with_on_select_action(WorkspaceAction::UngroupTabs(group_id))
@@ -11585,7 +11586,7 @@ impl Workspace {
     /// Checks if the provided tab indices need to be confirmed before closing, unless skip_confirmation is true.
     /// If none of them need confirmation (or the confirm setting is turned off), we close all the provided tabs.
     /// Returns true iff all of the tabs were closed.
-    fn close_tabs(
+    pub(crate) fn close_tabs(
         &mut self,
         tab_indices: impl Iterator<Item = usize>,
         dialog_source: OpenDialogSource,
@@ -19910,7 +19911,7 @@ impl Workspace {
         let config = TabSettings::as_ref(ctx)
             .header_toolbar_chip_selection
             .clone();
-        if knowledge_center_closed && !self.is_theme_chooser_open() {
+        if knowledge_center_closed {
             let left_toolbar_buttons = config
                 .left_items()
                 .into_iter()
@@ -20410,7 +20411,7 @@ impl Workspace {
             .platform_window(self.window_id)
             .map(|window| window.fullscreen_state() == FullscreenState::Fullscreen)
             .unwrap_or(false);
-        if self.current_workspace_state.is_left_panel_open() {
+        if self.is_left_panel_open(ctx) {
             0.
         } else if is_window_fullscreen && cfg!(target_os = "macos") {
             // Full-screen mode on MacOS does not need as much padding (traffic lights are hidden).
@@ -22026,13 +22027,13 @@ impl Workspace {
         let reporting_setings = AltScreenReporting::as_ref(app);
         let general_settings = GeneralSettings::as_ref(app);
         let theme_settings = ThemeSettings::as_ref(app);
-        let ssh_settings = SshSettings::as_ref(app);
         let warpify_settings = WarpifySettings::as_ref(app);
         let terminal_settings = TerminalSettings::as_ref(app);
         let window_settings = WindowSettings::as_ref(app);
         let pane_settings = PaneSettings::as_ref(app);
         let keys_settings = KeysSettings::as_ref(app);
         let command_search_settings = CommandSearchSettings::as_ref(app);
+        let ssh_settings = SshSettings::as_ref(app);
 
         let is_compact_mode =
             matches!(terminal_settings.spacing_mode.value(), SpacingMode::Compact);
@@ -22073,16 +22074,13 @@ impl Workspace {
             context.set.insert(flags::WARP_SAME_LINE_PROMPT_FLAG);
         }
 
-        if *ssh_settings.enable_legacy_ssh_wrapper.value() {
-            #[allow(deprecated)]
-            context.set.insert(flags::LEGACY_SSH_WRAPPER_CONTEXT_FLAG);
+        if *ssh_settings.reuse_existing_control_master.value() {
+            context
+                .set
+                .insert(flags::SSH_REUSE_CONTROL_MASTER_CONTEXT_FLAG);
         }
         if *warpify_settings.enable_ssh_warpification.value() {
             context.set.insert(flags::SSH_WARPIFICATION_CONTEXT_FLAG);
-        }
-
-        if *warpify_settings.use_ssh_tmux_wrapper.value() {
-            context.set.insert(flags::SSH_TMUX_WRAPPER_CONTEXT_FLAG);
         }
 
         if keys_settings.extra_meta_keys.left_alt {
@@ -22973,6 +22971,10 @@ impl TypedActionView for Workspace {
             CloseTabsOutsideGroup(group_id) => self.close_tabs_outside_group(*group_id, ctx),
             CloseTabsAboveGroup(group_id) => self.close_tabs_above_group(*group_id, ctx),
             CloseTabsBelowGroup(group_id) => self.close_tabs_below_group(*group_id, ctx),
+            PinTab(tab_index) => self.pin_tab(*tab_index, ctx),
+            UnpinTab(tab_index) => self.unpin_tab(*tab_index, ctx),
+            PinTabGroup(group_id) => self.pin_tab_group(*group_id, ctx),
+            UnpinTabGroup(group_id) => self.unpin_tab_group(*group_id, ctx),
             AddDefaultTab => {
                 let effective_mode = AISettings::as_ref(ctx).default_session_mode(ctx);
                 match effective_mode {
@@ -23607,10 +23609,10 @@ impl TypedActionView for Workspace {
                                     terminal_view.as_ref(ctx).current_repo_path().cloned();
                                 let preferred_session =
                                     terminal_view.as_ref(ctx).active_block_session_id();
-                                (repo_path, preferred_session, terminal_view.downgrade())
+                                (repo_path, preferred_session)
                             })
                     });
-                    if let Some((repo_path, preferred_session, terminal_view)) = read_result {
+                    if let Some((repo_path, preferred_session)) = read_result {
                         let diff_state_model = repo_path.as_ref().and_then(|rp| {
                             self.working_directories_model.update(ctx, |model, ctx| {
                                 model.get_or_create_diff_state_model(
@@ -23624,7 +23626,6 @@ impl TypedActionView for Workspace {
                             let context = CodeReviewPaneContext {
                                 repo_path,
                                 diff_state_model,
-                                terminal_view,
                             };
                             self.open_right_panel(
                                 &context,
@@ -23641,6 +23642,11 @@ impl TypedActionView for Workspace {
             OpenCodeReviewPanel(_) => {}
             ToggleVerticalTabsPanel => {
                 self.toggle_vertical_tabs_panel(ctx);
+            }
+            OpenVerticalTabsPanel => {
+                if !self.vertical_tabs_panel_open {
+                    self.toggle_vertical_tabs_panel(ctx);
+                }
             }
             ToggleNotificationMailbox { select_first } => {
                 if FeatureFlag::HOANotifications.is_enabled()
@@ -23816,6 +23822,15 @@ impl TypedActionView for Workspace {
                         self.focus_active_tab(ctx);
                     }
 
+                    ctx.notify();
+                }
+            }
+            OpenAgentManagementView => {
+                if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+                    && FeatureFlag::AgentManagementView.is_enabled()
+                {
+                    self.set_is_agent_management_view_open(true, ctx);
+                    ctx.focus(&self.agent_management_view);
                     ctx.notify();
                 }
             }
@@ -24833,6 +24848,11 @@ impl TypedActionView for Workspace {
                     self.toggle_left_panel_view(&LeftPanelAction::ProjectExplorer, is_showing, ctx);
                 }
             }
+            OpenProjectExplorer => {
+                if *CodeSettings::as_ref(ctx).show_project_explorer {
+                    self.open_left_panel_view(&LeftPanelAction::ProjectExplorer, ctx);
+                }
+            }
             ToggleWarpDrive => {
                 if WarpDriveSettings::is_warp_drive_enabled(ctx) {
                     let is_showing =
@@ -24896,6 +24916,11 @@ impl TypedActionView for Workspace {
                         is_showing,
                         ctx,
                     );
+                }
+            }
+            OpenConversationListView => {
+                if FeatureFlag::AgentViewConversationListView.is_enabled() {
+                    self.open_left_panel_view(&LeftPanelAction::ConversationListView, ctx);
                 }
             }
             ShowRewindConfirmationDialog {

@@ -169,6 +169,7 @@ impl Sessions {
                 | RemoteServerManagerEvent::SessionConnectionFailed { .. }
                 | RemoteServerManagerEvent::HostConnected { .. }
                 | RemoteServerManagerEvent::HostDisconnected { .. }
+                | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
                 | RemoteServerManagerEvent::NavigatedToDirectory { .. }
                 | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
                 | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -393,7 +394,7 @@ impl Sessions {
             TelemetryEvent::BootstrappingSucceeded(BootstrappingInfo {
                 shell: session.shell().shell_type().name(),
                 shell_version: session.shell().version().clone(),
-                is_ssh: session.is_legacy_ssh_session(),
+                is_ssh: session.is_ssh_wrapper_session(),
                 was_triggered_by_rc_file,
                 is_subshell: session.subshell_info().is_some(),
                 is_wsl: session.is_wsl(),
@@ -530,9 +531,27 @@ impl From<&SessionType> for command_corrections::SessionType {
     }
 }
 
+/// Whether a session was established by Warp's in-band SSH wrapper — the shell function our
+/// bootstrap injects that intercepts `ssh`, sets up a ControlMaster connection, and bootstraps
+/// the remote shell. This applies to all SSH warpification today: the remote-server SSH
+/// extension also runs on top of a wrapper session (reusing the ControlMaster socket for its
+/// proxy and for the `RemoteCommandExecutor` fallback).
+///
+/// `No` covers local sessions, subshells, and remote sessions warpified *without* the wrapper
+/// (e.g. via the auto-warpify RC snippet inside an unwrapped `ssh` session), which carry no
+/// ControlMaster socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IsLegacySSHSession {
-    Yes { socket_path: PathBuf },
+pub enum IsSSHWrapperSession {
+    /// The session was established by the SSH wrapper; `socket_path` is the ControlMaster
+    /// socket for the underlying connection.
+    Yes {
+        socket_path: PathBuf,
+        /// `true` when `socket_path` points at a ControlMaster the user
+        /// already had running (the SSH wrapper attached to it instead of
+        /// creating a Warp-owned one). Warp must not tear down such a
+        /// master on session exit.
+        external_control_master: bool,
+    },
     No,
 }
 
@@ -585,13 +604,12 @@ pub struct SessionInfo {
     pub function_names: HashSet<SmolStr>,
     pub builtins: HashSet<SmolStr>,
     pub keywords: Vec<SmolStr>,
-    pub is_legacy_ssh_session: IsLegacySSHSession,
+    pub is_ssh_wrapper_session: IsSSHWrapperSession,
     pub home_dir: Option<String>,
     pub cdpath: Option<String>,
     pub editor: Option<String>,
     pub session_type: BootstrapSessionType,
     pub host_info: HostInfo,
-    pub tmux_control_mode: bool,
     pub wsl_name: Option<String>,
     /// If this is a subshell or remote session, e.g. ssh, store the parent session ID here.
     pub spawning_session_id: Option<SessionId>,
@@ -609,18 +627,18 @@ impl SessionInfo {
         init_shell_value: InitShellValue,
         subshell_info: Option<SubshellInitializationInfo>,
         launch_data: Option<ShellLaunchData>,
-        legacy_ssh_session: Option<SSHValue>,
-        is_warpified_ssh_session: bool,
+        ssh_wrapper_session: Option<SSHValue>,
         active_block_session_id: Option<SessionId>,
     ) -> Self {
-        let is_legacy_ssh_session = match legacy_ssh_session {
-            Some(ssh_value) => IsLegacySSHSession::Yes {
+        let is_ssh_wrapper_session = match ssh_wrapper_session {
+            Some(ssh_value) => IsSSHWrapperSession::Yes {
                 socket_path: ssh_value.socket_path,
+                external_control_master: ssh_value.external_control_master,
             },
-            None => IsLegacySSHSession::No,
+            None => IsSSHWrapperSession::No,
         };
 
-        if launch_data.is_none() && is_legacy_ssh_session == IsLegacySSHSession::No {
+        if launch_data.is_none() && is_ssh_wrapper_session == IsSSHWrapperSession::No {
             log::warn!("pending_local_shell_path was None for a local session");
         }
 
@@ -628,8 +646,7 @@ impl SessionInfo {
         // to determine if this is a local or remote session.
         let session_type = Self::determine_session_type(
             &init_shell_value,
-            is_warpified_ssh_session
-                || matches!(&is_legacy_ssh_session, IsLegacySSHSession::Yes { .. }),
+            matches!(&is_ssh_wrapper_session, IsSSHWrapperSession::Yes { .. }),
         );
 
         let spawning_session_id = if matches!(session_type, BootstrapSessionType::WarpifiedRemote)
@@ -648,7 +665,7 @@ impl SessionInfo {
             hostname: init_shell_value.hostname,
             session_type,
             subshell_info,
-            is_legacy_ssh_session,
+            is_ssh_wrapper_session,
             environment_variable_names: Default::default(),
             path: None,
             home_dir: None,
@@ -661,7 +678,6 @@ impl SessionInfo {
             builtins: Default::default(),
             keywords: Default::default(),
             host_info: Default::default(),
-            tmux_control_mode: false,
             wsl_name: init_shell_value.wsl_name,
             spawning_session_id,
         }
@@ -670,14 +686,14 @@ impl SessionInfo {
     #[cfg(not(feature = "remote_tty"))]
     fn determine_session_type(
         init_shell_value: &InitShellValue,
-        is_warpified_ssh_session: bool,
+        is_ssh_session: bool,
     ) -> BootstrapSessionType {
         match get_local_hostname() {
             Ok(local_hostname) => {
                 // Ensures subshells are treated as local
                 if local_hostname == init_shell_value.hostname &&
                 // Ensures `ssh localhost` is treated as remote
-                !is_warpified_ssh_session
+                !is_ssh_session
                 {
                     BootstrapSessionType::Local
                 } else {
@@ -694,7 +710,7 @@ impl SessionInfo {
     #[cfg(feature = "remote_tty")]
     fn determine_session_type(
         _init_shell_value: &InitShellValue,
-        _is_warpified_ssh_session: bool,
+        _is_ssh_session: bool,
     ) -> BootstrapSessionType {
         // When the `remote_tty` feature is enabled--the session is always considered remote.
         BootstrapSessionType::WarpifiedRemote
@@ -706,11 +722,7 @@ impl SessionInfo {
     ///
     /// This should be called on the pending `SessionInfo` after the session is bootstrapped and
     /// used to create the canonical `Session` object for the newly bootstrapped session.
-    pub fn merge_from_bootstrapped_value(
-        mut self,
-        bootstrapped_value: BootstrappedValue,
-        tmux_control_mode: bool,
-    ) -> Self {
+    pub fn merge_from_bootstrapped_value(mut self, bootstrapped_value: BootstrappedValue) -> Self {
         // Determine the value from the bootstrap message, falling back to the cached shell type
         // (from the `InitShell` payload) if unable to parse.
         let shell_type = match ShellType::from_name(bootstrapped_value.shell.as_str()) {
@@ -791,13 +803,12 @@ impl SessionInfo {
             home_dir,
             cdpath: bootstrapped_value.cdpath,
             editor: bootstrapped_value.editor,
-            is_legacy_ssh_session: self.is_legacy_ssh_session,
+            is_ssh_wrapper_session: self.is_ssh_wrapper_session,
             subshell_info: self.subshell_info.take(),
             host_info: HostInfo {
                 os_category: bootstrapped_value.os_category,
                 linux_distribution: bootstrapped_value.linux_distribution,
             },
-            tmux_control_mode,
             wsl_name: bootstrapped_value.wsl_name,
             spawning_session_id: self.spawning_session_id,
         }
@@ -987,16 +998,19 @@ impl Session {
         self.info.host_info.clone()
     }
 
-    pub fn is_legacy_ssh_session(&self) -> bool {
+    /// Returns whether this session was established by Warp's in-band SSH wrapper (see
+    /// [`IsSSHWrapperSession`]). Note this stays `false` for remote sessions warpified via
+    /// the auto-warpify RC snippet inside an unwrapped `ssh` session.
+    pub fn is_ssh_wrapper_session(&self) -> bool {
         matches!(
-            self.info.is_legacy_ssh_session,
-            IsLegacySSHSession::Yes { .. }
+            self.info.is_ssh_wrapper_session,
+            IsSSHWrapperSession::Yes { .. }
         )
     }
 
     pub fn is_subshell_or_ssh(&self) -> bool {
         matches!(self.session_type(), SessionType::WarpifiedRemote { .. })
-            || self.is_legacy_ssh_session()
+            || self.is_ssh_wrapper_session()
             || self.subshell_info().is_some()
     }
 
@@ -1618,11 +1632,10 @@ pub mod testing {
                 function_names: HashSet::new(),
                 builtins: HashSet::new(),
                 keywords: Vec::new(),
-                is_legacy_ssh_session: IsLegacySSHSession::No,
+                is_ssh_wrapper_session: IsSSHWrapperSession::No,
                 home_dir: None,
                 cdpath: None,
                 host_info: Default::default(),
-                tmux_control_mode: false,
                 wsl_name: None,
                 spawning_session_id: None,
             }
@@ -1687,7 +1700,10 @@ pub mod testing {
             if let BootstrapSessionType::Local = self.session_type {
                 self.session_type = BootstrapSessionType::WarpifiedRemote;
             }
-            self.is_legacy_ssh_session = IsLegacySSHSession::Yes { socket_path };
+            self.is_ssh_wrapper_session = IsSSHWrapperSession::Yes {
+                socket_path,
+                external_control_master: false,
+            };
             self
         }
 

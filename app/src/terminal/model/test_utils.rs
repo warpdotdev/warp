@@ -6,9 +6,11 @@
 //! is marked as no_run only  because it's currently not possible
 //! to reference `#[cfg(test)]` symbols from doctests.
 
+use std::collections::HashMap;
 use std::io::sink;
 use std::sync::Arc;
 
+use pathfinder_geometry::vector::Vector2F;
 use warp_core::command::ExitCode;
 use warpui::r#async::executor::Background;
 
@@ -16,6 +18,12 @@ use super::ansi::{CommandFinishedValue, Handler, PrecmdValue, PreexecValue, Proc
 use super::block::{Block, BlockId, BlockSize};
 use super::blocks::BlockList;
 use super::bootstrap::BootstrapStage;
+use super::image_map::StoredImageMetadata;
+use super::iterm_image::{ITermImage, ITermImageDimensionUnit, ITermImageMetadata};
+use super::kitty::{
+    KittyAction, KittyImage, KittyImageMetadata, KittyPixelDataFormat, KittyPlacementData,
+    KittyTransmissionMedium, StoreAndDisplay, StoreOnly,
+};
 use super::terminal_model::BlockIndex;
 use super::{ObfuscateSecrets, TerminalModel};
 use crate::ai::blocklist::SerializedBlockListItem;
@@ -30,6 +38,62 @@ pub fn block_size() -> BlockSize {
         max_block_scroll_limit: 1000,
         warp_prompt_height_lines: 0.6,
     }
+}
+
+pub fn test_iterm_image(image_id: u32) -> ITermImage {
+    ITermImage {
+        metadata: ITermImageMetadata {
+            id: image_id,
+            desired_width: Some((1, ITermImageDimensionUnit::Cell)),
+            desired_height: Some((1, ITermImageDimensionUnit::Cell)),
+            preserve_aspect_ratio: false,
+            name: "test.png".to_string(),
+            inline: true,
+            image_size: Vector2F::new(10.0, 10.0),
+        },
+        data: vec![0],
+    }
+}
+
+fn test_kitty_image_metadata() -> KittyImageMetadata {
+    KittyImageMetadata {
+        pixel_data_format: KittyPixelDataFormat::Rgba32Bit,
+        transmission_medium: KittyTransmissionMedium::Direct,
+        image_size: Vector2F::new(10.0, 10.0),
+    }
+}
+
+pub fn test_kitty_image_metadata_map(image_id: u32) -> HashMap<u32, StoredImageMetadata> {
+    HashMap::from([(
+        image_id,
+        StoredImageMetadata::Kitty(test_kitty_image_metadata()),
+    )])
+}
+
+pub fn test_kitty_store_and_display_action(image_id: u32, placement_id: u32) -> KittyAction {
+    KittyAction::StoreAndDisplay(StoreAndDisplay {
+        image: KittyImage {
+            metadata: test_kitty_image_metadata(),
+            data: vec![0],
+        },
+        placement_data: KittyPlacementData {
+            cols: Some(1),
+            rows: Some(1),
+            ..Default::default()
+        },
+        image_id,
+        placement_id,
+    })
+}
+
+pub fn test_kitty_store_only_action(image_id: u32) -> KittyAction {
+    KittyAction::StoreOnly(StoreOnly {
+        image: KittyImage {
+            metadata: test_kitty_image_metadata(),
+            data: vec![0],
+        },
+        image_id,
+    })
 }
 
 fn block_padding() -> BlockPadding {

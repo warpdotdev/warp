@@ -190,7 +190,7 @@ lazy_static = "1.4.0"
 libc = "0.2.81"
 line-ending = "1.4.0"
 log = { version = "0.4", features = ["serde", "std"] }
-mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "40cecf2be376e47e15053eadbfb782a531777420" }
+mermaid_to_svg = { git = "https://github.com/warpdotdev/mermaid-to-svg.git", rev = "79aecc74187c29a027e85e18d070ff0dd884a0a7" }
 mime_guess = "2.0"
 minimp4 = "0.1.2"
 nix = { version = "0.26.4", default-features = false, features = ["signal"] }
@@ -199,10 +199,10 @@ nom = "7.1.1"
 num-traits = "0.2"
 oauth2 = { version = "5.0.0", default-features = false }
 opentelemetry = { version = "0.32.0", default-features = false, features = ["trace"] }
+opentelemetry-http = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
   "gzip-http",
   "http-proto",
-  "reqwest-blocking-client",
   "trace",
   "zstd-http",
 ] }
@@ -311,6 +311,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-jq",
   "lang-hcl",
   "lang-lua",
+  "lang-nix",
   "lang-ruby",
   "lang-php",
   "lang-toml",

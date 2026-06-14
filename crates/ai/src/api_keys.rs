@@ -109,22 +109,13 @@ pub struct GrokTokens {
 }
 
 impl GrokTokens {
-    /// Stop sending / start refreshing this long before the hard expiry so we
-    /// never hand the server a token that expires mid-flight.
-    const EXPIRY_SKEW: Duration = Duration::from_secs(60);
-
-    /// Returns the access token when it is non-empty and not within
-    /// [`Self::EXPIRY_SKEW`] of expiring. An unknown (`None`) expiry is treated
-    /// as valid — the server remains the final authority on the token.
-    pub fn valid_access_token(&self) -> Option<&str> {
-        if self.access_token.trim().is_empty() {
-            return None;
-        }
-        match self.expires_at {
-            Some(expires_at) => (expires_at > SystemTime::now() + Self::EXPIRY_SKEW)
-                .then_some(self.access_token.as_str()),
-            None => Some(self.access_token.as_str()),
-        }
+    /// Returns the access token whenever it is non-empty, regardless of
+    /// expiry. Possibly-expired tokens are still sent so the server stays the
+    /// final authority on token validity (it rejects truly invalid tokens);
+    /// `crate::grok_subscription` refreshes (nearly) expired tokens in the
+    /// background.
+    pub fn access_token_for_request(&self) -> Option<&str> {
+        (!self.access_token.trim().is_empty()).then_some(self.access_token.as_str())
     }
 
     /// Returns `true` when the token is known to expire within `lead_time` and
@@ -166,6 +157,11 @@ pub struct ApiKeyManager {
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
+    /// Guards against overlapping Grok token refreshes: the proactive refresh
+    /// timer and the request-time safety net
+    /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) grok_refresh_in_flight: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     secure_storage_write_version: u64,
@@ -181,6 +177,8 @@ impl ApiKeyManager {
             grok_tokens,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
+            #[cfg(not(target_family = "wasm"))]
+            grok_refresh_in_flight: false,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             secure_storage_write_version: 0,
@@ -408,12 +406,13 @@ impl ApiKeyManager {
         // The connected Grok subscription's OAuth access token is user-provided
         // auth, just like a pasted BYO API key, so it respects the same BYO
         // policy gate: when BYO keys are disabled (e.g. by workspace policy),
-        // the token must not be sent.
+        // the token must not be sent. Possibly-expired tokens ARE sent — the
+        // server is the authority on validity.
         let grok_oauth_access_token = include_byo_keys
             .then(|| {
                 self.grok_tokens
                     .as_ref()
-                    .and_then(GrokTokens::valid_access_token)
+                    .and_then(GrokTokens::access_token_for_request)
                     .map(str::to_owned)
             })
             .flatten()

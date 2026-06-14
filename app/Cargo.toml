@@ -318,6 +318,7 @@ hyper.workspace = true
 libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
 opentelemetry.workspace = true
+opentelemetry-http.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
 tokio.workspace = true
@@ -681,6 +682,7 @@ default = [
     "remote_codebase_indexing",
     "solo_user_byok",
     "custom_inference_endpoints",
+    "supergrok",
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
@@ -699,7 +701,6 @@ interactive_conversation_management_view = []
 default_waterfall_mode = []
 enforce_revisions_to_cloud_objects = []
 suggested_agent_mode_workflows = []
-ssh_tmux_wrapper = []
 ssh_enable_host_denylist_in_settings = []
 extern_plist = []
 fast_dev = ["skip_login"]

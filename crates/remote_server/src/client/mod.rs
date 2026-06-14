@@ -15,10 +15,11 @@ use crate::codebase_index_proto::{
 };
 use crate::proto::{
     notification, server_message, session_scoped_request, Abort, Authenticate, BufferEdit,
-    ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode, DiffStateFileDelta,
-    DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, Initialize, InitializeResponse,
-    LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse, RunCommandRequest,
-    RunCommandResponse, ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState,
+    BundledSkillProto, ClientMessage, CloseBuffer, CodebaseIndexLimits, DiffMode,
+    DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, Initialize,
+    InitializeResponse, LoadRepoMetadataDirectoryResponse, NavigatedToDirectoryResponse,
+    RunCommandRequest, RunCommandResponse, ServerMessage, SessionBootstrapped, TextEdit,
+    UnsubscribeDiffState,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -125,6 +126,8 @@ pub enum ClientEvent {
         mode: DiffMode,
         delta: DiffStateFileDelta,
     },
+    /// The daemon pushed its pre-parsed bundled skill catalog.
+    BundledSkillsSnapshotReceived { skills: Vec<BundledSkillProto> },
 }
 
 /// Parameters for the `Initialize` handshake, sent to the daemon at
@@ -666,6 +669,11 @@ impl RemoteServerClient {
                     repo_path,
                     mode,
                     delta,
+                })
+            }
+            server_message::Message::BundledSkillsSnapshot(snapshot) => {
+                Some(ClientEvent::BundledSkillsSnapshotReceived {
+                    skills: snapshot.skills,
                 })
             }
             other => {

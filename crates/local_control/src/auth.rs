@@ -6,9 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::discovery::InstanceId;
-use crate::protocol::{
-    ActionKind, ControlError, ErrorCode, ExecutionContextProof, InvocationContext,
-};
+use crate::protocol::{ActionKind, ControlError, ErrorCode};
 
 /// Bearer token used to authorize a single scoped local-control credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,53 +63,20 @@ impl AuthToken {
     }
 }
 
-/// Request for a short-lived credential scoped to one action and invocation context.
+/// Request for a short-lived credential scoped to one exact action.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRequest {
     pub protocol_version: u32,
     pub request_id: Uuid,
     pub action: ActionKind,
-    pub invocation_context: InvocationContext,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_context_proof: Option<ExecutionContextProof>,
 }
 
 impl CredentialRequest {
-    pub fn new(action: ActionKind, invocation_context: InvocationContext) -> Self {
+    pub fn new(action: ActionKind) -> Self {
         Self {
             protocol_version: crate::protocol::PROTOCOL_VERSION,
             request_id: Uuid::new_v4(),
             action,
-            invocation_context,
-            execution_context_proof: None,
-        }
-    }
-
-    /// Verifies whether the caller may claim its requested invocation context.
-    ///
-    /// External callers do not receive elevated trust from this proof and are
-    /// allowed only when the selected Warp instance enables outside-Warp
-    /// control. Inside-Warp callers must eventually present an app-issued,
-    /// session-bound `VerifiedWarpTerminal` proof; until that broker path lands,
-    /// this foundation branch rejects inside-Warp credential requests rather
-    /// than trusting a caller-declared label or spoofable environment variable.
-    pub fn verify_execution_context_proof(&self) -> Result<(), ControlError> {
-        match (&self.invocation_context, &self.execution_context_proof) {
-            (InvocationContext::InsideWarp, _) => Err(ControlError::new(
-                ErrorCode::ExecutionContextNotAllowed,
-                "inside-Warp credentials require an app-issued verified Warp terminal proof",
-            )),
-            (
-                InvocationContext::OutsideWarp,
-                None | Some(ExecutionContextProof::ExternalClient),
-            ) => Ok(()),
-            (
-                InvocationContext::OutsideWarp,
-                Some(ExecutionContextProof::VerifiedWarpTerminal { .. }),
-            ) => Err(ControlError::new(
-                ErrorCode::ExecutionContextNotAllowed,
-                "external clients cannot use a Warp terminal execution proof",
-            )),
         }
     }
 }
@@ -136,37 +101,17 @@ pub struct CredentialGrant {
     pub credential_id: String,
     pub instance_id: InstanceId,
     pub action: ActionKind,
-    pub invocation_context: InvocationContext,
-    pub authenticated_user: AuthenticatedUserGrant,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
 
-/// Authenticated user context attached to a credential grant when required.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AuthenticatedUserGrant {
-    pub required: bool,
-    pub subject: Option<String>,
-}
-
 impl CredentialGrant {
-    pub fn new(
-        instance_id: InstanceId,
-        action: ActionKind,
-        invocation_context: InvocationContext,
-        ttl: Duration,
-    ) -> Self {
+    pub fn new(instance_id: InstanceId, action: ActionKind, ttl: Duration) -> Self {
         let issued_at = Utc::now();
-        let metadata = action.metadata();
         Self {
             credential_id: format!("cred_{}", Uuid::new_v4().simple()),
             instance_id,
             action,
-            invocation_context,
-            authenticated_user: AuthenticatedUserGrant {
-                required: metadata.authenticated_user.required,
-                subject: None,
-            },
             issued_at,
             expires_at: issued_at + ttl,
         }
@@ -199,25 +144,6 @@ impl CredentialGrant {
                 format!(
                     "credential for {} cannot invoke {}",
                     self.action.as_str(),
-                    action.as_str()
-                ),
-            ));
-        }
-        let metadata = action.metadata();
-        if metadata.requires_authenticated_user && self.authenticated_user.subject.is_none() {
-            return Err(ControlError::new(
-                ErrorCode::AuthenticatedUserRequired,
-                format!("{} requires an authenticated Warp user", action.as_str()),
-            ));
-        }
-        if !metadata
-            .allowed_invocation_contexts
-            .contains(&self.invocation_context)
-        {
-            return Err(ControlError::new(
-                ErrorCode::ExecutionContextNotAllowed,
-                format!(
-                    "{} cannot run from the credential invocation context",
                     action.as_str()
                 ),
             ));

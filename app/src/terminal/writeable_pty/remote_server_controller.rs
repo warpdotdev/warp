@@ -18,7 +18,7 @@ use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEven
 use crate::remote_server::ssh_transport::SshTransport;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::PrivacySettings;
-use crate::terminal::model::session::{IsLegacySSHSession, SessionInfo};
+use crate::terminal::model::session::{IsSSHWrapperSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
@@ -138,6 +138,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::SessionDeregistered { .. }
             | RemoteServerManagerEvent::HostConnected { .. }
             | RemoteServerManagerEvent::HostDisconnected { .. }
+            | RemoteServerManagerEvent::BundledSkillsSnapshot { .. }
             | RemoteServerManagerEvent::NavigatedToDirectory { .. }
             | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
             | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
@@ -186,11 +187,16 @@ impl<T: EventLoopSender> RemoteServerController<T> {
 
     /// Idle -> AwaitingCheck
     fn on_ssh_init_shell_requested(&mut self, info: SessionInfo, ctx: &mut ModelContext<Self>) {
-        let IsLegacySSHSession::Yes { socket_path } = &info.is_legacy_ssh_session else {
+        let IsSSHWrapperSession::Yes {
+            socket_path,
+            external_control_master,
+        } = &info.is_ssh_wrapper_session
+        else {
             return;
         };
         let session_id = info.session_id;
         let socket_path = socket_path.clone();
+        let warp_owns_control_master = !external_control_master;
         debug_assert!(matches!(self.state, SshInitState::Idle));
         match std::mem::replace(&mut self.state, SshInitState::Idle) {
             SshInitState::Idle => {}
@@ -213,7 +219,11 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 self.flush_stashed_bootstrap(old_info, ctx);
             }
         }
-        let transport = SshTransport::new(socket_path, self.build_auth_context(ctx));
+        let transport = SshTransport::new(
+            socket_path,
+            self.build_auth_context(ctx),
+            warp_owns_control_master,
+        );
         self.did_install = false;
         self.remote_platform = None;
         self.preinstall_check = None;
@@ -267,6 +277,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(true) => {
                 let socket_path = transport.socket_path().clone();
+                let warp_owns_control_master = transport.warp_owns_control_master();
                 let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
@@ -276,6 +287,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 self.connect_session_for_current_identity(
                     session_id,
                     socket_path,
+                    warp_owns_control_master,
                     connection_label,
                     ctx,
                 );
@@ -500,6 +512,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         match result {
             Ok(()) => {
                 let socket_path = transport.socket_path().clone();
+                let warp_owns_control_master = transport.warp_owns_control_master();
                 let connection_label = connection_label_for_session_info(&session_info);
                 self.state = SshInitState::AwaitingConnect {
                     session_id,
@@ -509,6 +522,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 self.connect_session_for_current_identity(
                     session_id,
                     socket_path,
+                    warp_owns_control_master,
                     connection_label,
                     ctx,
                 );
@@ -543,11 +557,13 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         &mut self,
         session_id: SessionId,
         socket_path: PathBuf,
+        warp_owns_control_master: bool,
         connection_label: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_context = self.build_auth_context(ctx);
-        let transport = SshTransport::new(socket_path, auth_context.clone());
+        let transport =
+            SshTransport::new(socket_path, auth_context.clone(), warp_owns_control_master);
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.connect_session(
                 session_id,

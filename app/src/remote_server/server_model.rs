@@ -39,11 +39,12 @@ use super::proto::{
     git_get_pr_info_response, git_push_response, host_scoped_request, notification,
     resolve_conflict_response, run_command_response, save_buffer_response, server_message,
     session_scoped_request, write_file_response, Abort, Authenticate, BranchInfo, BufferEdit,
-    BufferUpdatedPush, ClientMessage, CloseBuffer, CodebaseIndexLimits, CodebaseIndexStatus,
-    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile,
-    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
-    DiscardFilesSuccess, DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead,
-    FileContextProto, FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
+    BufferUpdatedPush, BundledSkillProto, BundledSkillsSnapshot, ClientMessage, CloseBuffer,
+    CodebaseIndexLimits, CodebaseIndexStatus, CodebaseIndexStatusUpdated,
+    CodebaseIndexStatusesSnapshot, CodebaseResyncMode, DeleteFile, DeleteFileResponse,
+    DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse, DiscardFilesSuccess,
+    DropCodebaseIndex, ErrorCode, ErrorResponse, FailedFileRead, FileContextProto,
+    FileOperationError, FragmentMetadata as ProtoFragmentMetadata,
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
@@ -81,6 +82,7 @@ use super::protocol::RequestId;
 use crate::ai::agent::FileLocations;
 use crate::ai::blocklist::handoff::snapshot::upload_result_to_proto;
 use crate::ai::blocklist::{read_local_file_context, ReadFileContextResult};
+use crate::ai::skills::{bundled_skills_snapshot_protos, BundledSkill};
 use crate::auth::auth_state::{AuthState, AuthStateProvider};
 use crate::code_review::git_actions;
 use crate::features::FeatureFlag;
@@ -89,6 +91,21 @@ use crate::terminal::model::session::command_executor::{
     ExecuteCommandOptions, LocalCommandExecutor,
 };
 use crate::util::git;
+
+/// Resolves the global bundled resources directory populated by the install
+/// script (see [`remote_server::setup::remote_server_bundled_resources_dir`]),
+/// expanding the shell-form `~/` prefix against this process's home directory.
+///
+/// This deliberately does not use `warp_core::paths::bundled_resources_dir`,
+/// whose macOS behavior resolves resources inside an app bundle. The global
+/// location is version-independent: the last install wins, and slight skew
+/// against this daemon's version is accepted.
+fn daemon_bundled_resources_dir() -> Option<PathBuf> {
+    let dir = remote_server::setup::remote_server_bundled_resources_dir();
+    let suffix = dir.strip_prefix("~/")?;
+    let dir = dirs::home_dir()?.join(suffix);
+    dir.is_dir().then_some(dir)
+}
 
 /// Outcome of dispatching a request-style `ClientMessage`.
 ///
@@ -230,6 +247,10 @@ pub struct ServerModel {
     /// Returned in every `InitializeResponse` so clients can deduplicate
     /// host-scoped models.
     host_id: String,
+    /// The bundled skill catalog, pre-parsed and serialized for the
+    /// `BundledSkillsSnapshot` push. `None` until startup parsing completes
+    /// (or forever, when the global resources directory is absent).
+    bundled_skills: Option<Vec<BundledSkillProto>>,
     /// Per-session command executors created from `SessionBootstrapped` notifications.
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
@@ -266,6 +287,7 @@ impl ServerModel {
             grace_timer_cancel: None,
             in_progress: HashMap::new(),
             host_id,
+            bundled_skills: None,
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
@@ -599,6 +621,29 @@ impl ServerModel {
                 me.handle_diff_state_update(dispatch);
             });
         }
+        // Parse the bundled skill catalog from the global install location.
+        // Parsing never blocks the initialize handshake: connections that
+        // initialize before parsing completes receive the catalog via the
+        // completion broadcast instead. Deliberately not feature-flag gated:
+        // the flag controls exposure on the client (catalog storage and
+        // skill selection), where the connecting user's flag state actually
+        // lives — a headless daemon only sees its own channel defaults.
+        if let Some(resources_dir) = daemon_bundled_resources_dir() {
+            ctx.spawn(
+                BundledSkill::detect_in_resources_dir(resources_dir),
+                |me, catalog, _| {
+                    let skills = bundled_skills_snapshot_protos(&catalog);
+                    log::info!("Daemon parsed {} bundled skills", skills.len());
+                    me.bundled_skills = Some(skills);
+                    me.broadcast_bundled_skills_snapshot();
+                },
+            );
+        } else {
+            log::info!(
+                "Daemon found no global bundled resources directory; \
+                 bundled skills unavailable on this host"
+            );
+        }
         // Start the grace timer immediately so the daemon exits if no proxy
         // connects within GRACE_PERIOD. In practice the spawning proxy connects
         // within milliseconds, so the risk of premature shutdown is negligible;
@@ -606,6 +651,19 @@ impl ServerModel {
         // arrives.
         model.start_grace_timer(ctx);
         model
+    }
+
+    /// Broadcasts the parsed bundled skill catalog to all connections.
+    /// No-op until startup parsing has completed.
+    fn broadcast_bundled_skills_snapshot(&mut self) {
+        let Some(skills) = self.bundled_skills.clone() else {
+            return;
+        };
+        self.send_server_message(
+            None,
+            None,
+            server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+        );
     }
 
     /// Called when a proxy connects.  Inserts `conn_tx` into the connection
@@ -788,7 +846,7 @@ impl ServerModel {
             Some(client_message::Message::SessionScoped(wrapper)) => {
                 let outcome = match wrapper.message {
                     Some(session_scoped_request::Message::Initialize(m)) => {
-                        self.handle_initialize(m, &request_id, ctx)
+                        self.handle_initialize(m, &request_id, conn_id, ctx)
                     }
                     Some(session_scoped_request::Message::NavigatedToDirectory(m)) => {
                         self.handle_navigated_to_directory(m, &request_id, conn_id, ctx)
@@ -1436,12 +1494,16 @@ impl ServerModel {
     /// Handles `Initialize` by returning the server version and host id.
     ///
     /// Also configures Sentry crash reporting based on the user's identity
-    /// and preferences supplied by the connecting client.
+    /// and preferences supplied by the connecting client, and sends the
+    /// bundled skill catalog to the initializing connection when startup
+    /// parsing has already completed (otherwise the parse-completion
+    /// broadcast delivers it).
     #[cfg_attr(not(feature = "crash_reporting"), allow(unused_variables))]
     fn handle_initialize(
         &mut self,
         msg: Initialize,
         request_id: &RequestId,
+        conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
         log::info!("Handling Initialize (request_id={request_id})");
@@ -1459,6 +1521,17 @@ impl ServerModel {
             } else {
                 crate::crash_reporting::uninit_sentry();
             }
+        }
+
+        // Push the bundled skill catalog to this connection if it is already
+        // parsed. Enqueued on the same channel as the response below, so the
+        // client buffers it as a push event during the handshake.
+        if let Some(skills) = self.bundled_skills.clone() {
+            self.send_server_message(
+                Some(conn_id),
+                None,
+                server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+            );
         }
 
         let server_version = ChannelState::app_version().unwrap_or("").to_string();

@@ -12,6 +12,8 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_tokens,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_allowed: false,
+        #[cfg(not(target_family = "wasm"))]
+        grok_refresh_in_flight: false,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         secure_storage_write_version: 0,
@@ -357,40 +359,42 @@ fn api_keys_for_request_none_for_custom_endpoints_only() {
 // ── grok oauth token ────────────────────────────────────────────
 
 #[test]
-fn grok_valid_access_token_present_without_expiry() {
+fn grok_access_token_present_without_expiry() {
     let t = GrokTokens {
         access_token: "tok".into(),
         ..Default::default()
     };
-    assert_eq!(t.valid_access_token(), Some("tok"));
+    assert_eq!(t.access_token_for_request(), Some("tok"));
 }
 
 #[test]
-fn grok_valid_access_token_blank_is_none() {
+fn grok_access_token_blank_is_none() {
     let t = GrokTokens {
         access_token: "   ".into(),
         ..Default::default()
     };
-    assert_eq!(t.valid_access_token(), None);
+    assert_eq!(t.access_token_for_request(), None);
 }
 
 #[test]
-fn grok_valid_access_token_near_expiry_is_none() {
-    // Expires now, i.e. within the skew window, so it should not be sent.
+fn grok_access_token_near_expiry_still_sent() {
+    // Expired tokens are still sent; the server is the authority on validity.
     let t = grok_tokens("tok", Some(0));
-    assert_eq!(t.valid_access_token(), None);
+    assert_eq!(t.access_token_for_request(), Some("tok"));
 }
 
 #[test]
-fn grok_valid_access_token_far_future_is_some() {
+fn grok_access_token_far_future_is_some() {
     let t = grok_tokens("tok", Some(3600));
-    assert_eq!(t.valid_access_token(), Some("tok"));
+    assert_eq!(t.access_token_for_request(), Some("tok"));
 }
 
 #[test]
 fn grok_needs_refresh_within_lead_time() {
     assert!(grok_tokens("tok", Some(30)).needs_refresh(Duration::from_secs(300)));
     assert!(!grok_tokens("tok", Some(3600)).needs_refresh(Duration::from_secs(300)));
+    // Expired tokens still need a refresh.
+    assert!(grok_tokens("tok", Some(0)).needs_refresh(Duration::from_secs(300)));
     // Unknown expiry never reports as needing refresh.
     assert!(!grok_tokens("tok", None).needs_refresh(Duration::from_secs(300)));
 }
@@ -418,7 +422,10 @@ fn api_keys_for_request_omits_grok_token_when_byo_disabled() {
 }
 
 #[test]
-fn api_keys_for_request_omits_expired_grok_token() {
+fn api_keys_for_request_includes_expired_grok_token() {
+    // Expired tokens are still sent in requests; the server rejects truly
+    // invalid ones and the background refresh replaces them.
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
-    assert!(mgr.api_keys_for_request(true, false).is_none());
+    let result = mgr.api_keys_for_request(true, false).unwrap();
+    assert_eq!(result.grok_oauth_access_token, "grok-abc");
 }

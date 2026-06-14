@@ -99,7 +99,6 @@ use crate::terminal::shared_session::{
 };
 use crate::terminal::shell::ShellName;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
-use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
     init_pty_controller_model, init_remote_server_controller, wire_up_pty_controller_with_view,
@@ -610,7 +609,7 @@ impl TerminalManager {
                         }
                         send_telemetry_from_ctx!(
                             TelemetryEvent::AgentViewExited {
-                                origin: TelemetryAgentViewEntryOrigin::from(*origin),
+                                origin: TelemetryAgentViewEntryOrigin::from(origin.clone()),
                                 was_empty: *final_exchange_count == 0,
                             },
                             ctx
@@ -1127,15 +1126,13 @@ impl TerminalManager {
                     .contains(&ContextChipKind::NodeVersion)
         };
 
-        // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
-        let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
-            *WarpifySettings::as_ref(ctx)
-                .enable_ssh_warpification
-                .value()
-                && !*WarpifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
-        } else {
-            *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value()
-        };
+        let enable_ssh_wrapper = *SshSettings::as_ref(ctx).enable_ssh_wrapper.value();
+
+        // Only meaningful when the legacy ControlMaster wrapper is active.
+        let reuse_ssh_control_master = enable_ssh_wrapper
+            && *SshSettings::as_ref(ctx)
+                .reuse_existing_control_master
+                .value();
 
         let size: crate::terminal::SizeInfo = model.lock().block_list().size().to_owned();
         let options = PtyOptions {
@@ -1145,6 +1142,7 @@ impl TerminalManager {
             start_dir: startup_directory,
             env_vars,
             enable_ssh_wrapper,
+            reuse_ssh_control_master,
             shell_debug_mode: is_shell_debug_mode_enabled,
             honor_ps1: is_honor_ps1_enabled,
             node_version_chip_enabled,

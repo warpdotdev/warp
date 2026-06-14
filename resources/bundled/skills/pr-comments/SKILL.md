@@ -12,7 +12,7 @@ Fetch all review comments from the current branch's GitHub PR and display them v
 1. Run the bundled script (must be inside a git repo with an open PR on the current branch).
    Use `do_not_summarize_output: true` when running this shell command so the JSON output is not truncated.
    ```bash
-   python3 <skill_dir>/scripts/fetch_github_review_comments.py
+   python3 {{skill_dir}}/scripts/fetch_github_review_comments.py
    ```
    The script prints JSON to stdout.
    If the script fails to fetch comments, run the fallback `gh` commands instead.

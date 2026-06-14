@@ -43,8 +43,8 @@ use crate::code::active_file::{ActiveFileEvent, ActiveFileModel};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code_review::diff_state::GitFileStatus;
 #[cfg(feature = "local_fs")]
-use crate::code_review::git_status_update::{
-    GitRepoStatusEvent, GitRepoStatusModel, GitStatusUpdateModel, RepoGitFileStatuses,
+use crate::code_review::git_repo_model::{
+    GitRepoModels, GitRepoStatusEvent, GitRepoStatusModel, RepoGitFileStatuses,
 };
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::editor::{EditorOptions, EditorView, TextOptions};
@@ -457,7 +457,7 @@ impl FileTreeView {
             let Some(repo_path) = root.to_local_path() else {
                 continue;
             };
-            let result = GitStatusUpdateModel::handle(ctx)
+            let result = GitRepoModels::handle(ctx)
                 .update(ctx, |model, ctx| model.subscribe(&repo_path, ctx));
             match result {
                 Ok(handle) => {
@@ -491,7 +491,7 @@ impl FileTreeView {
         handle: &ModelHandle<GitRepoStatusModel>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let statuses = handle.as_ref(ctx).file_statuses().clone();
+        let statuses = handle.as_ref(ctx).file_statuses(ctx).clone();
         self.git_decorations.insert(root.clone(), statuses);
         ctx.notify();
     }

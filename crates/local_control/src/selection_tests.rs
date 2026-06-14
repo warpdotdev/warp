@@ -18,7 +18,6 @@ fn record(id: &str, pid: u32) -> InstanceRecord {
         credential_broker: Some(CredentialBrokerReference {
             socket_path: format!("{id}.broker.sock").into(),
         }),
-        outside_warp_control_enabled: true,
         actions: vec![ActionKind::TabCreate.metadata()],
     }
 }

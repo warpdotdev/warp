@@ -27,7 +27,7 @@ use crate::ai::blocklist::{
 };
 use crate::features::FeatureFlag;
 use crate::server::server_api::ai::SpawnAgentRequest;
-use crate::terminal::input::Event as InputEvent;
+use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -1170,30 +1170,7 @@ fn send_now_action_emits_row_kind_and_leaves_rows_for_host_to_fire() {
 
         // The panel keys its queue lookups on the history model's active conversation for its
         // terminal view, so seed one and build the panel as a child of that terminal view.
-        let terminal = add_window_with_terminal(&mut app, None);
-        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
-        let conversation_id =
-            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
-                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
-                history.set_active_conversation_id(id, terminal_view_id, ctx);
-                id
-            });
-        let suggestions_mode_model = {
-            let input = terminal.read(&app, |view, _| view.input.clone());
-            input.read(&app, |input, _| input.suggestions_mode_model().clone())
-        };
-        let cli_subagent_controller =
-            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
-        let panel = terminal.update(&mut app, |_, ctx| {
-            ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(
-                    terminal_view_id,
-                    suggestions_mode_model,
-                    cli_subagent_controller,
-                    ctx,
-                )
-            })
-        });
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
 
         let (prompt_id, command_id) =
             QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
@@ -1256,30 +1233,7 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
 
-        let terminal = add_window_with_terminal(&mut app, None);
-        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
-        let conversation_id =
-            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
-                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
-                history.set_active_conversation_id(id, terminal_view_id, ctx);
-                id
-            });
-        let suggestions_mode_model = {
-            let input = terminal.read(&app, |view, _| view.input.clone());
-            input.read(&app, |input, _| input.suggestions_mode_model().clone())
-        };
-        let cli_subagent_controller =
-            terminal.read(&app, |view, _| view.cli_subagent_controller.clone());
-        let panel = terminal.update(&mut app, |_, ctx| {
-            ctx.add_view(move |ctx| {
-                QueuedPromptsPanelView::new(
-                    terminal_view_id,
-                    suggestions_mode_model,
-                    cli_subagent_controller,
-                    ctx,
-                )
-            })
-        });
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
 
         // The locked initial cloud-mode prompt, plus a follow-up queued during setup.
         let (initial_id, followup_id) =
@@ -1316,6 +1270,162 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
                 panel.send_now_button_disabled_for_test(followup_id, ctx),
                 Some(false)
             );
+        });
+    });
+}
+
+/// Builds a panel keyed to a fresh terminal view with an active conversation, mirroring the
+/// construction the host `Input` performs. Returns the panel, the conversation id, and the
+/// host input.
+///
+/// When the QueueSlashCommand flag is on, the host input already owns a panel for this
+/// terminal view, and that panel is returned instead of constructing a second one: two panels
+/// on the same terminal view both react to `EditEntered` and fight over edit-editor focus, and
+/// the loser's `Blurred` handler commits the edit on the shared model out from under the test.
+fn build_panel_with_active_conversation(
+    app: &mut App,
+) -> (
+    ViewHandle<QueuedPromptsPanelView>,
+    AIConversationId,
+    ViewHandle<Input>,
+) {
+    let terminal = add_window_with_terminal(app, None);
+    let terminal_view_id = terminal.read(app, |view, _| view.view_id);
+    let conversation_id = BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+        history.set_active_conversation_id(id, terminal_view_id, ctx);
+        id
+    });
+    let input = terminal.read(app, |view, _| view.input.clone());
+    if let Some(panel) = input.read(app, |input, _| input.queued_prompts_panel().cloned()) {
+        return (panel, conversation_id, input);
+    }
+    let (suggestions_mode_model, host_editor) = input.read(app, |input, _| {
+        (
+            input.suggestions_mode_model().clone(),
+            input.editor().clone(),
+        )
+    });
+    let cli_subagent_controller =
+        terminal.read(app, |view, _| view.cli_subagent_controller.clone());
+    let panel = terminal.update(app, |_, ctx| {
+        ctx.add_view(move |ctx| {
+            QueuedPromptsPanelView::new(
+                terminal_view_id,
+                suggestions_mode_model,
+                cli_subagent_controller,
+                host_editor,
+                ctx,
+            )
+        })
+    });
+    (panel, conversation_id, input)
+}
+
+#[test]
+fn can_send_prompt_gates_buttons_and_hint_while_nonempty_input_gates_only_the_hint() {
+    // When the host reports prompts cannot be sent (read-only shared-session viewer), every
+    // row's send-now button is disabled and the enter hint hides. A non-empty input hides the
+    // hint but leaves the buttons alone.
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, input) = build_panel_with_active_conversation(&mut app);
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("send me"), ctx)
+        });
+
+        // Default: sendable, hint shown.
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(false)
+            );
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Sending unavailable: button disabled and hint hidden.
+        panel.update(&mut app, |panel, ctx| {
+            panel.set_can_send_prompt(false, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(true)
+            );
+            assert!(!panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Sending available again: button re-enabled and hint restored.
+        panel.update(&mut app, |panel, ctx| {
+            panel.set_can_send_prompt(true, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(false)
+            );
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Non-empty input: hint hidden, button stays enabled. The panel reads the host
+        // editor's emptiness live, so writing into the input buffer is enough.
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("draft", ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert_eq!(
+                panel.send_now_button_disabled_for_test(row_id, ctx),
+                Some(false)
+            );
+            assert!(!panel.enter_hint_shown_for_test(ctx));
+        });
+    });
+}
+
+#[test]
+fn enter_hint_hidden_during_inline_edit_and_for_locked_head() {
+    // The enter hint hides while a row is in inline edit mode and while the locked initial
+    // cloud-mode prompt sits at the head of the queue.
+    App::test((), |mut app| async move {
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("editable"), ctx)
+        });
+
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // Inline edit hides the hint; cancelling restores it.
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.enter_edit_mode(conversation_id, row_id, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(!panel.enter_hint_shown_for_test(ctx));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.cancel_edit(conversation_id, ctx);
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(panel.enter_hint_shown_for_test(ctx));
+        });
+
+        // A locked initial cloud-mode head row hides the hint.
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.remove_by_id(conversation_id, row_id, ctx);
+            model.append(
+                conversation_id,
+                QueuedQuery::new("initial".to_owned(), QueuedQueryOrigin::InitialCloudMode),
+                ctx,
+            );
+        });
+        panel.read(&app, |panel, ctx| {
+            assert!(!panel.enter_hint_shown_for_test(ctx));
         });
     });
 }

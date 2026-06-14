@@ -28,6 +28,10 @@ pub(in crate::terminal::model) struct ImageMap {
 }
 
 impl ImageMap {
+    pub fn is_empty(&self) -> bool {
+        self.image_placement_data.is_empty()
+    }
+
     pub fn get_image_placement_data(
         &self,
         image_id: u32,

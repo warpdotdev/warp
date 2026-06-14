@@ -155,11 +155,3 @@ pub fn assert_subshell_is_bootstrapped(tab_index: usize, pane_index: usize) -> T
         },
     )
 }
-
-pub fn accept_tmux_install() -> TestStep {
-    TestStep::new("Accept tmux install").with_keystrokes(&["enter"])
-}
-
-pub fn run_exit_command() -> TestStep {
-    TestStep::new("Run exit command").with_keystrokes(&["e", "x", "i", "t", "enter"])
-}

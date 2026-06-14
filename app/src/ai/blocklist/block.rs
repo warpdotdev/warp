@@ -477,13 +477,10 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handle for AI document created block
     ai_document_handle: MouseStateHandle,
 
-    /// Mouse state handle for 'open skill' button
-    /// from an OpenSkill action banner
-    open_skill_button_handle: MouseStateHandle,
-
-    /// Mouse state handle for 'open skill' button
-    /// from a ReadFiles action banner
-    read_from_skill_button_handle: MouseStateHandle,
+    /// Per-action mouse state handles for the 'open skill' button shown on
+    /// ReadSkill and ReadFiles action banners. Keyed by action id so that
+    /// multiple skill banners in the same block don't share hover/click state.
+    skill_button_handles: HashMap<AIAgentActionId, MouseStateHandle>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -2007,6 +2004,16 @@ impl AIBlock {
             if matches!(&action.action, AIAgentActionType::StartAgent { .. }) {
                 self.state_handles
                     .orchestration_navigation_card_handles
+                    .entry(action.id.clone())
+                    .or_default();
+            }
+
+            if matches!(
+                &action.action,
+                AIAgentActionType::ReadSkill(_) | AIAgentActionType::ReadFiles(_)
+            ) {
+                self.state_handles
+                    .skill_button_handles
                     .entry(action.id.clone())
                     .or_default();
             }
@@ -6591,10 +6598,7 @@ impl TypedActionView for AIBlock {
             } => {
                 // Resets the interaction states of ReadSkill and ReadFiles tool call banners before opening a new code pane
                 // Avoids an immediate re-hover (and stuck tooltip) while the new code pane is being created
-                for handle in [
-                    &self.state_handles.open_skill_button_handle,
-                    &self.state_handles.read_from_skill_button_handle,
-                ] {
+                for handle in self.state_handles.skill_button_handles.values() {
                     if let Ok(mut state) = handle.lock() {
                         state.reset_interaction_state();
                     }

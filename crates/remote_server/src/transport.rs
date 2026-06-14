@@ -139,6 +139,24 @@ impl Error {
     }
 }
 
+/// The SSH `ControlMaster` socket (if any) behind a connection, tagged
+/// with who owns the master process. Ownership decides teardown
+/// behavior: only `WarpManaged` masters are stopped with `ssh -O exit`
+/// on explicit teardown (see [`crate::ssh::stop_control_master`]);
+/// `UserOwned` masters must be left running.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, Clone)]
+pub enum ControlPath {
+    /// Warp created the ControlMaster at this socket path and is
+    /// responsible for tearing it down on session exit.
+    WarpManaged(PathBuf),
+    /// The SSH wrapper attached to a ControlMaster the user already had
+    /// running at this socket path. Warp must never tear it down.
+    UserOwned(PathBuf),
+    /// No ControlMaster socket (e.g. in-process test transports).
+    None,
+}
+
 /// A successful return from [`RemoteTransport::connect`].
 ///
 /// Bundles the live [`RemoteServerClient`] and its [`ClientEvent`]
@@ -172,15 +190,12 @@ pub struct Connection {
     #[cfg(not(target_family = "wasm"))]
     pub child: async_process::Child,
     /// For transports that multiplex through a local SSH
-    /// `ControlMaster` socket: the path to that socket, used on
-    /// explicit teardown (after the user's shell exits) to run
-    /// `ssh -O exit` and force the master to terminate without
-    /// waiting for half-closed channels. `None` for transports with
-    /// no separate master process (in-process tests, etc.).
-    ///
-    /// See [`crate::ssh::stop_control_master`] for the exact command.
+    /// `ControlMaster` socket: the socket path tagged with master
+    /// ownership, which decides whether explicit teardown (after the
+    /// user's shell exits) runs `ssh -O exit` against it. See
+    /// [`ControlPath`].
     #[cfg(not(target_family = "wasm"))]
-    pub control_path: Option<PathBuf>,
+    pub control_path: ControlPath,
     /// Tail buffer of the last N stderr lines from the SSH subprocess.
     /// Drained on connection failure and attached to telemetry.
     #[cfg(not(target_family = "wasm"))]
@@ -208,7 +223,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// This runs **before** any user-visible install affordance (the
     /// install choice block, auto-install, auto-update, or connect) and
     /// is the gate that decides whether to proceed with the install
-    /// pipeline or fall back to the legacy SSH flow.
+    /// pipeline or fall back to the wrapper-only SSH flow.
     ///
     /// Returns `Ok(_)` on success (including when the script reported
     /// `Unknown` — that's a parser-level outcome, not a transport-level

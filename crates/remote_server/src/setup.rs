@@ -506,6 +506,15 @@ pub fn binary_check_command() -> String {
     format!("{} --version", remote_server_binary())
 }
 
+/// Returns the shell command to remove the current remote-server binary.
+///
+/// The global bundled resources directory is deliberately left in place:
+/// the next install overwrites it, and an older daemon that is still
+/// running parsed its skills at startup.
+pub fn remote_server_removal_command() -> String {
+    format!("rm -f {}", remote_server_binary())
+}
+
 /// Returns the version string used to pin remote-server installs on
 /// channels that take the versioned path (i.e. everything except
 /// [`Channel::Local`] and [`Channel::Oss`]). Prefers the baked-in
@@ -531,6 +540,22 @@ pub fn remote_server_artifact_version() -> &'static str {
             pinned_version()
         }
     }
+}
+
+/// Name of the global, version-independent resources directory inside
+/// [`remote_server_dir`], populated by the install script from the
+/// artifact's `resources/` tree (bundled skills, settings schema).
+pub const BUNDLED_RESOURCES_DIR_NAME: &str = "bundled_resources";
+
+/// Returns the global, version-independent directory where the install
+/// script places the artifact's `resources/` tree. Shell-form path
+/// (`~/...`); the daemon expands it against its own home directory.
+///
+/// Deliberately not version-scoped: the last install wins, and slight
+/// version skew between the resources and a running daemon is accepted
+/// (the daemon parses its skills once at startup).
+pub fn remote_server_bundled_resources_dir() -> String {
+    format!("{}/{}", remote_server_dir(), BUNDLED_RESOURCES_DIR_NAME)
 }
 
 /// The install script template, loaded from a standalone `.sh` file for
@@ -565,6 +590,7 @@ pub fn install_script(staging_tarball_path: Option<&str>) -> String {
         .replace("{binary_name}", binary_name())
         .replace("{version_query}", &vq)
         .replace("{version_suffix}", &version_suffix)
+        .replace("{bundled_resources_dir_name}", BUNDLED_RESOURCES_DIR_NAME)
         .replace(
             "{no_http_client_exit_code}",
             &NO_HTTP_CLIENT_EXIT_CODE.to_string(),

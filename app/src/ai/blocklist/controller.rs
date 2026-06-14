@@ -2369,6 +2369,21 @@ impl BlocklistAIController {
             &conversation_data.server_conversation_token,
         );
 
+        // Safety net: if the connected Grok subscription's OAuth token is
+        // nearing or past expiry, kick off a background refresh so upcoming
+        // requests can authenticate even when the proactive refresh loop
+        // isn't running. This request still carries the currently stored
+        // token; the server is the authority on its validity.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            use ::ai::api_keys::ApiKeyManager;
+
+            let byo_allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+            ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.refresh_grok_tokens_if_needed(byo_allowed, ctx);
+            });
+        }
+
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_view_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),

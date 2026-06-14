@@ -591,6 +591,8 @@ pub enum ConversationUpdateKind {
     },
     /// Conversation metadata or capabilities changed.
     MetadataChanged,
+    /// Conversation title changed.
+    TitleChanged,
 }
 
 impl Entity for AgentConversationsModel {
@@ -1536,6 +1538,24 @@ impl AgentConversationsModel {
                     conversation_id: *conversation_id,
                 });
             }
+            BlocklistAIHistoryEvent::UpdatedConversationTitle {
+                conversation_id,
+                title,
+                ..
+            } => {
+                let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+                for task in self.tasks.values_mut() {
+                    if entry::conversation_id_shadowed_by_task(task, history_model)
+                        == Some(*conversation_id)
+                    {
+                        task.title = title.clone();
+                    }
+                }
+
+                ctx.emit(AgentConversationsModelEvent::ConversationUpdated {
+                    kind: ConversationUpdateKind::TitleChanged,
+                });
+            }
 
             // Task/exchange-level changes that don't affect conversation navigation.
             BlocklistAIHistoryEvent::CreatedSubtask { .. }
@@ -1543,7 +1563,6 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::ReassignedExchange { .. }
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. }
             // UpdatedStreamingExchange covers streaming and other exchange-level updates but
             // doesn't change any ConversationNavigationData fields (title comes from
             // UpdateTaskDescription, last_updated uses exchange.start_time which is set at append time).
@@ -1552,7 +1571,8 @@ impl AgentConversationsModel {
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
             | BlocklistAIHistoryEvent::OrchestrationConfigUpdated { .. }
             | BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
-            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. } => {}
+            | BlocklistAIHistoryEvent::LocalSharedSessionEstablished { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } => {}
 
             BlocklistAIHistoryEvent::ConversationServerTokenAssigned { .. } => {
                 ctx.emit(AgentConversationsModelEvent::ConversationUpdated {

@@ -9,10 +9,10 @@ use instant::Instant;
 pub use remote_server::setup::RemoteServerSetupState;
 
 use super::history::HistoryEntry;
-use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
+use super::model::ansi::FinishUpdateValue;
 use super::model::block::BlockId;
 use super::model::session::{SessionId, SessionInfo};
-use super::model::terminal_model::{BlockIndex, ExitReason, TmuxInstallationState};
+use super::model::terminal_model::{BlockIndex, ExitReason};
 use crate::server::ids::SyncId;
 use crate::server::telemetry::ImageProtocol;
 use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
@@ -81,18 +81,8 @@ pub enum Event {
     SSHControlMasterError,
     TerminalModeSwapped(TerminalMode),
     ExecutedInBandCommand(ExecutedExecutorCommandEvent),
-    TmuxControlModeReady {
-        primary_pane: u32,
-    },
     /// See comment above [crate::terminal::ModelEvent::DetectedEndOfSshLogin].
     DetectedEndOfSshLogin(SshLoginStatus),
-    RemoteWarpificationIsUnavailable(WarpificationUnavailableReason),
-    SshTmuxInstaller(TmuxInstallationState),
-    TmuxInstallFailed {
-        line: String,
-        command: String,
-    },
-    InitSsh(InitSshEvent),
     InitSubshell(InitSubshellEvent),
     /// Emitted when the user's RC file has been executed in a subshell.
     SourcedRcFileInSubshell(SourcedRcFileInSubshellEvent),
@@ -164,13 +154,6 @@ pub struct InitSubshellEvent {
 
 #[derive(Debug, Clone)]
 pub struct SourcedRcFileInSubshellEvent {
-    pub shell_type: ShellType,
-    pub uname: Option<String>,
-    pub tmux: Option<bool>,
-}
-
-#[derive(Debug, Clone)]
-pub struct InitSshEvent {
     pub shell_type: ShellType,
     pub uname: Option<String>,
 }
@@ -346,7 +329,7 @@ pub struct UserBlockCompleted {
 }
 
 /// Emitted upon completion of an executor command that goes through the pty, such as the
-/// InBandCommandExecutor or the TmuxCommandExecutor.
+/// InBandCommandExecutor.
 #[derive(Clone)]
 pub struct ExecutedExecutorCommandEvent {
     pub command_id: String,
@@ -456,20 +439,8 @@ impl Debug for Event {
             Event::SSH(remote_shell) => write!(f, "SSH(remote shell: {remote_shell}"),
             Event::SSHControlMasterError => write!(f, "SSH ControlMaster error"),
             Event::TerminalModeSwapped(_) => write!(f, "Terminal mode swapped"),
-            Event::TmuxControlModeReady { primary_pane } => {
-                write!(f, "TmuxControlModeReady(primary_pane: {primary_pane})")
-            }
             Event::DetectedEndOfSshLogin(check_type) => {
                 write!(f, "DetectedEndOfSshLogin: {check_type:?}")
-            }
-            Event::RemoteWarpificationIsUnavailable(_) => {
-                write!(f, "RemoteWarpificationIsUnavailable")
-            }
-            Event::SshTmuxInstaller(installer) => {
-                write!(f, "SshTmuxInstaller({installer:?})")
-            }
-            Event::TmuxInstallFailed { line, command } => {
-                write!(f, "TmuxInstallFailed(line: {line}, command: {command})")
             }
             Event::ExecutedInBandCommand(event) => write!(
                 f,
@@ -481,9 +452,6 @@ impl Debug for Event {
             }
             Event::SourcedRcFileInSubshell(event) => {
                 write!(f, "SourcedRcFileInSubshell({event:?})")
-            }
-            Event::InitSsh(event) => {
-                write!(f, "InitSsh({event:?})")
             }
             Event::PromptUpdated => write!(f, "PromptUpdated"),
             Event::HonorPS1OutOfSync => write!(f, "HonorPS1OutOfSync"),

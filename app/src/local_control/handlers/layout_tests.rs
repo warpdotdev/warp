@@ -2,7 +2,7 @@ use ::local_control::protocol::TargetSelector;
 use ::local_control::InstanceId;
 use warpui::App;
 
-use super::create_terminal_tab;
+use super::create_tab;
 use crate::local_control::LocalControlBridge;
 use crate::workspace::view::tests::{initialize_app, mock_workspace};
 
@@ -17,8 +17,13 @@ fn tab_create_handler_adds_and_activates_terminal_tab() {
 
         let response = bridge.update(&mut app, |bridge, ctx| {
             bridge.set_instance_id(instance_id.clone());
-            create_terminal_tab(&Some(instance_id.clone()), &TargetSelector::default(), ctx)
-                .expect("tab.create handler succeeds")
+            create_tab(
+                &Some(instance_id.clone()),
+                &serde_json::json!({}),
+                &TargetSelector::default(),
+                ctx,
+            )
+            .expect("tab.create handler succeeds")
         });
 
         workspace.read(&app, |workspace, _| {

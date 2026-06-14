@@ -1,6 +1,6 @@
 use super::{
-    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, GcpProviderConfig, GithubRepo,
-    ProvidersConfig,
+    AmbientAgentEnvironment, AwsProviderConfig, BaseImage, EnvironmentSecretRef, GcpProviderConfig,
+    GithubRepo, ProvidersConfig,
 };
 
 #[test]
@@ -172,6 +172,103 @@ fn roundtrip_serde_with_providers() {
             role_arn: "arn:aws:iam::1:role/r".into(),
         }),
     };
+
+    let serialized = serde_json::to_string(&env).unwrap();
+    let deserialized: AmbientAgentEnvironment = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(env, deserialized);
+}
+
+#[test]
+fn deserialize_legacy_environment_without_secrets() {
+    let json = serde_json::json!({
+        "name": "no-secrets-env",
+        "github_repos": [],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    assert_eq!(env.secrets, None);
+}
+
+#[test]
+fn deserialize_with_empty_secrets() {
+    let json = serde_json::json!({
+        "name": "empty-secrets-env",
+        "github_repos": [],
+        "docker_image": "ubuntu:latest",
+        "secrets": []
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    assert_eq!(env.secrets, Some(vec![]));
+}
+
+#[test]
+fn deserialize_with_specific_secrets() {
+    let json = serde_json::json!({
+        "name": "secrets-env",
+        "github_repos": [],
+        "docker_image": "ubuntu:latest",
+        "secrets": [
+            {"name": "GH_TOKEN"},
+            {"name": "NPM_TOKEN"}
+        ]
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    let secrets = env.secrets.unwrap();
+    assert_eq!(secrets.len(), 2);
+    assert_eq!(secrets[0].name, "GH_TOKEN");
+    assert_eq!(secrets[1].name, "NPM_TOKEN");
+}
+
+#[test]
+fn serialize_with_secrets_none_omits_field() {
+    let env = AmbientAgentEnvironment::new(
+        "test-env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+
+    let json = serde_json::to_value(&env).unwrap();
+    assert!(!json.as_object().unwrap().contains_key("secrets"));
+}
+
+#[test]
+fn serialize_with_empty_secrets_includes_field() {
+    let mut env = AmbientAgentEnvironment::new(
+        "test-env".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+    env.secrets = Some(vec![]);
+
+    let json = serde_json::to_value(&env).unwrap();
+    let secrets = json.get("secrets").unwrap();
+    assert!(secrets.as_array().unwrap().is_empty());
+}
+
+#[test]
+fn roundtrip_serde_with_secrets() {
+    let mut env = AmbientAgentEnvironment::new(
+        "secrets-rt".into(),
+        None,
+        vec![],
+        "ubuntu:latest".into(),
+        vec![],
+    );
+    env.secrets = Some(vec![
+        EnvironmentSecretRef {
+            name: "MY_SECRET".into(),
+        },
+        EnvironmentSecretRef {
+            name: "OTHER_SECRET".into(),
+        },
+    ]);
 
     let serialized = serde_json::to_string(&env).unwrap();
     let deserialized: AmbientAgentEnvironment = serde_json::from_str(&serialized).unwrap();

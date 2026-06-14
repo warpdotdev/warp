@@ -3,7 +3,6 @@ mod in_band_command_executor;
 mod local_command_executor;
 #[cfg(feature = "local_tty")]
 mod msys2_command_executor;
-mod tmux_executor;
 #[cfg(feature = "local_tty")]
 mod wsl_command_executor;
 use std::collections::HashMap;
@@ -150,11 +149,10 @@ fn new_command_executor_for_local_tty_session(
     use msys2_command_executor::MSYS2CommandExecutor;
     use remote_server_executor::RemoteServerCommandExecutor;
     use settings::Setting as _;
-    use tmux_executor::TmuxCommandExecutor;
     use warpui::SingletonEntity as _;
     use wsl_command_executor::WslCommandExecutor;
 
-    use super::IsLegacySSHSession;
+    use super::IsSSHWrapperSession;
     use crate::features::FeatureFlag;
     use crate::remote_server::manager::RemoteServerManager;
     use crate::settings::DebugSettings;
@@ -162,8 +160,8 @@ fn new_command_executor_for_local_tty_session(
     use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
     use crate::terminal::shell::ShellType;
 
-    // When the remote server feature flag is enabled and the session is a
-    // legacy SSH session, use the remote server executor *if* the manager
+    // When the remote server feature flag is enabled and the session is an
+    // SSH wrapper session, use the remote server executor *if* the manager
     // already has a live `Connected` client for this session.
     //
     // By construction this branch is only reached after
@@ -176,7 +174,7 @@ fn new_command_executor_for_local_tty_session(
     // `RemoteCommandExecutor` below. This preserves the fallback behavior
     // described in specs/APP-3797.
     if FeatureFlag::SshRemoteServer.is_enabled() {
-        if let IsLegacySSHSession::Yes { .. } = &session_info.is_legacy_ssh_session {
+        if let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session {
             let session_id = session_info.session_id;
             let maybe_client = RemoteServerManager::handle(ctx)
                 .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
@@ -191,23 +189,6 @@ fn new_command_executor_for_local_tty_session(
         }
     }
 
-    if FeatureFlag::SSHTmuxWrapper.is_enabled()
-        && session_info.tmux_control_mode
-        // We don't allow nested tmux warpification, so if our parent session is already warified using
-        // tmux then we shouldn't.
-        && !parent_session_info.is_some_and(|s| s.tmux_control_mode)
-    {
-        log::info!("creating a tmux executor!");
-        let executor = Arc::new(TmuxCommandExecutor::new(executor_command_tx.clone()));
-        let executor_clone = executor.clone();
-        ctx.spawn_stream_local(
-            in_band_command_output_rx,
-            move |_, event, _| executor_clone.handle_executed_command_event(event),
-            |_, _| {}, /* on_done */
-        );
-        return executor;
-    }
-
     let debug_settings = DebugSettings::as_ref(ctx);
     let are_in_band_generators_for_all_sessions_enabled_debug_setting = debug_settings
         .are_in_band_generators_for_all_sessions_enabled
@@ -215,9 +196,9 @@ fn new_command_executor_for_local_tty_session(
     let should_force_disable_in_band_generators =
         debug_settings.force_disable_in_band_generators.value();
 
-    let is_legacy_ssh_session = matches!(
-        &session_info.is_legacy_ssh_session,
-        IsLegacySSHSession::Yes { .. }
+    let is_ssh_wrapper_session = matches!(
+        &session_info.is_ssh_wrapper_session,
+        IsSSHWrapperSession::Yes { .. }
     );
 
     let shell_needs_in_band_executor = session_info.shell.force_in_band_command_executor();
@@ -309,15 +290,17 @@ fn new_command_executor_for_local_tty_session(
             }
         }
         BootstrapSessionType::WarpifiedRemote
-            if is_legacy_ssh_session
+            if is_ssh_wrapper_session
                 && !FeatureFlag::InBandGeneratorsForSSH.is_enabled()
                 && !force_use_in_band_generators =>
         {
-            if let IsLegacySSHSession::Yes { socket_path } = &session_info.is_legacy_ssh_session {
+            if let IsSSHWrapperSession::Yes { socket_path, .. } =
+                &session_info.is_ssh_wrapper_session
+            {
                 let wsl_distro = parent_session_info
                     .and_then(|session| session.wsl_name())
                     .map(ToOwned::to_owned);
-                log::info!("creating a legacy ssh executor!");
+                log::info!("creating a ControlMaster-based ssh executor!");
                 Arc::new(RemoteCommandExecutor::new(socket_path.clone(), wsl_distro))
             } else {
                 unreachable!("Unreachable because of match! above. Unfortunately if let guards in rust are still experimental.")

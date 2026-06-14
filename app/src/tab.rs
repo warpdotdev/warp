@@ -211,6 +211,7 @@ impl TabData {
         let mut menu_items = vec![];
 
         for section_items in [
+            self.pin_menu_items(index),
             self.tab_group_menu_items(index, tab_groups),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
@@ -544,6 +545,22 @@ impl TabData {
         }
         vec![MenuItemFields::new("Save as new config")
             .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
+            .into_item()]
+    }
+
+    /// Pin/unpin entry for the per-tab right-click menu.
+    fn pin_menu_items(&self, index: usize) -> Vec<MenuItem<WorkspaceAction>> {
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return vec![];
+        }
+
+        let (label, action) = if self.pinned {
+            ("Unpin tab", WorkspaceAction::UnpinTab(index))
+        } else {
+            ("Pin tab", WorkspaceAction::PinTab(index))
+        };
+        vec![MenuItemFields::new(label)
+            .with_on_select_action(action)
             .into_item()]
     }
 

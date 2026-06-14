@@ -21,6 +21,7 @@ fn host_bash_command_sets_history_size_sentinels() {
         false,
         false,
         false,
+        false,
         true,
     );
 
@@ -52,6 +53,7 @@ fn host_non_bash_command_does_not_set_history_size_sentinels() {
         false,
         false,
         false,
+        false,
         true,
     );
 
@@ -69,6 +71,7 @@ fn docker_sandbox_command_sets_history_size_sentinels() {
         &docker_starter,
         None,
         HashMap::new(),
+        false,
         false,
         false,
         false,
