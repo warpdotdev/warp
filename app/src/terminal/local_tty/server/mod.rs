@@ -26,7 +26,9 @@ mod protocol;
 
 use std::collections::HashSet;
 use std::os::unix::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use command::blocking::Command;
@@ -50,6 +52,9 @@ const RECV_SOCKET_FILENO: RawFd = libc::STDERR_FILENO + 1;
 /// The file descriptor of the Unix domain socket where the terminal server will
 /// send requests to the host application.
 const SEND_SOCKET_FILENO: RawFd = RECV_SOCKET_FILENO + 1;
+/// How long the host waits for terminal-server shell cleanup before using its
+/// final force-termination fallback.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Runs the terminal server event loop.
 ///
@@ -66,7 +71,11 @@ pub fn run_terminal_server(args: &warp_cli::TerminalServerArgs) {
 }
 
 /// Spawns a thread to handle fire-and-forget messages sent back from the server.
-fn spawn_message_receiver_thread(socket_fd: RawFd, terminated_children: Arc<Mutex<HashSet<u32>>>) {
+fn spawn_message_receiver_thread(
+    socket_fd: RawFd,
+    terminated_children: Arc<Mutex<HashSet<u32>>>,
+    shutdown_initiated: Arc<AtomicBool>,
+) {
     std::thread::spawn(move || {
         loop {
             match protocol::receive_message(socket_fd).expect("should not fail to receive") {
@@ -94,7 +103,12 @@ fn spawn_message_receiver_thread(socket_fd: RawFd, terminated_children: Arc<Mute
                     );
                 }
                 None => {
-                    // The server process exited, so we can just let this thread terminate.
+                    // The server process exited, so we can just let this thread
+                    // terminate. This is expected after the host initiates
+                    // terminal-server shutdown.
+                    if !shutdown_initiated.load(Ordering::Relaxed) {
+                        log::warn!("Received unexpected EOF on terminal server socket.");
+                    }
                     break;
                 }
             }
@@ -119,6 +133,10 @@ pub(super) struct TerminalServer {
 
     /// A client for communicating with the terminal server process.
     client: Arc<TerminalServerClient>,
+
+    /// Indicates whether the host application has initiated graceful shutdown
+    /// of the terminal server.
+    shutdown_initiated: Arc<AtomicBool>,
 }
 
 impl TerminalServer {
@@ -150,9 +168,14 @@ impl TerminalServer {
         // children that the terminal server has notified us about but
         // the pty event loops haven't yet processed.
         let terminated_children = Arc::new(Mutex::new(HashSet::new()));
+        let shutdown_initiated = Arc::new(AtomicBool::new(false));
 
         // Spawn the message receiver background thread.
-        spawn_message_receiver_thread(client_recv_fd, terminated_children.clone());
+        spawn_message_receiver_thread(
+            client_recv_fd,
+            terminated_children.clone(),
+            shutdown_initiated.clone(),
+        );
 
         unsafe {
             // Make sure the client file descriptor is closed when the server process
@@ -198,7 +221,11 @@ impl TerminalServer {
                 terminated_children,
             ));
 
-            Ok(Self { server, client })
+            Ok(Self {
+                server,
+                client,
+                shutdown_initiated,
+            })
         }
     }
 
@@ -210,7 +237,12 @@ impl TerminalServer {
 
 impl Drop for TerminalServer {
     fn drop(&mut self) {
-        // Kill the server child process and wait for it to terminate.
+        // Ask the server to clean up hosted PTYs before terminating it. If the
+        // server is unresponsive, force-killing it remains a bounded fallback.
+        self.shutdown_initiated.store(true, Ordering::Relaxed);
+        if let Err(err) = self.client.shutdown(SHUTDOWN_TIMEOUT) {
+            log::warn!("Failed to gracefully shut down terminal server: {err:#}");
+        }
         let _ = self.server.kill();
         let _ = self.server.wait();
     }

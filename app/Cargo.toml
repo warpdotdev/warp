@@ -374,6 +374,7 @@ signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
 nix = { workspace = true, features = [
     "fs",
     "hostname",
+    "poll",
     "resource",
     "signal",
     "socket",

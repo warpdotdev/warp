@@ -187,18 +187,16 @@ impl TerminalManager {
     /// Sends a shutdown message to the PTY event loop and waits for it to
     /// process that event.
     fn shutdown_event_loop(&mut self) {
+        let Some(join_handle) = self.event_loop_handle.take() else {
+            return;
+        };
         let shutdown_res = self.event_loop_tx.lock().send(Message::Shutdown);
         // Happens normally if the event loop has already been terminated (so the channel is now gone).
         if let Err(e) = shutdown_res {
             log::info!("Failed to send Shutdown {e:?}");
         }
-
-        if let Some(join_handle) = self.event_loop_handle.take() {
-            if let Err(e) = join_handle.join() {
-                log::error!("Failed to join event loop handle {e:?}");
-            }
-        } else {
-            log::error!("No event loop handle to join when dropping terminal manager.")
+        if let Err(e) = join_handle.join() {
+            log::error!("Failed to join event loop handle {e:?}");
         }
 
         self.inactive_pty_reads_rx.close();
@@ -2716,11 +2714,10 @@ fn get_shell_starter_internal(
     }
 }
 
-/// Send a Shutdown event to each PTY's event loop and waits for the
-/// event loop to terminate.
-/// This is needed on Windows to ensure all OpenConsole processes are
-/// cleaned up before the main thread exits.
-#[cfg(windows)]
+/// Sends a Shutdown event to each PTY's event loop and waits for each event
+/// loop to terminate.
+/// This is needed to ensure all PTY processes are cleaned up before the
+/// terminal server or main thread exits.
 pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
     let terminal_managers: Vec<ModelHandle<Box<dyn crate::terminal::TerminalManager>>> =
         ctx.models_of_type();

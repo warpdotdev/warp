@@ -2216,12 +2216,12 @@ pub(crate) fn app_callbacks(
             // after terminating the persistence writer, so we don't keep track
             // of the fact that the shell sessions terminated.
             #[cfg(feature = "local_tty")]
+            terminal::local_tty::shutdown_all_pty_event_loops(ctx);
+
+            #[cfg(feature = "local_tty")]
             terminal::local_tty::spawner::PtySpawner::handle(ctx).update(ctx, |pty_spawner, _| {
                 pty_spawner.prepare_for_app_termination();
             });
-
-            #[cfg(all(feature = "local_tty", windows))]
-            terminal::local_tty::shutdown_all_pty_event_loops(ctx);
 
             // Tear down app services before spawning the new process, to
             // ensure that the new process doesn't find the old process while
