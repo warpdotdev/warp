@@ -16,7 +16,7 @@ use parking_lot::FairMutex;
 use sum_tree::SeekBias;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{EntityId, ModelContext};
-use work_queue::FindWorkQueue;
+use work_queue::{FindWorkQueue, FindWorkItem};
 
 use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use super::FindOptions;
@@ -81,6 +81,8 @@ pub enum FindTaskMessage {
     },
     /// The work queue has drained (current batch of work is complete).
     Done,
+    /// Invalid regex error; contains the error message.
+    InvalidRegex(String),
 }
 
 /// Configuration for an async find run.
@@ -417,6 +419,8 @@ pub struct AsyncFindController {
     /// time and skips messages that arrive after a newer generation has started,
     /// preventing stale `Done` messages from prematurely ending a new scan.
     generation: u64,
+    /// Stores the last error message from an invalid regex.
+    last_error: Option<String>,
 }
 
 impl AsyncFindController {
@@ -437,6 +441,7 @@ impl AsyncFindController {
             current_find_options: None,
             cached_focused_match: None,
             generation: 0,
+            last_error: None,
         }
     }
 
@@ -475,6 +480,21 @@ impl AsyncFindController {
     /// Returns the currently focused match index (0-based), if any.
     pub fn focused_match_index(&self) -> Option<usize> {
         self.focused_match_index
+    }
+
+    /// Returns the last error message, if any.
+    pub fn last_error(&self) -> Option<&String> {
+        self.last_error.as_ref()
+    }
+
+    /// Sets the last error (used internally).
+    pub fn set_last_error(&mut self, err: Option<String>) {
+        self.last_error = err;
+    }
+
+    /// Takes and clears the last error, returning it.
+    pub fn take_last_error(&mut self) -> Option<String> {
+        self.last_error.take()
     }
 
     /// Focuses the next or previous match based on the given direction.
@@ -555,6 +575,7 @@ impl AsyncFindController {
             self.cached_focused_match = None;
             return;
         };
+        self.prune_stale_total_indices();
         let mut current_idx = 0;
 
         // Determine grid iteration order within each terminal block.
@@ -698,6 +719,7 @@ impl AsyncFindController {
             if !options.is_regex_enabled
                 && !current_config.is_regex_enabled
                 && options.is_case_sensitive == current_config.is_case_sensitive
+                && matches!(self.status, AsyncFindStatus::Complete)
                 && is_query_refinement(&current_config.query, new_query)
             {
                 // New query is a refinement of the old query — filter existing results.
@@ -874,6 +896,15 @@ impl AsyncFindController {
                     }
                 }
             }
+            FindTaskMessage::InvalidRegex(err) => {
+                log::error!("[async_find] regex error: {}", err);
+                self.last_error = Some(err.clone());
+                self.status = AsyncFindStatus::Complete;
+                // Clear any existing results; the query could not be parsed.
+                self.block_results.clear();
+                self.focused_match_index = None;
+                self.cached_focused_match = None;
+            }
             FindTaskMessage::Done => {
                 self.status = AsyncFindStatus::Complete;
             }
@@ -1033,81 +1064,137 @@ impl AsyncFindController {
         self.update_cached_focused_match();
     }
 
+        // Prune stale total indices for removed blocks and AI views.
+    fn prune_stale_total_indices(&mut self) {
+        let model = self.terminal_model.lock();
+        // Prune terminal block total indices for blocks that no longer exist.
+        self.block_results
+            .terminal_total_indices
+            .retain(|block_index, _| model.block_list().block_at(*block_index).is_some());
+        // Prune AI total indices for rich‑content views that have been unregistered.
+        // This prevents stale entries from persisting after a view is removed.
+        self.block_results
+            .ai_total_indices
+            .retain(|view_id, _| self.rich_content_views.contains_key(view_id));
+    }
+
     /// Filters existing results for a query refinement.
+    ///
+    /// Because the new query is a strict prefix extension of the old query,
+    /// any position matching the new query must also have matched the old one.
+    /// We exploit this by only rescanning the row ranges that contained prior
+    /// matches, skipping every block that had zero matches entirely.
     fn filter_results_for_refinement(
         &mut self,
         options: &FindOptions,
         block_sort_direction: BlockSortDirection,
         ctx: &mut ModelContext<TerminalFindModel>,
     ) {
-        // For now, we do a full rescan when the query is refined.
-        // A future optimization could filter existing matches without rescanning,
-        // and update the query for pending queue items.
-
-        // Create new config.
         let Some(config) = AsyncFindConfig::from_options(options, block_sort_direction) else {
             self.clear_results(ctx);
             return;
         };
 
-        // Cancel existing operation and clear results, but keep the task alive
-        // by re-using start_find which handles everything.
         self.cancel_current_find();
 
+        // Build dirty-range work items: one per (block, grid) pair that had at
+        // least one prior match, covering only the row span of those matches.
+        // Sort newest-first (descending BlockIndex) to match normal scan order.
+        let mut terminal_work_items: Vec<FindWorkItem> = {
+            let model = self.terminal_model.lock();
+
+            let mut keys: Vec<(BlockIndex, GridType)> = self
+                .block_results
+                .terminal_matches
+                .iter()
+                .filter(|(_, matches)| !matches.is_empty())
+                .map(|((block_index, grid_type), _)| (*block_index, *grid_type))
+                .collect();
+            keys.sort_by(|a, b| b.0.cmp(&a.0));
+
+            let mut items = Vec::with_capacity(keys.len());
+            for (block_index, grid_type) in keys {
+                let matches = match self
+                    .block_results
+                    .terminal_matches
+                    .get(&(block_index, grid_type))
+                {
+                    Some(m) if !m.is_empty() => m,
+                    _ => continue,
+                };
+
+                let Some(block) = model.block_list().block_at(block_index) else {
+                    continue;
+                };
+
+                let num_lines_truncated = match grid_type {
+                    GridType::Output => {
+                        block.output_grid().grid_handler().num_lines_truncated()
+                    }
+                    GridType::PromptAndCommand => block
+                        .prompt_and_command_grid()
+                        .grid_handler()
+                        .num_lines_truncated(),
+                    _ => continue,
+                };
+
+                // matches are stored ascending by end point; the first match's
+                // start row and the last match's end row bound the rescan range.
+                let abs_start = matches.first().unwrap().start_row();
+                let abs_end = matches.last().unwrap().end_row();
+                let rel_start = abs_start.saturating_sub(num_lines_truncated) as usize;
+                let rel_end = abs_end.saturating_sub(num_lines_truncated) as usize;
+
+                items.push(FindWorkItem::DirtyRange {
+                    block_index,
+                    grid_type,
+                    row_range: rel_start..=rel_end,
+                    num_lines_truncated,
+                });
+            }
+            items
+        };
+
+        // AI blocks with prior matches are re-scanned on the main thread.
+        let ai_work_items: Vec<FindWorkItem> = self
+            .block_results
+            .ai_matches
+            .iter()
+            .filter(|(_, matches)| !matches.is_empty())
+            .filter_map(|(&view_id, _)| {
+                self.block_results
+                    .ai_total_indices
+                    .get(&view_id)
+                    .map(|&total_index| FindWorkItem::AIBlock { view_id, total_index })
+            })
+            .collect();
+
+        // Keep total_indices (block ordering stays intact); clear only results.
         self.current_config = Some(config.clone());
         self.block_sort_direction = block_sort_direction;
-        self.block_results.clear();
+        self.block_results.terminal_matches.clear();
+        self.block_results.ai_matches.clear();
         self.focused_match_index = None;
         self.cached_focused_match = None;
         self.current_find_options = Some(options.clone());
         self.status = AsyncFindStatus::Scanning;
 
-        // Build the work queue from the current block list.
-        let queue = FindWorkQueue::new();
-        let block_info = {
-            let mut model = self.terminal_model.lock();
-            let info = collect_block_info(model.block_list(), &config);
-            // Clear stale dirty ranges (same rationale as in start_find).
-            if let Some(output_grid) = model
-                .block_list_mut()
-                .active_block_mut()
-                .grid_of_type_mut(GridType::Output)
-            {
-                output_grid.grid_handler_mut().take_find_dirty_rows_range();
-            }
-            info
-        };
-        queue.enqueue_full_scan(&block_info);
-        self.work_queue = Some(queue.clone());
-
-        // Populate TotalIndex maps from the block info.
-        for info in &block_info {
-            match info {
-                BlockInfo::Terminal {
-                    block_index,
-                    total_index,
-                } => {
-                    self.block_results
-                        .terminal_total_indices
-                        .insert(*block_index, *total_index);
-                }
-                BlockInfo::RichContent {
-                    view_id,
-                    total_index,
-                } => {
-                    self.block_results
-                        .ai_total_indices
-                        .insert(*view_id, *total_index);
-                }
-            }
-        }
-
-        // Create result channel and spawn streams.
         let (result_tx, result_rx) = async_channel::unbounded();
         self.result_tx = Some(result_tx.clone());
         self.spawn_result_and_throttle_streams(result_rx, ctx);
 
-        // Spawn background task.
+        terminal_work_items.extend(ai_work_items);
+        if terminal_work_items.is_empty() {
+            // No prior matches anywhere — nothing to rescan. Inject Done so the
+            // status transitions to Complete and the UI gets one update.
+            let _ = result_tx.try_send(FindTaskMessage::Done);
+            return;
+        }
+
+        let queue = FindWorkQueue::new();
+        queue.enqueue_refinement_scan(terminal_work_items);
+        self.work_queue = Some(queue.clone());
+
         self.task_handle = Some(spawn_find_task(
             config,
             self.terminal_model.clone(),

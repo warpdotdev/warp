@@ -856,6 +856,253 @@ fn test_focused_ai_match_resolves_only_ai_block() {
 }
 
 #[test]
+fn test_refinement_skips_blocks_with_no_prior_matches() {
+    // Block 0: "foo bar" — matches both "foo" and "foobar" (none for "foobar")
+    // Block 1: "foobar"  — matches "foo" and "foobar"
+    // After searching "foo" (complete), refining to "foobar" should only
+    // rescan block 1 (the only block that could have "foobar").
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let mut mock_terminal_model = TerminalModel::mock(None, None);
+        mock_terminal_model.simulate_block("cmd0", "foo bar\r\n");
+        mock_terminal_model.simulate_block("cmd1", "foobar\r\n");
+
+        let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
+        let test_model = app.add_model(|ctx| {
+            let mut model = TerminalFindModel::new(terminal_model.clone(), ctx);
+            model.async_find_controller =
+                Some(AsyncFindController::new(terminal_model.clone()));
+            model
+        });
+
+        // Initial search for "foo" — both blocks match.
+        test_model.update(&mut app, |model, ctx| {
+            model.async_find_controller.as_mut().unwrap().start_find(
+                &FindOptions {
+                    query: Some("foo".to_owned().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                },
+                BlockSortDirection::MostRecentLast,
+                ctx,
+            );
+        });
+
+        for _ in 0..100 {
+            let done = test_model.update(&mut app, |model, _| {
+                model
+                    .async_find_controller
+                    .as_ref()
+                    .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
+                    .unwrap_or(false)
+            });
+            if done {
+                break;
+            }
+            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+        }
+
+        let initial_count = test_model.update(&mut app, |model, _| {
+            model.async_find_controller.as_ref().unwrap().match_count()
+        });
+        assert!(initial_count >= 2, "both blocks should match 'foo'");
+
+        // Refine to "foobar" — only block 1 has "foobar".
+        test_model.update(&mut app, |model, ctx| {
+            model.async_find_controller.as_mut().unwrap().start_find(
+                &FindOptions {
+                    query: Some("foobar".to_owned().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                },
+                BlockSortDirection::MostRecentLast,
+                ctx,
+            );
+        });
+
+        for _ in 0..100 {
+            let done = test_model.update(&mut app, |model, _| {
+                model
+                    .async_find_controller
+                    .as_ref()
+                    .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
+                    .unwrap_or(false)
+            });
+            if done {
+                break;
+            }
+            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+        }
+
+        let (status, refined_count) = test_model.update(&mut app, |model, _| {
+            let c = model.async_find_controller.as_ref().unwrap();
+            (c.status().clone(), c.match_count())
+        });
+        assert_eq!(status, AsyncFindStatus::Complete);
+        assert_eq!(refined_count, 1, "only block 1 matches 'foobar'");
+    });
+}
+
+#[test]
+fn test_refinement_with_no_prior_matches_completes_immediately() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let mut mock_terminal_model = TerminalModel::mock(None, None);
+        mock_terminal_model.simulate_block("cmd0", "hello world\r\n");
+
+        let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
+        let test_model = app.add_model(|ctx| {
+            let mut model = TerminalFindModel::new(terminal_model.clone(), ctx);
+            model.async_find_controller =
+                Some(AsyncFindController::new(terminal_model.clone()));
+            model
+        });
+
+        // Search for "xyz" — no matches.
+        test_model.update(&mut app, |model, ctx| {
+            model.async_find_controller.as_mut().unwrap().start_find(
+                &FindOptions {
+                    query: Some("xyz".to_owned().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                },
+                BlockSortDirection::MostRecentLast,
+                ctx,
+            );
+        });
+
+        for _ in 0..100 {
+            let done = test_model.update(&mut app, |model, _| {
+                model
+                    .async_find_controller
+                    .as_ref()
+                    .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
+                    .unwrap_or(false)
+            });
+            if done {
+                break;
+            }
+            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+        }
+
+        // Refine to "xyzw" — prior search had zero matches, so refinement should
+        // complete immediately with zero matches and no background work.
+        test_model.update(&mut app, |model, ctx| {
+            model.async_find_controller.as_mut().unwrap().start_find(
+                &FindOptions {
+                    query: Some("xyzw".to_owned().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                },
+                BlockSortDirection::MostRecentLast,
+                ctx,
+            );
+        });
+
+        // Give the async machinery one tick to deliver the pre-seeded Done message.
+        warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+
+        let (status, count) = test_model.update(&mut app, |model, _| {
+            let c = model.async_find_controller.as_ref().unwrap();
+            (c.status().clone(), c.match_count())
+        });
+        assert_eq!(status, AsyncFindStatus::Complete);
+        assert_eq!(count, 0);
+    });
+}
+
+#[test]
+fn test_refinement_requires_complete_status() {
+    // A refinement during an in-progress scan should fall back to a full rescan,
+    // since partial results cannot guarantee all blocks have been checked.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let mut mock_terminal_model = TerminalModel::mock(None, None);
+        mock_terminal_model.simulate_block("cmd0", "foobar\r\n");
+
+        let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));
+        let test_model = app.add_model(|ctx| {
+            let mut model = TerminalFindModel::new(terminal_model.clone(), ctx);
+            model.async_find_controller =
+                Some(AsyncFindController::new(terminal_model.clone()));
+            model
+        });
+
+        // Start a scan but don't wait for it to complete.
+        test_model.update(&mut app, |model, ctx| {
+            model.async_find_controller.as_mut().unwrap().start_find(
+                &FindOptions {
+                    query: Some("foo".to_owned().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                },
+                BlockSortDirection::MostRecentLast,
+                ctx,
+            );
+        });
+
+        // While still scanning, a refinement query should NOT use the refinement
+        // path. Verify by checking that a new full scan is started (status reset
+        // to Scanning, work_queue populated from all blocks).
+        test_model.update(&mut app, |model, ctx| {
+            // Override status to Scanning to simulate an in-progress scan.
+            if let Some(c) = model.async_find_controller.as_mut() {
+                c.set_test_status(AsyncFindStatus::Scanning);
+            }
+            model.async_find_controller.as_mut().unwrap().start_find(
+                &FindOptions {
+                    query: Some("foobar".to_owned().into()),
+                    is_regex_enabled: false,
+                    is_case_sensitive: false,
+                    ..Default::default()
+                },
+                BlockSortDirection::MostRecentLast,
+                ctx,
+            );
+        });
+
+        // Should still be scanning (full rescan was initiated, not a fast-path).
+        let status = test_model.update(&mut app, |model, _| {
+            model
+                .async_find_controller
+                .as_ref()
+                .unwrap()
+                .status()
+                .clone()
+        });
+        assert_eq!(status, AsyncFindStatus::Scanning);
+
+        // Let it complete and verify "foobar" is found.
+        for _ in 0..100 {
+            let done = test_model.update(&mut app, |model, _| {
+                model
+                    .async_find_controller
+                    .as_ref()
+                    .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
+                    .unwrap_or(false)
+            });
+            if done {
+                break;
+            }
+            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+        }
+
+        let count = test_model.update(&mut app, |model, _| {
+            model.async_find_controller.as_ref().unwrap().match_count()
+        });
+        assert_eq!(count, 1);
+    });
+}
+
+#[test]
 fn test_focused_ai_match_most_recent_first_preserves_storage_order() {
     let mock_terminal_model = TerminalModel::mock(None, None);
     let terminal_model = Arc::new(FairMutex::new(mock_terminal_model));

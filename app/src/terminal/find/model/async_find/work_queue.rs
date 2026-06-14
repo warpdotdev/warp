@@ -175,6 +175,21 @@ impl FindWorkQueue {
         }
     }
 
+    /// Enqueues work items for a refinement scan (normal priority, back of queue).
+    ///
+    /// Unlike [`invalidate_block`] (which pushes to the front), refinement items
+    /// are processed after any already-queued work. Used when a new query is a
+    /// strict prefix of the previous query, so only rows with prior matches need
+    /// to be rescanned.
+    pub fn enqueue_refinement_scan(&self, items: impl IntoIterator<Item = FindWorkItem>) {
+        let mut inner = self.inner.lock().unwrap();
+        for item in items {
+            inner.items.push_back(item);
+        }
+        drop(inner);
+        self.event.notify(1);
+    }
+
     /// Closes the queue, waking any blocked [`pop`](FindWorkQueue::pop) call.
     ///
     /// After closing, `pop` will drain remaining items and then return
