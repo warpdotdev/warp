@@ -261,6 +261,7 @@ integration_tests! {
     test_settings_file_hot_reload_applies_new_values,
     test_custom_lsp_enable_registers_server_in_manager,
     test_custom_lsp_override_yields_custom_label_in_footer,
+    test_custom_lsp_enablement_survives_reload,
 
     test_settings_error_banner_on_startup_with_invalid_toml,
     test_settings_error_banner_on_startup_with_invalid_value,

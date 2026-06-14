@@ -19,13 +19,13 @@ use lsp::{LspManagerModel, ServerKey};
 use settings::Setting as _;
 use warp::features::FeatureFlag;
 use warp::integration_testing::lsp::{
-    resolve_server_for_path, CodeFooterView, PersistedWorkspace, ResolvedLspServer,
+    resolve_server_for_path, CodeFooterView, EnablementState, PersistedWorkspace, ResolvedLspServer,
 };
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::settings::LanguageServersSettings;
-use warpui::integration::TestStep;
-use warpui::{async_assert, SingletonEntity};
+use warpui_core::integration::TestStep;
+use warpui_core::{async_assert, SingletonEntity};
 
 use super::{new_builder, Builder};
 
@@ -232,6 +232,84 @@ pub fn test_custom_lsp_override_yields_custom_label_in_footer() -> Builder {
                         async_assert!(
                             status_ok && label_ok,
                             "expected SingleFile-with-no-builtin-status and label=Some({expected_label:?}); got status_ok={status_ok} label={label:?}",
+                        )
+                    },
+                ),
+        )
+}
+
+const PERSIST_DESCRIPTOR_NAME: &str = "persist_test_lsp";
+
+fn persist_settings_toml() -> String {
+    format!(
+        "[[editor.language_servers]]\n\
+         name = \"{PERSIST_DESCRIPTOR_NAME}\"\n\
+         command = \"sleep\"\n\
+         args = [\"3600\"]\n\
+         filetypes = [{{ pattern = \"*.{FILE_EXT}\" }}]\n"
+    )
+}
+
+fn persist_workspace_root() -> PathBuf {
+    std::env::temp_dir().join("warp-test-custom-lsp-persist")
+}
+
+fn persist_file_path() -> PathBuf {
+    persist_workspace_root().join(format!("file.{FILE_EXT}"))
+}
+
+/// Regression test for product.md invariant 13: a custom LSP server enabled
+/// for a workspace stays enabled across an app restart. Enables a custom server
+/// in a fresh workspace, then asserts it is still enabled after the persisted
+/// state is reloaded.
+pub fn test_custom_lsp_enablement_survives_reload() -> Builder {
+    FeatureFlag::SettingsFile.set_enabled(true);
+
+    new_builder()
+        .with_setup(move |_utils| {
+            std::fs::create_dir_all(persist_workspace_root())
+                .expect("should create fake workspace dir");
+
+            let path = warp::settings::user_preferences_toml_file_path();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("should create config dir");
+            }
+            std::fs::write(&path, persist_settings_toml()).expect("should write settings.toml");
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            TestStep::new("Enable custom LSP in a fresh workspace, then assert it persists")
+                .set_timeout(Duration::from_secs(20))
+                .add_named_assertion(
+                    "custom enablement is durably persisted as Yes across reload",
+                    |app, _| {
+                        // Enable the custom server for this workspace.
+                        app.update(|ctx| {
+                            let Some(resolved) = resolve_server_for_path(&persist_file_path(), ctx)
+                            else {
+                                return;
+                            };
+                            if !matches!(resolved, ResolvedLspServer::Custom(_)) {
+                                return;
+                            }
+                            PersistedWorkspace::handle(ctx).update(ctx, |ws, ctx| {
+                                ws.enable_and_spawn_lsp_server(
+                                    &persist_workspace_root(),
+                                    &resolved,
+                                    persist_file_path(),
+                                    ctx,
+                                );
+                            });
+                        });
+
+                        // Read the persisted state the way a fresh launch would.
+                        let persisted = warp::sqlite_testing::persisted_custom_lsp_enablement(
+                            &persist_workspace_root(),
+                            PERSIST_DESCRIPTOR_NAME,
+                        );
+                        async_assert!(
+                            persisted == Some(EnablementState::Yes),
+                            "custom enablement should survive reload; read back {persisted:?}"
                         )
                     },
                 ),

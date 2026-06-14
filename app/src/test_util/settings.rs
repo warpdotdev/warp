@@ -36,9 +36,8 @@ pub fn initialize_settings_for_tests_with_mode(
         AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
         CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
         GPUSettings, InputModeSettings, InputSettings, LanguageServersSettings,
-        LocalControlSettings,
-        NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
-        SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
+        LocalControlSettings, NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings,
+        ScrollSettings, SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
     };
     use crate::terminal::general_settings::GeneralSettings;
     use crate::terminal::keys_settings::KeysSettings;

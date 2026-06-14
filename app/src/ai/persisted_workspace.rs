@@ -565,6 +565,24 @@ impl PersistedWorkspace {
     /// map and the SQLite `workspace_language_server` table with
     /// `kind = 'Custom'`.
     fn set_custom_lsp_server_for_path(&mut self, path: &Path, name: &str, state: EnablementState) {
+        // Check if the workspace needs to be persisted before we take a
+        // mutable borrow, so we can call save_to_db without conflicting borrows.
+        let needs_persist = self
+            .workspaces
+            .get(path)
+            .is_some_and(|ws| !ws.is_persisted());
+
+        if needs_persist {
+            // Materialize the workspace: set a timestamp and persist metadata
+            // so the FK-dependent workspace_language_server row can be written.
+            let workspace = self.workspaces.get_mut(path).unwrap();
+            workspace.metadata.modified_ts = Some(Utc::now());
+            let metadata = workspace.metadata.clone();
+            self.save_to_db(vec![ModelEvent::UpsertCodebaseIndexMetadata {
+                index_metadata: Box::new(metadata),
+            }]);
+        }
+
         match self.workspaces.get_mut(path) {
             Some(workspace) => {
                 workspace
@@ -578,6 +596,11 @@ impl PersistedWorkspace {
                     modified_ts: Some(Utc::now()),
                     queried_ts: None,
                 };
+
+                self.save_to_db(vec![ModelEvent::UpsertCodebaseIndexMetadata {
+                    index_metadata: Box::new(metadata.clone()),
+                }]);
+
                 self.workspaces.insert(
                     path.to_path_buf(),
                     Workspace {
@@ -1075,6 +1098,7 @@ impl PersistedWorkspace {
             let has_persisted_servers = ws
                 .language_servers
                 .values()
+                .chain(ws.custom_language_servers.values())
                 .any(|s| *s != EnablementState::Suggested);
             if has_persisted_servers {
                 return None;
