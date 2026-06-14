@@ -21,6 +21,16 @@ const NUM_CHANNELS: u16 = 1;
 // Voice input is typically sampled at 16000Hz (and required by Wispr)
 const TARGET_SAMPLE_RATE: f32 = 16000.0;
 const STREAM_TIMEOUT: Duration = Duration::from_secs(60 * 6);
+// Maximum number of samples to accumulate in the resampled buffer.
+// This caps memory usage at roughly 10 minutes of audio at 16 kHz (4 bytes per f32 sample ≈ 38 MB).
+// Frames that arrive after the buffer is full are silently dropped; the user should stop
+// the recording well before this limit is reached under normal usage.
+const MAX_RESAMPLED_SAMPLES: usize = 16_000 * 60 * 10; // 10 min at 16 kHz
+// Length of the sinc interpolation filter used by the resampler.
+// 127 (odd) gives good anti-aliasing quality for voice at 16 kHz while keeping
+// memory and CPU cost reasonable. The previous value of 512 (buffer_size) was
+// unnecessarily large and contributed to excessive memory usage.
+const SINC_LEN: usize = 127;
 
 pub struct VoiceInput {
     state: VoiceInputState,
@@ -192,7 +202,7 @@ impl VoiceInput {
             SincInterpolationParameters {
                 interpolation: SincInterpolationType::Linear,
                 window: WindowFunction::Hann,
-                sinc_len: buffer_size as usize,
+                sinc_len: SINC_LEN,
                 f_cutoff: 0.95,
                 oversampling_factor: 1,
             },
@@ -358,6 +368,15 @@ impl VoiceInput {
         else {
             return;
         };
+
+        // Drop incoming frames once the buffer is at capacity to prevent unbounded memory growth.
+        // Under normal usage (short voice commands) the limit of MAX_RESAMPLED_SAMPLES is never
+        // reached; this guard protects against pathological sessions (e.g. the stream running
+        // close to STREAM_TIMEOUT) or against resampling tasks falling behind.
+        if resampled.lock().len() >= MAX_RESAMPLED_SAMPLES {
+            log::warn!("Voice input resampled buffer is full; dropping audio frame");
+            return;
+        }
 
         if input_buffer.len() < *chunk_size {
             input_buffer.resize(*chunk_size, 0.0); // Zero-pad if too short.
