@@ -404,6 +404,9 @@ pub struct RunAgentArgs {
         conflicts_with_all = ["prompt", "saved_prompt", "file"]
     )]
     pub skip_initial_turn: bool,
+
+    #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
+    pub configure_git_credentials_with_github: bool,
 }
 
 impl RunAgentArgs {
