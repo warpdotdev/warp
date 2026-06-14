@@ -153,6 +153,17 @@ impl Participant {
     }
 }
 
+/// Display info for attributing past activity (e.g. who initiated an agent
+/// exchange) to a participant, even if they have since left the session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParticipantAttribution {
+    pub display_name: String,
+    pub photo_url: Option<String>,
+    /// The participant's live presence color. `None` if the participant is no
+    /// longer present in the session.
+    pub color: Option<ColorU>,
+}
+
 /// Helper struct containing presence information about a participant who selected a particular block.
 pub struct ParticipantAtSelectedBlock<'a> {
     /// The participant who selected the block.
@@ -361,6 +372,36 @@ impl PresenceManager {
             }
         }
         None
+    }
+
+    /// Returns display info used to attribute past activity (e.g. the agent
+    /// query an exchange was initiated with) to the participant identified by
+    /// `id`.
+    ///
+    /// Unlike [`Self::get_participant`], this also resolves participants who
+    /// are no longer present in the session using their last-known profile
+    /// data, since attribution of past activity should survive the participant
+    /// leaving the session. Absent participants are resolved without a live
+    /// presence color.
+    pub fn get_participant_attribution(
+        &self,
+        id: &ParticipantId,
+    ) -> Option<ParticipantAttribution> {
+        if let Some(participant) = self.get_participant(id) {
+            return Some(ParticipantAttribution {
+                display_name: participant.info.profile_data.display_name.clone(),
+                photo_url: participant.info.profile_data.photo_url.clone(),
+                color: Some(participant.color),
+            });
+        }
+
+        self.absent_viewers
+            .get(id)
+            .map(|absent| ParticipantAttribution {
+                display_name: absent.participant_info.profile_data.display_name.clone(),
+                photo_url: absent.participant_info.profile_data.photo_url.clone(),
+                color: None,
+            })
     }
 
     /// Returns the participants who have the block at the block index selected.

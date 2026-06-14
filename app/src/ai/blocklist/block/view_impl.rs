@@ -959,7 +959,9 @@ impl View for AIBlock {
             }
             // Derive the display info for the participant who initiated this exchange.
             // For non-shared sessions, this is just the current user.
-            // For shared sessions, this is the user who initiated the request.
+            // For shared sessions, this is the user who initiated the request, even if
+            // they have since left the session (in which case we use their last-known
+            // profile data without a live presence color).
             let (avatar_display_name, profile_image_path, avatar_color) = self
                 .model
                 .response_initiator(app)
@@ -968,17 +970,17 @@ impl View for AIBlock {
                         .and_then(|terminal_view| {
                             terminal_view.read(app, |view, app| {
                                 view.shared_session_presence_manager().and_then(move |pm| {
-                                    pm.as_ref(app).get_participant(&participant_id).map(
-                                        |participant| {
-                                            // Get the display info from the participant
-                                            // who sent this query.
+                                    // Get the display info from the participant
+                                    // who sent this query.
+                                    pm.as_ref(app)
+                                        .get_participant_attribution(&participant_id)
+                                        .map(|attribution| {
                                             (
-                                                participant.info.profile_data.display_name.clone(),
-                                                participant.info.profile_data.photo_url.clone(),
-                                                Some(participant.color),
+                                                attribution.display_name,
+                                                attribution.photo_url,
+                                                attribution.color,
                                             )
-                                        },
-                                    )
+                                        })
                                 })
                             })
                         })

@@ -415,3 +415,189 @@ fn test_selected_block_index_for_avatar() {
         });
     });
 }
+
+fn participant_info_with_profile(
+    id: &ParticipantId,
+    display_name: &str,
+    photo_url: Option<&str>,
+) -> ParticipantInfo {
+    ParticipantInfo {
+        id: id.clone(),
+        profile_data: ProfileData {
+            firebase_uid: format!("{display_name}-uid"),
+            display_name: display_name.to_owned(),
+            photo_url: photo_url.map(str::to_owned),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn participant_list_with(sharer: Sharer, viewers: Vec<Viewer>) -> ParticipantList {
+    ParticipantList {
+        sharer,
+        viewers,
+        present_viewers: Default::default(),
+        absent_viewers: Default::default(),
+        guests: Default::default(),
+        pending_guests: Default::default(),
+    }
+}
+
+#[test]
+fn attribution_resolves_absent_viewer_profile_without_presence_color() {
+    App::test((), |mut app| async move {
+        let absent_id = ParticipantId::new();
+        let sharer_id = ParticipantId::new();
+        let sharer = Sharer {
+            info: participant_info_with_profile(&sharer_id, "Sharer", None),
+        };
+        let absent_viewer = Viewer {
+            info: participant_info_with_profile(
+                &absent_id,
+                "Departed Viewer",
+                Some("https://example.com/departed.png"),
+            ),
+            role: Role::Reader,
+            is_present: false,
+        };
+
+        let presence_manager = app.add_model(|ctx| {
+            PresenceManager::new_for_viewer(
+                ParticipantId::new(),
+                UserUid::new("self-uid"),
+                participant_list_with(sharer, vec![absent_viewer]),
+                ctx,
+            )
+        });
+
+        presence_manager.read(&app, |presence_manager, _ctx| {
+            // The live-presence lookup intentionally excludes absent viewers.
+            assert!(presence_manager.get_participant(&absent_id).is_none());
+
+            // But attribution of past activity (e.g. the agent query the
+            // departed viewer initiated) should still resolve their profile.
+            let attribution = presence_manager
+                .get_participant_attribution(&absent_id)
+                .expect("absent viewer should be resolvable for attribution");
+            assert_eq!(attribution.display_name, "Departed Viewer");
+            assert_eq!(
+                attribution.photo_url.as_deref(),
+                Some("https://example.com/departed.png")
+            );
+            assert_eq!(attribution.color, None);
+        });
+    });
+}
+
+#[test]
+fn attribution_still_resolves_viewer_after_they_leave() {
+    App::test((), |mut app| async move {
+        let viewer_id = ParticipantId::new();
+        let sharer_id = ParticipantId::new();
+        let sharer = Sharer {
+            info: participant_info_with_profile(&sharer_id, "Sharer", None),
+        };
+        let mut viewer = Viewer {
+            info: participant_info_with_profile(&viewer_id, "Prompt Sender", None),
+            role: Role::Reader,
+            is_present: true,
+        };
+
+        let presence_manager = app.add_model(|ctx| {
+            PresenceManager::new_for_viewer(
+                ParticipantId::new(),
+                UserUid::new("self-uid"),
+                participant_list_with(sharer.clone(), vec![viewer.clone()]),
+                ctx,
+            )
+        });
+
+        // Ensure participants are loaded before continuing.
+        presence_manager
+            .update(&mut app, |presence_manager, ctx| {
+                let spawned_future = presence_manager
+                    .load_participants_imgs_future_handle
+                    .as_ref()
+                    .expect("should have future handle");
+                ctx.await_spawned_future(spawned_future.future_id())
+            })
+            .await;
+
+        // While present, attribution carries the live presence color.
+        presence_manager.read(&app, |presence_manager, _ctx| {
+            let attribution = presence_manager
+                .get_participant_attribution(&viewer_id)
+                .expect("present viewer should be resolvable for attribution");
+            assert_eq!(attribution.display_name, "Prompt Sender");
+            assert!(attribution.color.is_some());
+        });
+
+        // The viewer leaves the session.
+        viewer.is_present = false;
+        presence_manager.update(&mut app, |presence_manager, ctx| {
+            presence_manager.update_participants(participant_list_with(sharer, vec![viewer]), ctx);
+        });
+
+        presence_manager.read(&app, |presence_manager, _ctx| {
+            assert!(presence_manager.get_participant(&viewer_id).is_none());
+
+            let attribution = presence_manager
+                .get_participant_attribution(&viewer_id)
+                .expect("departed viewer should still be resolvable for attribution");
+            assert_eq!(attribution.display_name, "Prompt Sender");
+            assert_eq!(attribution.color, None);
+        });
+    });
+}
+
+#[test]
+fn attribution_resolves_sharer_with_presence_color() {
+    App::test((), |mut app| async move {
+        let sharer_id = ParticipantId::new();
+        let sharer = Sharer {
+            info: participant_info_with_profile(&sharer_id, "Sharer", None),
+        };
+
+        let presence_manager = app.add_model(|ctx| {
+            PresenceManager::new_for_viewer(
+                ParticipantId::new(),
+                UserUid::new("self-uid"),
+                participant_list_with(sharer, vec![]),
+                ctx,
+            )
+        });
+
+        presence_manager.read(&app, |presence_manager, _ctx| {
+            let attribution = presence_manager
+                .get_participant_attribution(&sharer_id)
+                .expect("sharer should be resolvable for attribution");
+            assert_eq!(attribution.display_name, "Sharer");
+            assert!(attribution.color.is_some());
+        });
+    });
+}
+
+#[test]
+fn attribution_returns_none_for_unknown_participant() {
+    App::test((), |mut app| async move {
+        let sharer = Sharer {
+            info: participant_info_with_profile(&ParticipantId::new(), "Sharer", None),
+        };
+
+        let presence_manager = app.add_model(|ctx| {
+            PresenceManager::new_for_viewer(
+                ParticipantId::new(),
+                UserUid::new("self-uid"),
+                participant_list_with(sharer, vec![]),
+                ctx,
+            )
+        });
+
+        presence_manager.read(&app, |presence_manager, _ctx| {
+            assert!(presence_manager
+                .get_participant_attribution(&ParticipantId::new())
+                .is_none());
+        });
+    });
+}
