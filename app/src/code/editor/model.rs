@@ -255,7 +255,7 @@ impl DelayRendering {
         model.render_state.update(ctx, move |render_state, _| {
             let should_autoscroll = self.should_autoscroll;
             for (delta, content_version) in self.edits {
-                render_state.add_pending_edit(delta.clone(), content_version);
+                render_state.add_pending_edit(delta, content_version);
             }
             match should_autoscroll {
                 ShouldAutoscroll::Yes => render_state.request_autoscroll(),
