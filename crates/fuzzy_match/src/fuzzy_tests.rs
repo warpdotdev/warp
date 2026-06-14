@@ -156,6 +156,32 @@ fn test_ui_star_partial_patterns() {
     assert!(result3.is_some());
 }
 
+#[test]
+fn test_question_mark_matches_one_character_not_one_byte() {
+    // `?` must match exactly one *character*, not one byte. "é" is a single
+    // (two-byte) character, so the two-`?` pattern "??" requires two
+    // characters and must not match. A byte-oriented matcher would let each
+    // `?` consume one byte of "é" and wrongly report a match.
+    assert!(match_wildcard_pattern("é", "??").is_none());
+    assert!(match_wildcard_pattern("a", "??").is_none());
+
+    // A single `?` should match the single multi-byte character.
+    assert!(match_wildcard_pattern("é", "?").is_some());
+
+    // `?` inside a longer multi-byte pattern matches one character per `?`.
+    assert!(match_wildcard_pattern("héllo", "h?llo").is_some());
+    assert!(match_wildcard_pattern("héllo", "h??llo").is_none());
+}
+
+#[test]
+fn test_literal_multibyte_match_requires_full_character() {
+    // Literal multi-byte characters must compare per character, so a pattern
+    // that is one character longer than the text cannot match even though the
+    // text has more *bytes* than the pattern has characters.
+    assert!(match_wildcard_pattern("ä", "a").is_none());
+    assert!(match_wildcard_pattern("ä", "ä").is_some());
+}
+
 use crate::{
     match_indices, match_indices_case_insensitive, match_indices_case_insensitive_ignore_spaces,
 };

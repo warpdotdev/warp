@@ -364,8 +364,15 @@ fn find_partial_suffix_match(text: &str, partial_suffix: &str) -> Option<Vec<usi
 ///
 /// This function requires the pattern to match the entire text, unlike
 /// [`find_substring_glob_match`] which finds patterns anywhere in the text.
+///
+/// Matching is performed over Unicode scalar values (`char`s), so `?` matches
+/// exactly one character and a literal matches one character — not one byte.
+/// Operating over bytes would let `?` match a single byte of a multi-byte
+/// character (e.g. wrongly matching the one-character `"é"` against `"??"`).
 fn is_glob_match(text: &str, pattern: &str) -> bool {
-    is_glob_match_recursive(text.as_bytes(), pattern.as_bytes(), 0, 0)
+    let text_chars: Vec<char> = text.chars().collect();
+    let pattern_chars: Vec<char> = pattern.chars().collect();
+    is_glob_match_chars(&text_chars, &pattern_chars)
 }
 
 /// Finds a glob pattern as a substring anywhere in the text.
@@ -568,52 +575,6 @@ fn is_glob_match_chars_recursive(
             // Regular character - must match exactly (case insensitive)
             if text[text_idx].eq_ignore_ascii_case(&c) {
                 is_glob_match_chars_recursive(text, pattern, text_idx + 1, pattern_idx + 1)
-            } else {
-                false
-            }
-        }
-    }
-}
-
-fn is_glob_match_recursive(
-    text: &[u8],
-    pattern: &[u8],
-    text_idx: usize,
-    pattern_idx: usize,
-) -> bool {
-    // If we've consumed the entire pattern
-    if pattern_idx >= pattern.len() {
-        return text_idx >= text.len();
-    }
-
-    // If we've consumed the entire text but pattern remains
-    if text_idx >= text.len() {
-        // Only match if the remaining pattern is all '*'
-        return pattern[pattern_idx..].iter().all(|&c| c == b'*');
-    }
-
-    match pattern[pattern_idx] {
-        b'*' => {
-            // Try matching zero characters (skip the *)
-            if is_glob_match_recursive(text, pattern, text_idx, pattern_idx + 1) {
-                return true;
-            }
-            // Try matching one or more characters
-            for i in text_idx..text.len() {
-                if is_glob_match_recursive(text, pattern, i + 1, pattern_idx + 1) {
-                    return true;
-                }
-            }
-            false
-        }
-        b'?' => {
-            // ? matches exactly one character
-            is_glob_match_recursive(text, pattern, text_idx + 1, pattern_idx + 1)
-        }
-        c => {
-            // Regular character - must match exactly (case insensitive)
-            if text[text_idx].eq_ignore_ascii_case(&c) {
-                is_glob_match_recursive(text, pattern, text_idx + 1, pattern_idx + 1)
             } else {
                 false
             }
