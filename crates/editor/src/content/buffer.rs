@@ -62,6 +62,7 @@ use crate::render::model::{
 pub enum ContentFormat {
     Markdown,
     PlainText,
+    Ipynb,
 }
 
 /// Configuration struct that holds all the fields needed to reset the entire editor.
@@ -88,6 +89,15 @@ impl<'a> InitialBufferState<'a> {
         Self {
             text,
             format: ContentFormat::Markdown,
+            version: ContentVersion::new(),
+        }
+    }
+
+    /// Create a new InitialBufferState with Jupyter notebook (`.ipynb`) format
+    pub fn ipynb(text: &'a str) -> Self {
+        Self {
+            text,
+            format: ContentFormat::Ipynb,
             version: ContentVersion::new(),
         }
     }
@@ -859,6 +869,36 @@ impl Buffer {
         )
     }
 
+    /// Construct a [`Buffer`] from the JSON contents of a `.ipynb` (Jupyter)
+    /// notebook. The notebook is converted directly into formatted text.
+    /// On any parse failure the raw contents are shown verbatim
+    pub(crate) fn from_ipynb(
+        ipynb: &str,
+        embedded_item_conversion: Option<EmbeddedItemConversion>,
+        tab_indentation: TabIndentation,
+        selection_model: ModelHandle<BufferSelectionModel>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        let gfm_tables = warp_core::features::FeatureFlag::MarkdownTables.is_enabled();
+        let formatted_text = match ipynb_parser::ipynb_to_formatted_text(ipynb, gfm_tables) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                safe_error! {
+                    safe: ("Failed to render Jupyter notebook; showing raw contents"),
+                    full: ("Failed to render Jupyter notebook: {e}")
+                }
+                ipynb_parser::raw_fallback_formatted_text(ipynb)
+            }
+        };
+        Self::from_formatted_text(
+            formatted_text,
+            embedded_item_conversion,
+            tab_indentation,
+            selection_model,
+            ctx,
+        )
+    }
+
     fn replace(
         &mut self,
         state: InitialBufferState,
@@ -902,6 +942,13 @@ impl Buffer {
                 ctx,
             ),
             ContentFormat::PlainText => Buffer::from_plain_text(
+                state.text,
+                callback,
+                indentation,
+                selection_model.clone(),
+                ctx,
+            ),
+            ContentFormat::Ipynb => Buffer::from_ipynb(
                 state.text,
                 callback,
                 indentation,
