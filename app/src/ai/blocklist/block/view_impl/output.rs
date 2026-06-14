@@ -3604,8 +3604,9 @@ fn render_collapsible_text_block_section(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let text_color = blended_colors::text_disabled(theme, theme.surface_2());
-    let selectable = false;
     let is_streaming = props.model.status(app).is_streaming();
+    // Allow text selection once streaming is complete so users can copy reasoning content.
+    let selectable = !is_streaming;
 
     let mut container = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
