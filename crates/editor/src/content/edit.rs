@@ -534,54 +534,88 @@ impl EditDelta {
 
         let last_task = layout_tasks.len().saturating_sub(1);
 
-        // Then, run each task in parallel, collecting (a) the laid out BlockItems and (b) whether
-        // or not the last item ends with a newline.
-        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
-                let location = if idx == 0 {
-                    BlockLocation::Start
-                } else if idx >= last_task {
-                    BlockLocation::End
-                } else {
-                    BlockLocation::Middle
-                };
+        // Run layout tasks in parallel, but process them in sequential chunks to bound peak memory.
+        //
+        // Without chunking, rayon schedules all N tasks simultaneously and each task allocates
+        // a `TextFrame` (with `Vec<Line>` and `Vec<Glyph>` objects created via CoreText). For
+        // large documents — e.g. a full re-layout triggered by a theme change — this can spike
+        // to tens of GB when thousands of blocks are being laid out at the same time across all
+        // rayon worker threads.
+        //
+        // By processing in fixed-size chunks, we complete one batch before starting the next,
+        // capping peak allocation at roughly `LAYOUT_CHUNK_SIZE × avg_frame_bytes` instead of
+        // `total_blocks × avg_frame_bytes`. The per-chunk parallelism still keeps throughput
+        // high; the wall-clock regression is minimal for interactive edits (small deltas) and
+        // acceptable for background re-layouts (large deltas).
+        const LAYOUT_CHUNK_SIZE: usize = 2_000;
 
-                match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
-                        );
-                        None
+        let total_tasks = layout_tasks.len();
+        let mut all_block_items: Vec<BlockItem> = Vec::with_capacity(total_tasks);
+        let mut last_trailing_newline: Option<bool> = None;
+        let mut global_task_offset: usize = 0;
+
+        let chunked_tasks = layout_tasks.into_iter().chunks(LAYOUT_CHUNK_SIZE);
+        for chunk_iter in &chunked_tasks {
+            let chunk: Vec<_> = chunk_iter.collect();
+            let chunk_len = chunk.len();
+            let chunk_offset = global_task_offset;
+
+            let (chunk_items, chunk_trailing): (Vec<_>, Last<_>) = chunk
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(local_idx, (task, is_hidden))| {
+                    let global_idx = chunk_offset + local_idx;
+                    let location = if global_idx == 0 {
+                        BlockLocation::Start
+                    } else if global_idx >= last_task {
+                        BlockLocation::End
+                    } else {
+                        BlockLocation::Middle
+                    };
+
+                    match task.run(layout, location, is_hidden) {
+                        Ok(result) => Some(result),
+                        Err(e) => {
+                            log::error!(
+                                "Failed to lay out BlockItem at offset {:?}: {:?}",
+                                self.old_offset,
+                                e
+                            );
+                            None
+                        }
                     }
-                }
-            })
-            .unzip();
+                })
+                .unzip();
+
+            all_block_items.extend(chunk_items);
+            if let Some(val) = chunk_trailing.into_inner() {
+                last_trailing_newline = Some(val);
+            }
+            global_task_offset += chunk_len;
+        }
 
         // Iterate through block_items, and collapse adjacent Hidden items.
-        let block_items = block_items.into_iter().fold(Vec::new(), |mut acc, item| {
-            if let Some(last) = acc.last_mut() {
-                // If the last item is Hidden and the current item is also Hidden,
-                // we can skip adding the current item.
-                if let (BlockItem::Hidden(running_config), BlockItem::Hidden(config)) =
-                    (last, &item)
-                {
-                    *running_config += *config;
-                    return acc;
+        let block_items = all_block_items
+            .into_iter()
+            .fold(Vec::new(), |mut acc, item| {
+                if let Some(last) = acc.last_mut() {
+                    // If the last item is Hidden and the current item is also Hidden,
+                    // we can skip adding the current item.
+                    if let (BlockItem::Hidden(running_config), BlockItem::Hidden(config)) =
+                        (last, &item)
+                    {
+                        *running_config += *config;
+                        return acc;
+                    }
                 }
-            }
-            acc.push(item);
-            acc
-        });
+                acc.push(item);
+                acc
+            });
 
         // Trailing newline is default to true. This default value is used when
         // edit delta has no new line, which means one or multiple entire lines have
         // been deleted. We should still leave a trailing newline in this case.
-        let has_trailing_newline = has_trailing_newline.into_inner().unwrap_or(true);
+        let has_trailing_newline = last_trailing_newline.unwrap_or(true);
         let rich_text_styles = layout.rich_text_styles();
 
         LaidOutRenderDelta {
