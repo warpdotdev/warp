@@ -452,42 +452,6 @@ impl CustomizeUISlide {
 
     // --- Visual (right column) ---
 
-    /// All bundled image paths used by the customize slide visual.
-    /// Used for preloading into the asset cache.
-    pub(crate) const VISUAL_IMAGE_PATHS: &'static [&'static str] = &[
-        // Welcome / default
-        "async/png/onboarding/welcome_agent.png",
-        "async/png/onboarding/welcome_terminal.png",
-        // Agent intention
-        "async/png/onboarding/agent_intention/customize_vertical_tabs.png",
-        "async/png/onboarding/agent_intention/customize_horizontal_tabs.png",
-        "async/png/onboarding/agent_intention/customize_tools_disabled_vertical.png",
-        "async/png/onboarding/agent_intention/customize_tools_disabled_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_conversation_vertical.png",
-        "async/png/onboarding/agent_intention/customize_conversation_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_fileexplorer_vertical.png",
-        "async/png/onboarding/agent_intention/customize_fileexplorer_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_filesearch_vertical.png",
-        "async/png/onboarding/agent_intention/customize_filesearch_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_warpdrive_vertical.png",
-        "async/png/onboarding/agent_intention/customize_warpdrive_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_codereview_enabled_vertical.png",
-        "async/png/onboarding/agent_intention/customize_codereview_enabled_horizontal.png",
-        "async/png/onboarding/agent_intention/customize_codereview_disabled_vertical.png",
-        "async/png/onboarding/agent_intention/customize_codereview_disabled_horizontal.png",
-        // Terminal intention
-        "async/png/onboarding/terminal_intention/terminal_customize_vertical_tabs.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_horizontal_tabs.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_vertical.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_horizontal.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_filesearch_vertical.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_filesearch_horizontal.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_vertical.png",
-        "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_horizontal.png",
-        "async/png/onboarding/terminal_intention/terminal_codereview_enabled.png",
-        "async/png/onboarding/terminal_intention/terminal_codereview_disabled.png",
-    ];
-
     /// Returns the image path for the current visual state.
     /// When `OpenWarpNewSettingsModes` is enabled, assets depend on the tab layout setting.
     fn visual_image_path(

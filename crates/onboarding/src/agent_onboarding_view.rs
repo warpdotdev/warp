@@ -2,10 +2,7 @@ use std::time::Duration;
 
 use ai::LLMId;
 use instant::Instant;
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
-use warpui_core::assets::asset_cache::AssetSource;
-use warpui_core::image_cache::ImageType;
 use warpui_core::windowing::state::{ApplicationStage, StateEvent};
 use warpui_core::windowing::WindowManager;
 
@@ -322,10 +319,11 @@ impl AgentOnboardingView {
         // instead of to other views (e.g. the editor).
         ctx.focus_self();
 
-        // Preload customize-slide images so they're ready when the user reaches that slide.
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            Self::preload_onboarding_images(ctx);
-        }
+        // NOTE: We intentionally do *not* preload slide images here. Bundled images are decoded
+        // synchronously from the app bundle on first use, so lazy loading per slide is fast
+        // enough. Preloading all slides upfront kept ~0.73 GB of decoded image data alive in
+        // the AssetCache for the entire app session (bundled assets are never evicted).
+        // See APP-4541 and https://sentry.io/organizations/warpdotdev/issues/7259255054/
 
         send_telemetry_from_ctx!(OnboardingEvent::OnboardingStarted, ctx);
         send_telemetry_from_ctx!(
@@ -334,30 +332,6 @@ impl AgentOnboardingView {
             },
             ctx
         );
-    }
-
-    /// Eagerly loads all onboarding slide images into the asset cache
-    /// so they display instantly when the user navigates between slides.
-    fn preload_onboarding_images(ctx: &mut ViewContext<Self>) {
-        let asset_cache = warpui_core::assets::asset_cache::AssetCache::as_ref(ctx);
-        // Preload the shared background image used on all right panels.
-        asset_cache.load_asset::<ImageType>(AssetSource::Bundled {
-            path: crate::slides::layout::ONBOARDING_BG_PATH,
-        });
-        for path in IntentionSlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        for path in CustomizeUISlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        for path in ThirdPartySlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        for path in ThemePickerSlide::VISUAL_IMAGE_PATHS {
-            asset_cache.load_asset::<ImageType>(AssetSource::Bundled { path });
-        }
-        // Agent slide reuses customize_vertical_tabs / customize_horizontal_tabs
-        // which are already in CustomizeUISlide::VISUAL_IMAGE_PATHS.
     }
 
     fn handle_onboarding_completed(&mut self, ctx: &mut ViewContext<Self>) {
