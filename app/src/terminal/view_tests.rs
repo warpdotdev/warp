@@ -7337,5 +7337,15 @@ fn close_find_bar_preserves_options_on_async_find_path() {
             Some(needle_options().query),
             "closing the find bar must preserve the saved query on the async path"
         );
+        assert!(
+            !terminal.read(&app, |view, ctx| view
+                .find_model
+                .as_ref(ctx)
+                .async_find_controller
+                .as_ref()
+                .unwrap()
+                .has_active_find()),
+            "closing the find bar must clear the active find run so terminal wakeups stop rescanning"
+        );
     })
 }

@@ -890,10 +890,12 @@ impl AsyncFindController {
     /// Dropping the senders closes the result and throttle streams naturally.
     /// The find configuration is preserved so `has_active_find()` remains true.
     pub fn cancel_current_find(&mut self) {
-        // Close the work queue, which causes the background task's pop() to
-        // return Err(QueueClosed) and exit.
+        // Cancel queued work immediately. `close()` drains pending items, which
+        // is correct for normal completion but wrong for query changes/close: a
+        // cancelled find must not keep scanning stale chunks behind the terminal
+        // model lock.
         if let Some(queue) = self.work_queue.take() {
-            queue.close();
+            queue.cancel();
         }
 
         // Abort the background future so it stops being polled.
@@ -905,6 +907,24 @@ impl AsyncFindController {
         self.result_tx = None;
         self.throttle_tx = None;
         self.status = AsyncFindStatus::Idle;
+    }
+
+    /// Cancels active work and clears active config/results while preserving the
+    /// last find options so reopening the find bar can restore the query.
+    pub fn cancel_active_scan_preserve_options(
+        &mut self,
+        ctx: &mut ModelContext<TerminalFindModel>,
+    ) {
+        self.cancel_current_find();
+        self.current_config = None;
+        self.block_results.clear();
+        self.focused_match_index = None;
+        self.cached_focused_match = None;
+        self.status = AsyncFindStatus::Idle;
+
+        for view in self.rich_content_views.values() {
+            view.clear_matches(ctx);
+        }
     }
 
     /// Clears all find results and resets state.
