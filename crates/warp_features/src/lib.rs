@@ -883,6 +883,10 @@ pub enum FeatureFlag {
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
+
+    /// Shows a warning in the agent view when the active conversation's
+    /// provider-side prompt cache has expired.
+    PromptCacheExpiryWarning,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -949,6 +953,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::PromptCacheExpiryWarning,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

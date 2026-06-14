@@ -499,6 +499,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CustomInferenceEndpoints,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
+        #[cfg(feature = "prompt_cache_expiry_warning")]
+        FeatureFlag::PromptCacheExpiryWarning,
     ]);
 
     flags
