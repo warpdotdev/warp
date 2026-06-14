@@ -3838,6 +3838,13 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .should_force_disable_cloud_handoff
                         .toggle_and_save_value(ctx));
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::FeaturesPageAction {
+                            action: "ToggleCloudHandoff".to_string(),
+                            value: format!("{}", !*settings.should_force_disable_cloud_handoff),
+                        },
+                        ctx
+                    );
                 });
                 ctx.notify();
             }
@@ -3846,6 +3853,13 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .should_force_disable_ampersand_handoff
                         .toggle_and_save_value(ctx));
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::FeaturesPageAction {
+                            action: "ToggleAmpersandHandoff".to_string(),
+                            value: format!("{}", !*settings.should_force_disable_ampersand_handoff),
+                        },
+                        ctx
+                    );
                 });
                 ctx.notify();
             }
@@ -3854,6 +3868,13 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .auto_handoff_on_sleep_enabled
                         .toggle_and_save_value(ctx));
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::FeaturesPageAction {
+                            action: "ToggleAutoHandoffOnSleep".to_string(),
+                            value: format!("{}", *settings.auto_handoff_on_sleep_enabled),
+                        },
+                        ctx
+                    );
                 });
                 ctx.notify();
             }
