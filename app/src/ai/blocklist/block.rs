@@ -2971,6 +2971,7 @@ impl AIBlock {
                         ctx,
                     )
                     .with_can_show_diff_ui(false)
+                    .disable_find_and_replace()
                 });
                 view.update(ctx, |view, ctx| {
                     view.set_starting_line_number({
