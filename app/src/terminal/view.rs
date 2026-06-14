@@ -345,6 +345,7 @@ use crate::resource_center::{
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ObjectUid, SyncId};
+use crate::server::server_api::block::BlockClient;
 use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
     self, AgentModeAttachContextMethod, AgentModeEntrypoint, AgentModeRewindEntrypoint,
@@ -10866,6 +10867,47 @@ impl TerminalView {
         }
     }
 
+    /// Best-effort upload of a completed terminal block to GCS for session
+    /// transcript reconstruction, via the `shareBlock` GraphQL mutation with a
+    /// `sharedSessionId`. The server persists the payload keyed by the shared
+    /// session UUID so user-run commands can be included in the full transcript.
+    ///
+    /// No-op unless block persistence is enabled and this client is sharing an
+    /// Oz run. Agent-run blocks are excluded because they are already captured
+    /// in the conversation transcript synced to GCS by the agent worker.
+    fn maybe_persist_block_for_shared_oz_run(&self, serialized_block: &Arc<SerializedBlock>) {
+        if !FeatureFlag::PersistSharedSessionBlocks.is_enabled() {
+            return;
+        }
+
+        let shared_session_uuid = self
+            .shared_session
+            .as_ref()
+            .map(|s| s.session_id().to_string());
+
+        let is_shared_oz_run = {
+            let model = self.model.lock();
+            model.shared_session_status().is_sharer() && model.is_shared_ambient_agent_session()
+        };
+
+        let Some(shared_session_uuid) = shared_session_uuid.filter(|_| is_shared_oz_run) else {
+            return;
+        };
+
+        let serialized_block = serialized_block.clone();
+        let server_api = self.server_api.clone();
+        self.background_executor
+            .spawn(async move {
+                if let Err(err) = server_api
+                    .save_block_to_session(&serialized_block, &shared_session_uuid)
+                    .await
+                {
+                    log::warn!("Failed to save block to session {shared_session_uuid}: {err:#}");
+                }
+            })
+            .detach();
+    }
+
     fn active_block_is_considered_remote(&self, app: &AppContext) -> bool {
         let model = self.model.lock();
         let active_block = model.block_list().active_block();
@@ -11831,6 +11873,20 @@ impl TerminalView {
                             .spawn(async move { active_session.load_external_commands().await })
                             .detach();
                     }
+                }
+
+                match &block_type {
+                    BlockType::User(user_block_completed)
+                        if !user_block_completed.was_part_of_agent_interaction =>
+                    {
+                        self.maybe_persist_block_for_shared_oz_run(
+                            &user_block_completed.serialized_block,
+                        );
+                    }
+                    BlockType::BootstrapVisible(serialized_block) => {
+                        self.maybe_persist_block_for_shared_oz_run(serialized_block);
+                    }
+                    _ => {}
                 }
 
                 if let Some(delay) = command_finished_to_precmd_delay {

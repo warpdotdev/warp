@@ -3214,6 +3214,9 @@ union SetUserIsOnboardedResult = SetUserIsOnboardedOutput | UserFacingError
 
 input ShareBlockInput {
   block: BlockInput!
+  sharedSessionId: String
+  serializedBlock: String
+  blockId: String
 }
 
 type ShareBlockOutput implements Response {

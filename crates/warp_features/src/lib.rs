@@ -883,6 +883,11 @@ pub enum FeatureFlag {
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
+
+    /// Gates uploading completed non-agent terminal blocks to the run
+    /// `client-events` endpoint during a shared Oz run, so warp-server can
+    /// persist them to GCS and reconstruct the full session transcript.
+    PersistSharedSessionBlocks,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -949,6 +954,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::PersistSharedSessionBlocks,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

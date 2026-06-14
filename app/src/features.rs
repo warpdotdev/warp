@@ -499,6 +499,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CustomInferenceEndpoints,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
+        #[cfg(feature = "persist_shared_session_blocks")]
+        FeatureFlag::PersistSharedSessionBlocks,
     ]);
 
     flags
