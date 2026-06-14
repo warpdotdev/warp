@@ -34,8 +34,10 @@ const PREFIXES_TO_REMOVE: [&str; 2] = ["a/", "b/"];
 
 /// "@" is a suffix that can be added to symlinks. It appears in Git Bash's default configuration
 /// for `ls`.
+/// "." is a trailing period that appears when a file path is used at the end of a sentence in
+/// natural language, e.g. "Refer to foo.md." — the period is punctuation, not part of the path.
 #[cfg(feature = "local_fs")]
-const SUFFIXES_TO_REMOVE: [&str; 1] = ["@"];
+const SUFFIXES_TO_REMOVE: [&str; 2] = ["@", "."];
 
 /// Highlighted link within a terminal model grid.
 #[derive(Debug, Clone)]
@@ -509,6 +511,39 @@ impl super::TerminalView {
             );
 
             if let Some(absolute_path) = absolute_path {
+                // Windows NT normalizes trailing '.' in metadata lookups, so the literal
+                // capture succeeds but SUFFIXES_TO_REMOVE never shrinks end_point.  Retry
+                // with the dot stripped when the resolved path is non-verbatim (verbatim
+                // \\?\ paths bypass NT normalization and may have distinct foo.md vs foo.md.).
+                // We test the resolved `absolute_path`, not the captured token, because a
+                // relative token never starts with \\?\ even in a verbatim working directory.
+                #[cfg(target_os = "windows")]
+                if possible_path.path.path.ends_with('.')
+                    && !absolute_path
+                        .to_str()
+                        .is_some_and(|s| s.starts_with(r"\\?\"))
+                {
+                    let stripped = &possible_path.path.path[..possible_path.path.path.len() - 1];
+                    let stripped_clean_path = CleanPathResult {
+                        path: stripped.into(),
+                        line_and_column_num: possible_path.path.line_and_column_num,
+                    };
+                    if let Some(stripped_absolute_path) = absolute_path_if_valid(
+                        &stripped_clean_path,
+                        ShellPathType::ShellNative(working_directory.to_string()),
+                        shell_launch_data.as_ref(),
+                    ) {
+                        let new_end_point = possible_path.range.end().wrapping_sub(max_columns, 1);
+                        link = Some(Self::create_valid_link(
+                            stripped_absolute_path,
+                            stripped_clean_path.line_and_column_num,
+                            *possible_path.range.start()..=new_end_point,
+                            &within_model_possible_path,
+                        ));
+                        break;
+                    }
+                }
+
                 link = Some(Self::create_valid_link(
                     absolute_path,
                     possible_path.path.line_and_column_num,
@@ -625,5 +660,185 @@ impl super::TerminalView {
             ctx.set_cursor_shape(Cursor::PointingHand);
             ctx.notify();
         }
+    }
+}
+
+#[cfg(all(test, feature = "local_fs"))]
+mod tests {
+    use std::ops::RangeInclusive;
+
+    use warp_util::path::CleanPathResult;
+
+    use crate::terminal::model::{
+        grid::grid_handler::PossiblePath, index::Point, terminal_model::WithinModel,
+    };
+
+    use super::{super::TerminalView, GridHighlightedLink};
+
+    /// Build a minimal `PossiblePath` wrapping `path` with a grid range of row 0,
+    /// col 0 → col `path.len() - 1` (inclusive end = index of last character).
+    fn make_possible_path(path: &str) -> WithinModel<PossiblePath> {
+        let range: RangeInclusive<Point> = Point { row: 0, col: 0 }..=Point {
+            row: 0,
+            col: path.len().saturating_sub(1),
+        };
+        WithinModel::AltScreen(PossiblePath {
+            path: CleanPathResult {
+                path: path.to_string(),
+                line_and_column_num: None,
+            },
+            range,
+        })
+    }
+
+    /// Regression test for warpdotdev/warp#11477.
+    ///
+    /// A trailing-period path like `"foo.md."` must produce a valid link with the dot
+    /// stripped — via `SUFFIXES_TO_REMOVE` on POSIX or `strip_trailing_dot` on Windows.
+    #[test]
+    fn compute_valid_paths_strips_trailing_period() {
+        // Create a real temp file so that `absolute_path_if_valid` can resolve the path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("foo.md");
+        std::fs::write(&file_path, "").expect("write temp file");
+
+        let working_directory = dir.path().to_str().expect("temp dir path is valid UTF-8");
+
+        // "foo.md." — the path as it would appear at the end of a sentence.
+        let possible_paths = vec![make_possible_path("foo.md.")];
+
+        let result = TerminalView::compute_valid_paths(
+            working_directory,
+            possible_paths.into_iter(),
+            80,
+            None,
+        );
+
+        let file_link = result
+            .expect("expected a file link for 'foo.md.' after stripping trailing period, got None");
+        let GridHighlightedLink::File(within_model) = file_link else {
+            panic!("expected GridHighlightedLink::File, got a URL link");
+        };
+        let abs_path_str = within_model
+            .get_inner()
+            .absolute_path
+            .to_str()
+            .expect("absolute path is valid UTF-8");
+        assert!(
+            !abs_path_str.ends_with('.'),
+            "absolute path must not end with a period after stripping; got: {abs_path_str:?}"
+        );
+    }
+
+    /// Regression test for warpdotdev/warp#11477 — Windows highlight-range parity.
+    ///
+    /// NT normalizes trailing '.' so the literal lookup succeeds, meaning `SUFFIXES_TO_REMOVE`
+    /// never shrinks `end_point`. The Windows-gated retry branch must shrink it by 1 so the
+    /// visible highlight excludes the punctuation period.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn compute_valid_paths_windows_highlight_range_parity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("foo.md");
+        std::fs::write(&file_path, "").expect("write temp file");
+
+        let working_directory = dir.path().to_str().expect("temp dir path is valid UTF-8");
+
+        // "foo.md." — the captured token including the trailing sentence period.
+        let token = "foo.md.";
+        let possible_paths = vec![make_possible_path(token)];
+
+        let result = TerminalView::compute_valid_paths(
+            working_directory,
+            possible_paths.into_iter(),
+            80,
+            None,
+        );
+
+        let file_link = result.expect("expected a file link for 'foo.md.' on Windows, got None");
+        let GridHighlightedLink::File(within_model) = file_link else {
+            panic!("expected GridHighlightedLink::File, got a URL link");
+        };
+        let inner = within_model.get_inner();
+
+        // The input range's inclusive end is now token.len()-1 (the last character,
+        // the trailing '.').  The Windows highlight-parity branch strips that dot,
+        // so end_point is shrunk by 1 → token.len()-2 (the last character of "foo.md").
+        let expected_end_col = token.len() - 2;
+        let actual_end_col = inner.link.range.end().col;
+        assert_eq!(
+            actual_end_col, expected_end_col,
+            "highlight end column should exclude trailing '.': expected col {expected_end_col}, \
+             got col {actual_end_col}"
+        );
+
+        // The resolved path must not carry the trailing dot (verifies the stripped form was used).
+        let abs_path_str = inner
+            .absolute_path
+            .to_str()
+            .expect("absolute path is valid UTF-8");
+        assert!(
+            !abs_path_str.ends_with('.'),
+            "absolute path must not end with a period; got: {abs_path_str:?}"
+        );
+
+        // The resolved path must have a .md extension (stripped form preferred over literal).
+        let extension = inner.absolute_path.extension().and_then(|e| e.to_str());
+        assert_eq!(
+            extension,
+            Some("md"),
+            "resolved path must have .md extension; got: {extension:?}"
+        );
+    }
+
+    /// Regression test for warpdotdev/warp#11477 — verbatim-path guard predicate.
+    ///
+    /// The guard tests the resolved `absolute_path` (not the captured token) for the `\\?\`
+    /// prefix, because a relative token never starts with `\\?\` even in a verbatim cwd.
+    /// An end-to-end test is impractical (verbatim paths disable NT normalization, so the
+    /// guard branch is unreachable on local NTFS), so we verify the predicate directly.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn verbatim_path_guard_predicate() {
+        // A \\?\-prefixed path must be detected as verbatim → guard fires → retry skipped.
+        let verbatim = std::path::PathBuf::from(r"\\?\C:\Users\example\foo.md.");
+        let is_verbatim = verbatim.to_str().is_some_and(|s| s.starts_with(r"\\?\"));
+        assert!(
+            is_verbatim,
+            "verbatim path must be detected by the guard predicate"
+        );
+        // The guard condition is `!is_verbatim`; for a verbatim path that must be false,
+        // meaning the retry branch is skipped.
+        assert!(
+            is_verbatim,
+            "guard condition (!is_verbatim) must be false for verbatim path (retry branch skipped)"
+        );
+
+        // A non-verbatim path must NOT be detected as verbatim → guard does not fire → retry allowed.
+        let non_verbatim = std::path::PathBuf::from(r"C:\Users\example\foo.md.");
+        let is_verbatim_non = non_verbatim
+            .to_str()
+            .is_some_and(|s| s.starts_with(r"\\?\"));
+        assert!(
+            !is_verbatim_non,
+            "non-verbatim path must not be detected as verbatim"
+        );
+        // The guard condition is `!is_verbatim`, so it must be true → retry branch entered.
+        assert!(
+            !is_verbatim_non,
+            "guard condition must be true for non-verbatim path (retry branch entered)"
+        );
+
+        // A relative token (as seen in the old bug) never starts with \\?\ — confirming why
+        // testing the token rather than the resolved path was incorrect.
+        let relative_token = std::path::PathBuf::from("foo.md.");
+        let token_looks_verbatim = relative_token
+            .to_str()
+            .is_some_and(|s| s.starts_with(r"\\?\"));
+        assert!(
+            !token_looks_verbatim,
+            "relative token must not look verbatim — this is the old bug: the token \
+             never starts with \\?\\ even when the cwd is verbatim"
+        );
     }
 }

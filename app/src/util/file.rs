@@ -26,6 +26,56 @@ pub enum ShellPathType {
     PlatformNative(PathBuf),
 }
 
+/// Strips a single trailing dot from `path` on Windows.
+///
+/// The NT kernel normalizes trailing periods in `fs::metadata` lookups, so the resolved
+/// `PathBuf` can carry a literal dot that downstream callers (e.g. `is_markdown_file`)
+/// would misinterpret. Verbatim (`\\?\`) paths are left unchanged — Win32 normalization
+/// is bypassed there and a trailing dot may be a distinct file.
+#[cfg(windows)]
+fn strip_trailing_dot(path: PathBuf) -> PathBuf {
+    match path.to_str() {
+        Some(s) if s.ends_with('.') && !s.starts_with(r"\\?\") => PathBuf::from(&s[..s.len() - 1]),
+        _ => path,
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_trailing_dot_strips_single_trailing_dot() {
+        let result = strip_trailing_dot(PathBuf::from("foo.md."));
+        assert_eq!(result, PathBuf::from("foo.md"));
+    }
+
+    #[test]
+    fn strip_trailing_dot_preserves_verbatim_path() {
+        let input = PathBuf::from(r"\\?\C:\share\foo.md.");
+        let result = strip_trailing_dot(input.clone());
+        assert_eq!(result, input, "verbatim \\\\?\\ path must not be modified");
+    }
+
+    #[test]
+    fn strip_trailing_dot_passthrough_when_no_trailing_dot() {
+        let result = strip_trailing_dot(PathBuf::from("foo.md"));
+        assert_eq!(result, PathBuf::from("foo.md"));
+    }
+
+    #[test]
+    fn strip_trailing_dot_strips_only_one_dot() {
+        // A path ending with two dots loses only the outermost one.
+        let result = strip_trailing_dot(PathBuf::from("foo.md.."));
+        assert_eq!(result, PathBuf::from("foo.md."));
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_trailing_dot(path: PathBuf) -> PathBuf {
+    path
+}
+
 /// Checks if a file path exists and is valid for a file link.
 pub fn absolute_path_if_valid(
     clean_path_result: &CleanPathResult,
@@ -65,12 +115,12 @@ pub fn absolute_path_if_valid(
         .as_ref()
         .is_some_and(|path| is_path_valid(path, clean_path_result))
     {
-        return relative_path;
+        return relative_path.map(strip_trailing_dot);
     } else if maybe_absolute_path
         .as_ref()
         .is_some_and(|path| is_path_valid(path, clean_path_result))
     {
-        return maybe_absolute_path;
+        return maybe_absolute_path.map(strip_trailing_dot);
     }
 
     None
