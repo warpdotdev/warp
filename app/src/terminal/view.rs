@@ -20931,6 +20931,18 @@ impl TerminalView {
                     active_session.cancel_active_commands();
                 }
 
+                // Running a shell command means the user is done navigating/interacting with any
+                // selected blocks or text, so clear the selection. A lingering selection in shell
+                // mode keeps `redetermine_global_focus` pinned to the terminal, which prevents
+                // focus from returning to the input box once the command finishes (the focus is
+                // recomputed on `ModelEvent::BlockCompleted`). Only do this for user-initiated
+                // commands so that agent-, queued-, and shared-session-driven commands don't wipe
+                // the user's selected-block AI context.
+                if matches!(event.source, CommandExecutionSource::User) {
+                    self.clear_selected_blocks(ctx);
+                    self.clear_selected_text(ctx);
+                }
+
                 // Don't steal focus from other parts of the app.
                 if ctx.is_self_or_child_focused() {
                     self.focus_terminal(ctx);

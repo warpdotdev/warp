@@ -3710,6 +3710,83 @@ fn test_navigate_blocks() {
 //     run_navigation_test(InputMode::PinnedToTop);
 // }
 
+fn execute_command_event(source: CommandExecutionSource) -> InputEvent {
+    InputEvent::ExecuteCommand(Box::new(ExecuteCommandEvent {
+        command: "echo hi".into(),
+        session_id: 1.into(),
+        workflow_id: None,
+        workflow_command: None,
+        should_add_command_to_history: true,
+        source,
+    }))
+}
+
+/// Running a user-initiated shell command while a block is selected should clear the
+/// selection. In shell mode a lingering selection keeps focus pinned to the terminal
+/// (see `redetermine_global_focus`), which prevents focus from returning to the input box
+/// once the command finishes.
+#[test]
+fn running_user_command_clears_block_selection() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                for _ in 0..3 {
+                    model.simulate_block("ls", "foo");
+                }
+            }
+
+            view.select_most_recent_blocks(1, ctx);
+            assert!(
+                !view.selected_blocks.is_empty(),
+                "a block should be selected before running the command"
+            );
+
+            view.handle_input_event(&execute_command_event(CommandExecutionSource::User), ctx);
+
+            assert!(
+                view.selected_blocks.is_empty(),
+                "running a user command should clear the block selection"
+            );
+        });
+    })
+}
+
+/// A command that is not user-initiated (e.g. a queued-prompt or agent-driven command)
+/// must not wipe the user's selected-block AI context.
+#[test]
+fn running_non_user_command_preserves_block_selection() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                for _ in 0..3 {
+                    model.simulate_block("ls", "foo");
+                }
+            }
+
+            view.select_most_recent_blocks(1, ctx);
+            assert!(!view.selected_blocks.is_empty());
+
+            view.handle_input_event(
+                &execute_command_event(CommandExecutionSource::QueuedCommand),
+                ctx,
+            );
+
+            assert!(
+                !view.selected_blocks.is_empty(),
+                "a non-user command should preserve the block selection"
+            );
+        });
+    })
+}
+
 #[test]
 fn test_alt_scroll_sequences() {
     App::test((), |mut app| async move {
