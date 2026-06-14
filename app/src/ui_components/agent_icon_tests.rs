@@ -343,6 +343,7 @@ fn cli_agent_from_harness_maps_known_harnesses() {
         CLIAgent::from_harness(Harness::OpenCode),
         Some(CLIAgent::OpenCode)
     );
+    assert_eq!(CLIAgent::from_harness(Harness::Kimi), Some(CLIAgent::Kimi));
 }
 
 #[test]
