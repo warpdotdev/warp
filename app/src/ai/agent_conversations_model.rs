@@ -997,6 +997,7 @@ impl AgentConversationsModel {
                 } else if let RequestState::RequestFailed(e) = result {
                     model.has_finished_initial_load = true;
                     model.update_polling_state(ctx);
+                    ctx.emit(AgentConversationsModelEvent::ConversationsLoaded);
                     report_error!(e);
                 }
             },
