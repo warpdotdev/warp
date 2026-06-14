@@ -953,6 +953,7 @@ impl InputSuggestions {
                 theme.active_ui_detail().into(),
                 theme.surface_2().into(),
             )
+            .with_always_visible_scrollbar_thumb()
             .finish(),
         )
         .with_margin_top(6.0)
