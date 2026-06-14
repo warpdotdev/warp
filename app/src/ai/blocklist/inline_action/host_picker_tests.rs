@@ -41,7 +41,7 @@ fn build_menu_items_promotes_default_to_top() {
     // matching the Oz webapp's HostSelector layout.
     let items = build_menu_items(Some("my-corp"), None, &[]);
     assert_eq!(items.len(), 3);
-    assert_eq!(item_label(&items[0]), "my-corp  (Default)");
+    assert_eq!(item_label(&items[0]), "my-corp");
     assert_eq!(item_label(&items[1]), ORCHESTRATION_WARP_WORKER_HOST);
     assert_eq!(item_label(&items[2]), "Custom host\u{2026}");
 }
@@ -61,7 +61,7 @@ fn build_menu_items_dedups_recent_when_it_matches_default_or_warp() {
     // Same as the workspace default → no duplicate "Recent" row.
     let items = build_menu_items(Some("my-corp"), Some("my-corp"), &[]);
     assert_eq!(items.len(), 3);
-    assert_eq!(item_label(&items[0]), "my-corp  (Default)");
+    assert_eq!(item_label(&items[0]), "my-corp");
     assert_eq!(item_label(&items[1]), ORCHESTRATION_WARP_WORKER_HOST);
     assert_eq!(item_label(&items[2]), "Custom host\u{2026}");
 
@@ -80,7 +80,7 @@ fn build_menu_items_adds_connected_hosts_before_recent_and_dedups_known_hosts() 
     ];
     let items = build_menu_items(Some("my-corp"), Some("beta"), &connected_hosts);
     assert_eq!(items.len(), 5);
-    assert_eq!(item_label(&items[0]), "my-corp  (Default)");
+    assert_eq!(item_label(&items[0]), "my-corp");
     assert_eq!(item_label(&items[1]), ORCHESTRATION_WARP_WORKER_HOST);
     assert_eq!(item_label(&items[2]), "alpha");
     assert_eq!(item_label(&items[3]), "beta");
