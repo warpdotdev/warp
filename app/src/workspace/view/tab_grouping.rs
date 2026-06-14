@@ -146,7 +146,7 @@ impl Workspace {
     /// Re-seats `active_tab_index` so the previously-active pane group stays
     /// visually active across a tab reorder. Pass the pane group id captured
     /// before the reorder; no-op if it can't be found.
-    fn restore_active_tab_index(&mut self, pane_group_id: Option<EntityId>) {
+    pub(super) fn restore_active_tab_index(&mut self, pane_group_id: Option<EntityId>) {
         if let Some(active_id) = pane_group_id {
             if let Some(new_index) = self
                 .tabs
@@ -203,10 +203,12 @@ impl Workspace {
         let anchor_index = selected_indices[0];
         let anchor_previous_group_id = self.tabs[anchor_index].group_id;
 
-        // Assign membership and clear flags for every selected tab.
+        // Assign membership and clear flags for every selected tab. The new
+        // group is unpinned, so any selected tab in set as unpinned.
         for &index in &selected_indices {
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
+            tab.pinned = false;
             tab.in_multi_selection = false;
         }
 
@@ -242,6 +244,9 @@ impl Workspace {
                     .map(|last| last + 1)
             })
             .unwrap_or(anchor_index);
+
+        // Our insertion index for this group should be below any pinned items.
+        let insert_at = self.clamp_to_unpinned_region(&other_tabs, insert_at);
 
         other_tabs.splice(insert_at..insert_at, selected_tabs);
         self.tabs = other_tabs;
@@ -302,10 +307,13 @@ impl Workspace {
             .get(self.active_tab_index)
             .map(|tab| tab.pane_group.id());
 
-        // Assign membership and clear flags for every selected tab.
+        // Assign membership and clear flags for every selected tab. Entering
+        // the group removes any per-tab pinned flag — the destination group's
+        // own `pinned` flag now governs the member's position.
         for &index in &selected_indices {
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
+            tab.pinned = false;
             tab.in_multi_selection = false;
         }
 
@@ -393,10 +401,14 @@ impl Workspace {
                 });
         // Anchor the removed block just after the group's remaining members;
         // if none remain, fall back to the pre-computed prefix position.
-        let insert_at = match rest.iter().rposition(|tab| tab.group_id == Some(group_id)) {
+        let natural_insert_at = match rest.iter().rposition(|tab| tab.group_id == Some(group_id)) {
             Some(last) => last + 1,
             None => kept_before_group,
         };
+        // The removed tabs are now unpinned (they left a possibly-pinned
+        // group); they must land past every effectively pinned tab in
+        // not just past the source group's remaining members.
+        let insert_at = self.clamp_to_unpinned_region(&rest, natural_insert_at);
         rest.splice(insert_at..insert_at, removed);
         self.tabs = rest;
 
@@ -469,7 +481,7 @@ impl Workspace {
     /// True when `tab` is positioned in the pinned region of the tab list —
     /// either because its own `pinned` flag is set (ungrouped pinned tab) or
     /// because it belongs to a pinned group.
-    fn is_tab_effectively_pinned(&self, tab: &TabData) -> bool {
+    pub(super) fn is_tab_effectively_pinned(&self, tab: &TabData) -> bool {
         tab.pinned
             || tab
                 .group_id
@@ -478,11 +490,30 @@ impl Workspace {
 
     /// Index where the unpinned region begins: the count of leading tabs that
     /// belong to the pinned region.
-    fn pinned_boundary_index(&self) -> usize {
+    pub(super) fn pinned_boundary_index(&self) -> usize {
         self.tabs
             .iter()
             .take_while(|tab| self.is_tab_effectively_pinned(tab))
             .count()
+    }
+
+    /// Pushes `idx` past the leading effectively-pinned tabs in `tabs` if it
+    /// falls inside that prefix.
+    pub(super) fn clamp_to_unpinned_region(&self, tabs: &[TabData], idx: usize) -> usize {
+        let boundary = tabs
+            .iter()
+            .take_while(|tab| self.is_tab_effectively_pinned(tab))
+            .count();
+        idx.max(boundary)
+    }
+
+    /// Returns the slot just past the last member of `group_id`, suitable as
+    /// an insert/move target that keeps the group contiguous. `None` when the
+    /// group has no members.
+    pub(super) fn index_after_group(&self, group_id: TabGroupId) -> Option<usize> {
+        group_member_indices(&self.tabs, group_id)
+            .last()
+            .map(|last| last + 1)
     }
 
     /// Pins the tab. Grouped tabs are extracted from their group first

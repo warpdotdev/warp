@@ -6825,16 +6825,16 @@ impl Workspace {
             ctx,
         );
         let new_tab_index = self.active_tab_index;
+
+        // Ensure that new tab groups always land below pinned items, but above
+        // any other items in the tab list.
+        let target = self.pinned_boundary_index();
+
         if let Some(tab) = self.tabs.get_mut(new_tab_index) {
             tab.group_id = Some(group_id);
         }
 
-        // New tab groups always land at the top of the tab list.
-        if new_tab_index != 0 {
-            let tab = self.tabs.remove(new_tab_index);
-            self.tabs.insert(0, tab);
-            self.active_tab_index = 0;
-        }
+        self.move_tab_to_index(new_tab_index, target, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -6920,10 +6920,15 @@ impl Workspace {
             });
     }
 
-    /// Creates a new group containing the tab, anchored at the tab's original
-    /// position. If the tab was pulled out of an existing group, leaving it in
-    /// place would split that group's contiguous run, so the new group lands
-    /// just past the old group's last remaining member instead.
+    /// Creates a new group containing the tab. The new group is unpinned
+    /// regardless of whether the source tab was pinned — tab pinning and
+    /// group pinning are independent concepts, and the user can pin the new
+    /// group explicitly after creation. The block lands at the source tab's
+    /// original slot, except:
+    /// * If the tab was in an existing group, anchor past that group's last
+    ///   remaining member so the old group stays contiguous.
+    /// * If the tab was effectively pinned, clamp past the pinned region so
+    ///   the new (unpinned) group doesn't land inside the pinned area.
     fn new_tab_group_from_tab(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return;
@@ -6938,15 +6943,21 @@ impl Workspace {
         let group_id = group.id;
         self.tab_groups.insert(group_id, group);
 
-        self.tabs[tab_index].group_id = Some(group_id);
+        // If the tab we are making a group from, is already in a group
+        // our target index is directly after the group's last member.
+        // Otherwise it is the tab's current index.
+        let natural_target = previous_group_id
+            .and_then(|gid| self.index_after_group(gid))
+            .unwrap_or(tab_index);
 
-        // When the tab leaves an existing group, reposition it just past that
-        // group's last remaining member so the old group stays contiguous.
-        if let Some(prev_group_id) = previous_group_id {
-            if let Some(last) = group_member_indices(&self.tabs, prev_group_id).last() {
-                self.move_tab_to_index(tab_index, last + 1, ctx);
-            }
-        }
+        // Our target index should always be after all existing pinned items.
+        let target = self.clamp_to_unpinned_region(&self.tabs, natural_target);
+
+        self.tabs[tab_index].group_id = Some(group_id);
+        // Pin state is cleared when a new group with this tab is created.
+        self.tabs[tab_index].pinned = false;
+
+        self.move_tab_to_index(tab_index, target, ctx);
 
         // The move above may have shifted the tab; the new group has exactly
         // one member, so its position is the new active index.
@@ -6986,11 +6997,11 @@ impl Workspace {
         }
         let previous_group_id = tab.group_id;
 
-        let target_index = group_member_indices(&self.tabs, group_id)
-            .last()
-            .map(|i| i + 1)
-            .unwrap_or(self.tabs.len());
+        let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
         self.tabs[tab_index].group_id = Some(group_id);
+
+        // Moving a tab to a group, clear its pinned state.
+        self.tabs[tab_index].pinned = false;
         self.expand_tab_group(group_id, ctx);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
@@ -7004,7 +7015,8 @@ impl Workspace {
     }
 
     /// Removes the tab from its current group and repositions it just past
-    /// the group's last remaining member.
+    /// the group's last remaining member, or further if the group was pinned
+    /// (the removed tab is now unpinned and must clear the pinned region).
     fn remove_tab_from_group(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return;
@@ -7016,10 +7028,17 @@ impl Workspace {
             return;
         };
 
+        // The target index is after the last tab in this group.
+        // If this group was pinned, we want to move this tab after
+        // the pinned region.
+        let target = self
+            .index_after_group(previous_group_id)
+            .map(|t| self.clamp_to_unpinned_region(&self.tabs, t));
+
         self.tabs[tab_index].group_id = None;
 
-        if let Some(last) = group_member_indices(&self.tabs, previous_group_id).last() {
-            self.move_tab_to_index(tab_index, last + 1, ctx);
+        if let Some(target) = target {
+            self.move_tab_to_index(tab_index, target, ctx);
         }
 
         self.prune_empty_tab_group(previous_group_id, ctx);
@@ -7033,12 +7052,39 @@ impl Workspace {
         if !FeatureFlag::GroupedTabs.is_enabled() || !self.tab_groups.contains_key(&group_id) {
             return;
         }
+        // Capture the group's contiguous member range and pinned state
+        // before mutating; we need them to relocate the block out of the
+        // pinned region when the group was pinned.
+        let was_pinned = self.tab_groups.get(&group_id).is_some_and(|g| g.pinned);
+        let member_range = group_member_index_range(&self.tabs, group_id);
+
         for tab in &mut self.tabs {
             if tab.group_id == Some(group_id) {
                 tab.group_id = None;
             }
         }
         self.tab_groups.remove(&group_id);
+
+        // If the group was pinned, we must reposition the group's
+        // members after the pinned area. They are now ungrouped and
+        // thus no longer pinned.
+        if was_pinned {
+            if let Some((first, last)) = member_range {
+                // Remove ungrouped tabs from the tab list.
+                let active_pane_group_id = self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .map(|tab| tab.pane_group.id());
+                let drained: Vec<TabData> = self.tabs.drain(first..=last).collect();
+                // Recompute boundary now that the (formerly group-pinned)
+                // block has been removed from the list.
+                let target = self.pinned_boundary_index();
+                // Place the ungrouped tabs at their new target index.
+                self.tabs.splice(target..target, drained);
+                self.restore_active_tab_index(active_pane_group_id);
+            }
+        }
+
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
@@ -7069,16 +7115,45 @@ impl Workspace {
             let new_idx = self.active_tab_index;
             // Resolve the destination from the group's existing members before
             // adding the new tab to the group.
-            let target_index = group_member_indices(&self.tabs, group_id)
-                .last()
-                .map(|last| last + 1)
-                .unwrap_or(self.tabs.len());
+            let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
             if let Some(tab) = self.tabs.get_mut(new_idx) {
                 tab.group_id = Some(group_id);
             }
             self.move_tab_to_index(new_idx, target_index, ctx);
         }
         self.expand_tab_group(group_id, ctx);
+    }
+
+    /// True when the user-initiated reorder of `group_id` in `direction`
+    /// would not cross the pinned/unpinned boundary or go beyond the tab list bounds.
+    /// Used for the tab group menu which supports 'move group up/down' (or for htabs left/right).
+    pub(super) fn can_move_tab_group(&self, group_id: TabGroupId, direction: TabMovement) -> bool {
+        let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
+            return false;
+        };
+        let group_pinned = self.tab_groups.get(&group_id).is_some_and(|g| g.pinned);
+        match direction {
+            TabMovement::Left => {
+                // Group can not move up/left if it is the first item.
+                if first == 0 {
+                    return false;
+                }
+                let neighbor = &self.tabs[first - 1];
+                // This group can only move up/left if it is pinned or the
+                // item before it is not pinned.
+                group_pinned || !self.is_tab_effectively_pinned(neighbor)
+            }
+            TabMovement::Right => {
+                // Group can not move down/right if it is the last item.
+                if last + 1 >= self.tabs.len() {
+                    return false;
+                }
+                let neighbor = &self.tabs[last + 1];
+                // This group can only move down.right if it is not pinned
+                // or the item after it is pinned.
+                !group_pinned || self.is_tab_effectively_pinned(neighbor)
+            }
+        }
     }
 
     /// Moves the whole group up or down by one "slot", where a slot is the
@@ -7099,14 +7174,14 @@ impl Workspace {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return;
         }
+        if !self.can_move_tab_group(group_id, direction) {
+            return;
+        }
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return;
         };
         match direction {
             TabMovement::Left => {
-                if first == 0 {
-                    return;
-                }
                 // The upward neighbor is the tab directly above the group.
                 let above_index = first - 1;
                 // If that neighbor is itself grouped, land above its whole
@@ -7120,9 +7195,6 @@ impl Workspace {
                 self.move_group_block(group_id, target, ctx);
             }
             TabMovement::Right => {
-                if last + 1 >= self.tabs.len() {
-                    return;
-                }
                 // The downward neighbor is the tab directly below the group.
                 let below_index = last + 1;
                 // If that neighbor is itself grouped, expand to its whole
@@ -7228,7 +7300,9 @@ impl Workspace {
 
     /// Flips `tab_index`'s group membership. Callers are responsible for
     /// positioning the tab so groups remain contiguous; this method only
-    /// mutates `group_id` and prunes the old group when empty.
+    /// mutates `group_id`, clears the per-tab pinned flag when entering a
+    /// group (groups own pinning for their members — see `pin_tab_group`),
+    /// and prunes the old group when empty.
     pub fn assign_tab_to_group(
         &mut self,
         tab_index: usize,
@@ -7255,6 +7329,11 @@ impl Workspace {
 
         let previous_group_id = self.tabs[tab_index].group_id;
         self.tabs[tab_index].group_id = group_id;
+        // Entering a group: drop any individual pinned flag. The group's own
+        // `pinned` flag now governs whether this tab is in the pinned region.
+        if group_id.is_some() {
+            self.tabs[tab_index].pinned = false;
+        }
 
         if let Some(previous_group_id) = previous_group_id {
             self.prune_empty_tab_group(previous_group_id, ctx);
@@ -7368,9 +7447,18 @@ impl Workspace {
             return;
         }
 
+        let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
+        let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
         let menu_items = {
             let tab = &self.tabs[tab_index];
-            tab.menu_items(tab_index, self.tabs.len(), &self.tab_groups, ctx)
+            tab.menu_items(
+                tab_index,
+                self.tabs.len(),
+                &self.tab_groups,
+                can_move_left,
+                can_move_right,
+                ctx,
+            )
         };
         ctx.update_view(&self.tab_right_click_menu, |context_menu, view_ctx| {
             context_menu.set_items(menu_items, view_ctx);
@@ -7442,10 +7530,15 @@ impl Workspace {
                 reset_label: "Reset active pane name",
             },
         };
+        let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
+        let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
+        let tab = &self.tabs[tab_index];
         let menu_items = tab.menu_items_with_pane_name_target(
             tab_index,
             self.tabs.len(),
             &self.tab_groups,
+            can_move_left,
+            can_move_right,
             Some(pane_name_target),
             ctx,
         );
@@ -9408,10 +9501,15 @@ impl Workspace {
         let has_tabs_above = first > 0;
         let has_tabs_below = last + 1 < self.tabs.len();
         let has_tabs_outside = (last - first + 1) < self.tabs.len();
+        // Move entries are hidden when the move would cross the
+        // pinned/unpinned boundary, or go beyond the tab list bounds
+        // so the user never sees an option that would be a no-op.
+        let can_move_up = has_tabs_above && self.can_move_tab_group(group_id, TabMovement::Left);
+        let can_move_down = has_tabs_below && self.can_move_tab_group(group_id, TabMovement::Right);
 
         let move_section = {
             let mut items = vec![];
-            if has_tabs_above {
+            if can_move_up {
                 let label = if is_vertical {
                     "Move group up"
                 } else {
@@ -9423,7 +9521,7 @@ impl Workspace {
                         .into_item(),
                 );
             }
-            if has_tabs_below {
+            if can_move_down {
                 let label = if is_vertical {
                     "Move group down"
                 } else {
@@ -11781,10 +11879,7 @@ impl Workspace {
         let insert_index = if let Some(group_id) = tab_data.group_id {
             if self.tab_groups.contains_key(&group_id) {
                 // Group still exists — append after its current last member.
-                group_member_indices(&self.tabs, group_id)
-                    .last()
-                    .map(|i| i + 1)
-                    .unwrap_or(self.tabs.len())
+                self.index_after_group(group_id).unwrap_or(self.tabs.len())
             } else {
                 // Group was pruned — drop membership.
                 tab_data.group_id = None;
@@ -12121,11 +12216,7 @@ impl Workspace {
                 // contiguous run instead of past it so the setting is
                 // honored within the group's bounds.
                 let insert_idx = active_tab_group_id
-                    .and_then(|gid| {
-                        group_member_indices(&self.tabs, gid)
-                            .last()
-                            .map(|last| last + 1)
-                    })
+                    .and_then(|gid| self.index_after_group(gid))
                     .unwrap_or(self.tabs.len());
                 self.tabs.insert(insert_idx, TabData::new(new_pane_group));
                 self.tab_mru_order
@@ -12144,18 +12235,24 @@ impl Workspace {
                     // inherit the active tab's group. If the active tab is inside
                     // a group, land after the group's last member so we don't
                     // split it.
-                    let insert_idx = if is_restoration {
+                    let mut insert_idx = if is_restoration {
                         active_tab
                             .and_then(|t| t.group_id)
-                            .and_then(|gid| {
-                                group_member_indices(&self.tabs, gid)
-                                    .last()
-                                    .map(|last| last + 1)
-                            })
+                            .and_then(|gid| self.index_after_group(gid))
                             .unwrap_or(self.active_tab_index + 1)
                     } else {
                         self.active_tab_index + 1
                     };
+                    // When the new tab inherits the active tab's group it
+                    // joins that group's contiguous block, which lives
+                    // wherever the group lives (pinned or unpinned) —
+                    // placement is already correct. Without group
+                    // inheritance, the new tab is unpinned and standalone, so
+                    // we push it past the pinned boundary to avoid landing
+                    // inside the pinned area when the active tab is pinned.
+                    if active_tab_group_id.is_none() {
+                        insert_idx = self.clamp_to_unpinned_region(&self.tabs, insert_idx);
+                    }
                     self.tabs.insert(insert_idx, TabData::new(new_pane_group));
                     self.tab_mru_order
                         .push(self.tabs[insert_idx].pane_group.id());
@@ -13367,6 +13464,44 @@ impl Workspace {
         });
     }
 
+    /// True when reordering the tab at `index` in `direction` would not
+    /// split a group or cross the pinned/unpinned boundary. Used by the
+    /// action handler to no-op blocked moves and by `modify_tab_menu_items`
+    /// to hide the entry.
+    pub(super) fn can_move_tab(&self, index: usize, direction: TabMovement) -> bool {
+        let Some(tab) = self.tabs.get(index) else {
+            return false;
+        };
+        let tab_pinned = self.is_tab_effectively_pinned(tab);
+        match direction {
+            TabMovement::Left => {
+                if index == 0 {
+                    return false;
+                }
+                let neighbor = &self.tabs[index - 1];
+                // A grouped tab can only reorder within its own group;
+                // crossing the group boundary would split its contiguous
+                // run (first member moving left, etc.).
+                if tab.group_id.is_some() {
+                    return tab.group_id == neighbor.group_id;
+                }
+                // Unpinned tab can't move up into the pinned region.
+                tab_pinned || !self.is_tab_effectively_pinned(neighbor)
+            }
+            TabMovement::Right => {
+                if index + 1 >= self.tabs.len() {
+                    return false;
+                }
+                let neighbor = &self.tabs[index + 1];
+                if tab.group_id.is_some() {
+                    return tab.group_id == neighbor.group_id;
+                }
+                // Pinned tab can't move down into the unpinned region.
+                !tab_pinned || self.is_tab_effectively_pinned(neighbor)
+            }
+        }
+    }
+
     /// Moves the tab at `index` one slot left/right, where a "slot" is either a
     /// single tab or an entire adjacent group. If the neighbor in the move
     /// direction belongs to a *different* group, the tab hops over that whole
@@ -13374,6 +13509,9 @@ impl Workspace {
     /// ungrouped tab, or reordering within the tab's own group, is an ordinary
     /// one-slot move.
     fn move_tab(&mut self, index: usize, direction: TabMovement, ctx: &mut ViewContext<Self>) {
+        if !self.can_move_tab(index, direction) {
+            return;
+        }
         let tabs_len = self.tabs.len();
         // The group the moved tab belongs to (if any), so we can distinguish
         // "reorder within my own group" from "hop over a different group".
