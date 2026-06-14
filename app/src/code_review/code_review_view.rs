@@ -2250,6 +2250,12 @@ impl CodeReviewView {
     }
 
     fn show_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.find_bar.is_self_or_child_focused(ctx) {
+            self.close_find_bar(ctx);
+            ctx.focus_self();
+            return;
+        }
+
         let selected_text = self.editor_handles().find_map(|editor_handle| {
             editor_handle
                 .as_ref(ctx)

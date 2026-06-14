@@ -1836,7 +1836,6 @@ impl TypedActionView for RightPanelView {
                         ctx,
                     );
                     self.ensure_code_review_view_exists(repo_path, ctx);
-
                     // Persist the user's manual selection so it can be restored when
                     // they leave this pane group's session and come back. We only
                     // persist explicit `SelectRepo` actions (i.e. dropdown picks or

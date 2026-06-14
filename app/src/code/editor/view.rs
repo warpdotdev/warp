@@ -513,6 +513,11 @@ impl CodeEditorView {
             return;
         };
 
+        if find_bar.is_self_or_child_focused(ctx) {
+            self.close_find_bar(true, ctx);
+            return;
+        }
+
         // Pre-populate the search field with the currently selected text if it's a single line
         let should_populate_query = self.model.as_ref(ctx).selection_is_single_range(ctx);
 

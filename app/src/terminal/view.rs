@@ -19269,6 +19269,12 @@ impl TerminalView {
     }
 
     fn show_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.find_bar.is_self_or_child_focused(ctx) {
+            self.close_find_bar(ctx);
+            self.redetermine_global_focus(ctx);
+            return;
+        }
+
         let model = self.model.lock();
         let inverted_blocklist = self.is_inverted_blocklist(ctx);
         // Emit a telemetry event depending on whether the find bar is opened in blocklist or alt screen.
