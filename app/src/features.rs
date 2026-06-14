@@ -151,8 +151,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::UseTantivySearch,
         #[cfg(feature = "grep_tool")]
         FeatureFlag::GrepTool,
-        #[cfg(feature = "mcp_server")]
-        FeatureFlag::McpServer,
         #[cfg(feature = "mcp_debugging_ids")]
         FeatureFlag::McpDebuggingIds,
         #[cfg(feature = "markdown_tables")]

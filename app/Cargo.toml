@@ -530,7 +530,6 @@ default = [
     "validate_autosuggestions",
     "clear_autosuggestion_on_escape",
     "file_retrieval_tools",
-    "mcp_server",
     "fast_forward_autoexecute_button",
     "image_as_context",
     "command_palette_file_search",
@@ -781,7 +780,6 @@ local_fs = [
 log_expensive_frames_in_sentry = []
 markdown_tables = []
 markdown_mermaid = []
-mcp_server = []
 mcp_oauth = []
 mcp_debugging_ids = []
 notebook_parameter = []
