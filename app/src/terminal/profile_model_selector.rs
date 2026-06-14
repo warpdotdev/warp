@@ -86,6 +86,13 @@ const MODEL_PICKER_TOOLTIP: &str = "Choose an agent model";
 const MODEL_LOCKED_FOR_FOLLOWUP_TOOLTIP: &str = "Follow-ups use the original run's model";
 const MODEL_REQUIRES_EDIT_ACCESS_TOOLTIP: &str = "Request edit access to change model";
 const HARNESS_DEFAULT_MODEL_LABEL: &str = "default";
+fn udi_button_size() -> ButtonSize {
+    if cfg!(target_family = "wasm") {
+        ButtonSize::UDITouchButton
+    } else {
+        ButtonSize::UDIButton
+    }
+}
 
 pub fn calculate_scaled_font_size(appearance: &warp_core::ui::appearance::Appearance) -> f32 {
     if FeatureFlag::AgentView.is_enabled() {
@@ -268,7 +275,7 @@ impl ProfileModelSelector {
                 is_blurred: false,
             })
             .with_tooltip(PROFILE_PICKER_TOOLTIP)
-            .with_size(ButtonSize::UDIButton)
+            .with_size(udi_button_size())
             .with_icon(Icon::Psychology)
         });
 
@@ -296,14 +303,14 @@ impl ProfileModelSelector {
                 is_blurred: false,
             })
             .with_tooltip(MODEL_PICKER_TOOLTIP)
-            .with_size(ButtonSize::UDIButton)
+            .with_size(udi_button_size())
         });
 
         let profile_compact_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("", PromptIconButtonTheme::new(false))
                 .with_icon(Icon::Psychology)
                 .with_tooltip(PROFILE_PICKER_TOOLTIP)
-                .with_size(ButtonSize::UDIButton)
+                .with_size(udi_button_size())
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ProfileModelSelectorAction::ToggleProfileMenu);
                 })
@@ -313,7 +320,7 @@ impl ProfileModelSelector {
             ActionButton::new("", PromptIconButtonTheme::new(false))
                 .with_icon(Icon::Neurology)
                 .with_tooltip(MODEL_PICKER_TOOLTIP)
-                .with_size(ButtonSize::UDIButton)
+                .with_size(udi_button_size())
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ProfileModelSelectorAction::ToggleModelMenu);
                 })
