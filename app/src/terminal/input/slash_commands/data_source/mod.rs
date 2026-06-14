@@ -342,12 +342,6 @@ impl SlashCommandDataSource {
         if command.name == commands::HOST.name && !context.has_default_host {
             return false;
         }
-        // When CLI agent input is open, restrict to the explicit allowlist.
-        if context.is_cli_agent_input
-            && !Self::CLI_AGENT_INPUT_ALLOWED_COMMANDS.contains(&command.name)
-        {
-            return false;
-        }
 
         true
     }
