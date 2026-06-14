@@ -1521,6 +1521,7 @@ fn render_settings_button(
             }
         },
     )
+    .with_skip_synthetic_hover_out()
     .on_click(|ctx, _, _| {
         ctx.dispatch_typed_action(WorkspaceAction::ToggleVerticalTabsSettingsPopup);
     })
@@ -1620,6 +1621,7 @@ fn render_new_tab_button(
         }
         container.finish()
     })
+    .with_skip_synthetic_hover_out()
     .finish()
 }
 

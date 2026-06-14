@@ -31,6 +31,14 @@ fn mouse_moved_event(position: Vector2F) -> Event {
         is_synthetic: false,
     }
 }
+fn synthetic_mouse_moved_event(position: Vector2F) -> Event {
+    Event::MouseMoved {
+        position,
+        cmd: false,
+        shift: false,
+        is_synthetic: true,
+    }
+}
 
 #[derive(Default)]
 struct View {
@@ -49,6 +57,9 @@ struct View {
     /// If [`Some`], the top-right hoverable will
     /// have a hover-out delay with this duration.
     hover_out_delay: Option<Duration>,
+
+    /// If true, the top-right hoverable will preserve hover state on synthetic hover-outs.
+    skip_synthetic_hover_out: bool,
 }
 
 pub fn init(app: &mut AppContext) {
@@ -66,6 +77,11 @@ impl View {
 
     fn with_hover_out_delay(mut self, delay: Duration) -> Self {
         self.hover_out_delay = Some(delay);
+        self
+    }
+
+    fn with_skip_synthetic_hover_out(mut self) -> Self {
+        self.skip_synthetic_hover_out = true;
         self
     }
 
@@ -177,6 +193,9 @@ impl crate::core::View for View {
 
         if let Some(delay) = self.hover_out_delay {
             hoverable = hoverable.with_hover_out_delay(delay);
+        }
+        if self.skip_synthetic_hover_out {
+            hoverable = hoverable.with_skip_synthetic_hover_out();
         }
 
         stack.add_positioned_child(
@@ -576,6 +595,60 @@ fn test_hoverable_element_hover_handling_with_hover_out_delay() {
     });
 }
 
+#[test]
+fn test_hoverable_skip_synthetic_hover_out_preserves_hover_state() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            View::default().with_skip_synthetic_hover_out()
+        });
+
+        let mut presenter = Presenter::new(window_id);
+
+        let mut updated = HashSet::new();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            let event = mouse_moved_event(vec2f(90., 10.));
+            ctx.simulate_window_event(event.clone(), window_id, presenter.clone());
+            ctx.set_last_mouse_move_event(window_id, event);
+            assert_eq!(ctx.get_cursor_shape(), Cursor::PointingHand);
+
+            let event = synthetic_mouse_moved_event(vec2f(100., 100.));
+            ctx.simulate_window_event(event.clone(), window_id, presenter.clone());
+            ctx.set_last_mouse_move_event(window_id, event);
+            assert_eq!(ctx.get_cursor_shape(), Cursor::PointingHand);
+
+            let event = mouse_moved_event(vec2f(100., 100.));
+            ctx.simulate_window_event(event.clone(), window_id, presenter);
+            ctx.set_last_mouse_move_event(window_id, event);
+            assert_eq!(ctx.get_cursor_shape(), Cursor::Arrow);
+        });
+
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementTopRight)
+            );
+            let top_state = view.top_mouse_state.lock().unwrap();
+            assert!(!top_state.is_hovered());
+            assert!(!top_state.is_mouse_over_element());
+        });
+    });
+}
 #[test]
 fn test_hoverable_element_hover_handling_with_hover_in_out_delay() {
     App::test((), |mut app| async move {
