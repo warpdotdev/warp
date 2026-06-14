@@ -128,6 +128,110 @@ fn simple_is_empty() {
 }
 
 #[test]
+fn extend_to_nearest_boundary_moves_outer_boundary() {
+    let mut selection = Selection::new(SelectionType::Simple, Point::new(10, 2), Side::Left);
+    selection.update(Point::new(20, 2), Side::Right);
+
+    selection.extend_to_nearest_boundary(Point::new(25, 4), Side::Right);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(10, 2), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(25, 4), Side::Right)
+    );
+
+    selection.extend_to_nearest_boundary(Point::new(5, 1), Side::Left);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(5, 1), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(25, 4), Side::Right)
+    );
+}
+
+#[test]
+fn extend_to_nearest_boundary_shrinks_inside_selection() {
+    let mut selection = Selection::new(SelectionType::Simple, Point::new(10, 2), Side::Left);
+    selection.update(Point::new(20, 2), Side::Right);
+
+    selection.extend_to_nearest_boundary(Point::new(12, 4), Side::Left);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(12, 4), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(20, 2), Side::Right)
+    );
+
+    selection.extend_to_nearest_boundary(Point::new(18, 4), Side::Right);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(12, 4), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(18, 4), Side::Right)
+    );
+}
+
+#[test]
+fn extend_to_nearest_boundary_shrinks_same_row_by_column() {
+    let mut selection = Selection::new(SelectionType::Simple, Point::new(10, 2), Side::Left);
+    selection.update(Point::new(10, 20), Side::Right);
+
+    selection.extend_to_nearest_boundary(Point::new(10, 4), Side::Left);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(10, 4), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(10, 20), Side::Right)
+    );
+
+    selection.extend_to_nearest_boundary(Point::new(10, 18), Side::Right);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(10, 4), Side::Left)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(10, 18), Side::Right)
+    );
+}
+
+#[test]
+fn extend_to_nearest_boundary_handles_reversed_selection() {
+    let mut selection = Selection::new(SelectionType::Simple, Point::new(20, 2), Side::Right);
+    selection.update(Point::new(10, 2), Side::Left);
+
+    selection.extend_to_nearest_boundary(Point::new(5, 4), Side::Left);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(20, 2), Side::Right)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(5, 4), Side::Left)
+    );
+
+    selection.extend_to_nearest_boundary(Point::new(25, 4), Side::Right);
+    assert_eq!(
+        selection.region.start,
+        Anchor::new(Point::new(25, 4), Side::Right)
+    );
+    assert_eq!(
+        selection.region.end,
+        Anchor::new(Point::new(5, 4), Side::Left)
+    );
+}
+
+#[test]
 fn simple_max_min_column() {
     // If the selection starts on the Right side of a cell, it should skip that cell
     let mut selection = Selection::new(SelectionType::Simple, Point::new(0, 0), Side::Right);
