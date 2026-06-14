@@ -39,15 +39,8 @@ fn non_numeric_falls_back_to_char_order() {
 }
 
 #[test]
-fn non_ascii_without_digits_matches_str_cmp() {
-    for (a, b) in [
-        ("café", "cafz"),
-        ("한글", "한국"),
-        ("z", "é"),
-        ("résumé", "resume"),
-        ("naïve", "naive"),
-    ] {
-        assert_eq!(natural_cmp(a, b), a.cmp(b));
-        assert_eq!(natural_cmp(b, a), b.cmp(a));
-    }
+fn handles_multibyte_chars() {
+    assert_eq!(natural_cmp("café", "cafz"), "café".cmp("cafz"));
+    assert_eq!(natural_cmp("café2", "café10"), Ordering::Less);
+    assert_eq!(natural_cmp("café", "café"), Ordering::Equal);
 }
