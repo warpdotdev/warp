@@ -90,6 +90,8 @@ enum CanonicalRunState {
     LocalClaudePluginInProgress,
     /// Local Claude CLI session with a plugin listener (rich status), blocked.
     LocalClaudePluginBlocked,
+    /// Local Claude CLI session with a plugin listener (rich status), completed and read.
+    LocalClaudePluginSuccess,
     /// Local Claude CLI session detected via command matching only (no listener, no rich status).
     LocalClaudeCommandDetected,
 }
@@ -106,6 +108,7 @@ impl CanonicalRunState {
             ViewingCloudCodexTranscript,
             LocalClaudePluginInProgress,
             LocalClaudePluginBlocked,
+            LocalClaudePluginSuccess,
             LocalClaudeCommandDetected,
         ]
     }
@@ -160,7 +163,7 @@ impl CanonicalRunState {
                 }),
                 is_ambient: false,
             }),
-            LocalClaudeCommandDetected => Some(AgentIconFields {
+            LocalClaudePluginSuccess | LocalClaudeCommandDetected => Some(AgentIconFields {
                 is_cli: true,
                 cli_agent: Some(CLIAgent::Claude),
                 status: None,
@@ -243,6 +246,18 @@ impl CanonicalRunState {
                 selected_conversation_status: None,
                 has_selected_conversation: false,
             },
+            LocalClaudePluginSuccess => TerminalIconInputs {
+                is_ambient: false,
+                cli_session: Some(CLISessionInputs {
+                    agent: CLIAgent::Claude,
+                    has_listener: true,
+                    status: ConversationStatus::Success,
+                    supports_rich_status: true,
+                }),
+                selected_third_party_cli_agent: None,
+                selected_conversation_status: None,
+                has_selected_conversation: false,
+            },
             LocalClaudeCommandDetected => TerminalIconInputs {
                 is_ambient: false,
                 cli_session: Some(CLISessionInputs {
@@ -274,6 +289,7 @@ impl CanonicalRunState {
             | LocalOzInProgress
             | LocalClaudePluginInProgress
             | LocalClaudePluginBlocked
+            | LocalClaudePluginSuccess
             | LocalClaudeCommandDetected => None,
         }
     }
