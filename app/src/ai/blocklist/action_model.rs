@@ -1022,7 +1022,62 @@ impl BlocklistAIActionModel {
         self.handle_action_result(conversation_id, Arc::new(action_result), None, ctx);
     }
 
-    pub(super) fn cancel_action_with_id(
+    /// Cancels an agent-requested command before a CLI subagent attaches.
+    pub(crate) fn cancel_requested_command_with_id(
+        &mut self,
+        conversation_id: AIConversationId,
+        action_id: &AIAgentActionId,
+        reason: CancellationReason,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if self
+            .running_actions
+            .get(&conversation_id)
+            .is_some_and(|running| running.contains(action_id))
+            || self
+                .pending_actions
+                .get(&conversation_id)
+                .is_some_and(|actions| actions.iter().any(|action| action.id == *action_id))
+        {
+            self.cancel_action_with_id(conversation_id, action_id, reason, ctx);
+            return true;
+        }
+
+        let Some(action_result) = self
+            .finished_action_results
+            .get_mut(&conversation_id)
+            .and_then(|results| {
+                results.iter_mut().find(|result| {
+                    result.id == *action_id
+                        && matches!(
+                            result.result,
+                            AIAgentActionResultType::RequestCommandOutput(
+                                RequestCommandOutputResult::LongRunningCommandSnapshot { .. }
+                            )
+                        )
+                })
+            })
+        else {
+            return false;
+        };
+
+        *action_result = Arc::new(AIAgentActionResult {
+            id: action_result.id.clone(),
+            task_id: action_result.task_id.clone(),
+            result: AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::CancelledBeforeExecution,
+            ),
+        });
+        self.sort_finished_results(conversation_id);
+        ctx.emit(BlocklistAIActionEvent::FinishedAction {
+            action_id: action_id.clone(),
+            conversation_id,
+            cancellation_reason: Some(reason),
+        });
+        true
+    }
+
+    pub(crate) fn cancel_action_with_id(
         &mut self,
         conversation_id: AIConversationId,
         action_id: &AIAgentActionId,
