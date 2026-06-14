@@ -213,7 +213,6 @@ impl Pipeline {
                 Ok(None) => {}
                 Err(err) => {
                     log::warn!("Unable to get glyph out of glyph cache: {err:?}, {glyph:?}");
-                    return None;
                 }
             }
         }

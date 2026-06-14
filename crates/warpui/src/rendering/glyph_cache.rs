@@ -36,7 +36,7 @@ pub(crate) type RasterizeGlyphFn<'a> = dyn Fn(
 /// A cache that caches glyphs in a texture atlas.  
 pub struct GlyphCache<Texture> {
     textures: Vec<Texture>,
-    cache: HashMap<GlyphCacheKey, GlyphTextureOffset>,
+    cache: HashMap<GlyphCacheKey, Option<GlyphTextureOffset>>,
     glyph_config: rendering::GlyphConfig,
     atlas_manager: atlas::Manager,
 }
@@ -55,6 +55,143 @@ impl GlyphCacheKey {
             scale_factor: scale_factor.into(),
             subpixel_alignment,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use anyhow::anyhow;
+    use pathfinder_geometry::{
+        rect::RectI,
+        vector::{vec2f, vec2i},
+    };
+    use warpui_core::{
+        fonts::{
+            canvas::{Canvas, RasterFormat},
+            FontId, RasterizedGlyph, SubpixelAlignment,
+        },
+        rendering::GlyphConfig,
+        scene::GlyphKey,
+    };
+
+    use super::*;
+
+    fn glyph_key(glyph_id: u32) -> GlyphKey {
+        GlyphKey {
+            glyph_id,
+            font_id: FontId(0),
+            font_size: 12.0.into(),
+        }
+    }
+
+    fn rasterized_glyph() -> RasterizedGlyph {
+        RasterizedGlyph {
+            canvas: Canvas {
+                pixels: vec![255; 16],
+                size: vec2i(2, 2),
+                row_stride: 8,
+                format: RasterFormat::Rgba32,
+            },
+            is_emoji: false,
+        }
+    }
+
+    #[test]
+    fn raster_bounds_errors_are_cached_as_missing_glyphs() {
+        let mut glyph_cache = GlyphCache::new(GlyphConfig::default());
+        let glyph_key = glyph_key(1);
+        let raster_bounds_calls = Cell::new(0);
+        let rasterize_calls = Cell::new(0);
+
+        for _ in 0..2 {
+            let result = glyph_cache.get(
+                glyph_key,
+                1.0,
+                SubpixelAlignment::new(vec2f(0.0, 0.0)),
+                &|_| (),
+                &|_, _, _| {},
+                &|_, _, _| {
+                    raster_bounds_calls.set(raster_bounds_calls.get() + 1);
+                    Err(anyhow!("failed to get raster image"))
+                },
+                &|_, _, _, _, _| {
+                    rasterize_calls.set(rasterize_calls.get() + 1);
+                    Ok(rasterized_glyph())
+                },
+            );
+
+            assert!(result.unwrap().is_none());
+        }
+
+        assert_eq!(raster_bounds_calls.get(), 1);
+        assert_eq!(rasterize_calls.get(), 0);
+    }
+
+    #[test]
+    fn rasterize_errors_are_cached_as_missing_glyphs() {
+        let mut glyph_cache = GlyphCache::new(GlyphConfig::default());
+        let glyph_key = glyph_key(1);
+        let raster_bounds_calls = Cell::new(0);
+        let rasterize_calls = Cell::new(0);
+
+        for _ in 0..2 {
+            let result = glyph_cache.get(
+                glyph_key,
+                1.0,
+                SubpixelAlignment::new(vec2f(0.0, 0.0)),
+                &|_| (),
+                &|_, _, _| {},
+                &|_, _, _| {
+                    raster_bounds_calls.set(raster_bounds_calls.get() + 1);
+                    Ok(RectI::new(vec2i(0, 0), vec2i(2, 2)))
+                },
+                &|_, _, _, _, _| {
+                    rasterize_calls.set(rasterize_calls.get() + 1);
+                    Err(anyhow!("failed to get raster image"))
+                },
+            );
+
+            assert!(result.unwrap().is_none());
+        }
+
+        assert_eq!(raster_bounds_calls.get(), 1);
+        assert_eq!(rasterize_calls.get(), 1);
+    }
+
+    #[test]
+    fn cached_missing_glyphs_do_not_prevent_other_glyphs_from_rendering() {
+        let mut glyph_cache = GlyphCache::new(GlyphConfig::default());
+        let missing_glyph_key = glyph_key(1);
+        let renderable_glyph_key = glyph_key(2);
+
+        let missing_result = glyph_cache
+            .get(
+                missing_glyph_key,
+                1.0,
+                SubpixelAlignment::new(vec2f(0.0, 0.0)),
+                &|_| (),
+                &|_, _, _| {},
+                &|_, _, _| Err(anyhow!("failed to get raster image")),
+                &|_, _, _, _, _| Ok(rasterized_glyph()),
+            )
+            .unwrap();
+        assert!(missing_result.is_none());
+
+        let renderable_result = glyph_cache
+            .get(
+                renderable_glyph_key,
+                1.0,
+                SubpixelAlignment::new(vec2f(0.0, 0.0)),
+                &|_| (),
+                &|_, _, _| {},
+                &|_, _, _| Ok(RectI::new(vec2i(0, 0), vec2i(2, 2))),
+                &|_, _, _, _, _| Ok(rasterized_glyph()),
+            )
+            .unwrap();
+
+        assert!(renderable_result.is_some());
     }
 }
 
@@ -110,20 +247,38 @@ impl<Texture> GlyphCache<Texture> {
 
         match self.cache.get(&cache_key) {
             None => {
-                let bounds =
-                    raster_bounds_fn(glyph_key, Vector2F::splat(scale_factor), &self.glyph_config)?;
+                let bounds = match raster_bounds_fn(
+                    glyph_key,
+                    Vector2F::splat(scale_factor),
+                    &self.glyph_config,
+                ) {
+                    Ok(bounds) => bounds,
+                    Err(err) => {
+                        log::warn!("Unable to get glyph raster bounds: {err:?}, {glyph_key:?}");
+                        self.cache.insert(cache_key, None);
+                        return Ok(None);
+                    }
+                };
 
                 if bounds.size() == Vector2I::zero() {
+                    self.cache.insert(cache_key, None);
                     return Ok(None);
                 }
 
-                let rasterized_glyph = rasterize_glyph_fn(
+                let rasterized_glyph = match rasterize_glyph_fn(
                     glyph_key,
                     Vector2F::splat(scale_factor),
                     subpixel_alignment,
                     &self.glyph_config,
                     crate::fonts::canvas::RasterFormat::Rgba32,
-                )?;
+                ) {
+                    Ok(rasterized_glyph) => rasterized_glyph,
+                    Err(err) => {
+                        log::warn!("Unable to rasterize glyph: {err:?}, {glyph_key:?}");
+                        self.cache.insert(cache_key, None);
+                        return Ok(None);
+                    }
+                };
 
                 let texture_offset = self.atlas_manager.insert(rasterized_glyph.canvas.size)?;
                 let idx = texture_offset.texture_id.as_usize();
@@ -141,10 +296,10 @@ impl<Texture> GlyphCache<Texture> {
                     allocated_region: texture_offset.allocated_region,
                 };
 
-                self.cache.insert(cache_key, glyph_texture_offset);
+                self.cache.insert(cache_key, Some(glyph_texture_offset));
                 Ok(Some(glyph_texture_offset))
             }
-            Some(gto) => Ok(Some(*gto)),
+            Some(gto) => Ok(*gto),
         }
     }
 }
