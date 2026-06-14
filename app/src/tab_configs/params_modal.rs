@@ -184,10 +184,13 @@ impl TabConfigParamsModal {
     ///
     /// Builds one field per param in `config`. `cwd` is the active terminal's
     /// working directory, used to seed the branch picker's git lookup.
+    /// `prefilled_params` optionally overrides default values for params that were
+    /// provided via URI or CLI.
     pub fn on_open(
         &mut self,
         config: TabConfig,
         cwd: Option<PathBuf>,
+        prefilled_params: Option<HashMap<String, String>>,
         ctx: &mut ViewContext<Self>,
     ) {
         self.param_fields.clear();
@@ -226,9 +229,12 @@ impl TabConfigParamsModal {
         };
 
         for (i, (name, param)) in params.iter().enumerate() {
+            // Use the prefilled value if available, otherwise fall back to the TOML default.
+            let prefilled_value = prefilled_params.as_ref().and_then(|m| m.get(name).cloned());
+
             let field = match param.param_type {
                 TabConfigParamType::Branch => {
-                    let default_value = param.default.clone();
+                    let default_value = prefilled_value.clone().or_else(|| param.default.clone());
                     let branch_cwd = branch_initial_cwd.clone();
                     let style = PickerStyle {
                         width: picker_style.width,
@@ -247,11 +253,11 @@ impl TabConfigParamsModal {
                     });
                     ParamField::Branch {
                         picker,
-                        selected: param.default.clone(),
+                        selected: prefilled_value.clone().or_else(|| param.default.clone()),
                     }
                 }
                 TabConfigParamType::Repo => {
-                    let default_value = param.default.clone();
+                    let default_value = prefilled_value.clone().or_else(|| param.default.clone());
                     let style = PickerStyle {
                         width: picker_style.width,
                         background: picker_style.background,
@@ -275,11 +281,13 @@ impl TabConfigParamsModal {
                     });
                     ParamField::Repo {
                         picker,
-                        selected: param.default.clone(),
+                        selected: prefilled_value.clone().or_else(|| param.default.clone()),
                     }
                 }
                 TabConfigParamType::Text => {
-                    let default_text = param.default.clone().unwrap_or_default();
+                    let default_text = prefilled_value.clone().unwrap_or_else(|| {
+                        param.default.clone().unwrap_or_default()
+                    });
                     let placeholder = if default_text.is_empty() {
                         format!("Enter {name}")
                     } else {

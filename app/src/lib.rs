@@ -747,10 +747,33 @@ pub fn run() -> Result<()> {
     }
 
     let api_key = args.api_key().cloned();
+    let mut app_args = args.into_app_args();
+    append_tab_config_url_from_cli_args(&mut app_args);
+
     run_internal(LaunchMode::App {
-        args: args.into_app_args(),
+        args: app_args,
         api_key,
     })
+}
+
+fn append_tab_config_url_from_cli_args(app_args: &mut warp_cli::AppArgs) {
+    let Some(tab_config) = app_args.tab_config.take() else {
+        return;
+    };
+
+    let mut uri = url::Url::parse(&format!("{}://tab_config/", ChannelState::url_scheme()))
+        .expect("valid tab config URI base");
+    uri.path_segments_mut()
+        .expect("tab config URI supports path segments")
+        .push(&tab_config);
+
+    for param in app_args.params.drain(..) {
+        if let Some((key, value)) = param.split_once('=') {
+            uri.query_pairs_mut().append_pair(key, value);
+        }
+    }
+
+    app_args.urls.push(uri);
 }
 
 /// Runs an integration test using the provided test driver.
@@ -2675,4 +2698,59 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
 fn init_logging_for_unit_tests_glue() {
     // Initialize terminal-friendly logging for tests from the shared logger crate.
     warp_logging::init_logging_for_unit_tests();
+}
+
+#[cfg(test)]
+mod tab_config_cli_url_tests {
+    use super::*;
+
+    #[test]
+    fn appends_tab_config_url_from_cli_args() {
+        let mut app_args = warp_cli::AppArgs {
+            tab_config: Some("deploy config".to_string()),
+            params: vec![
+                "branch=feature/foo".to_string(),
+                "repo=/Users/me/project".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        append_tab_config_url_from_cli_args(&mut app_args);
+
+        assert!(app_args.tab_config.is_none());
+        assert!(app_args.params.is_empty());
+        assert_eq!(app_args.urls.len(), 1);
+
+        let url = &app_args.urls[0];
+        assert_eq!(url.host_str(), Some("tab_config"));
+        assert_eq!(
+            url.path_segments().and_then(|mut segments| segments.next()),
+            Some("deploy%20config"),
+        );
+        let params = url.query_pairs().collect::<Vec<_>>();
+        assert_eq!(params[0], ("branch".into(), "feature/foo".into()));
+        assert_eq!(params[1], ("repo".into(), "/Users/me/project".into()));
+    }
+
+    #[test]
+    fn encodes_tab_config_name_that_looks_like_query_or_fragment() {
+        let mut app_args = warp_cli::AppArgs {
+            tab_config: Some("deploy?branch=wrong#fragment".to_string()),
+            params: vec!["branch=right".to_string()],
+            ..Default::default()
+        };
+
+        append_tab_config_url_from_cli_args(&mut app_args);
+
+        let url = &app_args.urls[0];
+        assert_eq!(url.fragment(), None);
+        assert_eq!(
+            url.path_segments().and_then(|mut segments| segments.next()),
+            Some("deploy%3Fbranch=wrong%23fragment"),
+        );
+        assert_eq!(
+            url.query_pairs().collect::<Vec<_>>(),
+            vec![("branch".into(), "right".into())],
+        );
+    }
 }

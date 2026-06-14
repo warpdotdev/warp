@@ -128,6 +128,38 @@ fn model_list_parses() {
 }
 
 #[test]
+fn app_args_accept_tab_config_and_params() {
+    let args = Args::try_parse_from([
+        "warp",
+        "--tab-config",
+        "deploy",
+        "--param",
+        "branch=feature-x",
+        "--param",
+        "repo=/Users/me/project",
+    ])
+    .unwrap();
+
+    assert_eq!(args.args.tab_config.as_deref(), Some("deploy"));
+    assert_eq!(
+        args.args.params,
+        vec![
+            "branch=feature-x".to_string(),
+            "repo=/Users/me/project".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn app_args_preserve_param_values_containing_equals() {
+    let args = Args::try_parse_from(["warp", "--tab-config", "deploy", "--param", "token=abc=123"])
+        .unwrap();
+
+    assert_eq!(args.args.tab_config.as_deref(), Some("deploy"));
+    assert_eq!(args.args.params, vec!["token=abc=123".to_string()]);
+}
+
+#[test]
 fn login_parses() {
     let args = Args::try_parse_from(["warp", "login"]).unwrap();
 
