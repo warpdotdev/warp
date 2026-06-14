@@ -6,7 +6,13 @@
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
 
+use std::collections::{HashMap, HashSet};
+
+use crate::ai::active_agent_views_model::ConversationOrTaskId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskId};
+use crate::ai::artifacts::{merge_artifacts, Artifact};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,9 +67,25 @@ pub fn collect_descendant_conversation_ids_in_spawn_order(
     parent_id: AIConversationId,
     descendants: &mut Vec<AIConversationId>,
 ) {
+    let mut visited = HashSet::from([parent_id]);
+    collect_descendants_guarded(history, parent_id, &mut visited, descendants);
+}
+
+/// Recursive worker for [`collect_descendant_conversation_ids_in_spawn_order`].
+/// `visited` guards against cycles and diamonds in the parent/child index so a
+/// corrupted topology can't cause infinite recursion or duplicate entries.
+fn collect_descendants_guarded(
+    history: &BlocklistAIHistoryModel,
+    parent_id: AIConversationId,
+    visited: &mut HashSet<AIConversationId>,
+    descendants: &mut Vec<AIConversationId>,
+) {
     for child_id in history.child_conversation_ids_of(&parent_id) {
+        if !visited.insert(*child_id) {
+            continue;
+        }
         descendants.push(*child_id);
-        collect_descendant_conversation_ids_in_spawn_order(history, *child_id, descendants);
+        collect_descendants_guarded(history, *child_id, visited, descendants);
     }
 }
 
@@ -244,6 +266,166 @@ pub fn aggregated_orchestrator_status(
         return ConversationStatus::Cancelled;
     }
     ConversationStatus::Success
+}
+
+/// Returns the artifacts for the orchestration tree rooted at `root`, in
+/// pre-order and deduped by artifact identity (first occurrence wins).
+///
+/// The same tree is stored from two sides — run records link children via
+/// [`AmbientAgentTask::children`], conversations via the parent → children
+/// index — and either side may be missing nodes (remote children often have
+/// no local conversation; local children may have no loaded run record), so
+/// the walk follows both edge types. Each node contributes its conversation
+/// artifacts (falling back to cached historical metadata when not loaded)
+/// followed by the artifacts on its run record in `tasks`. The run record
+/// matters for remote children: their artifact events are never applied to
+/// the local placeholder conversation, so the run is the only local source.
+/// Reads only in-memory state — never fetches; a `TaskId` root not present
+/// in `tasks` contributes nothing. For non-orchestration roots this degrades
+/// to the root's own artifacts.
+pub(crate) fn aggregated_subtree_artifacts<'a>(
+    history: &'a BlocklistAIHistoryModel,
+    tasks: &'a HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+    root: ConversationOrTaskId,
+) -> Vec<Artifact> {
+    let mut walker = SubtreeArtifactWalker {
+        history,
+        tasks,
+        visited_runs: HashSet::new(),
+        visited_conversations: HashSet::new(),
+        artifact_lists: Vec::new(),
+    };
+    match root {
+        ConversationOrTaskId::TaskId(task_id) => walker.visit(tasks.get(&task_id), None),
+        ConversationOrTaskId::ConversationId(conversation_id) => {
+            walker.visit(None, Some(conversation_id))
+        }
+    }
+    merge_artifacts(walker.artifact_lists)
+}
+
+/// Pre-order DFS state for [`aggregated_subtree_artifacts`]. Each visit
+/// handles one agent node — the pairing of a run record and its linked local
+/// conversation — and the per-identity visited sets both guard against
+/// cycles and stop a node reached through one tree from contributing again
+/// when reached through the other.
+struct SubtreeArtifactWalker<'a> {
+    history: &'a BlocklistAIHistoryModel,
+    tasks: &'a HashMap<AmbientAgentTaskId, AmbientAgentTask>,
+    visited_runs: HashSet<AmbientAgentTaskId>,
+    visited_conversations: HashSet<AIConversationId>,
+    artifact_lists: Vec<&'a [Artifact]>,
+}
+
+impl<'a> SubtreeArtifactWalker<'a> {
+    /// Visits one node given whichever of its identities the caller knows,
+    /// resolving the other half through the run ↔ conversation links.
+    fn visit(
+        &mut self,
+        task: Option<&'a AmbientAgentTask>,
+        conversation_id: Option<AIConversationId>,
+    ) {
+        let history = self.history;
+        let tasks = self.tasks;
+        let conversation_id = conversation_id
+            .or_else(|| task.and_then(|task| conversation_id_shadowed_by_task(task, history)));
+        let conversation = conversation_id.and_then(|id| history.conversation(&id));
+        let task = task.or_else(|| {
+            conversation
+                .and_then(|conversation| conversation.task_id())
+                .and_then(|task_id| tasks.get(&task_id))
+        });
+
+        // `filter` doubles as the visited guard: an identity already seen
+        // contributes nothing and is not traversed again.
+        let new_conversation_id =
+            conversation_id.filter(|id| self.visited_conversations.insert(*id));
+        let new_task = task.filter(|task| self.visited_runs.insert(task.task_id));
+
+        if let Some(conversation_id) = new_conversation_id {
+            let artifacts = conversation
+                .map(|conversation| conversation.artifacts())
+                .or_else(|| {
+                    history
+                        .get_conversation_metadata(&conversation_id)
+                        .map(|metadata| metadata.artifacts.as_slice())
+                })
+                .unwrap_or_default();
+            self.artifact_lists.push(artifacts);
+        }
+        if let Some(task) = new_task {
+            self.artifact_lists.push(&task.artifacts);
+        }
+
+        if let Some(conversation_id) = new_conversation_id {
+            for child_id in history.child_conversation_ids_of(&conversation_id) {
+                self.visit(None, Some(*child_id));
+            }
+        }
+        if let Some(task) = new_task {
+            for run_id in &task.children {
+                if let Some(child_task) = run_id
+                    .parse::<AmbientAgentTaskId>()
+                    .ok()
+                    .and_then(|id| tasks.get(&id))
+                {
+                    self.visit(Some(child_task), None);
+                }
+            }
+        }
+    }
+}
+
+/// Returns the local conversation ID represented by the given task, if this task and a
+/// conversation entry both point at the same underlying local run.
+///
+/// We first match using the orchestration agent ID (task ID / run ID under v2), and fall back
+/// to the server conversation token for cases where the task only carries conversation identity
+/// through `conversation_id`.
+pub(crate) fn conversation_id_shadowed_by_task(
+    task: &AmbientAgentTask,
+    history_model: &BlocklistAIHistoryModel,
+) -> Option<AIConversationId> {
+    history_model
+        .conversation_id_for_agent_id(&task.run_id().to_string())
+        .or_else(|| {
+            task.conversation_id().and_then(|conversation_id| {
+                history_model.find_conversation_id_by_server_token(&ServerConversationToken::new(
+                    conversation_id.to_string(),
+                ))
+            })
+        })
+}
+
+/// Returns `conversation_id` followed by its orchestration ancestors
+/// (nearest parent first), walking parent links on loaded conversations.
+pub fn conversation_and_ancestors(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+) -> Vec<AIConversationId> {
+    let mut chain = vec![conversation_id];
+    let mut current = conversation_id;
+    while let Some(parent) = history.conversation(&current).and_then(|conversation| {
+        history.resolved_parent_conversation_id_for_conversation(conversation)
+    }) {
+        // Guard against parent-link cycles.
+        if chain.contains(&parent) {
+            break;
+        }
+        chain.push(parent);
+        current = parent;
+    }
+    chain
+}
+
+/// Returns whether `conversation_id` is `root_id` itself or one of its
+/// descendants, by walking parent links upward from `conversation_id`.
+pub fn is_in_orchestration_subtree(
+    history: &BlocklistAIHistoryModel,
+    root_id: AIConversationId,
+    conversation_id: AIConversationId,
+) -> bool {
+    conversation_and_ancestors(history, conversation_id).contains(&root_id)
 }
 
 /// Returns a conversation's direct status, or the aggregated subtree status

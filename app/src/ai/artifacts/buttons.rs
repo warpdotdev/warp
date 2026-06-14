@@ -17,6 +17,7 @@ const BUTTON_MAX_TEXT_WIDTH: f32 = 200.;
 
 /// A view that renders a set of artifact buttons (plans, branches, PRs)
 pub struct ArtifactButtonsRow {
+    artifacts: Vec<Artifact>,
     buttons: Vec<ViewHandle<ActionButton>>,
     theme: Arc<dyn ActionButtonTheme>,
 }
@@ -25,6 +26,7 @@ impl ArtifactButtonsRow {
     pub fn new(artifacts: &[Artifact], ctx: &mut ViewContext<Self>) -> Self {
         let theme: Arc<dyn ActionButtonTheme> = Arc::new(SecondaryTheme);
         Self {
+            artifacts: artifacts.to_vec(),
             buttons: collect_buttons(artifacts, &theme, ctx),
             theme,
         }
@@ -36,12 +38,20 @@ impl ArtifactButtonsRow {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         Self {
+            artifacts: artifacts.to_vec(),
             buttons: collect_buttons(artifacts, &theme, ctx),
             theme,
         }
     }
 
+    /// Rebuilds the buttons for `artifacts`. No-ops when the artifacts are
+    /// unchanged, so redundant refreshes (e.g. several children reporting
+    /// into the same ancestor card) skip the rebuild and re-render.
     pub fn update_artifacts(&mut self, artifacts: &[Artifact], ctx: &mut ViewContext<Self>) {
+        if self.artifacts == artifacts {
+            return;
+        }
+        self.artifacts = artifacts.to_vec();
         self.buttons = collect_buttons(artifacts, &self.theme, ctx);
         ctx.notify();
     }

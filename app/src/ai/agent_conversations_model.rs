@@ -28,7 +28,7 @@ use warpui::{
     SingletonEntity, WindowId,
 };
 
-use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::ambient_agents::{
@@ -37,7 +37,8 @@ use crate::ai::ambient_agents::{
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate,
+    orchestration_topology, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
+    ConversationStatusUpdate,
 };
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::conversation_navigation::ConversationNavigationData;
@@ -344,7 +345,7 @@ impl AgentRunDisplayStatus {
                     return Self::from_task_state(task);
                 }
                 let history_model = BlocklistAIHistoryModel::as_ref(app);
-                entry::conversation_id_shadowed_by_task(task, history_model)
+                orchestration_topology::conversation_id_shadowed_by_task(task, history_model)
                     .and_then(|conversation_id| history_model.conversation(&conversation_id))
                     .map(|conversation| Self::from_conversation_status(conversation.status()))
                     .unwrap_or_else(|| Self::from_task_state(task))
@@ -565,6 +566,10 @@ pub struct AgentConversationsModel {
     /// Earliest RTC timestamp received while no list surface was open.
     /// On next `register_view_open`, triggers a single `fetch_tasks_updated_after`.
     dirty_since: Option<DateTime<Utc>>,
+    /// Parent run IDs whose child runs we have already requested from the
+    /// server this session. Like `task_fetch_state`, this exists purely to
+    /// dedupe requests and ensure we don't try to fetch the same child run repeatedly.
+    requested_child_runs_for: HashSet<AmbientAgentTaskId>,
 }
 
 pub enum AgentConversationsModelEvent {
@@ -615,6 +620,7 @@ impl AgentConversationsModel {
                 task_fetch_state: HashMap::new(),
                 rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
                 dirty_since: None,
+                requested_child_runs_for: HashSet::new(),
             };
         }
 
@@ -654,6 +660,7 @@ impl AgentConversationsModel {
             task_fetch_state: HashMap::new(),
             rtc_task_refresh_throttle_state: RtcTaskRefreshThrottleState::default(),
             dirty_since: None,
+            requested_child_runs_for: HashSet::new(),
         };
 
         // Only sync local conversations if we're not in CLI mode. Server-side data
@@ -1206,7 +1213,7 @@ impl AgentConversationsModel {
         let mut emitted_conversation_ids = HashSet::new();
 
         for task in self.tasks.values() {
-            let entry = entry::entry_for_task(task, history_model, app);
+            let entry = entry::entry_for_task(task, &self.tasks, history_model, app);
             if let Some(conversation_id) = entry.identity.local_conversation_id {
                 attached_conversation_ids.insert(conversation_id);
             }
@@ -1218,7 +1225,7 @@ impl AgentConversationsModel {
             if attached_conversation_ids.contains(&conversation_id) {
                 continue;
             }
-            let entry = entry::entry_for_conversation(metadata, history_model, app);
+            let entry = entry::entry_for_conversation(metadata, &self.tasks, history_model, app);
             emitted_conversation_ids.insert(conversation_id);
             entries.push(entry);
         }
@@ -1234,6 +1241,7 @@ impl AgentConversationsModel {
             entries.push(entry::entry_for_historical_metadata(
                 metadata,
                 nav_data,
+                &self.tasks,
                 history_model,
                 app,
             ));
@@ -1256,11 +1264,13 @@ impl AgentConversationsModel {
             AgentConversationEntryId::AmbientRun(task_id) => self
                 .tasks
                 .get(task_id)
-                .map(|task| entry::entry_for_task(task, history_model, app)),
+                .map(|task| entry::entry_for_task(task, &self.tasks, history_model, app)),
             AgentConversationEntryId::Conversation(conversation_id) => self
                 .conversations
                 .get(conversation_id)
-                .map(|metadata| entry::entry_for_conversation(metadata, history_model, app))
+                .map(|metadata| {
+                    entry::entry_for_conversation(metadata, &self.tasks, history_model, app)
+                })
                 .or_else(|| {
                     history_model
                         .get_conversation_metadata(conversation_id)
@@ -1272,6 +1282,7 @@ impl AgentConversationsModel {
                             entry::entry_for_historical_metadata(
                                 metadata,
                                 nav_data,
+                                &self.tasks,
                                 history_model,
                                 app,
                             )
@@ -1445,14 +1456,15 @@ impl AgentConversationsModel {
             task.conversation_id()
                 .is_some_and(|conversation_id| conversation_id == server_token.as_str())
         }) {
-            return Some(entry::entry_for_task(task, history_model, app));
+            return Some(entry::entry_for_task(task, &self.tasks, history_model, app));
         }
 
         let conversation_id = history_model.find_conversation_id_by_server_token(server_token)?;
         if let Some(task) = self.tasks.values().find(|task| {
-            entry::conversation_id_shadowed_by_task(task, history_model) == Some(conversation_id)
+            orchestration_topology::conversation_id_shadowed_by_task(task, history_model)
+                == Some(conversation_id)
         }) {
-            return Some(entry::entry_for_task(task, history_model, app));
+            return Some(entry::entry_for_task(task, &self.tasks, history_model, app));
         }
 
         self.get_entry_by_id(
@@ -1698,6 +1710,132 @@ impl AgentConversationsModel {
                 }
                 RequestState::RequestFailedRetryPending(_) => {
                     // Wait for a terminal outcome before updating dedup/backoff state.
+                }
+            },
+        );
+    }
+
+    /// Aggregated artifacts for the orchestration tree rooted at `task`
+    /// (the run, its descendants' run records, and their linked local
+    /// conversations), deduped by identity. Reads only in-memory state.
+    pub fn aggregated_task_artifacts(
+        &self,
+        task: &AmbientAgentTask,
+        app: &AppContext,
+    ) -> Vec<Artifact> {
+        orchestration_topology::aggregated_subtree_artifacts(
+            BlocklistAIHistoryModel::as_ref(app),
+            &self.tasks,
+            ConversationOrTaskId::TaskId(task.task_id),
+        )
+    }
+
+    /// Aggregated artifacts for the orchestration tree rooted at `root_id`,
+    /// including artifacts on each node's backing run record (the only local
+    /// source for remote children's artifacts). Reads only in-memory state.
+    pub fn aggregated_conversation_artifacts(
+        &self,
+        root_id: AIConversationId,
+        app: &AppContext,
+    ) -> Vec<Artifact> {
+        orchestration_topology::aggregated_subtree_artifacts(
+            BlocklistAIHistoryModel::as_ref(app),
+            &self.tasks,
+            ConversationOrTaskId::ConversationId(root_id),
+        )
+    }
+
+    /// Fetches child runs of `parent_task_id` that aren't loaded yet into the
+    /// model with a single `ancestor_run_id` list request, then emits a task
+    /// update event.
+    ///
+    /// Runs at most once per parent run per session: when every child is
+    /// already loaded this short-circuits before consulting the guard, and
+    /// otherwise `requested_child_runs_for` ensures repeated panel refreshes
+    /// (or a failed request) never issue another one.
+    pub fn ensure_child_tasks_loaded(
+        &mut self,
+        parent_task_id: &AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(parent) = self.tasks.get(parent_task_id) else {
+            return;
+        };
+        let has_missing_child = parent.children.iter().any(|run_id| {
+            run_id
+                .parse::<AmbientAgentTaskId>()
+                .is_ok_and(|id| !self.tasks.contains_key(&id))
+        });
+        if !has_missing_child {
+            return;
+        }
+        self.fetch_child_runs_once(*parent_task_id, ctx);
+    }
+
+    /// Conversation-rooted variant of [`Self::ensure_child_tasks_loaded`] for
+    /// local orchestrators: when any descendant conversation's backing run is
+    /// missing from the task map, fetches the orchestrator run's descendants
+    /// with a single `ancestor_run_id` request (once per parent run per
+    /// session). Used by panels rooted at a conversation, where the parent
+    /// run record itself may not be loaded.
+    pub fn ensure_child_tasks_loaded_for_conversation(
+        &mut self,
+        parent_conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let history_model = BlocklistAIHistoryModel::as_ref(ctx);
+        let Some(parent_task_id) = history_model
+            .conversation(&parent_conversation_id)
+            .and_then(|conversation| conversation.task_id())
+        else {
+            return;
+        };
+        let has_missing_child = orchestration_topology::descendant_conversation_ids_in_spawn_order(
+            history_model,
+            parent_conversation_id,
+        )
+        .into_iter()
+        .filter_map(|id| {
+            history_model
+                .conversation(&id)
+                .and_then(|conversation| conversation.task_id())
+        })
+        .any(|task_id| !self.tasks.contains_key(&task_id));
+        if !has_missing_child {
+            return;
+        }
+        self.fetch_child_runs_once(parent_task_id, ctx);
+    }
+
+    /// Issues the one-per-parent-run `ancestor_run_id` list request, deduped
+    /// via `requested_child_runs_for`. Failures are not retried.
+    fn fetch_child_runs_once(
+        &mut self,
+        parent_task_id: AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.requested_child_runs_for.insert(parent_task_id) {
+            return;
+        }
+
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let ancestor_run_id = parent_task_id.to_string();
+        ctx.spawn(
+            async move {
+                ai_client
+                    .list_ambient_agent_tasks(
+                        INITIAL_TASK_AMOUNT,
+                        TaskListFilter {
+                            ancestor_run_id: Some(ancestor_run_id),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            },
+            move |model, result, ctx| match result {
+                Ok(tasks) => model.update_model_with_new_tasks(tasks, ctx),
+                Err(e) => {
+                    log::warn!("Failed to fetch child runs for {parent_task_id}: {e:#}");
                 }
             },
         );
