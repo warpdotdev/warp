@@ -998,6 +998,7 @@ impl HostRequestHandle {
         mode: crate::proto::GitCommitChainMode,
         message: String,
         include_unstaged: bool,
+        selected_paths: Vec<String>,
         branch: String,
         autogenerate_pr_content: bool,
     ) -> Result<(crate::proto::GitOpDelta, Option<crate::proto::PrInfo>), HostRequestError> {
@@ -1010,6 +1011,7 @@ impl HostRequestHandle {
                     branch,
                     mode: mode as i32,
                     autogenerate_pr_content,
+                    selected_paths,
                 },
             ))
             .await?;
@@ -3091,6 +3093,7 @@ impl RemoteServerManager {
         mode: crate::proto::GitCommitChainMode,
         message: String,
         include_unstaged: bool,
+        selected_paths: Vec<String>,
         branch: String,
         autogenerate_pr_content: bool,
         ctx: &mut ModelContext<Self>,
@@ -3111,6 +3114,7 @@ impl RemoteServerManager {
                         mode,
                         message,
                         include_unstaged,
+                        selected_paths,
                         branch,
                         autogenerate_pr_content,
                     )

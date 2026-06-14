@@ -353,6 +353,74 @@ fn detects_gh_auth_errors() {
     assert!(!is_gh_auth_error("no pull requests found for branch"));
 }
 
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn run_commit_with_selected_paths_commits_only_those() {
+    let (_dir, repo) = init_repo().await;
+    std::fs::write(repo.join("a.txt"), "a\n").expect("write a.txt");
+    std::fs::write(repo.join("b.txt"), "b\n").expect("write b.txt");
+
+    super::run_commit(&repo, "add a only", false, &["a.txt".to_string()], None)
+        .await
+        .expect("selective commit");
+
+    // a.txt is committed at HEAD; b.txt is left untracked in the working tree.
+    let head_files = git(&repo, &["show", "--name-only", "--pretty=format:", "HEAD"]).await;
+    assert!(
+        head_files.contains("a.txt"),
+        "expected a.txt committed: {head_files}"
+    );
+    assert!(
+        !head_files.contains("b.txt"),
+        "b.txt should not be committed: {head_files}"
+    );
+    let untracked = git(&repo, &["ls-files", "--others", "--exclude-standard"]).await;
+    assert!(
+        untracked.contains("b.txt"),
+        "b.txt should remain untracked: {untracked}"
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn run_commit_with_empty_selection_commits_all_when_include_unstaged() {
+    let (_dir, repo) = init_repo().await;
+    std::fs::write(repo.join("a.txt"), "a\n").expect("write a.txt");
+    std::fs::write(repo.join("b.txt"), "b\n").expect("write b.txt");
+
+    super::run_commit(&repo, "add all", true, &[], None)
+        .await
+        .expect("commit all");
+
+    let head_files = git(&repo, &["show", "--name-only", "--pretty=format:", "HEAD"]).await;
+    assert!(
+        head_files.contains("a.txt") && head_files.contains("b.txt"),
+        "expected both files committed: {head_files}"
+    );
+    let untracked = git(&repo, &["ls-files", "--others", "--exclude-standard"]).await;
+    assert!(
+        untracked.is_empty(),
+        "nothing should remain untracked: {untracked}"
+    );
+}
+
+#[cfg(feature = "local_fs")]
+#[tokio::test]
+async fn run_commit_with_selected_paths_errors_when_no_change() {
+    let (_dir, repo) = init_repo().await;
+    std::fs::write(repo.join("a.txt"), "a\n").expect("write a.txt");
+    git(&repo, &["add", "a.txt"]).await;
+    git(&repo, &["commit", "-m", "base a"]).await;
+
+    // Selecting a path with no pending change must surface an error rather
+    // than producing an empty commit.
+    let result = super::run_commit(&repo, "noop", false, &["a.txt".to_string()], None).await;
+    assert!(
+        result.is_err(),
+        "expected error for empty selective commit, got: {result:?}"
+    );
+}
+
 #[tokio::test]
 async fn detached_tag_display_returns_short_sha() {
     let (_dir, repo) = init_repo().await;

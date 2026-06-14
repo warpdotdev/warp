@@ -27,16 +27,29 @@ use crate::util::git::{self, get_branch_commit_messages, get_diff_for_pr, Commit
 ///
 /// When the chain creates a PR, `ai_client` (when `Some`) generates the
 /// title/body with a `--fill` fallback; pass `None` to skip AI entirely.
+///
+/// When `selected_paths` is non-empty, only those repo-relative paths are
+/// committed (the rest stay in the working tree); when empty, the whole
+/// working set is committed per `include_unstaged`.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_commit_chain(
     repo_path: &Path,
     mode: CommitChainMode,
     message: &str,
     include_unstaged: bool,
+    selected_paths: &[String],
     branch: &str,
     ai_client: Option<&dyn AIClient>,
     path_env: Option<&str>,
 ) -> anyhow::Result<(Vec<Commit>, Option<String>, Option<PrInfo>)> {
-    git::run_commit(repo_path, message, include_unstaged, path_env).await?;
+    git::run_commit(
+        repo_path,
+        message,
+        include_unstaged,
+        selected_paths,
+        path_env,
+    )
+    .await?;
     let pr_info = match mode {
         CommitChainMode::CommitOnly => None,
         CommitChainMode::CommitAndPush => {
