@@ -796,7 +796,7 @@ pub enum BlockItem {
         asset_source: AssetSource,
         config: ImageBlockConfig,
     },
-    Table(Box<LaidOutTable>),
+    Table(Arc<LaidOutTable>),
     TrailingNewLine(Cursor),
     Hidden(HiddenBlockConfig),
 }
@@ -1231,6 +1231,15 @@ pub(crate) struct TableScrollbarInteractionState {
     drag_state: Cell<Option<TableScrollbarDragState>>,
     hovered: Cell<bool>,
 }
+
+// SAFETY: LaidOutTable contains Cell fields (scroll_left, scrollbar_interaction_state) that
+// prevent automatic Sync. These fields are only accessed from the main UI thread during
+// painting and event handling — never concurrently from multiple threads. Wrapping
+// LaidOutTable in Arc (instead of Box) makes BlockItem::clone() O(1) during SumTree
+// operations, avoiding deep copies of the table's large nested vectors (cell_layouts,
+// cell_offset_maps, cell_text_frames, etc.) that previously caused ~20 GB of allocations
+// for large markdown tables.
+unsafe impl Sync for LaidOutTable {}
 
 impl LaidOutTable {
     pub fn height(&self) -> Pixels {

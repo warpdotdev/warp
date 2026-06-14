@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::mem;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use itertools::Itertools;
@@ -1308,7 +1309,7 @@ fn layout_table_block(
     };
     let content_length = text_block.content_length;
     let horizontal_scroll_allowed = !layout.container_scrolls_horizontally();
-    Ok(BlockItem::Table(Box::new(LaidOutTable {
+    Ok(BlockItem::Table(Arc::new(LaidOutTable {
         table,
         config,
         row_heights,
