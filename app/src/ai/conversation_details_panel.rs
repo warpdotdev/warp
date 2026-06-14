@@ -748,14 +748,8 @@ impl ConversationDetailsPanel {
                 Some(*ai_conversation_id.as_ref()?)
             }
             PanelMode::Task {
-                display_status,
-                conversation_id,
-                ..
+                conversation_id, ..
             } => {
-                let status = display_status.as_ref()?;
-                if status.is_working() {
-                    return None;
-                }
                 // Hide for non-Oz harnesses (e.g. Claude, Gemini): they can't be
                 // forked into a local Warp conversation.
                 if matches!(self.data.harness, Some(h) if h != Harness::Oz) {
