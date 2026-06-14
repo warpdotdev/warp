@@ -179,8 +179,22 @@ fn render_button(
             }
         };
 
-        let mut flex = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        let mut flex = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+
+        // When the button expands on hover, force its row to span the full
+        // available width. Without this, the soft-wrapped text collapses to the
+        // width of its longest wrapped line, which is narrower than the clipped
+        // single-line (collapsed) state. That horizontal shrink moves the chip's
+        // right edge out from under the cursor, which flips hover off, which
+        // collapses the chip again, which puts the cursor back over it — an
+        // infinite hover/un-hover relayout loop that manifests as flickering /
+        // ghosted text. Keeping the expanded chip full-width keeps the hover
+        // target stable so the cursor stays inside it.
+        if should_expand_button {
+            flex = flex.with_main_axis_size(MainAxisSize::Max);
+        }
+
+        let mut flex = flex
             .with_child(
                 Container::new(
                     ConstrainedBox::new(Icon::new(icon.into(), icon_color).finish())
