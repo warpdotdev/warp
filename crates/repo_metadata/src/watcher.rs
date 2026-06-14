@@ -3,6 +3,7 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 
 #[cfg(feature = "local_fs")]
 use futures::{future::OptionFuture, FutureExt as _};
@@ -604,11 +605,12 @@ impl DirectoryWatcher {
         self.processing_queue.update(ctx, |queue, ctx| {
             for (repo_handle, repo_update) in repo_updates {
                 let subscriber_ids = repo_handle.read(ctx, |repo, _| repo.get_subscriber_ids());
+                let shared_update = Arc::new(repo_update);
                 for subscriber_id in subscriber_ids {
                     queue.enqueue_incremental_update(
                         repo_handle.downgrade(),
                         subscriber_id,
-                        repo_update.clone(),
+                        Arc::clone(&shared_update),
                         ctx,
                     );
                 }
@@ -737,7 +739,7 @@ enum Task {
     Update {
         repository: WeakModelHandle<Repository>,
         subscriber_id: SubscriberId,
-        update: RepositoryUpdate,
+        update: Arc<RepositoryUpdate>,
     },
 }
 
@@ -847,7 +849,7 @@ impl TaskQueue {
         &mut self,
         repository: WeakModelHandle<Repository>,
         subscriber_id: SubscriberId,
-        update: RepositoryUpdate,
+        update: Arc<RepositoryUpdate>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.enqueue(
