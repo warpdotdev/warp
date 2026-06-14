@@ -1,5 +1,6 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use warp_core::ui::color::{contrast::MinimumAllowedContrast, ContrastingColor};
 use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill as WarpThemeFill, WarpTheme};
@@ -93,6 +94,10 @@ fn cloud_icon_size(total: f32) -> f32 {
 
 fn status_in_cloud_size(total: f32) -> f32 {
     total * STATUS_IN_CLOUD_RATIO
+}
+
+fn cloud_status_icon_color(color: ColorU, cloud_fill: WarpThemeFill) -> ColorU {
+    color.on_background(cloud_fill.into_solid(), MinimumAllowedContrast::Text)
 }
 
 /// Default overhang of the overlay's BR past the circle's BR edge (toward the box's
@@ -373,18 +378,16 @@ fn render_with_cloud_status_badge(
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
     let cloud_diameter = cloud_icon_size(total_size);
-    let cloud = ConstrainedBox::new(
-        WarpIcon::CloudFilled
-            .to_warpui_icon(theme.foreground())
-            .finish(),
-    )
-    .with_width(cloud_diameter)
-    .with_height(cloud_diameter)
-    .finish();
+    let cloud_fill = theme.foreground();
+    let cloud = ConstrainedBox::new(WarpIcon::CloudFilled.to_warpui_icon(cloud_fill).finish())
+        .with_width(cloud_diameter)
+        .with_height(cloud_diameter)
+        .finish();
 
     let cloud_with_status: Box<dyn Element> = match status {
         Some(status) => {
             let (icon, color) = status.status_icon_and_color(theme, StatusColorStyle::Cloud);
+            let color = cloud_status_icon_color(color, cloud_fill);
             let inner = status_in_cloud_size(total_size);
             let status_icon =
                 ConstrainedBox::new(icon.to_warpui_icon(WarpThemeFill::Solid(color)).finish())
@@ -493,4 +496,38 @@ fn render_with_optional_status_badge(
         .with_width(total_size)
         .with_height(total_size)
         .finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use warp_core::ui::color::contrast::high_enough_contrast;
+
+    #[test]
+    fn cloud_status_icon_color_meets_text_contrast_on_light_cloud() {
+        let low_contrast_green = ColorU::new(0xD6, 0xFC, 0xB9, 0xFF);
+        let cloud_fill = WarpThemeFill::white();
+
+        let adjusted = cloud_status_icon_color(low_contrast_green, cloud_fill);
+
+        assert!(high_enough_contrast(
+            adjusted,
+            cloud_fill.into_solid(),
+            MinimumAllowedContrast::Text,
+        ));
+    }
+
+    #[test]
+    fn cloud_status_icon_color_meets_text_contrast_on_dark_cloud() {
+        let low_contrast_green = ColorU::new(0x00, 0x8E, 0x41, 0xFF);
+        let cloud_fill = WarpThemeFill::black();
+
+        let adjusted = cloud_status_icon_color(low_contrast_green, cloud_fill);
+
+        assert!(high_enough_contrast(
+            adjusted,
+            cloud_fill.into_solid(),
+            MinimumAllowedContrast::Text,
+        ));
+    }
 }
