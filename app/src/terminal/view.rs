@@ -1620,6 +1620,20 @@ pub struct ExecuteCommandEvent {
     pub source: CommandExecutionSource,
 }
 
+/// Controls how existing block/text selections influence focus when redetermining
+/// focus in [`TerminalView::redetermine_global_focus_with_policy`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionFocusPolicy {
+    /// In shell mode, selected blocks/text keep the terminal focused so blocklist
+    /// navigation continues to work.
+    HoldsFocus,
+    /// Selections only keep the terminal focused while the user is actively making a
+    /// selection (mid text-selection drag or mid block click). Used when a command
+    /// completes, so a selection made before or during the command doesn't prevent
+    /// focus from returning to the input box.
+    HoldsFocusOnlyWhileSelecting,
+}
+
 /// Actions that can be taken on a passive code diff via the input editor.
 #[derive(Clone, Debug)]
 pub enum CodeDiffAction {
@@ -10717,6 +10731,17 @@ impl TerminalView {
     ///
     /// See [`Self::redetermine_global_focus`] to change focus without checking that the terminal is focused.
     fn redetermine_terminal_focus(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        self.redetermine_terminal_focus_with_policy(SelectionFocusPolicy::HoldsFocus, ctx)
+    }
+
+    /// Like [`Self::redetermine_terminal_focus`], but with an explicit
+    /// [`SelectionFocusPolicy`] controlling whether existing block/text selections keep
+    /// the terminal focused.
+    fn redetermine_terminal_focus_with_policy(
+        &mut self,
+        selection_focus_policy: SelectionFocusPolicy,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
         // Only reset focus if this terminal is focused; don't steal it from another part
         // of the app, or from an AI block / code diff the user is navigating.
         let reset_focus = ctx.is_self_or_child_focused()
@@ -10724,7 +10749,7 @@ impl TerminalView {
             && !self.block_filter_editor.is_self_or_child_focused(ctx)
             && !self.is_any_ai_block_focused(ctx);
         if reset_focus {
-            self.redetermine_global_focus(ctx);
+            self.redetermine_global_focus_with_policy(selection_focus_policy, ctx);
         }
 
         reset_focus
@@ -11523,8 +11548,16 @@ impl TerminalView {
 
                 // In-band commands finishing should never trigger a focus change as it could steal
                 // focus from the TerminalView.
+                //
+                // A block/text selection made before or during the command shouldn't pin focus
+                // to the terminal now that the command has finished -- focus should return to
+                // the input box so the user can type the next command. The exception is when
+                // the user is actively making a selection at this very moment.
                 if !matches!(block_completed_event.block_type, BlockType::InBandCommand) {
-                    let reset_focus = self.redetermine_terminal_focus(ctx);
+                    let reset_focus = self.redetermine_terminal_focus_with_policy(
+                        SelectionFocusPolicy::HoldsFocusOnlyWhileSelecting,
+                        ctx,
+                    );
                     // There are two different cases for redraws here:
                     // 1. If this terminal or its children were focused, redraw immediately after
                     //    this event.
@@ -20405,6 +20438,17 @@ impl TerminalView {
     ///
     /// TODO: https://linear.app/warpdotdev/issue/CORE-277
     pub fn redetermine_global_focus(&mut self, ctx: &mut ViewContext<Self>) {
+        self.redetermine_global_focus_with_policy(SelectionFocusPolicy::HoldsFocus, ctx);
+    }
+
+    /// Like [`Self::redetermine_global_focus`], but with an explicit
+    /// [`SelectionFocusPolicy`] controlling whether existing block/text selections keep
+    /// the terminal focused.
+    fn redetermine_global_focus_with_policy(
+        &mut self,
+        selection_focus_policy: SelectionFocusPolicy,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if self.context_menu_state.is_some() {
             // This is a hack to avoid focusing on the terminal which
             // calls on_blur and closes the context menu when it is supposed
@@ -20458,8 +20502,16 @@ impl TerminalView {
             // navigation continues to work, unless the user has opted to preserve input focus.
             let preserve_input_focus =
                 *BlockListSettings::as_ref(ctx).preserve_input_focus_on_block_selection;
-            let has_block_or_text_selection_in_shell_mode =
-                is_shell_mode && !preserve_input_focus && (are_blocks_selected || is_text_selected);
+            let selection_holds_focus = match selection_focus_policy {
+                SelectionFocusPolicy::HoldsFocus => true,
+                SelectionFocusPolicy::HoldsFocusOnlyWhileSelecting => {
+                    self.is_selecting || self.mouse_down_block_index.is_some()
+                }
+            };
+            let has_block_or_text_selection_in_shell_mode = is_shell_mode
+                && !preserve_input_focus
+                && (are_blocks_selected || is_text_selected)
+                && selection_holds_focus;
 
             has_active_user_terminal_command || has_block_or_text_selection_in_shell_mode
         };
