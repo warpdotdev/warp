@@ -43,7 +43,7 @@ jobs:
             There will always be at least one such flag.
 
             ## Context
-            Feature flags are defined in warp_core/src/features.rs. They're enabled by default in app/Cargo.toml, using the default feature list. The mapping between Cargo features and app features is in the enabled_features function of app/src/lib.rs.
+            Feature flags are defined in crates/warp_core/src/features.rs. They're enabled by default in app/Cargo.toml, using the default feature list. The mapping between Cargo features and app features is in the enabled_features function of app/src/lib.rs.
 
             ## Recommended Procedure
             1. Use `git blame` on the Cargo.toml file to identify when each feature flag was enabled by default.
