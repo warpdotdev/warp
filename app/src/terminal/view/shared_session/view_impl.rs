@@ -128,6 +128,16 @@ impl TerminalView {
             {
                 return None;
             }
+            // A user-initiated share (e.g. `/remote-control` of a local
+            // conversation) carries a sidecar orchestrator `source_task_id`, but
+            // it is not a cloud conversation. The cloud-handoff continuation and
+            // tombstone UI must only apply to genuine cloud (ambient agent)
+            // conversations, so bail out for a session whose source is still set
+            // to a non-ambient kind. Sessions with no source (e.g. restored
+            // cloud-mode panes or finished viewers) fall through unchanged.
+            if model.shared_session_source().is_some() && !model.is_shared_ambient_agent_session() {
+                return None;
+            }
             self.ambient_agent_task_id_for_details_panel_from_model(&model, ctx)
         };
         let Some(task_id) = task_id else {

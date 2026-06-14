@@ -1350,6 +1350,73 @@ fn test_on_session_share_ended_does_not_insert_tombstone_for_non_ambient_session
     });
 }
 
+/// Regression test for APP-4604. A `/remote-control` share of a local
+/// conversation is a `User` share that, post-QUALITY-726, carries a sidecar
+/// orchestrator `source_task_id`. Ending that share (e.g. when the session
+/// hits the 100MB limit) must not run the cloud-handoff continuation logic and
+/// must not insert a "conversation ended" tombstone that removes the input box,
+/// even when the resolved task would otherwise produce a tombstone.
+#[test]
+fn test_on_session_share_ended_keeps_input_for_user_share_with_source_task_id() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+    let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let terminal = terminal_view_for_viewer(&mut app);
+        // A failing task owned by another user would resolve to a no-CTA
+        // tombstone for a genuine cloud (ambient) share.
+        let mut task = create_cloud_mode_task_for_user("another-user");
+        let task_id = task.task_id;
+        task.state = AmbientAgentTaskState::Failed;
+        task.status_message = Some(TaskStatusMessage {
+            message: "Environment setup failed: Failed to run setup command".to_string(),
+            error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+        });
+
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            model.insert_task_for_test(task);
+        });
+        let initial_block_height_items = terminal.read(&app, |view, _| {
+            view.model.lock().block_list().block_heights().items().len()
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.input().update(ctx, |input, ctx| {
+                input.editor().update(ctx, |editor, ctx| {
+                    editor.set_interaction_state(InteractionState::Editable, ctx);
+                });
+            });
+            let mut model = view.model.lock();
+            // A `/remote-control` share: `User` source carrying the orchestrator
+            // task id on the sidecar.
+            model.set_shared_session_source(SharedSessionSource::user(Some(task_id.to_string())));
+            // Mimic the sharer cleanup path, which flips the status to
+            // `NotShared` before `on_session_share_ended` runs.
+            model.set_shared_session_status(SharedSessionStatus::NotShared);
+            drop(model);
+            view.on_session_share_ended(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let final_block_height_items =
+                view.model.lock().block_list().block_heights().items().len();
+            // Only the shared session ended banner is inserted; no tombstone.
+            assert_eq!(final_block_height_items, initial_block_height_items + 1);
+            assert!(view.conversation_ended_tombstone_view_id.is_none());
+            assert_eq!(view.pending_cloud_followup_task_id, None);
+            // The local input box stays usable.
+            assert_eq!(
+                view.input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .interaction_state(ctx),
+                InteractionState::Editable
+            );
+        });
+    });
+}
+
 #[test]
 fn test_on_ambient_agent_execution_ended_inserts_tombstone_when_handoff_enabled() {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
