@@ -40,6 +40,8 @@ use repo_metadata::repositories::DetectedRepositories;
 use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
+#[cfg(feature = "local_fs")]
+use url::Url;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
@@ -49,6 +51,8 @@ use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
+#[cfg(feature = "local_fs")]
+use warp_util::path::{CleanPathResult, LineAndColumnArg};
 use warpui::assets::asset_cache::AssetCache;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -315,9 +319,67 @@ pub fn init(app: &mut AppContext) {
 }
 
 #[cfg(feature = "local_fs")]
+pub(super) fn file_url_link_target(link: &str) -> Option<(PathBuf, Option<LineAndColumnArg>)> {
+    let url = Url::parse(link).ok()?;
+    if url.scheme() != "file" {
+        return None;
+    }
+
+    let file_path = url.to_file_path().ok()?;
+    let mut display_path = file_path.to_string_lossy().into_owned();
+    if let Some(fragment) = url.fragment() {
+        display_path.push('#');
+        display_path.push_str(fragment);
+    }
+
+    let clean_path_result = CleanPathResult::with_line_and_column_number(&display_path);
+    if clean_path_result.line_and_column_num.is_some() {
+        Some((
+            PathBuf::from(clean_path_result.path),
+            clean_path_result.line_and_column_num,
+        ))
+    } else {
+        Some((file_path, None))
+    }
+}
+
+#[cfg(not(feature = "local_fs"))]
+impl AIBlock {
+    fn rich_content_link_for_detected_link(&self, link_type: &DetectedLinkType) -> RichContentLink {
+        match link_type {
+            DetectedLinkType::Url(link) => RichContentLink::Url(link.clone()),
+        }
+    }
+}
+
+#[cfg(feature = "local_fs")]
 impl AIBlock {
     fn detected_file_path_target_override(&self, absolute_path: &Path) -> Option<FileTarget> {
         is_supported_image_file(absolute_path).then_some(FileTarget::SystemGeneric)
+    }
+
+    fn rich_content_link_for_detected_link(&self, link_type: &DetectedLinkType) -> RichContentLink {
+        match link_type {
+            DetectedLinkType::Url(link) => {
+                if let Some((absolute_path, line_and_column_num)) = file_url_link_target(link) {
+                    return RichContentLink::FilePath {
+                        target_override: self.detected_file_path_target_override(&absolute_path),
+                        absolute_path,
+                        line_and_column_num,
+                    };
+                }
+
+                RichContentLink::Url(link.clone())
+            }
+            DetectedLinkType::FilePath {
+                absolute_path,
+                line_and_column_num,
+            } => RichContentLink::FilePath {
+                absolute_path: absolute_path.to_owned(),
+                line_and_column_num: *line_and_column_num,
+                target_override: self.detected_file_path_target_override(absolute_path),
+            },
+        }
     }
 }
 
@@ -4355,19 +4417,7 @@ impl AIBlock {
         let link_type = self
             .detected_links_state
             .link_at(&hovered.location, &hovered.link_range)?;
-        let rich_content_link = match link_type {
-            DetectedLinkType::Url(link) => RichContentLink::Url(link.clone()),
-            #[cfg(feature = "local_fs")]
-            DetectedLinkType::FilePath {
-                absolute_path,
-                line_and_column_num,
-            } => RichContentLink::FilePath {
-                absolute_path: absolute_path.to_owned(),
-                line_and_column_num: *line_and_column_num,
-                target_override: self.detected_file_path_target_override(absolute_path),
-            },
-        };
-        Some(rich_content_link)
+        Some(self.rich_content_link_for_detected_link(link_type))
     }
 
     /// `true` if the AI output in the block finished streaming.
@@ -5044,6 +5094,15 @@ impl AIBlock {
     ) {
         match self.detected_links_state.link_at(location, link_range) {
             Some(DetectedLinkType::Url(link)) => {
+                #[cfg(feature = "local_fs")]
+                if let Some((absolute_path, line_and_column_num)) = file_url_link_target(link) {
+                    ctx.emit(AIBlockEvent::OpenDetectedFilePath {
+                        target_override: self.detected_file_path_target_override(&absolute_path),
+                        absolute_path,
+                        line_and_column_num,
+                    });
+                    return;
+                }
                 ctx.open_url(link);
             }
             #[cfg(feature = "local_fs")]
@@ -5068,18 +5127,7 @@ impl AIBlock {
         let Some(link_type) = self.detected_links_state.link_at(location, link_range) else {
             return;
         };
-        let rich_content_link = match link_type {
-            DetectedLinkType::Url(link) => RichContentLink::Url(link.clone()),
-            #[cfg(feature = "local_fs")]
-            DetectedLinkType::FilePath {
-                absolute_path,
-                line_and_column_num,
-            } => RichContentLink::FilePath {
-                absolute_path: absolute_path.to_owned(),
-                line_and_column_num: *line_and_column_num,
-                target_override: self.detected_file_path_target_override(absolute_path),
-            },
-        };
+        let rich_content_link = self.rich_content_link_for_detected_link(link_type);
         self.detected_links_state.link_location_open_tooltip = Some(LinkLocation {
             link_range: link_range.clone(),
             location: *location,

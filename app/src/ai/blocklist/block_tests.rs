@@ -375,6 +375,72 @@ fn compose_child_prompt_treats_whitespace_only_base_as_empty() {
     assert_eq!(composed, "do X");
 }
 
+#[test]
+#[cfg(feature = "local_fs")]
+fn file_url_link_target_handles_percent_decoded_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file with spaces.rs");
+    std::fs::write(&path, b"fn main() {}\n").unwrap();
+    let link = url::Url::from_file_path(&path).unwrap().to_string();
+
+    let (resolved_path, line_and_column_num) =
+        super::file_url_link_target(&link).expect("file URL should parse");
+
+    assert_eq!(resolved_path, path);
+    assert_eq!(line_and_column_num, None);
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn file_url_link_target_extracts_line_and_column_suffix() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("main.rs");
+    std::fs::write(&path, b"fn main() {}\n").unwrap();
+    let link = format!("{}:42:7", url::Url::from_file_path(&path).unwrap());
+
+    let (resolved_path, line_and_column_num) =
+        super::file_url_link_target(&link).expect("file URL should parse");
+
+    assert_eq!(resolved_path, path);
+    assert_eq!(
+        line_and_column_num,
+        Some(warp_util::path::LineAndColumnArg {
+            line_num: 42,
+            column_num: Some(7),
+        })
+    );
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn file_url_link_target_extracts_github_style_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lib.rs");
+    std::fs::write(&path, b"fn lib() {}\n").unwrap();
+    let link = format!("{}#L12", url::Url::from_file_path(&path).unwrap());
+
+    let (resolved_path, line_and_column_num) =
+        super::file_url_link_target(&link).expect("file URL should parse");
+
+    assert_eq!(resolved_path, path);
+    assert_eq!(
+        line_and_column_num,
+        Some(warp_util::path::LineAndColumnArg {
+            line_num: 12,
+            column_num: None,
+        })
+    );
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn file_url_link_target_ignores_non_file_urls() {
+    assert_eq!(
+        super::file_url_link_target("https://example.com/file.rs"),
+        None
+    );
+}
+
 fn agent_cfg() -> RunAgentsAgentRunConfig {
     RunAgentsAgentRunConfig {
         name: "child".to_string(),
