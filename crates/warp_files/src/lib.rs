@@ -362,12 +362,22 @@ impl FileModel {
                     .insert(file_path.to_path_buf(), repo_root);
                 WatcherType::Repository
             } else {
-                // Fallback to individual file watcher
+                // Fallback to individual file watcher.
+                // Watch the parent directory (NonRecursive) instead of the file
+                // itself so the watch survives editors that use a
+                // delete+create/rename pattern (vim, sed -i, etc.).
+                // Using Recursive here would register inotify watches on every
+                // subdirectory, which can consume gigabytes of memory in large
+                // directory trees.
+                let watch_path = file_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| file_path.to_path_buf());
                 self.watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
-                        file_path,
+                        &watch_path,
                         WatchFilter::accept_all(),
-                        RecursiveMode::Recursive,
+                        RecursiveMode::NonRecursive,
                     ));
                 });
                 WatcherType::Individual
@@ -1131,12 +1141,21 @@ impl FileModel {
                 }
             }
 
-            // Register individual file watcher
+            // Register individual file watcher.
+            // Watch the parent directory (NonRecursive) to match the pattern
+            // used by `open()` and `unsubscribe()`. Using Recursive with
+            // accept_all() would walk the entire directory tree and register
+            // an inotify watch on every subdirectory, which can consume
+            // gigabytes of memory.
+            let watch_path = path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| path.clone());
             self.watcher.update(ctx, |watcher, _ctx| {
                 std::mem::drop(watcher.register_path(
-                    &path,
+                    &watch_path,
                     WatchFilter::accept_all(),
-                    RecursiveMode::Recursive,
+                    RecursiveMode::NonRecursive,
                 ));
             });
         }
