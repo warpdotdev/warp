@@ -332,6 +332,29 @@ impl<'a> RenderContentTreeRef<'a> {
         }
     }
 
+    /// The full line range of the first collapsed hidden section, or `None` if
+    /// there are none. Resolves the range the same way a hidden-section bar
+    /// does — the `Hidden` block's `start_line` plus its hidden line count —
+    /// so tests can fully expand the first section the bar would.
+    pub fn first_hidden_section_line_range(&self) -> Option<Range<LineCount>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        cursor.descend_to_first_item(&self.0, |_| true);
+        loop {
+            let range = {
+                let positioned = cursor.positioned_item()?;
+                if matches!(positioned.item, BlockItem::Hidden(_)) {
+                    Some(positioned.start_line..positioned.start_line + positioned.item.lines())
+                } else {
+                    None
+                }
+            };
+            if let Some(range) = range {
+                return Some(range);
+            }
+            cursor.next();
+        }
+    }
+
     pub fn is_entire_range_of_type(
         &self,
         range: &Range<CharOffset>,
@@ -1594,13 +1617,20 @@ pub fn gutter_expansion_button_types(
         }
     }
 }
-#[derive(Debug, Clone, Copy)]
+// `Clone`, not `Copy`: holds a `MouseStateHandle` (`Arc`-backed), like
+// `BlockItem::TaskList`. The hidden-range dedupe paths clone configs accordingly.
+#[derive(Debug, Clone)]
 pub struct HiddenBlockConfig {
     line_count: LineCount,
     content_length: CharOffset,
     // The location of the block is set when the hidden section is first laid out,
     // and updated in RenderState.dedupe_hidden_ranges.
     block_location: BlockLocation,
+    // Persistent hover state for the full-width bar, so it can show a hover
+    // highlight and respond to a double-click. Created once per section and
+    // carried across re-layouts (including range dedupe, which preserves the
+    // accumulating range's handle).
+    mouse_state: MouseStateHandle,
 }
 
 impl HiddenBlockConfig {
@@ -1613,7 +1643,12 @@ impl HiddenBlockConfig {
             line_count,
             content_length,
             block_location,
+            mouse_state: MouseStateHandle::default(),
         }
+    }
+
+    pub fn mouse_state(&self) -> MouseStateHandle {
+        self.mouse_state.clone()
     }
 
     pub fn height(&self) -> Pixels {
@@ -2773,9 +2808,9 @@ impl RenderState {
             for item in sub_tree.cursor::<CharOffset, CharOffset>() {
                 if let BlockItem::Hidden(config) = item {
                     if let Some(prev) = &mut hidden_config {
-                        *prev += *config;
+                        *prev += config.clone();
                     } else {
-                        hidden_config = Some(*config)
+                        hidden_config = Some(config.clone())
                     }
                 } else if hidden_config.is_none() {
                     new_tree.push(item.clone());
@@ -3260,6 +3295,15 @@ impl RenderState {
         let content = self.content();
         let offset = block.viewport_item().block_offset();
         Some(start..start + content.block_at_offset(offset)?.item.lines())
+    }
+
+    /// The full line range of the block starting at `offset`, resolved without a
+    /// `RenderableBlock`. Used to compute a hidden section's complete range for
+    /// double-click full expansion.
+    pub fn line_range_at_offset(&self, offset: CharOffset) -> Option<Range<LineCount>> {
+        let content = self.content();
+        let block = content.block_at_offset(offset)?;
+        Some(block.start_line..block.start_line + block.item.lines())
     }
 }
 

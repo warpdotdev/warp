@@ -213,3 +213,77 @@ pub fn assert_code_review_scroll_region(expected_region: ScrollRegion) -> Assert
         })
     })
 }
+
+/// Polls until the given file's diff editor has at least `min` collapsed hidden
+/// sections. Use this to wait for the diff to lay out before interacting.
+pub fn assert_min_hidden_sections(
+    expected_file_path: impl Into<String>,
+    min: usize,
+) -> AssertionCallback {
+    let expected_file_path = expected_file_path.into();
+
+    Box::new(move |app, window_id| {
+        let Some(code_review_view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure(
+                "code review view not yet available in the window".to_string(),
+            );
+        };
+        code_review_view.read(app, |code_review_view, ctx| {
+            let Some(actual) =
+                code_review_view.hidden_section_count_for_test(&expected_file_path, ctx)
+            else {
+                return AssertionOutcome::failure(format!(
+                    "expected hidden-section count for {expected_file_path:?} to be available"
+                ));
+            };
+            async_assert!(
+                actual >= min,
+                "expected at least {min} hidden sections in {expected_file_path:?}, got {actual}"
+            )
+        })
+    })
+}
+
+/// Fully expand the first hidden section (the action a bar double-click
+/// performs) and assert it removed exactly one hidden section. A chunked
+/// reveal would only shrink a range, leaving the count unchanged, so the
+/// decrement is what distinguishes a full expansion.
+pub fn expand_first_hidden_section_and_assert_full_reveal(
+    file_path: impl Into<String>,
+) -> TestStep {
+    let file_path = file_path.into();
+
+    TestStep::new("Fully expand the first hidden section").with_action(move |app, window_id, _| {
+        let code_review_view = single_code_review_view(app, window_id);
+
+        let before = code_review_view
+            .read(app, |code_review_view, ctx| {
+                code_review_view.hidden_section_count_for_test(&file_path, ctx)
+            })
+            .expect("hidden-section count should be available before expanding");
+        assert!(
+            before > 0,
+            "expected at least one hidden section before expanding {file_path:?}, got {before}"
+        );
+
+        let expanded = code_review_view.update(app, |code_review_view, ctx| {
+            code_review_view.fully_expand_first_hidden_section_for_test(&file_path, ctx)
+        });
+        assert!(
+            expanded,
+            "expected a hidden section to expand for {file_path:?}"
+        );
+
+        let after = code_review_view
+            .read(app, |code_review_view, ctx| {
+                code_review_view.hidden_section_count_for_test(&file_path, ctx)
+            })
+            .expect("hidden-section count should be available after expanding");
+        assert_eq!(
+            after,
+            before - 1,
+            "expected a full expansion to remove exactly one hidden section in {file_path:?} \
+             (a chunked reveal would leave the count unchanged)"
+        );
+    })
+}
