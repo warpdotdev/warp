@@ -1,3 +1,6 @@
+use crate::context_chips::available_chips;
+use crate::context_chips::ContextChipKind;
+use crate::ui_components::icons::Icon;
 use std::sync::Arc;
 
 use crate::context_chips::context_chip::GeneratorContext;
@@ -131,5 +134,71 @@ fn test_node_version() {
             .as_ref()
             .and_then(|v| v.as_text()),
         Some("v18.0.0")
+    );
+}
+
+#[test]
+fn test_jj_bookmark_shell_command() {
+    let generator = super::jj_bookmark();
+    assert_eq!(generator.dependencies(), &["jj".to_owned()]);
+}
+
+#[test]
+fn test_jj_dirty_items_shell_command() {
+    let generator = super::jj_dirty_items();
+    assert_eq!(generator.dependencies(), &["jj".to_owned()]);
+}
+
+#[test]
+fn test_available_chips_includes_jj_variants() {
+    let chips = available_chips();
+    assert!(chips.contains(&ContextChipKind::JjBookmark));
+    assert!(chips.contains(&ContextChipKind::JjDirtyItems));
+}
+
+#[test]
+fn test_jj_chips_udi_icon() {
+    assert_eq!(
+        ContextChipKind::JjBookmark.udi_icon(),
+        Some(Icon::GitBranch)
+    );
+    assert_eq!(ContextChipKind::JjDirtyItems.udi_icon(), Some(Icon::File));
+}
+
+#[test]
+fn test_jj_bookmark_placeholder() {
+    assert_eq!(
+        ContextChipKind::JjBookmark
+            .placeholder_value()
+            .as_text()
+            .unwrap(),
+        "jj-feature-bookmark"
+    );
+}
+
+#[test]
+fn test_jj_dirty_items_placeholder() {
+    assert_eq!(
+        ContextChipKind::JjDirtyItems
+            .placeholder_value()
+            .as_text()
+            .unwrap(),
+        "3"
+    );
+}
+
+#[test]
+fn test_jj_bookmark_display_value() {
+    assert_eq!(
+        ContextChipKind::JjBookmark.display_value(&"main".to_string().into()),
+        "jj:(main)"
+    );
+}
+
+#[test]
+fn test_jj_dirty_items_display_value() {
+    assert_eq!(
+        ContextChipKind::JjDirtyItems.display_value(&"3".to_string().into()),
+        "±3"
     );
 }
