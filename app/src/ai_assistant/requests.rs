@@ -37,6 +37,12 @@ pub enum RequestStatus {
     },
 }
 
+#[derive(Clone)]
+pub struct PinnedAssistantMessage {
+    pub transcript_part_index: usize,
+    pub completed: bool,
+}
+
 fn cache_request_limit_info(request_limit_info: RequestLimitInfo, app_mut: &mut AppContext) {
     if let Ok(serialized) = serde_json::to_string(&request_limit_info) {
         let _ = app_mut
@@ -83,6 +89,9 @@ pub struct Requests {
     /// This list is mutually exclusive from current_transcript.  
     old_transcript_parts: Vec<TranscriptPart>,
 
+    /// Assistant responses pinned by the user in the current transcript.
+    pinned_assistant_messages: Vec<PinnedAssistantMessage>,
+
     ai_execution_context: Option<WarpAiExecutionContext>,
 }
 
@@ -124,6 +133,7 @@ impl Requests {
             current_transcript: Vec::new(),
             current_transcript_summarized: false,
             old_transcript_parts: Vec::new(),
+            pinned_assistant_messages: Vec::new(),
             request_status: RequestStatus::NotInFlight,
             request_limit_info,
             ai_execution_context: None,
@@ -215,6 +225,7 @@ impl Requests {
                                 assistant: AssistantTranscriptPart {
                                     is_error: false,
                                     copy_all_tooltip_and_button_mouse_handles: Some((Default::default(), Default::default())),
+                                    pin_tooltip_and_button_mouse_handles: Some((Default::default(), Default::default())),
                                     formatted_message: FormattedTranscriptMessage {
                                         markdown: response_in_markdown,
                                         raw: trimmed_response.to_string(),
@@ -274,6 +285,7 @@ impl Requests {
                                 assistant: AssistantTranscriptPart {
                                     is_error: true,
                                     copy_all_tooltip_and_button_mouse_handles: None,
+                                    pin_tooltip_and_button_mouse_handles: None,
                                     formatted_message: FormattedTranscriptMessage {
                                         markdown: response_in_markdown,
                                         raw: response,
@@ -298,6 +310,7 @@ impl Requests {
                                 assistant: AssistantTranscriptPart {
                                     is_error: true,
                                     copy_all_tooltip_and_button_mouse_handles: None,
+                                    pin_tooltip_and_button_mouse_handles: None,
                                     formatted_message: FormattedTranscriptMessage {
                                         markdown: response_in_markdown,
                                         raw: response,
@@ -338,11 +351,61 @@ impl Requests {
         self.old_transcript_parts.extend(old_transcript);
         self.request_status = RequestStatus::NotInFlight;
         self.current_transcript_summarized = false;
+        self.pinned_assistant_messages.clear();
         ctx.notify();
     }
 
     pub fn transcript(&self) -> &[TranscriptPart] {
         self.current_transcript.as_slice()
+    }
+
+    pub fn pinned_assistant_messages(&self) -> &[PinnedAssistantMessage] {
+        self.pinned_assistant_messages.as_slice()
+    }
+
+    pub fn is_assistant_message_pinned(&self, transcript_part_index: usize) -> bool {
+        self.pinned_assistant_messages
+            .iter()
+            .any(|pinned| pinned.transcript_part_index == transcript_part_index)
+    }
+
+    pub fn toggle_pinned_assistant_message(
+        &mut self,
+        transcript_part_index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(index) = self
+            .pinned_assistant_messages
+            .iter()
+            .position(|pinned| pinned.transcript_part_index == transcript_part_index)
+        {
+            self.pinned_assistant_messages.remove(index);
+        } else if self
+            .current_transcript
+            .get(transcript_part_index)
+            .is_some_and(|part| !part.assistant.is_error)
+        {
+            self.pinned_assistant_messages.push(PinnedAssistantMessage {
+                transcript_part_index,
+                completed: false,
+            });
+        }
+        ctx.notify();
+    }
+
+    pub fn toggle_pinned_assistant_message_completed(
+        &mut self,
+        transcript_part_index: usize,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(pinned) = self
+            .pinned_assistant_messages
+            .iter_mut()
+            .find(|pinned| pinned.transcript_part_index == transcript_part_index)
+        {
+            pinned.completed = !pinned.completed;
+            ctx.notify();
+        }
     }
 
     /// Includes the old transcript parts appended with the current
@@ -423,6 +486,7 @@ impl Requests {
             current_transcript: transcript,
             current_transcript_summarized: false,
             old_transcript_parts: Vec::new(),
+            pinned_assistant_messages: Vec::new(),
             request_status: RequestStatus::NotInFlight,
             request_limit_info: RequestLimitInfo::default(),
             ai_execution_context: None,

@@ -36,6 +36,7 @@ pub struct AssistantTranscriptPart {
     pub is_error: bool,
     pub formatted_message: FormattedTranscriptMessage,
     pub copy_all_tooltip_and_button_mouse_handles: Option<(MouseStateHandle, MouseStateHandle)>,
+    pub pin_tooltip_and_button_mouse_handles: Option<(MouseStateHandle, MouseStateHandle)>,
 }
 
 /// The information needed to render a single transcript message (whether it be a question or answer).

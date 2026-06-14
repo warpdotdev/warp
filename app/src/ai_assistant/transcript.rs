@@ -13,11 +13,12 @@ use warpui::elements::{
 };
 use warpui::keymap::Keystroke;
 use warpui::platform::Cursor;
+use warpui::presenter::ChildView;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::units::{IntoPixels, Pixels};
 use warpui::{
     AppContext, BlurContext, Element, Entity, FocusContext, ModelHandle, SingletonEntity,
-    TypedActionView, View, ViewContext, WeakViewHandle,
+    TypedActionView, View, ViewContext, ViewHandle, WeakViewHandle,
 };
 
 use super::panel::{HEADER_HEIGHT, HEXAGON_ALERT_SVG_PATH};
@@ -29,6 +30,7 @@ use super::utils::{
 };
 use super::AI_ASSISTANT_SVG_PATH;
 use crate::appearance::Appearance;
+use crate::editor::{EditorOptions, EditorView, PropagateAndNoOpNavigationKeys, TextOptions};
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::{SaveAsWorkflowModalSource, TelemetryEvent, WarpAIActionType};
 use crate::ui_components::blended_colors;
@@ -39,6 +41,8 @@ const TRANSCRIPT_POSITION_ID: &str = "ai_assistant::transcript";
 const TERMINAL_INPUT_SVG_PATH: &str = "bundled/svg/terminal-input.svg";
 const USER_ICON_SVG_PATH: &str = "bundled/svg/user.svg";
 const SAVE_WORKFLOW_ICON_PATH: &str = "bundled/svg/workflow.svg";
+const PIN_ICON_PATH: &str = "bundled/svg/pin-01.svg";
+const PIN_FILLED_ICON_PATH: &str = "bundled/svg/pin-filled.svg";
 
 const BODY_FONT_SIZE: f32 = 13.;
 const CODE_FONT_SIZE: f32 = 12.;
@@ -50,6 +54,8 @@ const DETAILS_BOTTOM_MARGIN: f32 = 12.;
 const COPY_BUTTON_SIZE: f32 = 14.;
 const TERMINAL_INPUT_BUTTON_SIZE: f32 = 20.;
 const SAVE_AS_WORKFLOW_BUTTON_SIZE: f32 = 20.;
+const PIN_BUTTON_SIZE: f32 = 16.;
+const MAX_NOTES_HEIGHT: f32 = 140.;
 
 const HOW_DO_I_FIX_PROMPT: &str = "How do I fix this?";
 const SHOW_EXAMPLES_PROMPT: &str = "Show examples.";
@@ -58,9 +64,30 @@ const IN_FLIGHT_REQUEST_TEXT: &str = "Generating answer...";
 const ACCURACY_NOTICE_TEXT: &str = "AI responses can be inaccurate.";
 const MISSING_CONTEXT_NOTICE_TEXT: &str =
     "Warp AI might forget earlier answers as conversations get long.";
+const NOTES_PLACEHOLDER_TEXT: &str = " Notes...";
 
 lazy_static::lazy_static! {
     static ref SCROLL_BUFFER_OFFSET_PX: Pixels = (10.).into_pixels();
+}
+
+fn transcript_part_position_id(index: usize) -> String {
+    format!("ai_assistant::transcript_part::{index}")
+}
+
+fn pinned_message_preview(text: &str) -> String {
+    const MAX_PREVIEW_CHARS: usize = 120;
+
+    let mut preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if preview.chars().count() > MAX_PREVIEW_CHARS {
+        preview = preview
+            .chars()
+            .take(MAX_PREVIEW_CHARS)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        preview.push('…');
+    }
+    preview
 }
 
 #[derive(Debug, Clone, Default)]
@@ -85,6 +112,7 @@ pub struct Transcript {
     view_handle: WeakViewHandle<Transcript>,
 
     requests_model: ModelHandle<Requests>,
+    notes_editor: ViewHandle<EditorView>,
     selected_code_block: Option<CodeBlockIndex>,
 
     clipped_scroll_state: ClippedScrollStateHandle,
@@ -103,6 +131,15 @@ pub enum TranscriptAction {
         code_block_index: CodeBlockIndex,
     },
     OpenWorkflowModal(CodeBlockIndex),
+    TogglePinnedAnswer {
+        transcript_part_index: usize,
+    },
+    TogglePinnedAnswerCompleted {
+        transcript_part_index: usize,
+    },
+    JumpToPinnedAnswer {
+        transcript_part_index: usize,
+    },
     ClickedCodeBlock {
         code_block_index: CodeBlockIndex,
     },
@@ -158,6 +195,23 @@ impl TypedActionView for Transcript {
                 self.paste_in_terminal_input(*code_block_index, ctx);
             }
             OpenWorkflowModal(code_block_index) => self.open_workflow_modal(*code_block_index, ctx),
+            TogglePinnedAnswer {
+                transcript_part_index,
+            } => {
+                self.requests_model.update(ctx, |requests, ctx| {
+                    requests.toggle_pinned_assistant_message(*transcript_part_index, ctx);
+                });
+            }
+            TogglePinnedAnswerCompleted {
+                transcript_part_index,
+            } => {
+                self.requests_model.update(ctx, |requests, ctx| {
+                    requests.toggle_pinned_assistant_message_completed(*transcript_part_index, ctx);
+                });
+            }
+            JumpToPinnedAnswer {
+                transcript_part_index,
+            } => self.scroll_to_transcript_part(*transcript_part_index, ctx),
             ClickedUrl(url) => {
                 ctx.open_url(&url.url);
             }
@@ -182,10 +236,30 @@ impl TypedActionView for Transcript {
 impl Transcript {
     pub fn new(requests_model: &ModelHandle<Requests>, ctx: &mut ViewContext<Self>) -> Self {
         ctx.observe(requests_model, |_, _, ctx| ctx.notify());
+        let notes_editor = {
+            ctx.add_typed_action_view(|ctx| {
+                let appearance = Appearance::as_ref(ctx);
+                let options = EditorOptions {
+                    text: TextOptions::ui_text(Some(BODY_FONT_SIZE), appearance),
+                    propagate_and_no_op_vertical_navigation_keys:
+                        PropagateAndNoOpNavigationKeys::Always,
+                    autogrow: true,
+                    soft_wrap: true,
+                    supports_vim_mode: true,
+                    ..Default::default()
+                };
+
+                EditorView::new(options, ctx)
+            })
+        };
+        notes_editor.update(ctx, |editor, ctx| {
+            editor.set_placeholder_text(NOTES_PLACEHOLDER_TEXT, ctx)
+        });
 
         Self {
             view_handle: ctx.handle(),
             requests_model: requests_model.to_owned(),
+            notes_editor,
             selected_code_block: None,
             clipped_scroll_state: Default::default(),
             mouse_state_handles: Default::default(),
@@ -315,6 +389,29 @@ impl Transcript {
         }
     }
 
+    fn scroll_to_transcript_part(
+        &mut self,
+        transcript_part_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(transcript_pos) = ctx.element_position_by_id(TRANSCRIPT_POSITION_ID) else {
+            return;
+        };
+        let Some(part_pos) =
+            ctx.element_position_by_id(transcript_part_position_id(transcript_part_index))
+        else {
+            return;
+        };
+
+        let current_scroll_top_px = self.clipped_scroll_state.scroll_start();
+        let part_start_y_px =
+            part_pos.origin_y().into_pixels() - transcript_pos.origin_y().into_pixels();
+
+        self.clipped_scroll_state
+            .scroll_to(current_scroll_top_px + part_start_y_px - *SCROLL_BUFFER_OFFSET_PX);
+        ctx.notify();
+    }
+
     pub fn scroll_to_bottom_of_transcript(&mut self, ctx: &mut ViewContext<Self>) {
         // This relies on the fact that the clipped scrollable will recompute
         // the scroll_top in after_layout if it exceeds the true max.
@@ -424,7 +521,6 @@ impl Transcript {
                     code_block_index,
                 });
             })
-            .with_cursor(Cursor::PointingHand)
             .finish();
 
         buttons.add_child(appearance.ui_builder().tool_tip_on_element(
@@ -521,6 +617,7 @@ impl Transcript {
         transcript_part_index: usize,
         part: &AssistantTranscriptPart,
         appearance: &Appearance,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
@@ -545,30 +642,87 @@ impl Transcript {
             .finish()
         };
 
-        let bottom_right_element = part.copy_all_tooltip_and_button_mouse_handles.clone().map(
-            |(tooltip_handle, button_handle)| {
-                let copy_button = appearance
-                    .ui_builder()
-                    .copy_button(16., button_handle)
-                    .build()
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(TranscriptAction::CopyAnswerToClipboard {
-                            transcript_part_index,
-                        })
+        let mut buttons = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if let Some((tooltip_handle, button_handle)) =
+            part.copy_all_tooltip_and_button_mouse_handles.clone()
+        {
+            let copy_button = appearance
+                .ui_builder()
+                .copy_button(16., button_handle)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(TranscriptAction::CopyAnswerToClipboard {
+                        transcript_part_index,
                     })
-                    .with_cursor(Cursor::PointingHand)
-                    .finish();
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish();
 
-                appearance.ui_builder().tool_tip_on_element(
-                    "Copy answer to clipboard".to_string(),
+            buttons.add_child(appearance.ui_builder().tool_tip_on_element(
+                "Copy answer to clipboard".to_string(),
+                tooltip_handle,
+                copy_button,
+                ParentAnchor::TopRight,
+                ChildAnchor::BottomRight,
+                vec2f(0., -5.),
+            ));
+        }
+
+        if let Some((tooltip_handle, button_handle)) =
+            part.pin_tooltip_and_button_mouse_handles.clone()
+        {
+            let is_pinned = self
+                .requests_model
+                .as_ref(app)
+                .is_assistant_message_pinned(transcript_part_index);
+            let icon_path = if is_pinned {
+                PIN_FILLED_ICON_PATH
+            } else {
+                PIN_ICON_PATH
+            };
+            let tooltip_text = if is_pinned {
+                "Unpin answer"
+            } else {
+                "Pin answer"
+            };
+            let pin_button = appearance
+                .ui_builder()
+                .animated_button(
+                    button_handle,
+                    icon_path,
+                    AnimatedButtonOptions {
+                        size: PIN_BUTTON_SIZE,
+                        padding: Some(3.),
+                        color: None,
+                        with_accent_animations: true,
+                        circular: true,
+                    },
+                )
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(TranscriptAction::TogglePinnedAnswer {
+                        transcript_part_index,
+                    })
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish();
+
+            buttons.add_child(
+                Container::new(appearance.ui_builder().tool_tip_on_element(
+                    tooltip_text.to_string(),
                     tooltip_handle,
-                    copy_button,
+                    pin_button,
                     ParentAnchor::TopRight,
                     ChildAnchor::BottomRight,
                     vec2f(0., -5.),
-                )
-            },
-        );
+                ))
+                .with_margin_left(10.)
+                .finish(),
+            );
+        }
+        let bottom_right_element = Some(buttons.finish());
 
         self.render_message(
             &part.formatted_message,
@@ -597,6 +751,128 @@ impl Transcript {
         .with_width(16.)
         .finish();
         self.render_message(dialogue, background_color, icon, None, appearance)
+    }
+
+    fn render_notes_section(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        Container::new(
+            Flex::column()
+                .with_child(
+                    Text::new_inline("Notes", appearance.ui_font_family(), BODY_FONT_SIZE)
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
+                )
+                .with_child(
+                    ConstrainedBox::new(
+                        Container::new(ChildView::new(&self.notes_editor).finish())
+                            .with_background_color(theme.surface_2().into_solid())
+                            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                            .with_uniform_padding(8.)
+                            .with_margin_top(8.)
+                            .finish(),
+                    )
+                    .with_max_height(MAX_NOTES_HEIGHT)
+                    .finish(),
+                )
+                .finish(),
+        )
+        .with_padding_left(PANEL_LEFT_MARGIN)
+        .with_padding_right(20.)
+        .with_padding_top(16.)
+        .with_padding_bottom(16.)
+        .finish()
+    }
+
+    fn render_pinned_messages(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let requests = self.requests_model.as_ref(app);
+        let transcript = requests.transcript();
+        let mut column = Flex::column().with_child(
+            Text::new_inline("Pinned", appearance.ui_font_family(), BODY_FONT_SIZE)
+                .with_color(theme.active_ui_text_color().into())
+                .finish(),
+        );
+
+        for pinned in requests.pinned_assistant_messages() {
+            let Some(part) = transcript.get(pinned.transcript_part_index) else {
+                continue;
+            };
+            let transcript_part_index = pinned.transcript_part_index;
+            let checkbox = if pinned.completed { "☑" } else { "☐" };
+            let checkbox = EventHandler::new(
+                Container::new(
+                    Text::new_inline(checkbox, appearance.ui_font_family(), BODY_FONT_SIZE)
+                        .with_color(theme.active_ui_text_color().into())
+                        .finish(),
+                )
+                .with_margin_right(8.)
+                .finish(),
+            )
+            .on_left_mouse_down(move |ctx, _, _| {
+                ctx.dispatch_typed_action(TranscriptAction::TogglePinnedAnswerCompleted {
+                    transcript_part_index,
+                });
+                DispatchEventResult::StopPropagation
+            })
+            .finish();
+
+            let row = EventHandler::new(
+                Container::new(
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_child(checkbox)
+                        .with_child(
+                            Shrinkable::new(
+                                1.,
+                                appearance
+                                    .ui_builder()
+                                    .wrappable_text(
+                                        pinned_message_preview(part.raw_assistant_answer()),
+                                        true,
+                                    )
+                                    .with_style(UiComponentStyles {
+                                        font_size: Some(BODY_FONT_SIZE),
+                                        font_family_id: Some(appearance.ui_font_family()),
+                                        font_color: Some(
+                                            theme.main_text_color(theme.surface_2()).into(),
+                                        ),
+                                        ..Default::default()
+                                    })
+                                    .build()
+                                    .finish(),
+                            )
+                            .finish(),
+                        )
+                        .finish(),
+                )
+                .with_background_color(theme.surface_2().into_solid())
+                .with_border(Border::all(1.).with_border_fill(theme.outline()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                .with_uniform_padding(8.)
+                .with_margin_top(8.)
+                .finish(),
+            )
+            .on_left_mouse_down(move |ctx, _, _| {
+                ctx.dispatch_typed_action(TranscriptAction::JumpToPinnedAnswer {
+                    transcript_part_index,
+                });
+                DispatchEventResult::StopPropagation
+            })
+            .finish();
+
+            column.add_child(row);
+        }
+
+        Container::new(column.finish())
+            .with_padding_left(PANEL_LEFT_MARGIN)
+            .with_padding_right(20.)
+            .with_padding_bottom(16.)
+            .finish()
     }
 
     /// Renders a single message (whether that be a user's prompt or assistant's answer).
@@ -819,9 +1095,24 @@ impl View for Transcript {
         let num_remaining_reqs = self.requests_model.as_ref(app).num_remaining_reqs();
 
         let mut blocks = Flex::column();
+        blocks.add_child(self.render_notes_section(appearance));
+        if !self
+            .requests_model
+            .as_ref(app)
+            .pinned_assistant_messages()
+            .is_empty()
+        {
+            blocks.add_child(self.render_pinned_messages(appearance, app));
+        }
         for (index, part) in transcript.iter().enumerate() {
             blocks.add_child(self.render_user_prompt(&part.user, appearance));
-            blocks.add_child(self.render_assistant_answer(index, &part.assistant, appearance));
+            blocks.add_child(
+                SavePosition::new(
+                    self.render_assistant_answer(index, &part.assistant, appearance, app),
+                    &transcript_part_position_id(index),
+                )
+                .finish(),
+            );
         }
 
         if let RequestStatus::InFlight { request, .. } = request_status {
@@ -838,12 +1129,14 @@ impl View for Transcript {
                 &AssistantTranscriptPart {
                     is_error: false,
                     copy_all_tooltip_and_button_mouse_handles: None,
+                    pin_tooltip_and_button_mouse_handles: None,
                     formatted_message: FormattedTranscriptMessage {
                         markdown: in_flight_request_markdown,
                         raw: IN_FLIGHT_REQUEST_TEXT.to_owned(),
                     },
                 },
                 appearance,
+                app,
             ));
         }
 
