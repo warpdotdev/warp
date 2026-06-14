@@ -23,8 +23,8 @@ from collections import defaultdict
 
 
 def list_fonts():
-    command = "gcloud storage ls --recursive 'gs://warp-static-assets/fallback-fonts/**.ttf'"
-    return subprocess.check_output(command, shell=True, text=True).splitlines()
+    command = ["gcloud", "storage", "ls", "--recursive", "gs://warp-static-assets/fallback-fonts/**.ttf"]
+    return subprocess.check_output(command, text=True).splitlines()
 
 
 def generate_families(font_uris):
