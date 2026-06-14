@@ -38,6 +38,47 @@ cfg_if::cfg_if! {
     }
 }
 
+/// Identifies which step of MCP config-file processing produced a
+/// [`ConfigParseError`]. Used to format a user-facing message in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigParseStage {
+    /// I/O error reading the config file (not "file is missing", which is normal).
+    Read,
+    /// TOML normalization failed (Codex configs only).
+    TomlNormalize,
+    /// A `${VAR}` reference could not be resolved from the environment.
+    EnvSubstitute,
+    /// JSON deserialization of the config contents failed.
+    JsonParse,
+}
+
+/// A structured record of a single config-file parse failure, carried alongside
+/// the (now empty) server list in `FileMCPWatcherEvent::ConfigParsed` so the
+/// settings UI can surface a banner instead of silently showing zero servers
+/// (issue #9807).
+#[derive(Debug, Clone)]
+pub struct ConfigParseError {
+    pub path: PathBuf,
+    pub provider: MCPProvider,
+    pub stage: ConfigParseStage,
+    /// The underlying error rendered with `{:#}`; safe for the local UI since
+    /// the user authored this config themselves.
+    pub message: String,
+}
+
+impl ConfigParseError {
+    /// Returns a short sentence suitable for an inline warning in Settings.
+    pub fn user_message(&self) -> String {
+        let what = match self.stage {
+            ConfigParseStage::Read => "Couldn't read this config file",
+            ConfigParseStage::TomlNormalize => "Invalid TOML",
+            ConfigParseStage::EnvSubstitute => "Missing required environment variable",
+            ConfigParseStage::JsonParse => "Invalid JSON",
+        };
+        format!("{what}: {}", self.message)
+    }
+}
+
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         pub mod file_based_manager;

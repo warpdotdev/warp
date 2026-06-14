@@ -1203,6 +1203,12 @@ impl MCPServersListPageView {
             .with_spacing(style::PAGE_SPACING)
             .with_child(description);
 
+        // Surface MCP config-file parse failures above all other page content so
+        // the user sees them whether or not any servers were detected.
+        if let Some(error_banner) = self.render_config_parse_errors_banner(appearance, app) {
+            page.add_child(error_banner);
+        }
+
         let search_term = self.search_editor.as_ref(app).buffer_text(app);
 
         // Collect filtered server cards by ID.
@@ -1480,6 +1486,89 @@ impl MCPServersListPageView {
             .finish()
     }
 
+    /// Builds an inline banner section that flags any MCP config files that
+    /// failed to load. Returns `None` when there are no current parse errors so
+    /// the page body can skip allocating an empty container. Each banner names
+    /// the provider, the file path, and a short reason, so the user no longer
+    /// has to inspect logs to learn why a config that exists on disk produced
+    /// zero servers (issue #9807).
+    fn render_config_parse_errors_banner(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let theme = appearance.theme();
+        let mut errors: Vec<_> = FileBasedMCPManager::as_ref(app)
+            .config_parse_errors()
+            .collect();
+        if errors.is_empty() {
+            return None;
+        }
+        // Stable order: by provider, then path. Avoids flicker between renders.
+        errors.sort_by(|a, b| {
+            (a.provider.display_name(), &a.path).cmp(&(b.provider.display_name(), &b.path))
+        });
+
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(8.);
+        for error in errors {
+            let header_line = format!(
+                "{} · {}",
+                error.provider.display_name(),
+                error.path.display()
+            );
+            let icon = ConstrainedBox::new(
+                Icon::AlertTriangle
+                    .to_warpui_icon(theme.ui_error_color().into())
+                    .finish(),
+            )
+            .with_height(16.)
+            .with_width(16.)
+            .finish();
+
+            let text_column = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_spacing(2.)
+                .with_child(
+                    Text::new(header_line, appearance.ui_font_family(), 12.)
+                        .with_color(theme.ui_error_color())
+                        .finish(),
+                )
+                .with_child(
+                    appearance
+                        .ui_builder()
+                        .wrappable_text(error.user_message(), true)
+                        .with_style(style::description_text(appearance))
+                        .build()
+                        .finish(),
+                )
+                .finish();
+
+            let row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(
+                    Container::new(icon)
+                        .with_margin_right(8.)
+                        .with_margin_top(2.)
+                        .finish(),
+                )
+                .with_child(Expanded::new(1., text_column).finish())
+                .finish();
+
+            let banner = Container::new(row)
+                .with_padding_left(12.)
+                .with_padding_right(12.)
+                .with_padding_top(10.)
+                .with_padding_bottom(10.)
+                .with_border(Border::all(1.).with_border_color(theme.ui_error_color()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .finish();
+            column = column.with_child(banner);
+        }
+        Some(column.finish())
+    }
+
     fn render_empty_state(&self, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
         Container::new(
             ConstrainedBox::new(
@@ -1723,6 +1812,12 @@ impl MCPServersListPageView {
     #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
     fn refresh_file_based_server_cards(&mut self, ctx: &mut ViewContext<Self>) {
         self.create_file_based_server_cards(ctx);
+        // Notify unconditionally so the parse-error banner re-renders even on
+        // ConfigParsed / ConfigRemoved events that don't create or clear any
+        // server cards (e.g. the first parse failure on a previously-empty
+        // config). Other call sites already notify via adjacent state changes,
+        // but the watcher path has no such side-effect.
+        ctx.notify();
     }
 
     fn toggle_server_running_file_based(
