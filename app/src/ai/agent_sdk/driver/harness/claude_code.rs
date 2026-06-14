@@ -180,6 +180,10 @@ impl ThirdPartyHarness for ClaudeHarness {
             resolved_mcp_servers,
         )?))
     }
+
+    fn requires_verified_platform_plugin(&self) -> bool {
+        true
+    }
 }
 
 /// Format slug sent to the server when creating a Claude Code conversation.
