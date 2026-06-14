@@ -1296,6 +1296,109 @@ fn test_clone_command_from_blockgrid_to_empty() {
     assert_eq!(new_content, "clone1\nclone2\nclone3");
 }
 
+#[test]
+fn test_multiline_preexec_reconciles_command_grid_redraw_prefix() {
+    let cases = [
+        (
+            "ececho \"line one\" && \\\r\necho \"line two\"",
+            "echo \"line one\" && \\\necho \"line two\"",
+        ),
+        ("aasdf\r\nasdf", "asdf\nasdf"),
+    ];
+
+    for (command_grid_text, reported_command) in cases {
+        let prompt_and_command_grid = mock_blockgrid(command_grid_text);
+        let mut rprompt_grid = mock_blockgrid("");
+        rprompt_grid.finish();
+        let mut output_grid = mock_blockgrid("");
+        output_grid.finish();
+
+        let mut block = create_test_block_with_grids(
+            BlockIndex::zero(),
+            prompt_and_command_grid,
+            rprompt_grid,
+            output_grid,
+            false, /* honor_ps1 */
+        );
+        block.set_honor_ps1(false);
+
+        block.preexec(PreexecValue {
+            command: reported_command.to_owned(),
+            session_id: None,
+        });
+
+        assert_eq!(block.command_to_string(), reported_command);
+        assert_eq!(
+            block.prompt_and_command_with_secrets_unobfuscated(false),
+            reported_command
+        );
+    }
+}
+
+#[test]
+fn test_multiline_preexec_reconciliation_preserves_prompt_demarcation() {
+    let prompt = "warp> ";
+    let reported_command = "echo \"line one\" && \\\necho \"line two\"";
+    let mut block = TestBlockBuilder::new().with_honor_ps1(true).build();
+    block.prompt_marker(ansi::PromptMarker::StartPrompt {
+        kind: ansi::PromptKind::Initial,
+    });
+    for c in prompt.chars() {
+        block.input(c);
+    }
+    block.prompt_marker(ansi::PromptMarker::EndPrompt);
+    block.start();
+    for c in "ececho \"line one\" && \\".chars() {
+        block.input(c);
+    }
+    block.carriage_return();
+    block.linefeed();
+    for c in "echo \"line two\"".chars() {
+        block.input(c);
+    }
+
+    block.preexec(PreexecValue {
+        command: reported_command.to_owned(),
+        session_id: None,
+    });
+
+    assert_eq!(block.command_to_string(), reported_command);
+    assert_eq!(
+        block.prompt_and_command_with_secrets_unobfuscated(false),
+        format!("{prompt}{reported_command}")
+    );
+}
+
+#[test]
+fn test_multiline_preexec_preserves_legitimate_repeated_command_prefix() {
+    let reported_command = "aasdf\nasdf";
+    let prompt_and_command_grid = mock_blockgrid("aasdf\r\nasdf");
+    let mut rprompt_grid = mock_blockgrid("");
+    rprompt_grid.finish();
+    let mut output_grid = mock_blockgrid("");
+    output_grid.finish();
+
+    let mut block = create_test_block_with_grids(
+        BlockIndex::zero(),
+        prompt_and_command_grid,
+        rprompt_grid,
+        output_grid,
+        false, /* honor_ps1 */
+    );
+    block.set_honor_ps1(false);
+
+    block.preexec(PreexecValue {
+        command: reported_command.to_owned(),
+        session_id: None,
+    });
+
+    assert_eq!(block.command_to_string(), reported_command);
+    assert_eq!(
+        block.prompt_and_command_with_secrets_unobfuscated(false),
+        reported_command
+    );
+}
+
 /// Tests is_command_empty for an empty command with the combined grid.
 #[test]
 fn test_command_is_empty_combined_grid() {
