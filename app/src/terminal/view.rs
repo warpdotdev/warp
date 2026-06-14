@@ -5624,17 +5624,19 @@ impl TerminalView {
     }
 
     pub fn attach_path_as_context(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
-        // If a CLI agent is running, write the path directly to the PTY.
-        if self.active_cli_agent(ctx).is_some() {
-            let content = path.to_string_lossy().to_string();
-            self.write_to_pty(content.into_bytes(), ctx);
-            self.focus_terminal(ctx);
+        let content = path.to_string_lossy().to_string();
+
+        // If a CLI agent is running, route the context to rich input when it is
+        // open, otherwise fall back to writing directly to the PTY.
+        if self
+            .try_send_text_to_cli_agent_or_rich_input(content.clone(), ctx)
+            .is_some()
+        {
             return;
         }
 
         self.input.update(ctx, |input, ctx| {
-            let content = path.to_string_lossy();
-            input.append_to_buffer(content.as_ref(), ctx);
+            input.append_to_buffer(content.as_str(), ctx);
             ctx.notify();
         });
     }
