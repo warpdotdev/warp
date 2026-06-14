@@ -2341,3 +2341,41 @@ fn test_device_status_uses_active_block_if_no_typeahead() {
 
     assert_eq!(writer, "\x1b[1;21R".as_bytes());
 }
+
+/// Regression test: rich content blocks must be marked dirty when the pane width
+/// changes so the layout engine re-measures them on the next frame. Without this,
+/// blocks kept their old wrap width after the window was maximized, leaving a blank
+/// area on the right side.
+#[test]
+fn test_resize_marks_rich_content_dirty() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+
+    let view_id_a = EntityId::new();
+    let view_id_b = EntityId::new();
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id_a, None), false);
+    block_list.append_rich_content(RichContentItem::new_for_test(None, view_id_b, None), false);
+
+    // Clear any dirty state left over from appending.
+    let _ = block_list.take_dirty_rich_content_items();
+
+    let old_size = SizeInfo::new_without_font_metrics(24, 80);
+    let new_size = SizeInfo::new_without_font_metrics(24, 200);
+
+    let size_update = SizeUpdate {
+        update_reason: SizeUpdateReason::Refresh,
+        last_size: old_size,
+        new_size,
+        new_gap_height: None,
+        natural_rows: 24,
+        natural_cols: 200,
+    };
+
+    assert!(size_update.pane_size_changed());
+
+    block_list.resize(&size_update, true);
+
+    let dirty = block_list.take_dirty_rich_content_items();
+    assert!(dirty.contains(&view_id_a));
+    assert!(dirty.contains(&view_id_b));
+}

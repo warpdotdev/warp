@@ -2127,6 +2127,22 @@ impl BlockList {
                 }
             },
         );
+
+        // Rich content blocks are sized by the UI layout engine, not by the terminal
+        // grid, so they don't get reflowed by the Block::resize() calls above.
+        // Mark them all dirty so they are re-measured against the new pane width.
+        if size_update.pane_size_changed() {
+            self.mark_all_rich_content_dirty();
+        }
+    }
+
+    /// Marks every rich content item dirty so heights are re-measured on the next layout pass.
+    fn mark_all_rich_content_dirty(&mut self) {
+        for item in self.removable_blocklist_item_positions.keys() {
+            if let RemovableBlocklistItem::RichContent(view_id) = item {
+                self.dirty_rich_content_items.insert(*view_id);
+            }
+        }
     }
 
     /// Helper function to update each block--ensuring the BlockHeights sumtree is appropriately
