@@ -1,4 +1,8 @@
 //! This module contains common utilities for rendering Blocklist AI UI.
+
+#[cfg(test)]
+#[path = "view_util_tests.rs"]
+mod tests;
 use std::sync::LazyLock;
 
 use pathfinder_color::ColorU;
@@ -137,6 +141,11 @@ pub fn get_attached_blocks_chip_element_position_id(view_id: EntityId) -> String
 /// Returns the saved position ID of the overflow menu inside the [`AIBlock`] header.
 pub fn get_ai_block_overflow_menu_element_position_id(view_id: EntityId) -> String {
     format!("aiblock:{view_id}.overflow_menu_position")
+}
+
+/// Formats a token count for display, e.g. 1247 becomes "1247 tok".
+pub fn format_token_count(tokens: u64) -> String {
+    format!("{tokens} tok")
 }
 
 /// Formats credit count to display as whole numbers when the value is effectively a whole number,

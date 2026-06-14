@@ -21,7 +21,7 @@ use crate::ai::blocklist::usage::render_context_window_usage_icon;
 use crate::ai::blocklist::usage::rollup::{
     compute_orchestration_rollup, AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry,
 };
-use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::view_util::{format_credits, format_token_count};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
@@ -343,6 +343,20 @@ impl ConversationUsageView {
             format_value_text(self.usage_info.tool_calls, "call"),
             appearance,
         ));
+
+        let total_tokens: u64 = self
+            .usage_info
+            .models
+            .iter()
+            .map(|u| u64::from(u.warp_tokens + u.byok_tokens + u.custom_endpoint_tokens))
+            .sum();
+        if total_tokens > 0 {
+            labels.push(render_label_text("Tokens", appearance));
+            values.push(render_value_text(
+                format_token_count(total_tokens),
+                appearance,
+            ));
+        }
 
         let entries_by_category = self.collect_models_by_category();
         let mut categories: Vec<_> = entries_by_category.keys().cloned().collect();
