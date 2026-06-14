@@ -307,7 +307,7 @@ impl Entry {
                         BudgetExceededBehavior::FailFast => true,
                         BudgetExceededBehavior::StopAndLazyLoad => {
                             quota.is_none_or(|remaining| remaining > 0)
-                                || matches_force_included_path(
+                                || matches_ignored_path_interest(
                                     &job.path,
                                     options.force_included_paths,
                                 )
@@ -581,7 +581,7 @@ fn evaluate_entry(
             false, /* check_ancestors */
         );
 
-    let force_included = matches_force_included_path(curr_path, options.force_included_paths);
+    let force_included = matches_ignored_path_interest(curr_path, options.force_included_paths);
 
     // If we've reached the max depth, force lazy-loading even of non-ignored folders unless the
     // folder is on the path to a force-included subtree.
@@ -688,10 +688,12 @@ pub fn is_git_internal_path(path: &Path) -> bool {
 }
 
 /// Returns `true` when `path` is, contains, or lies on the way to one of the
-/// `force_included_paths`. Each force-included path is a relative component
-/// sequence (e.g. `.agents/skills`) matched against the tail of `path`, so a
-/// match also holds for the ancestor prefixes leading to it.
-fn matches_force_included_path(path: &Path, force_included_paths: &[PathBuf]) -> bool {
+/// `force_included_paths` (component-aware tail match). Also used for the
+/// failed-walk-cache exception: an interest path overrides the cache.
+pub(crate) fn matches_ignored_path_interest(
+    path: &Path,
+    ignored_path_interests: &[PathBuf],
+) -> bool {
     let path_components: Vec<_> = path
         .components()
         .filter_map(|component| match component {
@@ -703,7 +705,7 @@ fn matches_force_included_path(path: &Path, force_included_paths: &[PathBuf]) ->
         })
         .collect();
 
-    force_included_paths.iter().any(|force_included| {
+    ignored_path_interests.iter().any(|force_included| {
         let force_included_components: Vec<_> = force_included
             .components()
             .filter_map(|component| match component {
@@ -988,7 +990,7 @@ pub fn should_watch_repo_directory(
         return should_watch_directory_in_git_path(path);
     }
 
-    if matches_force_included_path(path, force_included_paths) {
+    if matches_ignored_path_interest(path, force_included_paths) {
         return true;
     }
 

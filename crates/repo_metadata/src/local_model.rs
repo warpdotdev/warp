@@ -5,7 +5,6 @@
 //! all repositories tracked by Warp.
 
 use std::collections::HashMap;
-#[cfg(feature = "local_fs")]
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,7 +38,8 @@ pub struct RepoContents<'a> {
 use warp_util::standardized_path::StandardizedPath;
 
 use crate::entry::{
-    BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
+    matches_ignored_path_interest, BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry,
+    FileId, IgnoredPathStrategy,
 };
 use crate::repository::Repository;
 use crate::standing_queries::{
@@ -50,8 +50,8 @@ use crate::{gitignores_for_directory, matches_gitignores, RepoMetadataError};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use notify_debouncer_full::notify::RecursiveMode;
-        use crate::entry::repo_watch_filter;
         use crate::repositories::{DetectedRepositories, DetectedRepositoriesEvent};
+        use crate::entry::repo_watch_filter;
         use crate::watcher::DirectoryWatcher;
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use warpui_core::SingletonEntity as _;
@@ -222,6 +222,9 @@ pub struct LocalRepoMetadataModel {
     standing_results: HashMap<StandardizedPath, StandingQueryResults>,
     /// Refcounts for lazily-loaded standalone paths tracked in the model.
     lazy_loaded_paths: HashMap<StandardizedPath, usize>,
+    /// Paths that previously hit `ExceededMaxFileLimit`; descendant events are
+    /// short-circuited without re-walking. Unbounded; entries are few in practice.
+    failed_walk_paths: HashSet<StandardizedPath>,
     /// File system watcher for monitoring changes.
     #[cfg(feature = "local_fs")]
     watcher: Option<ModelHandle<BulkFilesystemWatcher>>,
@@ -337,6 +340,7 @@ impl LocalRepoMetadataModel {
             repositories: HashMap::new(),
             standing_results: HashMap::new(),
             lazy_loaded_paths: HashMap::new(),
+            failed_walk_paths: HashSet::new(),
             #[cfg(feature = "local_fs")]
             watcher: None,
             emit_incremental_updates: false,
@@ -590,12 +594,16 @@ impl LocalRepoMetadataModel {
                 let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
                 let lazy_load = self.lazy_loaded_paths.contains_key(&repo_path);
+                // Snapshot the failed-walk cache so the background task can
+                // short-circuit paths without holding a reference to `self`.
+                let failed_walk_paths_snapshot = self.failed_walk_paths.clone();
                 ctx.spawn(
                     async move {
-                        let (mutations, standing_results, removed_roots) =
+                        let (mutations, newly_failed, standing_results, removed_roots) =
                             Self::compute_file_tree_mutations(
                                 &repo_scoped_update,
                                 &gitignores_clone,
+                                &failed_walk_paths_snapshot,
                                 &force_included_paths,
                                 &standing_query_definitions,
                                 lazy_load,
@@ -603,6 +611,7 @@ impl LocalRepoMetadataModel {
                             .await;
                         (
                             mutations,
+                            newly_failed,
                             standing_results,
                             removed_roots,
                             repo_path_clone,
@@ -610,8 +619,19 @@ impl LocalRepoMetadataModel {
                         )
                     },
                     |model,
-                     (mutations, discovered_results, removed_roots, repo_path, lazy_load),
+                     (
+                        mutations,
+                        newly_failed,
+                        discovered_results,
+                        removed_roots,
+                        repo_path,
+                        lazy_load,
+                    ),
                      ctx| {
+                        // Persist any newly-discovered failed-walk paths so
+                        // subsequent events for those subtrees are short-circuited.
+                        model.failed_walk_paths.extend(newly_failed);
+
                         if let Some(IndexedRepoState::Indexed(state)) =
                             model.repositories.get_mut(&repo_path)
                         {
@@ -769,15 +789,42 @@ impl LocalRepoMetadataModel {
                     })
                     .unwrap_or_default();
                 watcher.update(ctx, |watcher, _ctx| {
+                    use crate::entry::{should_ignore_git_path, should_watch_repo_directory};
+                    use notify_debouncer_full::notify::WatchFilter;
+                    use std::sync::Arc;
                     if had_previous {
                         std::mem::drop(watcher.unregister_path(&watch_path));
                     }
                     for dir in &previous_extra {
                         std::mem::drop(watcher.unregister_path(dir));
                     }
+                    // Wrap `repo_watch_filter()`'s predicates with an additional
+                    // OS-system-directory exclusion. We apply this at the
+                    // `add_repository_internal` entrypoint (an explicit "open
+                    // this repository" request) rather than in the shared
+                    // `repo_watch_filter()` so that bulk-watcher tests that
+                    // place fixture repos under the real %TEMP% still receive
+                    // events.
+                    let gitignores_for_filter = gitignores.clone();
+                    let force_included_for_filter = force_included_paths.clone();
+                    let watch_filter = WatchFilter::with_filter(
+                        Arc::new(move |path: &std::path::Path| {
+                            if is_system_dir_excluded(path) {
+                                return false;
+                            }
+                            should_watch_repo_directory(
+                                path,
+                                &gitignores_for_filter,
+                                &force_included_for_filter,
+                            )
+                        }),
+                        Arc::new(|path: &std::path::Path| {
+                            !should_ignore_git_path(path) && !is_system_dir_excluded(path)
+                        }),
+                    );
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(gitignores, force_included_paths),
+                        watch_filter,
                         recursive_mode,
                     ));
                 });
@@ -1131,7 +1178,9 @@ impl LocalRepoMetadataModel {
     ///
     /// Performs all filesystem I/O (`exists()`, `is_dir()`, `build_tree()`,
     /// gitignore checks) and returns a lightweight list of mutations that can
-    /// be applied to the tree on the main thread without cloning it.
+    /// be applied to the tree on the main thread without cloning it. Also
+    /// returns newly-exceeded paths for the failed-walk cache so that
+    /// subsequent events for those subtrees are short-circuited.
     ///
     /// When `lazy_load` is true (lazy non-git roots), newly added directories
     /// are emitted as unloaded placeholders rather than fully-materialized
@@ -1140,15 +1189,18 @@ impl LocalRepoMetadataModel {
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
         gitignores: &[Gitignore],
+        failed_walk_paths: &HashSet<StandardizedPath>,
         force_included_paths: &[PathBuf],
         standing_query_definitions: &StandingQueryDefinitions,
         lazy_load: bool,
     ) -> (
         Vec<FileTreeMutation>,
+        Vec<StandardizedPath>,
         StandingQueryResults,
         Vec<StandardizedPath>,
     ) {
         let mut mutations = Vec::new();
+        let mut newly_failed: Vec<StandardizedPath> = Vec::new();
         let mut standing_results = StandingQueryResults::default();
         let mut removed_roots = Vec::new();
 
@@ -1170,6 +1222,18 @@ impl LocalRepoMetadataModel {
         for path_to_add in update.added.iter().chain(update.moved.keys()) {
             if !path_to_add.exists() {
                 continue;
+            }
+
+            // Skip descendants of known over-limit directories unless the path
+            // matches an ignored_path_interest (interest overrides the cache).
+            if let Ok(std_path) = StandardizedPath::try_from_local(path_to_add) {
+                if failed_walk_paths
+                    .iter()
+                    .any(|failed| std_path.starts_with(failed))
+                    && !matches_ignored_path_interest(path_to_add, force_included_paths)
+                {
+                    continue;
+                }
             }
 
             let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
@@ -1211,6 +1275,22 @@ impl LocalRepoMetadataModel {
                             subtree,
                         });
                     }
+                    Err(BuildTreeError::ExceededMaxFileLimit) => {
+                        // Cache this path so future events for this subtree are
+                        // skipped without re-running the walk.
+                        if let Ok(std_path) = StandardizedPath::try_from_local(path_to_add) {
+                            newly_failed.push(std_path);
+                        }
+                        log::warn!(
+                            "Failed to build subtree for directory {path_to_add:?}: \r
+                             ExceededMaxFileLimit — future events for this path will be \r
+                             skipped"
+                        );
+                        mutations.push(FileTreeMutation::AddUnloadedDirectory {
+                            path: path_to_add.clone(),
+                            is_ignored,
+                        });
+                    }
                     Err(BuildTreeError::Symlink) => {
                         // Directory symlinks are intentionally absent from the canonical tree.
                         // Re-hydrate only when the changed entry itself can introduce a
@@ -1245,7 +1325,7 @@ impl LocalRepoMetadataModel {
             }
         }
 
-        (mutations, standing_results, removed_roots)
+        (mutations, newly_failed, standing_results, removed_roots)
     }
 
     /// Phase 2: Applies pre-computed mutations to the file tree on the main thread.
@@ -1722,12 +1802,107 @@ impl warpui_core::Entity for LocalRepoMetadataModel {
     type Event = RepositoryMetadataEvent;
 }
 
-/// Helper function to recursively collect contents (files and optionally directories) from an Entry tree.
-///
-/// Collects at most [`MAX_REPO_CONTENTS_RESULTS`] entries into `contents`.
-/// Returns `true` if traversal stopped early because that cap was reached,
-/// indicating the collected `contents` are truncated and more matching entries
-/// exist.
+/// Returns `true` when `path` is inside a high-noise OS system directory that
+/// should be excluded from file-tree watcher events (e.g. `AppData\Local\Temp`).
+/// On Windows, matching is anchored to `%USERPROFILE%\AppData` and is
+/// case-insensitive and component-aware to avoid false positives on workspace
+/// subtrees that happen to contain the same segment sequence.
+pub(crate) fn is_system_dir_excluded(path: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        is_system_dir_excluded_windows(path)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Windows implementation of [`is_system_dir_excluded`].
+/// Anchors to `%USERPROFILE%\AppData` before pattern-matching so workspace
+/// subtrees that happen to contain `AppData\Local\Temp` are not excluded.
+/// Falls back to an unanchored scan when `%USERPROFILE%` is unset.
+#[cfg(target_os = "windows")]
+fn is_system_dir_excluded_windows(path: &Path) -> bool {
+    // Resolve the user's AppData root from %USERPROFILE%.
+    // %USERPROFILE% is always set on Windows for interactive sessions and most
+    // service accounts; it expands to e.g. C:\Users\alice.
+    let appdata_root: Option<PathBuf> =
+        std::env::var_os("USERPROFILE").map(|profile| PathBuf::from(profile).join("AppData"));
+
+    // If we have an AppData root, require the path to start with it before
+    // doing the sub-pattern match. This prevents false positives for workspace
+    // subtrees like `fixtures\AppData\Local\Temp`.
+    if let Some(ref root) = appdata_root {
+        // `path` must be inside the user's AppData tree.
+        if !path.starts_with(root) {
+            return false;
+        }
+        // Strip the AppData prefix so the patterns below only need to name
+        // the portion after "AppData" (e.g. ["Local", "Temp"]).
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        return is_appdata_subpath_excluded(relative);
+    }
+
+    // Fallback (USERPROFILE unset): unanchored scan — same as the original
+    // implementation. Better to over-exclude than to miss a real system dir.
+    let components: Vec<&std::ffi::OsStr> = path.components().map(|c| c.as_os_str()).collect();
+    const WINDOWS_EXCLUDE_PATTERNS_FULL: &[&[&str]] = &[
+        &["AppData", "Local", "Temp"],
+        &["AppData", "Local", "Microsoft", "Windows"],
+        &["AppData", "LocalLow"],
+    ];
+    WINDOWS_EXCLUDE_PATTERNS_FULL.iter().any(|pattern| {
+        if components.len() < pattern.len() {
+            return false;
+        }
+        components.windows(pattern.len()).any(|window| {
+            window
+                .iter()
+                .zip(pattern.iter())
+                .all(|(component, expected)| {
+                    component
+                        .to_str()
+                        .map(|s| s.eq_ignore_ascii_case(expected))
+                        .unwrap_or(false)
+                })
+        })
+    })
+}
+
+/// Returns `true` if `relative` (path already stripped of `%USERPROFILE%\AppData`)
+/// matches one of the excluded subtrees as an anchored prefix.
+#[cfg(target_os = "windows")]
+fn is_appdata_subpath_excluded(relative: &Path) -> bool {
+    /// Patterns relative to `%USERPROFILE%\AppData\`.
+    const APPDATA_EXCLUDE_PATTERNS: &[&[&str]] = &[
+        &["Local", "Temp"],
+        &["Local", "Microsoft", "Windows"],
+        &["LocalLow"],
+    ];
+
+    let components: Vec<&std::ffi::OsStr> = relative.components().map(|c| c.as_os_str()).collect();
+
+    APPDATA_EXCLUDE_PATTERNS.iter().any(|pattern| {
+        if components.len() < pattern.len() {
+            return false;
+        }
+        // Anchored: only check the leading window.
+        components[..pattern.len()]
+            .iter()
+            .zip(pattern.iter())
+            .all(|(component, expected)| {
+                component
+                    .to_str()
+                    .map(|s| s.eq_ignore_ascii_case(expected))
+                    .unwrap_or(false)
+            })
+    })
+}
+
+/// Recursively collects repo contents, capped at [`MAX_REPO_CONTENTS_RESULTS`].
+/// Returns `true` when the cap was hit (results are truncated).
 pub(crate) fn collect_contents_recursive<'a>(
     entry: &'a FileTreeEntry,
     current_path: &'a StandardizedPath,
