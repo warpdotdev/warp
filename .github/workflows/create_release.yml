@@ -215,7 +215,7 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
@@ -390,7 +390,7 @@ jobs:
 
       - name: Upload DMG to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.dmg_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
@@ -481,7 +481,7 @@ jobs:
 
       - name: Upload CLI to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/macos/${{ matrix.arch }}
@@ -649,7 +649,7 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -805,7 +805,7 @@ jobs:
 
       - name: Upload CLI packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -828,7 +828,7 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/x86_64
@@ -1237,7 +1237,7 @@ jobs:
 
       - name: Upload app packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           parent: false
@@ -1249,7 +1249,7 @@ jobs:
             cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
 
       - name: Upload CLI packages to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         with:
           path: ${{ steps.bundle_cli.outputs.packages_dir }}
@@ -1263,7 +1263,7 @@ jobs:
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/linux/aarch64
@@ -1353,7 +1353,7 @@ jobs:
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.packages_dir }}
           # Only upload the files from within `packages_dir`, don't include the
@@ -1370,7 +1370,7 @@ jobs:
 
       - name: Upload assets to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.assets_dir }}
           parent: false
@@ -1539,7 +1539,7 @@ jobs:
 
       - name: Upload installer to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: ${{ steps.bundle_app.outputs.installer_path }}
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
@@ -1801,7 +1801,7 @@ jobs:
           credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
 
       - name: Upload changelog.json to Google Cloud Storage
-        uses: google-github-actions/upload-cloud-storage@e95a15f226403ed658d3e65f40205649f342ba2c # v1
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
         with:
           path: changelog.json
           destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}
