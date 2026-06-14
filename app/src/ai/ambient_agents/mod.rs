@@ -76,12 +76,30 @@ pub enum AmbientConversationStatus {
 pub fn conversation_output_status_from_conversation(
     conversation: &AIConversation,
 ) -> Option<AmbientConversationStatus> {
+    // A pending recovery is not a terminal outcome.
+    if conversation.status().is_transient_error() {
+        return None;
+    }
     if let ConversationStatus::Blocked { blocked_action } = conversation.status() {
         return Some(AmbientConversationStatus::Blocked {
             blocked_action: blocked_action.clone(),
         });
     }
     if let ConversationStatus::Error = conversation.status() {
+        // Prefer the structured error on the last exchange: it carries the precise
+        // error variant and rendering hints that the string-only `status_error_message`
+        // cannot.
+        if let Some(AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Error { error, .. },
+        }) = conversation
+            .root_task_exchanges()
+            .last()
+            .map(|exchange| &exchange.output_status)
+        {
+            return Some(AmbientConversationStatus::Error {
+                error: error.clone(),
+            });
+        }
         if let Some(error_message) = conversation.status_error_message() {
             return Some(AmbientConversationStatus::Error {
                 error: RenderableAIError::Other {

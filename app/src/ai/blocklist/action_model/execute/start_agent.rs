@@ -581,9 +581,11 @@ fn start_agent_error_message_for_status(
         // `WaitingForEvents` is treated like `InProgress`/`Success` here:
         // a child that's actively waiting for events has, by definition,
         // already initialized successfully and is not an error case.
-        // The agent run is still in flight, so we don't surface an error
-        // message for the start path.
+        // TransientError is likewise non-terminal: a recovery is in flight,
+        // so keep waiting. The agent run is still in flight in all of these
+        // cases, so we don't surface an error message for the start path.
         ConversationStatus::InProgress
+        | ConversationStatus::TransientError
         | ConversationStatus::Success
         | ConversationStatus::WaitingForEvents => None,
     }

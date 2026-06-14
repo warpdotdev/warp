@@ -715,6 +715,7 @@ impl From<&AIApiError> for RenderableAIError {
             {
                 Self::transient_network_error(false, false)
             }
+            AIApiError::StreamTruncated => Self::transient_network_error(false, false),
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,

@@ -326,8 +326,9 @@ impl AgentNotificationsModel {
         };
 
         match status {
-            // When the agent resumes its work, clear stale notifications.
-            ConversationStatus::InProgress => {
+            // When the agent resumes its work (or is automatically recovering from a
+            // transient failure), clear stale notifications.
+            ConversationStatus::InProgress | ConversationStatus::TransientError => {
                 self.remove_notification_by_source(origin, ctx);
             }
             ConversationStatus::Success => {
@@ -493,9 +494,11 @@ impl ConversationStatus {
             ConversationStatus::Success
             | ConversationStatus::Blocked { .. }
             | ConversationStatus::Error => true,
-            // Streaming hasn't reached a notable state; a yielded wait is
-            // still active; user-cancellations are self-evident.
+            // Streaming hasn't reached a notable state; a recovering or
+            // yielded conversation is still active; user-cancellations are
+            // self-evident.
             ConversationStatus::InProgress
+            | ConversationStatus::TransientError
             | ConversationStatus::WaitingForEvents
             | ConversationStatus::Cancelled => false,
         }

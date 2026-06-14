@@ -15,16 +15,20 @@ use super::{
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
+    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
+    ServerAIConversationMetadata,
 };
 use crate::ai::agent::{
     AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, FinishedAIAgentOutput,
-    Shared, UserQueryMode,
+    RenderableAIError, Shared, UserQueryMode,
 };
-use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::{
+    conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
+};
 use crate::ai::blocklist::controller::RequestInput;
 use crate::ai::blocklist::ResponseStreamId;
 use crate::ai::llms::LLMId;
+use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::input_suggestions::HistoryInputSuggestion;
 use crate::persistence::model::{
@@ -32,6 +36,7 @@ use crate::persistence::model::{
 };
 use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::model::session::SessionId;
 use crate::test_util::settings::{
     initialize_history_persistence_for_tests, initialize_settings_for_tests,
@@ -3832,4 +3837,145 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
             "error must surface the missing-placeholder reason; got: {err:#}",
         );
     });
+}
+
+// --- conversation_output_status_from_conversation ---
+
+/// Builds a conversation with one in-flight exchange, completes it with the
+/// given error (mirroring what the controller does when a response stream
+/// fails), and returns the resulting [`ConversationStatus`] plus the derived
+/// [`AmbientConversationStatus`].
+fn statuses_after_stream_error(
+    error: RenderableAIError,
+    recovery_pending: bool,
+) -> (
+    Option<ConversationStatus>,
+    Option<AmbientConversationStatus>,
+) {
+    type Captured = (
+        Option<ConversationStatus>,
+        Option<AmbientConversationStatus>,
+    );
+    let derived: Arc<Mutex<Captured>> = Arc::new(Mutex::new((None, None)));
+    let derived_for_test = Arc::clone(&derived);
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        // Completing a request with an error emits telemetry, which requires
+        // the telemetry context provider (and the auth state it reads).
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let conversation_id = history_model.update(&mut app, |model, ctx| {
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        let stream_id = ResponseStreamId::new_for_test();
+        history_model.update(&mut app, |model, ctx| {
+            let exchange = create_exchange_with_query("test query", Local::now(), None);
+            let task_id = model
+                .conversation(&conversation_id)
+                .unwrap()
+                .get_root_task_id()
+                .clone();
+            let request_input = RequestInput {
+                conversation_id,
+                input_messages: HashMap::from([(task_id, exchange.input)]),
+                working_directory: exchange.working_directory,
+                model_id: exchange.model_id,
+                coding_model_id: exchange.coding_model_id,
+                cli_agent_model_id: exchange.cli_agent_model_id,
+                computer_use_model_id: exchange.computer_use_model_id,
+                shared_session_response_initiator: exchange.response_initiator,
+                request_start_ts: exchange.start_time,
+                supported_tools_override: None,
+            };
+            model
+                .update_conversation_for_new_request_input(
+                    request_input,
+                    stream_id.clone(),
+                    terminal_view_id,
+                    ctx,
+                )
+                .unwrap();
+        });
+
+        history_model.update(&mut app, |model, ctx| {
+            model.mark_response_stream_completed_with_error(
+                error,
+                recovery_pending,
+                &stream_id,
+                conversation_id,
+                terminal_view_id,
+                ctx,
+            );
+        });
+
+        *derived_for_test.lock().unwrap() = history_model.read(&app, |model, _| {
+            let conversation = model.conversation(&conversation_id).unwrap();
+            (
+                Some(conversation.status().clone()),
+                conversation_output_status_from_conversation(conversation),
+            )
+        });
+    });
+    // Two steps: a tail-expression `lock()` temporary would outlive `derived` (E0597).
+    let result = std::mem::take(&mut *derived.lock().unwrap());
+    result
+}
+
+/// A failure with a recovery scheduled moves the conversation to the
+/// non-terminal `TransientError` status, and the driver-facing conversion must
+/// not report a terminal outcome for it.
+#[test]
+fn recovery_pending_error_sets_transient_error_status() {
+    let (status, derived) = statuses_after_stream_error(
+        RenderableAIError::transient_network_error(true, false),
+        /*recovery_pending*/ true,
+    );
+
+    assert_eq!(status, Some(ConversationStatus::TransientError));
+    assert!(
+        derived.is_none(),
+        "a pending recovery must not derive a terminal outcome, got {derived:?}"
+    );
+}
+
+/// The structured exchange error (and its rendering hints) must survive the
+/// conversion to `AmbientConversationStatus`; the conversation-level
+/// `status_error_message` is a plain string and would otherwise drop them.
+#[test]
+fn structured_exchange_error_is_preserved_in_output_status() {
+    let (status, derived) = statuses_after_stream_error(
+        RenderableAIError::transient_network_error(true, false),
+        /*recovery_pending*/ false,
+    );
+
+    assert_eq!(status, Some(ConversationStatus::Error));
+    let Some(AmbientConversationStatus::Error { error }) = derived else {
+        panic!("expected an error status, got {derived:?}");
+    };
+    assert!(
+        error.will_attempt_resume(),
+        "the structured exchange error must be preserved, got {error:?}"
+    );
+}
+
+/// A stream error without a pending recovery stays terminal.
+#[test]
+fn non_resumable_stream_error_stays_terminal_in_output_status() {
+    let (status, derived) = statuses_after_stream_error(
+        RenderableAIError::transient_network_error(false, false),
+        /*recovery_pending*/ false,
+    );
+
+    assert_eq!(status, Some(ConversationStatus::Error));
+    let Some(AmbientConversationStatus::Error { error }) = derived else {
+        panic!("expected an error status, got {derived:?}");
+    };
+    assert!(
+        !error.will_attempt_resume(),
+        "will_attempt_resume must be false for a non-recoverable error, got {error:?}"
+    );
 }

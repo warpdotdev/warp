@@ -9,7 +9,7 @@ use warpui::App;
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::{
     classify_renderable_error, map_cli_session_status, map_conversation_status,
-    LocalAgentTaskSyncModel,
+    task_update_for_conversation_error, LocalAgentTaskSyncModel,
 };
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::RenderableAIError;
@@ -174,6 +174,63 @@ fn map_conversation_status_in_progress_reports_in_progress_with_no_message() {
 
     assert_eq!(state, AgentTaskState::InProgress);
     assert!(update.is_none());
+}
+
+#[test]
+fn transient_error_status_maps_to_in_progress() {
+    // A pending recovery is represented by the TransientError conversation status;
+    // the run is kept IN_PROGRESS so the execution isn't torn down mid-recovery.
+    let mut conversation = AIConversation::new(false, false);
+    conversation.set_status_for_test(ConversationStatus::TransientError);
+    assert_update(
+        map_conversation_status(&conversation),
+        AgentTaskState::InProgress,
+        None,
+        Some("attempting to resume"),
+    );
+}
+
+// --- task_update_for_conversation_error ---
+
+#[test]
+fn resume_rendering_hint_is_ignored_for_terminal_classification() {
+    // The will_attempt_resume flag on the error is a rendering hint only. An Error
+    // status always classifies terminally — in-flight recoveries surface as the
+    // non-terminal TransientError status instead.
+    assert_update(
+        task_update_for_conversation_error(Some(&RenderableAIError::Other {
+            error_message: "connection reset".into(),
+            will_attempt_resume: true,
+            waiting_for_network: false,
+        })),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("connection reset"),
+    );
+}
+
+#[test]
+fn non_resumable_error_is_terminal() {
+    assert_update(
+        task_update_for_conversation_error(Some(&RenderableAIError::Other {
+            error_message: "connection reset".into(),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+        })),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::InternalError),
+        Some("connection reset"),
+    );
+}
+
+#[test]
+fn missing_error_is_terminal_error() {
+    assert_update(
+        task_update_for_conversation_error(None),
+        AgentTaskState::Error,
+        None,
+        Some("Agent encountered an error"),
+    );
 }
 
 // --- map_cli_session_status ---
