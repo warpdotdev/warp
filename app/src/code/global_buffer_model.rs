@@ -25,6 +25,12 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
 
+/// Maximum file content size (in bytes) that the editor will load.
+/// Files larger than this trigger a `FailedToLoad` event instead of
+/// attempting a full buffer populate + layout, which can allocate
+/// 10+ GB for very large files.
+const MAX_EDITOR_FILE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
+
 use super::buffer_location::{LocalOrRemotePath, SyncClock};
 
 cfg_if::cfg_if! {
@@ -490,6 +496,24 @@ impl GlobalBufferModel {
         is_initial_load: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Guard against very large files that would cause excessive memory
+        // usage in the editor layout pipeline (see Sentry issue 7259255054).
+        if is_initial_load && content.len() > MAX_EDITOR_FILE_SIZE {
+            log::warn!(
+                "File too large to open in editor ({} bytes, limit {} bytes)",
+                content.len(),
+                MAX_EDITOR_FILE_SIZE,
+            );
+            ctx.emit(GlobalBufferModelEvent::FailedToLoad {
+                file_id,
+                error: Rc::new(FileLoadError::FileTooLarge {
+                    size: content.len(),
+                    max_size: MAX_EDITOR_FILE_SIZE,
+                }),
+            });
+            return;
+        }
+
         let Some(state) = self.buffers.get_mut(&file_id) else {
             return;
         };
