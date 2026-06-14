@@ -403,6 +403,31 @@ pub(crate) extern "C-unwind" fn warp_app_has_custom_action_for_keystroke(
 }
 
 #[no_mangle]
+pub(crate) extern "C-unwind" fn warp_app_dispatch_custom_action_for_keystroke(
+    this: &mut Object,
+    window_id: &mut Object,
+    event: id,
+) -> BOOL {
+    let app = unsafe { get_app(this) };
+    let window = unsafe { get_window_state(window_id) };
+    let warp_event = unsafe { super::event::from_native(event, None, false) };
+
+    let Some(Event::KeyDown { keystroke, .. }) = warp_event else {
+        return NO;
+    };
+
+    let handled = app.callbacks.with_mutable_app_context(|ctx| {
+        ctx.dispatch_custom_action_for_keystroke(&keystroke, window.id())
+    });
+
+    if handled {
+        YES
+    } else {
+        NO
+    }
+}
+
+#[no_mangle]
 pub(crate) extern "C-unwind" fn warp_app_disable_warning_modal(this: &mut Object) {
     let app = unsafe { get_app(this) };
     app.callbacks.warning_modal_disabled();

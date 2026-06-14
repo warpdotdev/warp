@@ -254,6 +254,13 @@ pub struct BindingLens<'a> {
     pub id: BindingId,
 }
 
+impl BindingLens<'_> {
+    /// Determine if this binding applies to the given context.
+    pub fn in_context(&self, context: &Context) -> bool {
+        self.context_predicate.eval(context)
+    }
+}
+
 /// A unique identifier for a Binding within the application.
 ///
 /// Used so that bindings can be uniquely identified even if data within them (such as their

@@ -1935,6 +1935,80 @@ impl AppContext {
         }
     }
 
+    /// Dispatches the active custom action bound to the given keystroke, if any.
+    ///
+    /// On macOS, default custom-action shortcuts are registered as native menu key equivalents
+    /// instead of being converted to keystroke triggers. This helper lets the platform layer route a
+    /// key-equivalent event directly through the active responder chain, while still honoring the
+    /// same context and enabled predicates as menu dispatch.
+    pub fn dispatch_custom_action_for_keystroke(
+        &mut self,
+        keystroke: &Keystroke,
+        window_id: WindowId,
+    ) -> bool {
+        if !self.key_bindings_enabled(window_id) {
+            return false;
+        }
+
+        let responder_chain = self.get_responder_chain(window_id);
+        let custom_action = match self
+            .contexts_from_responder_chain(window_id, &responder_chain)
+            .ok()
+            .and_then(|contexts| {
+                contexts.into_iter().rev().find_map(|context| {
+                    self.custom_action_for_keystroke_in_context(keystroke, &context)
+                })
+            }) {
+            Some(action) => action,
+            None => return false,
+        };
+
+        let result =
+            self.dispatch_custom_action_internal(custom_action, window_id, &responder_chain);
+
+        match result {
+            Ok(true) => {
+                self.dispatch_self_or_child_interacted_with(window_id, &responder_chain);
+                true
+            }
+            Ok(false) => false,
+            Err(error) => {
+                log::error!("error dispatching custom action for keystroke: {error}");
+                false
+            }
+        }
+    }
+
+    fn custom_action_for_keystroke_in_context(
+        &self,
+        keystroke: &Keystroke,
+        context: &Context,
+    ) -> Option<CustomTag> {
+        self.custom_action_bindings()
+            .filter(|binding| binding.in_context(context))
+            .find_map(|binding| {
+                let custom_tag = match (binding.trigger, binding.original_trigger) {
+                    (Trigger::Custom(tag), _) | (_, Some(Trigger::Custom(tag))) => *tag,
+                    _ => return None,
+                };
+
+                let binding_keystroke = match binding.trigger {
+                    Trigger::Keystrokes(keystrokes) if keystrokes.len() == 1 => {
+                        keystrokes.first().cloned()
+                    }
+                    Trigger::Custom(tag) => self
+                        .keystroke_matcher
+                        .default_keystroke_trigger_for_custom_action(*tag),
+                    _ => None,
+                };
+
+                binding_keystroke
+                    .as_ref()
+                    .is_some_and(|binding_keystroke| binding_keystroke == keystroke)
+                    .then_some(custom_tag)
+            })
+    }
+
     /// Figures out what keystroke (if any) is bound to a custom action and dispatches it as a key event.
     /// This is used when the user is in the course of editing their keybindings and we need
     /// to get the raw keystroke for something that is currently bound to a custom action.
