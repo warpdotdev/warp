@@ -1,0 +1,17 @@
+[package]
+name = "wsh"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "wsh"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+crossterm.workspace = true
+libc.workspace = true
+log.workspace = true
+env_logger.workspace = true
+nix = { workspace = true, features = ["fs", "term"] }

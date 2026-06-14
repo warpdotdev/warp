@@ -15572,6 +15572,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "warpui_tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "unicode-segmentation",
+ "unicode-width 0.1.14",
+ "warpui_core",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -16838,6 +16848,18 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "wsh"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "env_logger",
+ "libc",
+ "log",
+ "nix 0.26.4",
 ]
 
 [[package]]

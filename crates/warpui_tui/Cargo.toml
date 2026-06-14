@@ -1,0 +1,13 @@
+[package]
+name = "warpui_tui"
+version = "0.1.0"
+edition = "2021"
+authors.workspace = true
+publish.workspace = true
+license = "MIT"
+
+[dependencies]
+crossterm.workspace = true
+unicode-segmentation = "1.11.0"
+unicode-width.workspace = true
+warpui_core.workspace = true
