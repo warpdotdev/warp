@@ -398,6 +398,16 @@ impl platform::Delegate for AppDelegate {
         }
     }
 
+    fn set_dock_icon_visible(&self, visible: bool) {
+        dispatch::Queue::main().exec_async(move || unsafe {
+            let app_delegate: id = msg_send![NSApp(), delegate];
+            let _: BOOL = msg_send![
+                app_delegate,
+                setDockIconVisible: if visible { YES } else { NO }
+            ];
+        });
+    }
+
     fn terminate_app(&self, termination_mode: TerminationMode) {
         // Execute `[NSApp terminate]` asynchronously on the main thread to
         // ensure we don't accidentally run into any double-borrow errors.

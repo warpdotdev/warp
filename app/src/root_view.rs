@@ -983,8 +983,6 @@ fn open_settings_page_in_new_window(section: &SettingsSection, ctx: &mut AppCont
     });
 }
 
-/// MCP servers need to wait for initial load to complete, so we have this action in addition
-/// to the general-purpose [`open_settings_page_in_new_window`].
 fn open_mcp_settings_in_new_window(args: &OpenMCPSettingsArgs, ctx: &mut AppContext) {
     let autoinstall = args.autoinstall.clone();
     let root_handle = open_new_window_get_handles(None, ctx).1;
@@ -1331,59 +1329,64 @@ fn get_quake_mode_state(ctx: &mut AppContext) -> Option<QuakeModeState> {
     }
 }
 
+fn create_quake_mode_window(
+    global_resource_handles: &GlobalResourceHandles,
+    ctx: &mut AppContext,
+) -> WindowId {
+    let config = quake_mode_config(
+        &KeysSettings::as_ref(ctx)
+            .quake_mode_settings
+            .value()
+            .clone(),
+        ctx,
+    );
+
+    let window_settings = WindowSettings::as_ref(ctx);
+    let active_window_id = ctx.windows().active_window();
+    let (id, _) = ctx.add_window(
+        AddWindowOptions {
+            window_style: WindowStyle::Pin,
+            window_bounds: WindowBounds::ExactPosition(config.window_bounds),
+            title: Some("Warp".to_owned()),
+            background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
+            background_blur_texture: *window_settings.background_blur_texture,
+            anchor_new_windows_from_closed_position:
+                warpui::NextNewWindowsHasThisWindowsBoundsUponClose::No,
+            on_gpu_driver_selected: on_gpu_driver_selected_callback(),
+            window_instance: Some(ChannelState::app_id().to_string() + "-hotkey"),
+            ..Default::default()
+        },
+        |ctx| {
+            let mut view = RootView::new(
+                global_resource_handles.clone(),
+                NewWorkspaceSource::Empty {
+                    previous_active_window: active_window_id,
+                    shell: None,
+                },
+                ctx,
+            );
+            view.focus(ctx);
+            view
+        },
+    );
+
+    let mut quake_mode_state = QUAKE_STATE.lock();
+    *quake_mode_state = Some(QuakeModeState {
+        window_state: WindowState::PendingOpen,
+        window_id: id,
+        active_display_id: config.display_id,
+    });
+
+    id
+}
+
 fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx: &mut AppContext) {
     // Get the current state of quake mode.
     let state = get_quake_mode_state(ctx);
     match state {
         None => {
             send_telemetry_from_app_ctx!(TelemetryEvent::OpenQuakeModeWindow, ctx);
-
-            let config = quake_mode_config(
-                &KeysSettings::as_ref(ctx)
-                    .quake_mode_settings
-                    .value()
-                    .clone(),
-                ctx,
-            );
-
-            let window_settings = WindowSettings::as_ref(ctx);
-
-            let active_window_id = ctx.windows().active_window();
-            let (id, _) = ctx.add_window(
-                AddWindowOptions {
-                    window_style: WindowStyle::Pin,
-                    window_bounds: WindowBounds::ExactPosition(config.window_bounds),
-                    title: Some("Warp".to_owned()),
-                    background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
-                    background_blur_texture: *window_settings.background_blur_texture,
-                    // Ignore the quake window for positioning the next window
-                    anchor_new_windows_from_closed_position:
-                        warpui::NextNewWindowsHasThisWindowsBoundsUponClose::No,
-                    on_gpu_driver_selected: on_gpu_driver_selected_callback(),
-                    window_instance: Some(ChannelState::app_id().to_string() + "-hotkey"),
-                    ..Default::default()
-                },
-                |ctx| {
-                    let mut view = RootView::new(
-                        global_resource_handles.clone(),
-                        NewWorkspaceSource::Empty {
-                            previous_active_window: active_window_id,
-                            shell: None,
-                        },
-                        ctx,
-                    );
-                    view.focus(ctx);
-                    view
-                },
-            );
-
-            // Update quake mode state after the call to prevent deadlocking.
-            let mut quake_mode_state = QUAKE_STATE.lock();
-            *quake_mode_state = Some(QuakeModeState {
-                window_state: WindowState::PendingOpen,
-                window_id: id,
-                active_display_id: config.display_id,
-            });
+            create_quake_mode_window(global_resource_handles, ctx);
         }
         Some(state) if matches!(state.window_state, WindowState::Hidden) => {
             send_telemetry_from_app_ctx!(TelemetryEvent::OpenQuakeModeWindow, ctx);
@@ -1425,11 +1428,6 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
     };
 }
 
-/// This action will show or hide all of Warp's windows except the quake window
-///
-/// - If Warp is active and has any windows, hide those windows.
-/// - If Warp is hidden, show all windows.
-/// - If Warp is active but has 0 normal windows, create a new window with a new session.
 fn show_or_hide_non_quake_mode_windows(_: &(), ctx: &mut AppContext) {
     let quake_window_id = get_quake_mode_state(ctx).map(|state| state.window_id);
     let non_quake_mode_window_ids = ctx

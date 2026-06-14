@@ -94,6 +94,7 @@ pub fn dock_menu() -> Menu {
     )
 }
 
+
 fn custom_shortcut(action: CustomAction) -> Option<Keystroke> {
     trigger_to_keystroke(&Trigger::Custom(action.into()))
 }
