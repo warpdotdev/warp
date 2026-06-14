@@ -5109,6 +5109,7 @@ impl CodeReviewView {
         .finish();
 
         Container::new(inner_header)
+            .with_corner_radius(inner_corner_radius)
             .with_background(outer_bg)
             .finish()
     }
