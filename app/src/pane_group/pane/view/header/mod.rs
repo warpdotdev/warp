@@ -137,7 +137,7 @@ impl<P: BackingView> PaneHeader<P> {
         pane_configuration: ModelHandle<PaneConfiguration>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let overflow_menu = ctx.add_typed_action_view(|_| Menu::new());
+        let overflow_menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
         ctx.subscribe_to_view(&overflow_menu, move |me, _, event, ctx| {
             me.handle_overflow_menu_action(event, ctx);
         });
