@@ -431,6 +431,10 @@ impl ShellCommandExecutor {
                         match transfer_result {
                             TransferControlResult::ControlHandedBack
                             | TransferControlResult::BlockFinished => {
+                                let is_preempted = matches!(
+                                    transfer_result,
+                                    TransferControlResult::ControlHandedBack
+                                );
                                 match model.block_list().block_with_id(&block_id) {
                                     Some(block) => {
                                         if block.finished() {
@@ -460,7 +464,7 @@ impl ShellCommandExecutor {
                                                 grid_contents,
                                                 cursor: CURSOR_MARKER,
                                                 is_alt_screen_active: model.is_alt_screen_active(),
-                                                is_preempted: false,
+                                                is_preempted,
                                             }
                                         }
                                     }

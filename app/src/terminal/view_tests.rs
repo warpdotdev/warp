@@ -19,7 +19,8 @@ use super::*;
 use crate::ai::agent::conversation::{AIConversation, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, UserQueryMode,
+    AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
+    UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
@@ -5291,6 +5292,84 @@ fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_runnin
             assert!(view.is_input_box_visible(&model, ctx));
         });
     })
+}
+
+#[test]
+fn completed_agent_requested_command_auto_resume_skips_transfer_takeover() {
+    fn assert_resume_exchange_count(reason: UserTakeOverReason, expected_count: usize) {
+        App::test((), move |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+
+            let terminal = add_window_with_terminal(&mut app, None);
+
+            terminal.update(&mut app, |view, ctx| {
+                let (conversation_id, task_id) =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                        let conversation_id = history_model.start_new_conversation(
+                            view.view_id,
+                            false,
+                            false,
+                            false,
+                            ctx,
+                        );
+                        let task_id = history_model
+                            .conversation(&conversation_id)
+                            .expect("conversation should exist")
+                            .get_root_task_id()
+                            .clone();
+                        (conversation_id, task_id)
+                    });
+
+                let block_id = {
+                    let mut model = view.model.lock();
+                    model.init_shell(InitShellValue {
+                        session_id: 0.into(),
+                        shell: "zsh".to_owned(),
+                        ..Default::default()
+                    });
+                    model.bootstrapped(BootstrappedValue {
+                        shell: "zsh".to_owned(),
+                        ..Default::default()
+                    });
+                    model.simulate_long_running_block("ssh localhost", "Password:");
+
+                    let active_block = model.block_list_mut().active_block_mut();
+                    active_block.set_agent_interaction_mode_for_requested_command(
+                        AIAgentActionId::from("test-action".to_owned()),
+                        Some(task_id.clone()),
+                        conversation_id,
+                    );
+                    active_block
+                        .set_agent_interaction_mode_for_agent_monitored_command(
+                            &task_id,
+                            conversation_id,
+                        )
+                        .expect("requested command should transition to agent-monitored");
+                    active_block.id().clone()
+                };
+
+                view.cli_subagent_controller.update(ctx, |controller, ctx| {
+                    controller.switch_control_to_user(reason, ctx);
+                });
+
+                view.on_user_block_completed(&block_id, ctx);
+
+                let exchange_count = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .expect("conversation should exist")
+                    .exchange_count();
+                assert_eq!(exchange_count, expected_count);
+            });
+        });
+    }
+
+    assert_resume_exchange_count(UserTakeOverReason::Manual, 1);
+    assert_resume_exchange_count(
+        UserTakeOverReason::TransferFromAgent {
+            reason: "Enter your password".to_owned(),
+        },
+        0,
+    );
 }
 
 #[test]
