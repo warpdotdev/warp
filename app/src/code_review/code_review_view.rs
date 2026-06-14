@@ -2452,6 +2452,9 @@ impl CodeReviewView {
                     self.viewported_list_state.remove(index);
                     let new_states =
                         self.build_view_state_for_file_diffs(std::slice::from_ref(diff), ctx);
+                    for _ in &new_states {
+                        self.viewported_list_state.add_item();
+                    }
                     diff_data.file_states.extend(
                         new_states
                             .into_iter()
@@ -2478,6 +2481,9 @@ impl CodeReviewView {
             (None, Some(diff)) => {
                 let new_states =
                     self.build_view_state_for_file_diffs(std::slice::from_ref(diff.as_ref()), ctx);
+                for _ in &new_states {
+                    self.viewported_list_state.add_item();
+                }
                 diff_data.file_states.extend(
                     new_states
                         .into_iter()
@@ -2560,18 +2566,51 @@ impl CodeReviewView {
             return;
         };
 
-        // Deallocate global buffers that are going to be invalidated.
-        if let Some(repo) = self.active_repo.as_mut() {
-            repo.state = CodeReviewViewState::None;
-            GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
-                model.remove_deallocated_buffers(ctx);
-            });
-        }
+        // Reuse existing editors instead of tearing the whole view down.
+        // Rebuilding every editor resets each one to its "not yet loaded" state,
+        // which makes `render` fall back to the loading skeleton until every
+        // editor reloads (see `all_editors_loaded`). An already-rendered diff
+        // would then flash skeleton → content on every refresh — e.g. the
+        // metadata-triggered reload that fires right after the panel opens emits
+        // a second, identical `NewDiffsComputed`. Preserving editors keeps their
+        // loaded state so unchanged files stay on screen; only genuinely new
+        // files start unloaded.
+        let mut reusable_states = self
+            .active_repo
+            .as_mut()
+            .and_then(|repo| repo.pop_loaded_state())
+            .map(|loaded| loaded.file_states)
+            .unwrap_or_default();
 
         // Create a new list state for this update
         self.viewported_list_state = Self::create_list_state(ctx);
 
-        let file_states_vec = self.build_view_state_for_file_diffs(&diff_data.files, ctx);
+        let mut file_states_vec = Vec::with_capacity(diff_data.files.len());
+        for file in &diff_data.files {
+            let reused = reusable_states
+                .swap_remove(&file.file_diff.file_path)
+                .and_then(|prev| self.reuse_file_state_if_compatible(prev, file, ctx));
+            match reused {
+                Some(state) => file_states_vec.push(state),
+                None => file_states_vec
+                    .extend(self.build_view_state_for_file_diffs(std::slice::from_ref(file), ctx)),
+            }
+        }
+
+        // Populate the viewported list with one item per file diff. Both the
+        // reuse and rebuild paths feed `file_states_vec`, so list-item accounting
+        // lives here in a single place.
+        for _ in &file_states_vec {
+            self.viewported_list_state.add_item();
+        }
+
+        // Any states left behind are for files no longer present in the diff;
+        // dropping them releases their editors so the now-unused global buffers
+        // can be deallocated.
+        drop(reusable_states);
+        GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_deallocated_buffers(ctx);
+        });
         let is_local = self.repo_is_local();
         let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
 
@@ -2614,7 +2653,10 @@ impl CodeReviewView {
         ctx.notify();
     }
 
-    /// Builds view state for the given file diffs, returning the list of newly created file states.
+    /// Builds view state for the given file diffs, returning the list of newly
+    /// created file states. Does not touch the viewported list; the caller owns
+    /// list-item accounting and must add one item per returned state (see
+    /// `invalidate_all` and `update_from_single_file_diff_result`).
     fn build_view_state_for_file_diffs(
         &self,
         files: &[FileDiffAndContent],
@@ -2748,11 +2790,68 @@ impl CodeReviewView {
             })
         }
 
-        // Populate the viewported list with file diffs
-        for _ in file_states.iter() {
-            self.viewported_list_state.add_item();
-        }
         file_states
+    }
+
+    /// Attempts to reuse an existing file's editor for the incoming diff during a
+    /// full reload, refreshing it in place rather than rebuilding it.
+    ///
+    /// Rebuilding an editor resets its loaded state, which forces the whole view
+    /// back to the loading skeleton until every editor reloads (see
+    /// `all_editors_loaded`) — the source of the diff "flashing" on refresh.
+    /// Returns `Some(state)` when the editor was reused, or `None` when the file
+    /// is incompatible (no editor, deleted-state toggled, now binary, or has no
+    /// content) and a fresh editor must be built by the caller.
+    fn reuse_file_state_if_compatible(
+        &self,
+        mut prev: FileState,
+        file: &FileDiffAndContent,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<FileState> {
+        let can_reuse = prev.editor_state.is_some()
+            && !file_status_changed_deleted_state(&prev.file_diff.status, &file.file_diff.status)
+            && !file.file_diff.is_binary
+            && file.content_at_head.is_some();
+        if !can_reuse {
+            return None;
+        }
+
+        // An identical diff (e.g. a redundant reload) needs nothing re-applied —
+        // keep the editor exactly as-is.
+        if prev.file_diff != file.file_diff {
+            // Don't clobber edits the user hasn't saved; leave the editor and its
+            // (now stale) `file_diff` untouched, mirroring the single-file path.
+            let has_unsaved_changes = prev
+                .editor_state
+                .as_ref()
+                .is_some_and(|editor_state| editor_state.has_unsaved_changes(ctx));
+            if !has_unsaved_changes {
+                let applied = if let (Some(editor_state), Some(repo_path)) =
+                    (prev.editor_state.as_ref(), self.repo_path())
+                {
+                    let full_file_location = repo_path.join(&file.file_diff.file_path);
+                    let comment_line_numbers =
+                        self.comment_line_numbers_for_file(&full_file_location, ctx);
+                    Self::apply_diff_to_code_editor(
+                        editor_state.editor(),
+                        file,
+                        false,
+                        &comment_line_numbers,
+                        ctx,
+                    );
+                    true
+                } else {
+                    false
+                };
+                // Only adopt the new diff once it has actually been applied to the
+                // editor, so `file_diff` never gets ahead of the editor's contents.
+                if applied {
+                    prev.file_diff = file.file_diff.clone();
+                }
+            }
+        }
+
+        Some(prev)
     }
 
     fn render_diff_at_index(
