@@ -8563,7 +8563,25 @@ impl TerminalView {
                 controller.switch_control_to_user(UserTakeOverReason::Stop, ctx);
             });
         } else if is_long_running {
-            self.user_write_ctrl_c_to_pty(ctx);
+            let conversation_id_to_stop = {
+                let model = self.model.lock();
+                let active_block = model.block_list().active_block();
+                active_block
+                    .long_running_control_state()
+                    .and_then(|state| {
+                        state
+                            .user_take_over_reason()
+                            .is_some_and(UserTakeOverReason::is_stop)
+                            .then(|| active_block.ai_conversation_id())
+                    })
+                    .flatten()
+            };
+
+            if let Some(conversation_id) = conversation_id_to_stop {
+                self.stop_local_agent_conversation(conversation_id, ctx);
+            } else {
+                self.user_write_ctrl_c_to_pty(ctx);
+            }
         } else {
             self.maybe_handle_ctrl_c_in_rich_content_block(ctx);
         }
