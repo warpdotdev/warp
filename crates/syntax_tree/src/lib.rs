@@ -23,6 +23,16 @@ use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 
+/// Files whose byte representation exceeds this limit are not parsed by
+/// tree-sitter. Very large or syntactically complex files can cause the
+/// parser's error-recovery pass (`_ts_parser__recover`) to allocate gigabytes
+/// of memory, triggering OOM conditions. Skipping syntax highlighting for
+/// oversized files is preferable to crashing the application.
+///
+/// The limit is intentionally generous (1 MiB) — typical source files are well
+/// under this size. It matches the default used by many editors (e.g. VS Code).
+const MAX_PARSE_BYTES: usize = 1024 * 1024; // 1 MiB
+
 thread_local! {
     static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
@@ -309,6 +319,25 @@ impl DecorationLayer for SyntaxTreeState {
         // If there is an active parsing in progress. Abort that first before starting another one.
         if let Some(handle) = self.parsing_handle.take() {
             handle.abort();
+        }
+
+        // Guard against parsing files that exceed the size limit. The tree-sitter
+        // error-recovery pass (`_ts_parser__recover`) can allocate O(N²) memory on
+        // large or syntactically complex files, causing gigabytes of heap growth and
+        // potential OOM crashes. Skipping syntax highlighting for oversized files is
+        // the safer trade-off.
+        if content.byte_count() > MAX_PARSE_BYTES {
+            log::warn!(
+                "Skipping tree-sitter parse: file size {} B exceeds {} B limit",
+                content.byte_count(),
+                MAX_PARSE_BYTES
+            );
+            // Clear any stale syntax tree so highlights are not shown for
+            // content that no longer matches the cached tree.
+            self.syntax_tree.lock().clear();
+            *self.highlight_cache.borrow_mut() = None;
+            self.buffer_version = version;
+            return;
         }
 
         let Some(language) = self
