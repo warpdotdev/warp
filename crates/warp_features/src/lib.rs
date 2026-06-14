@@ -875,6 +875,11 @@ pub enum FeatureFlag {
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
 
+    /// Gates the sleep-interruption discoverability modal: when the computer
+    /// sleeps and an in-progress local agent run would have been handed off to
+    /// cloud but `auto_handoff_on_sleep_enabled` is off, a one-time modal
+    /// surfaces on wake offering to enable the setting.
+    AutoHandoffSleepPrompt,
     /// Gates the Pinned Tabs feature, which lets users pin individual tabs
     /// and whole tab groups so they stay at the front of the tab list and
     /// are protected from reordering.

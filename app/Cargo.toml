@@ -670,6 +670,7 @@ default = [
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
+    "auto_handoff_sleep_prompt",
     "run_agents_tool",
     "orchestration_viewer_streamer",
     "owner_orchestration_ancestor_streamer",
@@ -989,6 +990,7 @@ warp_control_cli = []
 agent_harness = []
 oz_handoff = []
 handoff_local_cloud = []
+auto_handoff_sleep_prompt = []
 hoa_notifications = []
 open_code_notifications = []
 transfer_control_tool = []
