@@ -177,15 +177,26 @@ impl RequestParams {
                 .copied()
                 .collect();
 
-            // If file-based MCP servers are enabled, add active servers in scope of
-            // the user's current working directory
-            if let Some(cwd) = session_context.current_working_directory() {
-                active_servers.extend(
-                    templatable_manager
-                        .get_active_file_based_servers(Path::new(cwd), app)
-                        .values(),
-                );
-            }
+            // Add file-based MCP servers in scope.
+            //
+            // We always include home-rooted (global) servers, regardless of whether
+            // a cwd is available. This matters for fresh conversations whose
+            // `current_working_directory()` returns `None` because no exchange has
+            // populated one yet — without this, globally-configured servers in
+            // `~/.warp/.mcp.json` would be invisible to the agent even though they
+            // appear connected in Settings (#9111).
+            //
+            // Repo-scoped servers in `<repo>/.warp/.mcp.json` are still gated on
+            // `cwd` since they have no meaning without one.
+            let cwd_path = session_context
+                .current_working_directory()
+                .as_deref()
+                .map(Path::new);
+            active_servers.extend(
+                templatable_manager
+                    .get_active_file_based_servers(cwd_path, app)
+                    .values(),
+            );
 
             // Include any ephemeral MCP servers started via the Oz CLI.
             active_servers.extend(
