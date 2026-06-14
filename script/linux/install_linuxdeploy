@@ -10,40 +10,38 @@ mkdir -p "$LOCAL_BIN"
 # it in ~/.local/bin.
 #
 # Usage:
-#   download_appimage $BINARY_NAME $DOWNLOAD_URL_BASE
+#   download_appimage $BINARY_NAME $VERSION $DOWNLOAD_URL_BASE
 #
 # Args:
 #   BINARY_NAME:       The name of the AppImage-bundled binary we want to
 #                      download, e.g.: "appimagetool".
+#   VERSION:           The upstream release tag; embedded in the cached
+#                      filename so bumping it forces a re-download.
 #   DOWNLOAD_URL_BASE: The URL to the directory containing the architecture-
 #                      specific AppImages.
 download_appimage() {
   BINARY_NAME="$1"
-  DOWNLOAD_URL_BASE="$2"
+  VERSION="$2"
+  DOWNLOAD_URL_BASE="$3"
 
-  APPIMAGE_NAME="$BINARY_NAME-$(uname -m).AppImage"
+  APPIMAGE_PATH="$LOCAL_BIN/$BINARY_NAME-$VERSION-$(uname -m).AppImage"
 
-  if [ -x "$(which "$BINARY_NAME")" ]; then
-    echo "✅ Found $BINARY_NAME on your PATH."
-  elif [ -x "$(which "$APPIMAGE_NAME")" ]; then
-    APPIMAGE_PATH="$(which "$APPIMAGE_NAME")"
-    APPIMAGE_PARENT_DIR="$(dirname "$APPIMAGE_PATH")"
-    # Create a symlink so we can invoke it like a normal binary.
-    ln -s "$APPIMAGE_PATH" "$APPIMAGE_PARENT_DIR/$BINARY_NAME"
-    echo "✅ Found $APPIMAGE_NAME on your PATH; added $BINARY_NAME symlink."
-  else
-    echo "⬇️  Downloading $APPIMAGE_NAME..."
-    APPIMAGE_PATH="$LOCAL_BIN/$APPIMAGE_NAME"
-    curl -fL "$DOWNLOAD_URL_BASE/$APPIMAGE_NAME" --output "$APPIMAGE_PATH"
+  if [ ! -x "$APPIMAGE_PATH" ]; then
+    APPIMAGE_RELEASE_URL="$DOWNLOAD_URL_BASE/$BINARY_NAME-$(uname -m).AppImage"
+    echo "⬇️  Downloading $APPIMAGE_RELEASE_URL..."
+    curl -fL "$APPIMAGE_RELEASE_URL" --output "$APPIMAGE_PATH"
     chmod +x "$APPIMAGE_PATH"
-    # Create a symlink so we can invoke it like a normal binary.
-    ln -s "$APPIMAGE_PATH" "$LOCAL_BIN/$BINARY_NAME"
   fi
+
+  # Create a symlink so we can invoke it like a normal binary.
+  ln -sf "$APPIMAGE_PATH" "$LOCAL_BIN/$BINARY_NAME"
 }
 
 # Install linuxdeploy, a helper for constructing an AppDir (and then invoking
 # appimagetool).
-download_appimage "linuxdeploy" "https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20240109-1/"
+LINUXDEPLOY_VERSION="1-alpha-20251107-1"
+download_appimage "linuxdeploy" "$LINUXDEPLOY_VERSION" \
+  "https://github.com/linuxdeploy/linuxdeploy/releases/download/$LINUXDEPLOY_VERSION/"
 
 if [ ! -x "$(which linuxdeploy)" ]; then
   echo -e "⚠️  ${red}Please make sure that \"$LOCAL_BIN\" is on your PATH, otherwise some scripts may not work.${reset}"
