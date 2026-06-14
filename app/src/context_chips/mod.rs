@@ -172,6 +172,7 @@ pub enum ContextChipKind {
     VirtualEnvironment,
     CondaEnvironment,
     NodeVersion,
+    RubyVersion,
     #[schemars(description = "A user-defined custom chip.")]
     Custom {
         title: String,
@@ -269,6 +270,20 @@ impl ContextChipKind {
                     [
                         ChipFingerprintInput::SessionId,
                         ChipFingerprintInput::NodeVersion,
+                    ],
+                ),
+            )),
+            Self::RubyVersion => Some(ContextChip::builtin_with_runtime_policy(
+                "Ruby Version",
+                builtins::ruby_version,
+                RefreshConfig::OnDemandOnly,
+                ChipRuntimePolicy::new(
+                    std::iter::empty::<&str>(),
+                    false,
+                    None,
+                    [
+                        ChipFingerprintInput::SessionId,
+                        ChipFingerprintInput::RubyVersion,
                     ],
                 ),
             )),
@@ -383,6 +398,7 @@ impl ContextChipKind {
             Self::VirtualEnvironment => ChipValue::Text("pyenv".to_string()),
             Self::CondaEnvironment => ChipValue::Text("condaenv".to_string()),
             Self::NodeVersion => ChipValue::Text("v18.17.0".to_string()),
+            Self::RubyVersion => ChipValue::Text("3.3.0".to_string()),
             Self::Date => ChipValue::Text("July 12, 2023".to_string()),
             Self::Time12 => ChipValue::Text("03:48 pm".to_string()),
             Self::Time24 => ChipValue::Text("15:48".to_string()),
@@ -416,6 +432,7 @@ impl ContextChipKind {
             Self::VirtualEnvironment => prompt_colors.input_prompt_virtual_env,
             Self::CondaEnvironment => prompt_colors.input_prompt_virtual_env,
             Self::NodeVersion => prompt_colors.input_prompt_virtual_env,
+            Self::RubyVersion => prompt_colors.input_prompt_virtual_env,
             Self::Date => prompt_colors.input_prompt_date,
             Self::Time12 => prompt_colors.input_prompt_time,
             Self::Time24 => prompt_colors.input_prompt_time,
@@ -509,9 +526,10 @@ impl ContextChipKind {
             Self::Hostname => Some(Icon::Laptop),
             Self::Date => Some(Icon::CalendarDate),
             Self::Time12 | Self::Time24 => Some(Icon::Clock),
-            Self::VirtualEnvironment | Self::CondaEnvironment | Self::Subshell => {
-                Some(Icon::Terminal)
-            }
+            Self::VirtualEnvironment
+            | Self::CondaEnvironment
+            | Self::RubyVersion
+            | Self::Subshell => Some(Icon::Terminal),
             Self::NodeVersion => Some(Icon::NodeJS),
             Self::ShellGitBranch | Self::SvnBranch => Some(Icon::GitBranch),
             Self::GitDiffStats | Self::SvnDirtyItems => Some(Icon::File),
@@ -550,6 +568,7 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::VirtualEnvironment,
         ContextChipKind::CondaEnvironment,
         ContextChipKind::NodeVersion,
+        ContextChipKind::RubyVersion,
         ContextChipKind::KubernetesContext,
         ContextChipKind::SvnBranch,
         ContextChipKind::SvnDirtyItems,

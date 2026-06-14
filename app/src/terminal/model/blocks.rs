@@ -2910,6 +2910,7 @@ impl BlockList {
             virtual_env: block.virtual_env.clone(),
             conda_env: block.conda_env.clone(),
             node_version: block.node_version.clone(),
+            ruby_version: block.ruby_version.clone(),
             session_id: block.session_id.map(|id| id.as_u64()),
             ps1: block.ps1.clone(),
             honor_ps1: Some(block.honor_ps1),

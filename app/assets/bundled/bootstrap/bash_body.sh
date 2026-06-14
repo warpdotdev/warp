@@ -472,6 +472,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
             \"virtual_env\": \"\",
             \"conda_env\": \"\",
             \"node_version\": \"\",
+            \"ruby_version\": \"\",
             \"session_id\": $WARP_SESSION_ID,
             \"is_after_in_band_command\": true
             }}"
@@ -558,10 +559,12 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         local escaped_virtual_env=""
         local escaped_conda_env=""
         local escaped_node_version=""
+        local escaped_ruby_version=""
         local escaped_git_head=""
         local escaped_git_branch=""
         local git_head=""
         local git_branch=""
+        local ruby_version=""
 
         # Only fill these fields once we've finished bootstrapping, as the
         # blocks created during the bootstrap process don't have visible
@@ -631,6 +634,39 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
               fi
           fi
 
+          # Get Ruby version if ruby is available and we're in a Ruby project
+          if command -v ruby > /dev/null 2>&1 && [ "$WARP_IN_MSYS2" = false ]; then
+              local current_dir="$PWD"
+              local found_ruby_project=false
+              local ruby_project_dir=""
+              while [[ "$current_dir" != "/" ]]; do
+                  if [[ -f "$current_dir/Gemfile" ]] || [[ -f "$current_dir/.ruby-version" ]] || [[ -f "$current_dir/.ruby-gemset" ]] || [[ -f "$current_dir/Rakefile" ]] || [[ -f "$current_dir/config.ru" ]] || [[ -f "$current_dir"/*.gemspec ]]; then
+                      found_ruby_project=true
+                      ruby_project_dir="$current_dir"
+                      break
+                  fi
+                  current_dir=$(dirname "$current_dir")
+              done
+
+              if [[ "$found_ruby_project" = true ]]; then
+                  local git_dir="$ruby_project_dir"
+                  local in_git_repo=false
+                  while [[ "$git_dir" != "/" ]]; do
+                      if [[ -d "$git_dir/.git" ]]; then
+                          in_git_repo=true
+                          break
+                      fi
+                      git_dir=$(dirname "$git_dir")
+                  done
+
+                  if [[ "$in_git_repo" = true ]]; then
+                      ruby_version=$(ruby -e 'print RUBY_VERSION' 2>/dev/null)
+                      if [[ -n "$ruby_version" ]]; then
+                          escaped_ruby_version=$(warp_escape_json "$ruby_version")
+                      fi
+                  fi
+              fi
+          fi
           # Note: We explicitly do _not_ use command -p here, as `git` is a command that can be
           # installed in non-standard locations and so is not always available on the shell's
           # default PATH. Instead, we rely on the active PATH, as if the user doesn't have git
@@ -679,6 +715,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           warp_send_hook_kv_pair "virtual_env" "$VIRTUAL_ENV"
           warp_send_hook_kv_pair "conda_env" "$CONDA_DEFAULT_ENV"
           warp_send_hook_kv_pair "node_version" "$node_version"
+          warp_send_hook_kv_pair "ruby_version" "$ruby_version"
           warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
@@ -692,6 +729,7 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           \"virtual_env\": \"$escaped_virtual_env\",
           \"conda_env\": \"$escaped_conda_env\",
           \"node_version\": \"$escaped_node_version\",
+          \"ruby_version\": \"$escaped_ruby_version\",
           \"session_id\": $WARP_SESSION_ID
           }}"
           warp_send_json_message "$escaped_json"

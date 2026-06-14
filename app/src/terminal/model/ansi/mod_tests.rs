@@ -602,6 +602,7 @@ fn parse_dcs_precmd() {
                 virtual_env: None,
                 conda_env: Some("numpy".to_string()),
                 node_version: None,
+                ruby_version: None,
                 kube_config: None,
                 session_id: Some(167303092612201),
                 ps1_is_encoded: None,

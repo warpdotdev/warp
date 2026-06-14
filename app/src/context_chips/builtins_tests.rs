@@ -120,6 +120,7 @@ fn test_node_version() {
         None,                        // virtual_env
         None,                        // conda_env
         Some("v18.0.0".to_string()), // node_version
+        None,                        // ruby_version
     );
     let ctx_with_node = GeneratorContext {
         active_block_metadata: &block_metadata,
@@ -131,5 +132,36 @@ fn test_node_version() {
             .as_ref()
             .and_then(|v| v.as_text()),
         Some("v18.0.0")
+    );
+}
+
+#[test]
+fn test_ruby_version() {
+    use crate::context_chips::context_chip::Environment;
+    use crate::terminal::model::block::BlockMetadata;
+    use crate::terminal::model::session::Session;
+
+    let session = Session::test();
+    let block_metadata = BlockMetadata::new(Some(session.id()), None);
+
+    let environment_no_ruby = Environment::default();
+    let ctx_no_ruby = GeneratorContext {
+        active_block_metadata: &block_metadata,
+        active_session: Some(&session),
+        current_environment: &environment_no_ruby,
+    };
+    assert_eq!(super::ruby_version(&ctx_no_ruby), None);
+
+    let environment_with_ruby = Environment::new(None, None, None, Some("3.3.0".to_string()));
+    let ctx_with_ruby = GeneratorContext {
+        active_block_metadata: &block_metadata,
+        active_session: Some(&session),
+        current_environment: &environment_with_ruby,
+    };
+    assert_eq!(
+        super::ruby_version(&ctx_with_ruby)
+            .as_ref()
+            .and_then(|v| v.as_text()),
+        Some("3.3.0")
     );
 }

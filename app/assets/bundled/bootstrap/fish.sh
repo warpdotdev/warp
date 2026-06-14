@@ -293,6 +293,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
         \"virtual_env\": \"\",
         \"conda_env\": \"\",
         \"node_version\": \"\",
+        \"ruby_version\": \"\",
         \"session_id\": $WARP_SESSION_ID,
         \"is_after_in_band_command\": true
         }}"
@@ -332,6 +333,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
     set -l escaped_virtual_env ""
     set -l escaped_conda_env ""
     set -l escaped_node_version ""
+    set -l escaped_ruby_version ""
     set -l escaped_git_head ""
     set -l escaped_git_branch ""
 
@@ -409,6 +411,40 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
             end
         end
 
+        # Get Ruby version if ruby is available and we're in a Ruby project
+        if command -q ruby
+            set current_dir (pwd)
+            set found_ruby_project false
+            set ruby_project_dir ""
+            while test "$current_dir" != "/"
+                if test -f "$current_dir/Gemfile"; or test -f "$current_dir/.ruby-version"; or test -f "$current_dir/.ruby-gemset"; or test -f "$current_dir/Rakefile"; or test -f "$current_dir/config.ru"
+                    set found_ruby_project true
+                    set ruby_project_dir "$current_dir"
+                    break
+                end
+                set current_dir (dirname "$current_dir")
+            end
+
+            if test "$found_ruby_project" = true
+                set git_dir "$ruby_project_dir"
+                set in_git_repo false
+                while test "$git_dir" != "/"
+                    if test -d "$git_dir/.git"
+                        set in_git_repo true
+                        break
+                    end
+                    set git_dir (dirname "$git_dir")
+                end
+
+                if test "$in_git_repo" = true
+                    set ruby_version (ruby -e 'print RUBY_VERSION' 2>/dev/null)
+                    if test -n "$ruby_version"
+                        set escaped_ruby_version (warp_escape_json "$ruby_version")
+                    end
+                end
+            end
+        end
+
       set -l git_branch ""
       set -l git_head ""
       if command -q git
@@ -448,6 +484,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       \"virtual_env\": \"$escaped_virtual_env\",
       \"conda_env\": \"$escaped_conda_env\",
       \"node_version\": \"$escaped_node_version\",
+      \"ruby_version\": \"$escaped_ruby_version\",
       \"session_id\": $WARP_SESSION_ID
       }}"
     else
@@ -461,6 +498,7 @@ function warp_precmd --on-event fish_prompt --on-event fish_posterror
       \"virtual_env\": \"$escaped_virtual_env\",
       \"conda_env\": \"$escaped_conda_env\",
       \"node_version\": \"$escaped_node_version\",
+      \"ruby_version\": \"$escaped_ruby_version\",
       \"session_id\": $WARP_SESSION_ID
       }}"
     end

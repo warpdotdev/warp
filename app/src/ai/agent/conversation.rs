@@ -3733,6 +3733,7 @@ impl AIConversation {
                 virtual_env: None,
                 conda_env: None,
                 node_version: None,
+                ruby_version: None,
                 exit_code: command_block.exit_code,
                 did_execute: true,
                 start_ts: command_block.start_ts.or(exchange_time),

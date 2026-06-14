@@ -67,6 +67,23 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             return ''
         }
 
+        # Safely attempt to get Ruby version if available. Avoid literal 'ruby' invocation
+        # to satisfy PSUseCompatibleCommands across target platforms.
+        function Warp-TryGet-RubyVersion {
+            try {
+                $cmd = Get-Command -CommandType Application ruby 2>$null
+                if ($null -eq $cmd) { return '' }
+                $rv = & $cmd.Source -e 'print RUBY_VERSION' 2>$null
+                if ($null -ne $rv -and "$rv" -ne '') {
+                    return $rv
+                }
+            } catch {
+                # Log at verbose level so normal users are not spammed, but the catch is not empty.
+                Write-Verbose "ruby -e 'print RUBY_VERSION' failed: $($_.Exception.Message)"
+            }
+            return ''
+        }
+
         # Encode a string as hex-encoded UTF-8.
         function Warp-Encode-HexString([string]$str) {
             [BitConverter]::ToString([System.Text.Encoding]::UTF8.GetBytes($str)).Replace('-', '')
@@ -468,6 +485,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                     git_branch = ''
                     virtual_env = ''
                     conda_env = ''
+                    ruby_version = ''
                     session_id = $global:_warpSessionId
                     is_after_in_band_command = $true
                 }
@@ -482,6 +500,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             $gitHead = ''
             $gitBranch = ''
             $nodeVersion = ''
+            $rubyVersion = ''
 
             # Only fill these fields once we've finished bootstrapping, as the
             # blocks created during the bootstrap process don't have visible
@@ -551,6 +570,57 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                     }
                 }
 
+                # Compute Ruby version if ruby is available and we're in a Ruby project within a Git repo.
+                $hasRubyCommand = Get-Command -CommandType Application ruby 2>$null
+                if ($hasRubyCommand) {
+                    try {
+                        $dir = Get-Item -LiteralPath (Get-Location).Path
+                        $foundRubyProject = $false
+                        $rubyProjectDir = $null
+                        while ($null -ne $dir) {
+                            $rubyMarkers = @(
+                                'Gemfile',
+                                '.ruby-version',
+                                '.ruby-gemset',
+                                'Rakefile',
+                                'config.ru'
+                            )
+                            foreach ($marker in $rubyMarkers) {
+                                if (Test-Path -LiteralPath (Join-Path $dir.FullName $marker)) {
+                                    $foundRubyProject = $true
+                                    $rubyProjectDir = $dir.FullName
+                                    break
+                                }
+                            }
+                            if ($foundRubyProject) { break }
+                            if (Get-ChildItem -LiteralPath $dir.FullName -Filter '*.gemspec' 2>$null | Select-Object -First 1) {
+                                $foundRubyProject = $true
+                                $rubyProjectDir = $dir.FullName
+                                break
+                            }
+                            $dir = $dir.Parent
+                        }
+
+                        if ($foundRubyProject) {
+                            $probe = Get-Item -LiteralPath $rubyProjectDir
+                            $inGitRepo = $false
+                            while ($null -ne $probe) {
+                                if (Test-Path -LiteralPath (Join-Path $probe.FullName '.git')) {
+                                    $inGitRepo = $true
+                                    break
+                                }
+                                $probe = $probe.Parent
+                            }
+
+                            if ($inGitRepo) {
+                                $rubyVersion = Warp-TryGet-RubyVersion
+                            }
+                        }
+                    } catch {
+                        Write-Verbose "Failed to compute Ruby context: $($_.Exception.Message)"
+                    }
+                }
+
                 # We do not inline $hasGitCommand b/c the linter does not like seeing '>'
                 # in an if statement; it thinks we are trying to do -gt incorrectly.
                 # Since this is a good warning and we do not want to turn off this lint rule,
@@ -589,6 +659,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                     virtual_env = $virtualEnv
                     conda_env = $condaEnv
                     node_version = $nodeVersion
+                    ruby_version = $rubyVersion
                     session_id = $global:_warpSessionId
                     kube_config = $kubeConfig
                 }
