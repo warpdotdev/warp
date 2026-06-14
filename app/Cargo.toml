@@ -527,7 +527,6 @@ default = [
     "kitty_images",
     "global_ai_analytics_collection",
     "grep_tool",
-    "validate_autosuggestions",
     "clear_autosuggestion_on_escape",
     "file_retrieval_tools",
     "mcp_server",
@@ -865,7 +864,6 @@ ime_marked_text = []
 partial_next_command_suggestions = []
 drive_objects_as_context = []
 iterm_images = []
-validate_autosuggestions = []
 autoupdate_ui_revamp = []
 warp_packs = []
 suggested_rules = []
