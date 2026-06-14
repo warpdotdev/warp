@@ -73,6 +73,7 @@ use crate::settings::{
 use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 use crate::terminal::model::block::{Block, BlockSection};
 use crate::terminal::model::blocks::{
@@ -87,7 +88,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::{grid_renderer, SizeInfo};
+use crate::terminal::{grid_renderer, CLIAgent, SizeInfo};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
 use crate::util::color::Opacity;
@@ -164,6 +165,10 @@ impl ScrollingAcceleration {
             ScrollingAcceleration::Polynomial(degree) => delta.powf(degree) / 100.0,
         }
     }
+}
+
+fn cli_agent_allows_scroll_reporting(agent: Option<CLIAgent>) -> bool {
+    !matches!(agent, Some(CLIAgent::Claude))
 }
 
 enum SelectionCursorRenderLocation {
@@ -1327,6 +1332,16 @@ impl BlockListElement {
             false
         }
     }
+    fn should_forward_scroll_to_pty(&self, model: &TerminalModel, app: &AppContext) -> bool {
+        let active_cli_agent = CLIAgentSessionsModel::as_ref(app)
+            .session(self.terminal_view_id)
+            .map(|session| session.agent);
+
+        // Claude Code recently started enabling mouse scroll reporting on the primary grid, but in
+        // Warp's block list users expect the wheel to review terminal history while Claude is
+        // running. Keep click/drag mouse reporting intact and only reserve scrollback for Claude.
+        cli_agent_allows_scroll_reporting(active_cli_agent) && !should_intercept_scroll(model, app)
+    }
 
     fn scroll_internal(
         &self,
@@ -1364,7 +1379,7 @@ impl BlockListElement {
                         .block_at(block_index)
                         .is_some_and(|block| block.is_active_and_long_running());
 
-                    if on_long_running_block && !should_intercept_scroll(&model, app) {
+                    if on_long_running_block && self.should_forward_scroll_to_pty(&model, app) {
                         // Send scroll event to PTY as mouse wheel action.
                         // Convert Lines to i32 by rounding to nearest non-zero integer.
                         let delta = round_nonzero(delta_lines.as_f64());
@@ -4681,6 +4696,18 @@ impl Element for BlockListElement {
 
     fn origin(&self) -> Option<Point> {
         self.origin
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_code_keeps_mouse_wheel_for_warp_scrollback() {
+        assert!(!cli_agent_allows_scroll_reporting(Some(CLIAgent::Claude)));
+        assert!(cli_agent_allows_scroll_reporting(Some(CLIAgent::Codex)));
+        assert!(cli_agent_allows_scroll_reporting(Some(CLIAgent::Gemini)));
+        assert!(cli_agent_allows_scroll_reporting(None));
     }
 }
 
