@@ -5055,7 +5055,6 @@ impl CodeReviewView {
 
         let file_path_for_toggle = file.file_diff.file_path.clone();
 
-        let outer_bg = theme.background();
         let inner_corner_radius = if file.is_expanded {
             CornerRadius::with_top(Radius::Pixels(8.))
         } else {
@@ -5108,9 +5107,7 @@ impl CodeReviewView {
         .with_defer_events_to_children()
         .finish();
 
-        Container::new(inner_header)
-            .with_background(outer_bg)
-            .finish()
+        inner_header
     }
 
     /// Renders file-specific statistics
