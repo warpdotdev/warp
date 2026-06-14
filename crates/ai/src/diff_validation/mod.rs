@@ -149,6 +149,7 @@ impl AIRequestedCodeDiff {
                 fuzzy_match_failures,
                 noop_deltas,
                 missing_line_numbers: _,
+                fuzzy_match_failure_details: _,
             }) => {
                 let update_deltas_empty = match &self.diff_type {
                     DiffType::Update { deltas, .. } => deltas.is_empty(),
@@ -323,7 +324,9 @@ fn remove_extra_line_num_prefix(replace: String) -> String {
         .join("\n")
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize)]
+const MAX_DIFF_MATCH_FAILURE_BYTES: usize = 1_000;
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
 pub struct DiffMatchFailures {
     /// Failures to perform a fuzzy match with content.
     pub fuzzy_match_failures: u8,
@@ -331,6 +334,42 @@ pub struct DiffMatchFailures {
     pub noop_deltas: u8,
     /// Search blocks that are missing line numbers.
     pub missing_line_numbers: u8,
+    /// The search blocks that failed to fuzzy match. Skipped for telemetry.
+    #[serde(skip)]
+    pub fuzzy_match_failure_details: Vec<DiffMatchFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffMatchFailure {
+    pub search: String,
+    pub range: Option<Range<usize>>,
+}
+
+fn capped_failure_text(text: &str) -> String {
+    if text.len() <= MAX_DIFF_MATCH_FAILURE_BYTES {
+        return text.to_string();
+    }
+
+    let mut end = 0;
+    for (index, char) in text.char_indices() {
+        let next = index + char.len_utf8();
+        if next > MAX_DIFF_MATCH_FAILURE_BYTES {
+            break;
+        }
+        end = next;
+    }
+
+    format!("{}\n... [truncated]", &text[..end])
+}
+
+fn v4a_hunk_search_text(diff: &V4AHunk) -> String {
+    [
+        diff.pre_context.lines().collect_vec(),
+        diff.old.lines().collect_vec(),
+        diff.post_context.lines().collect_vec(),
+    ]
+    .concat()
+    .join("\n")
 }
 
 /// Fix two common issues with responses from the models that request code actions:
@@ -426,6 +465,10 @@ pub fn fuzzy_match_v4a_diffs(
             None => {
                 log::warn!("Failed to find matching location for V4A diff");
                 failures.fuzzy_match_failures += 1;
+                failures.fuzzy_match_failure_details.push(DiffMatchFailure {
+                    search: capped_failure_text(&v4a_hunk_search_text(diff)),
+                    range: None,
+                });
             }
         }
     }
@@ -497,6 +540,7 @@ fn fuzzy_match_file_diffs(
         log::debug!("{diff:#?}");
 
         let (mut line_range, search) = parse_line_numbers(&diff.search);
+        let parsed_line_range = line_range.clone();
 
         // Missing line numbers are not necessarily fatal, due to fuzzy matching, but we still
         // want to track them.
@@ -624,6 +668,10 @@ fn fuzzy_match_file_diffs(
             }
             None => {
                 failures.fuzzy_match_failures += 1;
+                failures.fuzzy_match_failure_details.push(DiffMatchFailure {
+                    search: capped_failure_text(&search),
+                    range: parsed_line_range,
+                });
             }
         }
     }

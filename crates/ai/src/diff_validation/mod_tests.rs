@@ -411,6 +411,13 @@ fn test_v4a_no_match() {
     assert!(diff.failures.is_some());
     let failures = diff.failures.unwrap();
     assert_eq!(failures.fuzzy_match_failures, 1);
+    assert_eq!(
+        failures.fuzzy_match_failure_details,
+        vec![DiffMatchFailure {
+            search: "fn does_not_exist() {\n    unrelated_code();\n}".to_string(),
+            range: None,
+        }]
+    );
 }
 
 #[test]
