@@ -31,11 +31,14 @@ use workflows::workflow::{Argument, ArgumentType, Workflow};
 
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{AIAgentExchange, AIAgentInput, AIAgentOutputStatus, UserQueryMode};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
-use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions};
+use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions, ResponseStreamId};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::gallery::MCPGalleryManager;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::outline::RepoOutlines;
@@ -59,7 +62,10 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::import::model::ImportedConfigModel;
-use crate::settings::{AliasExpansionSettings, AppEditorSettings, InputBoxType, PrivacySettings};
+use crate::settings::{
+    AliasExpansionSettings, AppEditorSettings, InputBoxType, LongRunningCommandSubmissionMode,
+    PrivacySettings, PromptSubmissionMode,
+};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 #[cfg(windows)]
 use crate::system::SystemInfo;
@@ -1608,6 +1614,265 @@ fn empty_buffer_enter_skips_locked_initial_cloud_mode_head() {
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             assert_eq!(model.queue(conversation_id).len(), 2);
         });
+    });
+}
+
+/// Seeds an in-progress conversation (one streaming exchange, so it is non-empty and titled)
+/// for `terminal` and puts its active block into the agent-in-control long-running-command
+/// state for that conversation.
+fn simulate_agent_controlled_lrc(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+) -> AIConversationId {
+    let terminal_view_id = terminal.read(app, |view, _| view.id());
+    let conversation_id = seed_active_conversation(app, terminal_view_id);
+    BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
+        let exchange = AIAgentExchange {
+            id: AIAgentExchangeId::new(),
+            input: vec![AIAgentInput::UserQuery {
+                query: "run the dev server".to_owned(),
+                context: Default::default(),
+                static_query_type: None,
+                referenced_attachments: Default::default(),
+                user_query_mode: UserQueryMode::Normal,
+                running_command: None,
+                intended_agent: None,
+            }],
+            output_status: AIAgentOutputStatus::Streaming { output: None },
+            added_message_ids: HashSet::new(),
+            start_time: Local::now(),
+            finish_time: None,
+            time_to_first_token_ms: None,
+            working_directory: None,
+            model_id: LLMId::from("test-model"),
+            request_cost: None,
+            coding_model_id: LLMId::from("test-coding-model"),
+            cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+            computer_use_model_id: LLMId::from("test-computer-use-model"),
+            response_initiator: None,
+        };
+        let response_stream_id = ResponseStreamId::new_for_test();
+        history
+            .conversation_mut(&conversation_id)
+            .expect("conversation should exist")
+            .append_reassigned_exchange(&response_stream_id, exchange, terminal_view_id, ctx)
+            .expect("exchange should append");
+        history.update_conversation_status(
+            terminal_view_id,
+            conversation_id,
+            ConversationStatus::InProgress,
+            ctx,
+        );
+    });
+
+    terminal.update(app, |view, _ctx| {
+        let mut model = view.model.lock();
+        model.simulate_long_running_block("sleep 10", "running");
+        let active_block = model.block_list_mut().active_block_mut();
+        active_block.set_is_agent_tagged_in(true);
+        let task_id = TaskId::new("test-task".to_owned());
+        active_block
+            .set_agent_interaction_mode_for_agent_monitored_command(&task_id, conversation_id)
+            .expect("tagged-in command should transition to agent-monitored");
+        assert!(active_block.is_agent_in_control());
+    });
+    conversation_id
+}
+
+/// Selects `conversation_id` for the input via the pending-query state. AgentView must be
+/// disabled so `selected_conversation_id` resolves from this state directly.
+fn select_conversation_via_pending_query_state(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+    conversation_id: AIConversationId,
+) {
+    terminal.update(app, |view, ctx| {
+        view.ai_context_model().update(ctx, |context_model, ctx| {
+            context_model.set_pending_query_state_for_existing_conversation(
+                conversation_id,
+                AgentViewEntryOrigin::Input {
+                    was_prompt_autodetected: false,
+                },
+                ctx,
+            );
+        });
+    });
+}
+
+/// While an agent controls a long-running command, a prompt submission auto-queues (with the
+/// `LrcAutoQueue` origin) instead of being sent — without the user ever enabling queue mode.
+#[test]
+fn prompt_submission_auto_queues_during_agent_controlled_lrc() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_controlled_lrc(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("queue me", ctx);
+            input.input_enter(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "queue me");
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::LrcAutoQueue);
+        });
+        input.read(&app, |input, ctx| {
+            assert!(input.buffer_text(ctx).is_empty());
+        });
+    });
+}
+
+/// With the LRC submission mode set to send immediately, a submission during an
+/// agent-controlled LRC is not queued (it falls through to the normal submission path, as
+/// today).
+#[test]
+fn prompt_submission_is_not_queued_during_lrc_when_set_to_send_immediately() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_controlled_lrc(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .long_running_command_submission_mode
+                .set_value(LongRunningCommandSubmissionMode::SendImmediately, ctx);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("send me", ctx);
+            input.input_enter(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert!(model.queue(conversation_id).is_empty());
+        });
+    });
+}
+
+/// With the default submission mode set to Queue, the LRC machinery is inert: a submission
+/// during an agent-controlled LRC still queues, but as a regular queued row (generic origin)
+/// that waits for the end of the full response rather than the end of the command.
+#[test]
+fn prompt_submission_during_lrc_with_queue_default_uses_generic_origin() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_controlled_lrc(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .default_prompt_submission_mode
+                .set_value(PromptSubmissionMode::Queue, ctx);
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.replace_buffer_content("queue me", ctx);
+            input.input_enter(ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].origin(), QueuedQueryOrigin::AutoQueueToggle);
+        });
+    });
+}
+
+/// When the long-running command finishes, every `LrcAutoQueue` row fires to the agent in
+/// queue order; rows with other origins stay queued for the normal end-of-response drain.
+#[test]
+fn lrc_queued_prompts_fire_when_command_finishes() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_controlled_lrc(&mut app, &terminal);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new("first".to_owned(), QueuedQueryOrigin::LrcAutoQueue),
+                ctx,
+            );
+            model.append(
+                conversation_id,
+                QueuedQuery::new("keep me".to_owned(), QueuedQueryOrigin::QueueSlashCommand),
+                ctx,
+            );
+            model.append(
+                conversation_id,
+                QueuedQuery::new("second".to_owned(), QueuedQueryOrigin::LrcAutoQueue),
+                ctx,
+            );
+        });
+
+        let ai_query_count = Rc::new(RefCell::new(0));
+        let ai_query_count_for_subscription = ai_query_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event: &super::Event, _| {
+                if matches!(event, super::Event::ExecuteAIQuery) {
+                    *ai_query_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.send_lrc_queued_prompts(conversation_id, ctx);
+        });
+
+        assert_eq!(*ai_query_count.borrow(), 2);
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            let queue = model.queue(conversation_id);
+            assert_eq!(queue.len(), 1);
+            assert_eq!(queue[0].text(), "keep me");
+        });
+    });
+}
+
+/// While an agent controls a long-running command (and the setting is on), the empty-input
+/// ghost text shows the queue hint instead of the steer hint.
+#[test]
+fn ghost_text_shows_queue_hint_during_agent_controlled_lrc() {
+    App::test((), |mut app| async move {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let conversation_id = simulate_agent_controlled_lrc(&mut app, &terminal);
+        select_conversation_via_pending_query_state(&mut app, &terminal, conversation_id);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let hint = input.update(&mut app, |input, ctx| {
+            input.set_input_mode_agent(/* ensure_input_is_focused */ false, ctx);
+            input.agent_mode_hint_text(ctx)
+        });
+        assert!(
+            hint.starts_with("Queue a follow up for the running agent"),
+            "expected queue hint, got {hint:?}"
+        );
     });
 }
 
