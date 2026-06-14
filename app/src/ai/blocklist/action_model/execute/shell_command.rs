@@ -617,22 +617,23 @@ impl ShellCommandExecutor {
     }
 
     pub(super) fn cancel_execution(&mut self, id: &AIAgentActionId, _ctx: &mut ModelContext<Self>) {
-        let terminal_model = self.terminal_model.lock();
-        let active_block = terminal_model.block_list().active_block();
-        if !active_block.is_active_and_long_running() {
-            return;
-        }
+        let requested_command_selector = BlockSelector::RequestedCommandId(id.clone());
+        self.block_finished_senders
+            .remove(&requested_command_selector);
+        self.force_refresh_senders
+            .remove(&requested_command_selector);
 
-        let selector = if active_block
-            .requested_command_action_id()
-            .is_some_and(|requested_command_id| requested_command_id == id)
-        {
-            BlockSelector::RequestedCommandId(id.clone())
-        } else {
-            BlockSelector::Id(active_block.id().clone())
+        let active_block_selector = {
+            let terminal_model = self.terminal_model.lock();
+            let active_block = terminal_model.block_list().active_block();
+            active_block
+                .is_active_and_long_running()
+                .then(|| BlockSelector::Id(active_block.id().clone()))
         };
-        self.block_finished_senders.remove(&selector);
-        self.force_refresh_senders.remove(&selector);
+        if let Some(selector) = active_block_selector {
+            self.block_finished_senders.remove(&selector);
+            self.force_refresh_senders.remove(&selector);
+        }
     }
 
     /// Force any in-flight poll for the given long-running command block to resolve
