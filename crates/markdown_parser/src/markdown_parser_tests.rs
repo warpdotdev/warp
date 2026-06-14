@@ -37,6 +37,28 @@ fn test_parse_line_endings() {
 }
 
 #[test]
+fn test_parse_long_delimiter_run_does_not_overflow() {
+    // Regression test: a run of 256+ identical emphasis delimiters used to overflow
+    // the `u8` delimiter-run counter in `parse_delimiter_run`, panicking in debug
+    // builds ("attempt to add with overflow") and wrapping to 0 (silently corrupting
+    // the rendered output) in release builds. The counter is now `usize`.
+    for delimiter in ['*', '_', '~'] {
+        for run_len in [255usize, 256, 300] {
+            let source: String = std::iter::repeat(delimiter).take(run_len).collect();
+            // Unmatched delimiters round-trip to literal text, so the whole run must be
+            // preserved verbatim as a single plain-text fragment.
+            assert_eq!(
+                test_parse_markdown(&source),
+                vec![FormattedTextLine::Line(vec![
+                    FormattedTextFragment::plain_text(&source),
+                ])],
+                "{run_len} '{delimiter}' delimiters should parse to literal text"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_parse_single_line() {
     // Ensure we can parse without a trailing newline.
     assert_eq!(
