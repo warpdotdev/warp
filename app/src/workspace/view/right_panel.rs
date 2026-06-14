@@ -627,6 +627,7 @@ impl RightPanelView {
                 pane_group_id,
                 repository_terminal_map: _,
                 focused_repo,
+                focused_dir: _,
             } => {
                 let Some(active_pane_group) = &self.active_pane_group else {
                     return;

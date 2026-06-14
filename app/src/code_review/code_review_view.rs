@@ -2968,64 +2968,6 @@ impl CodeReviewView {
         }
     }
 
-    /// Converts GitDiffData hunks to DiffDelta format for CodeEditorView.apply_diffs
-    fn convert_hunks_to_diff_deltas(hunks: &[DiffHunk]) -> Vec<ai::diff_validation::DiffDelta> {
-        let mut diff_deltas = Vec::new();
-
-        for hunk in hunks {
-            let mut current_replacement_start: Option<usize> = None;
-            let mut current_insertion = String::new();
-            let mut has_removals = false;
-            let mut old_line = hunk.old_start_line;
-
-            for line in &hunk.lines {
-                match line.line_type {
-                    DiffLineType::Add => {
-                        if current_replacement_start.is_none() {
-                            current_replacement_start = Some(old_line);
-                        }
-
-                        current_insertion.push_str(&line.text);
-                        current_insertion.push('\n');
-                    }
-                    DiffLineType::Delete => {
-                        if current_replacement_start.is_none() {
-                            current_replacement_start = Some(old_line);
-                        }
-                        has_removals = true;
-                        old_line += 1;
-                    }
-                    DiffLineType::Context => {
-                        if let Some(start) = current_replacement_start.take() {
-                            let end = if has_removals { old_line } else { start };
-
-                            diff_deltas.push(ai::diff_validation::DiffDelta {
-                                replacement_line_range: start..end,
-                                insertion: current_insertion.clone(),
-                            });
-                            current_insertion.clear();
-                            has_removals = false;
-                        }
-                        old_line += 1;
-                    }
-                    DiffLineType::HunkHeader => {
-                        continue;
-                    }
-                }
-            }
-
-            if let Some(start) = current_replacement_start.take() {
-                let end = if has_removals { old_line } else { start };
-                diff_deltas.push(ai::diff_validation::DiffDelta {
-                    replacement_line_range: start..end,
-                    insertion: current_insertion,
-                });
-            }
-        }
-
-        diff_deltas
-    }
-
     #[cfg(not(target_family = "wasm"))]
     fn create_code_review_model_with_global_buffer(
         &self,
@@ -3455,7 +3397,8 @@ impl CodeReviewView {
     ) {
         if let Some(file_content) = &file.content_at_head {
             let version = ContentVersion::new();
-            let diff_deltas = Self::convert_hunks_to_diff_deltas(&file.file_diff.hunks);
+            let diff_deltas =
+                crate::code_review::diff_state::convert_hunks_to_diff_deltas(&file.file_diff.hunks);
 
             // For deleted files, we need to populate the buffer directly since the file
             // doesn't exist on disk and can't be loaded via GlobalBufferModel.
@@ -6416,6 +6359,8 @@ impl CodeReviewView {
             GitRepoStatusEvent::MetadataChanged => {
                 me.update_git_operations_ui(ctx);
             }
+            // Per-file status drives only the Project Explorer's decorations.
+            GitRepoStatusEvent::FileStatusesChanged => {}
         });
         self.git_repo_status = Some(handle);
     }

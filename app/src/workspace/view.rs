@@ -5,6 +5,7 @@ pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
 pub(crate) mod free_tier_limit_hit_modal;
+pub(crate) mod git_graph;
 pub mod global_search;
 pub(crate) mod launch_modal;
 pub(crate) mod left_panel;
@@ -279,7 +280,7 @@ use crate::pane_group::pane::ActionOrigin;
 use crate::pane_group::FilePane;
 use crate::pane_group::{
     self, AIFactPane, AnyPaneContent, ChildAgentOrigin, CodeDiffPane, CodePane, CodeReviewPanelArg,
-    Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
+    CommitDiffPane, Direction as PaneGroupDirection, Direction, EnvironmentManagementPane,
     ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
     TabBarHoverIndex, TerminalPaneId,
 };
@@ -327,9 +328,9 @@ use crate::settings::{
     active_theme_kind, respect_system_theme, AISettings, AISettingsChangedEvent,
     AccessibilitySettings, AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings,
     ChangelogSettings, CodeSettings, CodeSettingsChangedEvent, CtrlTabBehavior, CursorBlink,
-    DebugSettings, DefaultSessionMode, FontSettings, GPUSettings, InputModeSettings, InputSettings,
-    MonospaceFontSize, PaneSettings, PrivacySettings, SelectionSettings, Settings, SshSettings,
-    ThemeSettings,
+    DebugSettings, DefaultSessionMode, FontSettings, GPUSettings, GitSettings,
+    GitSettingsChangedEvent, InputModeSettings, InputSettings, MonospaceFontSize, PaneSettings,
+    PrivacySettings, SelectionSettings, Settings, SshSettings, ThemeSettings,
 };
 use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::settings_view::handoff_environment_creation_modal::{
@@ -623,6 +624,7 @@ pub(crate) const LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME: &str = "workspace:left_p
 pub(crate) const LEFT_PANEL_WARP_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
 pub(crate) const LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME: &str =
     "workspace:left_panel_agent_conversations";
+pub(crate) const LEFT_PANEL_GIT_GRAPH_BINDING_NAME: &str = "workspace:left_panel_git_graph";
 
 const KEYBINDINGS_TO_CACHE: [&str; 4] = [
     ASK_AI_ASSISTANT_KEYBINDING_NAME,
@@ -3059,6 +3061,13 @@ impl Workspace {
             }
         });
 
+        ctx.subscribe_to_model(&GitSettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, GitSettingsChangedEvent::ShowGitGraph { .. }) {
+                me.update_left_panel_available_views(ctx);
+                ctx.notify();
+            }
+        });
+
         ctx.subscribe_to_model(&WarpDriveSettings::handle(ctx), |me, _, event, ctx| {
             if let WarpDriveSettingsChangedEvent::EnableWarpDrive { .. } = event {
                 me.update_left_panel_available_views(ctx);
@@ -4036,6 +4045,7 @@ impl Workspace {
                 },
                 LeftPanelDisplayedTab::WarpDrive => ToolPanelView::WarpDrive,
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
+                LeftPanelDisplayedTab::GitGraph => ToolPanelView::GitGraph,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -6198,7 +6208,81 @@ impl Workspace {
                     ctx,
                 );
             }
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelEvent::OpenCommitFileDiff {
+                repo_relative_path,
+                short_hash,
+                base_content,
+                hunks,
+                preview,
+            } => {
+                self.open_commit_file_diff(
+                    repo_relative_path.clone(),
+                    short_hash.clone(),
+                    base_content.clone(),
+                    hunks.clone(),
+                    preview.clone(),
+                    ctx,
+                );
+            }
         }
+    }
+
+    /// Opens a read-only diff pane in the **current tab**, showing a single file's changes for a
+    /// commit (triggered by the Git Graph).
+    ///
+    /// Mirrors the behavior of "open file": it does not open a new tab. If the current tab already
+    /// has a commit diff pane, **its content is updated in place** and focused (clicking several
+    /// files in a row reuses the same pane, and since the pane is not destroyed the header/close
+    /// button persist); otherwise a new pane is split off to the right of the current pane group
+    /// and focused.
+    #[cfg(not(target_family = "wasm"))]
+    fn open_commit_file_diff(
+        &mut self,
+        repo_relative_path: String,
+        short_hash: String,
+        base_content: String,
+        hunks: Vec<crate::code_review::diff_state::DiffHunk>,
+        preview: crate::code::commit_diff_view::DiffPreview,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Reuse: update the existing commit diff pane's content in place and focus it.
+        if let Some((pane_id, view)) = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .first_commit_diff_pane(ctx)
+        {
+            view.update(ctx, |view, ctx| {
+                view.load(
+                    repo_relative_path,
+                    short_hash,
+                    base_content,
+                    hunks,
+                    preview,
+                    ctx,
+                );
+            });
+            self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.focus_pane(pane_id, true, ctx);
+            });
+            return;
+        }
+
+        // First time: split off a new pane to the right of the current tab and focus it.
+        let view = ctx.add_typed_action_view(move |ctx| {
+            crate::code::commit_diff_view::CommitDiffView::new(
+                repo_relative_path,
+                short_hash,
+                base_content,
+                hunks,
+                preview,
+                ctx,
+            )
+        });
+        let pane = CommitDiffPane::from_view(view, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            pane_group.add_pane_with_direction(Direction::Right, pane, true, ctx);
+        });
     }
 
     fn handle_right_panel_event(&mut self, event: RightPanelEvent, ctx: &mut ViewContext<Self>) {
@@ -19371,6 +19455,7 @@ impl Workspace {
                         ToolPanelView::GlobalSearch { .. } => "Global search",
                         ToolPanelView::WarpDrive => "Warp Drive",
                         ToolPanelView::ConversationListView => "Agent conversations",
+                        ToolPanelView::GitGraph => "Git Graph",
                     }
                 } else {
                     "Tools panel"
@@ -19425,6 +19510,7 @@ impl Workspace {
                 ToolPanelView::GlobalSearch { .. } => "Global search",
                 ToolPanelView::WarpDrive => "Warp Drive",
                 ToolPanelView::ConversationListView => "Agent conversations",
+                ToolPanelView::GitGraph => "Git Graph",
             }
         } else {
             "Tools panel"
@@ -22656,6 +22742,18 @@ impl Workspace {
         }
     }
 
+    /// The left panel view handle. Exposed for integration tests.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn left_panel_view(&self) -> ViewHandle<LeftPanelView> {
+        self.left_panel_view.clone()
+    }
+
+    /// Opens the Git Graph in the left panel. Exposed for integration tests.
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn open_git_graph_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_left_panel_view(&LeftPanelAction::GitGraph, ctx);
+    }
+
     fn toggle_left_panel_view(
         &mut self,
         action: &LeftPanelAction,
@@ -22695,6 +22793,12 @@ impl Workspace {
         }
         if WarpDriveSettings::is_warp_drive_enabled(ctx) {
             views.push(ToolPanelView::WarpDrive);
+        }
+        if cfg!(feature = "local_fs")
+            && FeatureFlag::GitGraph.is_enabled()
+            && *GitSettings::as_ref(ctx).show_git_graph.value()
+        {
+            views.push(ToolPanelView::GitGraph);
         }
         views
     }

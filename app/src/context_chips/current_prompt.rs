@@ -1414,6 +1414,8 @@ impl CurrentPrompt {
                     GitRepoStatusEvent::MetadataChanged => {
                         me.apply_git_repo_metadata(ctx);
                     }
+                    // Per-file status drives only the Project Explorer's decorations.
+                    GitRepoStatusEvent::FileStatusesChanged => {}
                 });
 
                 // Eagerly populate chips if metadata is already available (the

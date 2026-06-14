@@ -10,6 +10,7 @@ use billing_and_usage_page::BillingAndUsagePageEvent;
 use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent, CodeSubpage};
 use environments_page::EnvironmentsPageView;
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
+use git_page::GitSettingsPageView;
 use itertools::Itertools as _;
 use keybindings::KeybindingsView;
 use main_page::{MainPageAction, MainSettingsPageEvent, MainSettingsPageView};
@@ -88,6 +89,7 @@ pub(crate) mod environments_page;
 mod execution_profile_view;
 mod features;
 mod features_page;
+mod git_page;
 pub(crate) mod handoff_environment_creation_modal;
 pub mod keybindings;
 mod main_page;
@@ -245,6 +247,7 @@ pub enum SettingsSection {
     BillingAndUsage,
     Appearance,
     Features,
+    Git,
     Keybindings,
     Privacy,
     Referrals,
@@ -383,6 +386,7 @@ impl FromStr for SettingsSection {
             "Appearance" => Ok(Self::Appearance),
             "Code" => Ok(Self::Code),
             "Features" => Ok(Self::Features),
+            "Git" => Ok(Self::Git),
             "Keyboard shortcuts" => Ok(Self::Keybindings),
             "Privacy" => Ok(Self::Privacy),
             "Referrals" => Ok(Self::Referrals),
@@ -1072,6 +1076,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::CloudEnvironments(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Code(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::Git(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
@@ -1185,6 +1190,9 @@ impl SettingsView {
             me.handle_code_page_event(event, ctx);
         });
 
+        // Git page
+        let git_page_handle = ctx.add_typed_action_view(GitSettingsPageView::new);
+
         // Teams page, adding unconditionally, as `should_render` later on decides whether it
         // should be shown to the user or not
         let teams_page_handle = ctx.add_typed_action_view(TeamsPageView::new);
@@ -1273,6 +1281,7 @@ impl SettingsView {
             SettingsPage::new(ai_page_handle),
             billing_and_usage_page,
             SettingsPage::new(code_page_handle),
+            SettingsPage::new(git_page_handle),
             SettingsPage::new(teams_page_handle),
             SettingsPage::new(appearance_page_handle),
             SettingsPage::new(features_page_handle),
@@ -1311,6 +1320,7 @@ impl SettingsView {
                     SettingsSection::EditorAndCodeReview,
                 ],
             )),
+            SettingsNavItem::Page(SettingsSection::Git),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
                 "Cloud platform",
                 vec![
@@ -2097,6 +2107,7 @@ impl SettingsView {
             SettingsPageViewHandle::CloudEnvironments(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Code(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::Git(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::WarpDrive(v) => v.as_ref(app).should_render(app),
         }
     }

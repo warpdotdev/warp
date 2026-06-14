@@ -69,3 +69,6 @@ __pycache__/
 
 # Project notes
 .note/
+
+# Don't include the CodeGraph index
+.codegraph/

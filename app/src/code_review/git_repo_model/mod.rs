@@ -5,7 +5,7 @@ use warpui::{AppContext, Entity, ModelContext};
 #[cfg(feature = "local_fs")]
 mod local;
 #[cfg(feature = "local_fs")]
-pub use local::LocalGitRepoStatusModel;
+pub use local::{LocalGitRepoStatusModel, RepoGitFileStatuses};
 
 use super::diff_state::DiffStats;
 #[cfg(feature = "local_fs")]
@@ -26,6 +26,9 @@ pub struct GitStatusMetadata {
 pub enum GitRepoStatusEvent {
     /// Emitted whenever the metadata changes (branch name, diff stats, etc.).
     MetadataChanged,
+    /// Emitted when the per-file working-tree status map changes. The Project
+    /// Explorer listens for this to refresh its git decorations.
+    FileStatusesChanged,
 }
 
 /// Unified per-repo git status model. PR 1 only contains the local backend;
@@ -48,6 +51,9 @@ impl GitRepoStatusModel {
     fn forward_event(&mut self, event: &GitRepoStatusEvent, ctx: &mut ModelContext<Self>) {
         match event {
             GitRepoStatusEvent::MetadataChanged => ctx.emit(GitRepoStatusEvent::MetadataChanged),
+            GitRepoStatusEvent::FileStatusesChanged => {
+                ctx.emit(GitRepoStatusEvent::FileStatusesChanged)
+            }
         }
     }
 
@@ -63,6 +69,15 @@ impl GitRepoStatusModel {
                 let _ = ctx;
                 unreachable!("GitRepoStatusModel cannot be constructed without local_fs")
             }
+        }
+    }
+
+    /// Per-file/-directory working-tree status for the Project Explorer's git
+    /// decorations. Empty unless [`FeatureFlag::GitGraph`] is enabled.
+    #[cfg(feature = "local_fs")]
+    pub fn file_statuses<'a>(&self, ctx: &'a AppContext) -> &'a RepoGitFileStatuses {
+        match self {
+            Self::Local(m) => m.as_ref(ctx).file_statuses(),
         }
     }
 

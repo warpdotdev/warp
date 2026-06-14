@@ -9,6 +9,7 @@ use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigSt
 use ai::diff_validation::DiffDelta;
 // TODO(vorporeal): Remove this re-export at some point.
 pub use ai::document::{AIDocumentId, AIDocumentVersion};
+use anyhow;
 use chrono::{DateTime, Local, Utc};
 use itertools::Itertools;
 use uuid::Uuid;

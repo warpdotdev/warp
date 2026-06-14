@@ -33,6 +33,7 @@ use super::billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use super::code_page::CodeSettingsPageView;
 use super::environments_page::EnvironmentsPageView;
 use super::features_page::FeaturesPageView;
+use super::git_page::GitSettingsPageView;
 use super::keybindings::KeybindingsView;
 use super::main_page::MainSettingsPageView;
 use super::mcp_servers_page::MCPServersSettingsPageView;
@@ -107,6 +108,7 @@ pub enum SettingsPageViewHandle {
     Keybindings(ViewHandle<KeybindingsView>),
     About(ViewHandle<AboutPageView>),
     Code(ViewHandle<CodeSettingsPageView>),
+    Git(ViewHandle<GitSettingsPageView>),
     Teams(ViewHandle<TeamsPageView>),
     OzCloudAPIKeys(ViewHandle<super::platform_page::PlatformPageView>),
     Privacy(ViewHandle<PrivacyPageView>),
@@ -131,6 +133,7 @@ impl SettingsPageViewHandle {
             Keybindings(view_handle) => ChildView::new(view_handle).finish(),
             About(view_handle) => ChildView::new(view_handle).finish(),
             Code(view_handle) => ChildView::new(view_handle).finish(),
+            Git(view_handle) => ChildView::new(view_handle).finish(),
             Teams(view_handle) => ChildView::new(view_handle).finish(),
             OzCloudAPIKeys(view_handle) => ChildView::new(view_handle).finish(),
             Privacy(view_handle) => ChildView::new(view_handle).finish(),

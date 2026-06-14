@@ -241,15 +241,22 @@ pub enum WorkingDirectoriesEvent {
         /// All active repository roots (deduplicated) in most to least recently added order.
         repositories: Vec<LocalOrRemotePath>,
     },
-    /// The focused repository changed for a specific pane group.
-    /// This fires when the user focuses a different pane or CDs within the focused pane.
+    /// The focused pane's directory changed for a specific pane group.
+    /// This fires when the user focuses a different pane or CDs within the
+    /// focused pane (keyed on `focused_dir`, so it also fires between two
+    /// non-repo directories where `focused_repo` would stay `None`).
     FocusedRepoChanged {
-        /// The PaneGroup whose focused repo changed
+        /// The PaneGroup whose focused pane changed
         pane_group_id: EntityId,
         /// All active repository-terminal ID pairs (deduplicated)
         repository_terminal_map: HashMap<LocalOrRemotePath, EntityId>,
         /// The repository path of the focused terminal, if any
         focused_repo: Option<LocalOrRemotePath>,
+        /// The focused terminal's display directory: its repo root when inside
+        /// a repo, otherwise its working directory. Unlike `focused_repo`, this
+        /// is set even for a non-repo directory, so the Git Graph can anchor on
+        /// it and scan for nested repos.
+        focused_dir: Option<LocalOrRemotePath>,
     },
 }
 
@@ -289,8 +296,11 @@ pub struct WorkingDirectoriesModel {
     /// Per-pane-group mapping from repository root locations to their CodeReviewView.
     /// This allows reusing code review views across multiple requests for the same repo.
     code_review_views: HashMap<EntityId, HashMap<LocalOrRemotePath, ViewHandle<CodeReviewView>>>,
-    /// Per-pane-group tracking of the focused repository root path.
-    focused_repo: HashMap<EntityId, Option<LocalOrRemotePath>>,
+    /// Per-pane-group tracking of the focused pane's display directory (repo
+    /// root when inside a repo, otherwise the working directory). Used to gate
+    /// the `FocusedRepoChanged` emit so it fires on any focus/CD change, repo
+    /// or not.
+    focused_dir: HashMap<EntityId, Option<LocalOrRemotePath>>,
     /// Per-pane-group tracking of the repository the user has manually selected for the
     /// code review (right) panel. This is the repo that should be restored when the user
     /// leaves the pane group's session and returns to it later, even if the auto-selection
@@ -557,7 +567,7 @@ impl WorkingDirectoriesModel {
         self.global_search_views.remove(&pane_group_id);
         self.file_tree_views.remove(&pane_group_id);
         self.code_review_views.remove(&pane_group_id);
-        self.focused_repo.remove(&pane_group_id);
+        self.focused_dir.remove(&pane_group_id);
         self.selected_review_repo.remove(&pane_group_id);
     }
 
@@ -588,6 +598,7 @@ impl WorkingDirectoriesModel {
                 pane_group_id,
                 repository_terminal_map: HashMap::new(),
                 focused_repo: None,
+                focused_dir: None,
             });
         }
     }
@@ -624,8 +635,8 @@ impl WorkingDirectoriesModel {
             .least_recent_repositories_for_pane_group(pane_group_id)
             .map(|repos| repos.iter().cloned().collect())
             .unwrap_or_default();
-        let old_focused_repo: Option<LocalOrRemotePath> =
-            self.focused_repo.get(&pane_group_id).cloned().flatten();
+        let old_focused_dir: Option<LocalOrRemotePath> =
+            self.focused_dir.get(&pane_group_id).cloned().flatten();
 
         // Resolve a local path to its detected repository root, or keep the path as-is if no repo is found.
         let root_for_path = |path: PathBuf| {
@@ -786,10 +797,15 @@ impl WorkingDirectoriesModel {
         // Second pass: if we have a focused terminal, ensure its repo maps to it
         // This ensures the dropdown selects the correct repo when a pane is focused or CD'd
         let mut focused_repo: Option<LocalOrRemotePath> = None;
+        // The focused pane's display directory (its repo root when inside a
+        // repo, otherwise its working directory) — set even for a non-repo dir,
+        // unlike `focused_repo`.
+        let mut focused_dir: Option<LocalOrRemotePath> = None;
         if let Some(focused_id) = focused_terminal_id {
             let mut repos_to_insert = Vec::new();
             for (dir, terminal_id) in &new_root_to_terminal {
                 if *terminal_id == focused_id {
+                    focused_dir = Some(dir.clone());
                     if let Some(repo_root) =
                         DetectedRepositories::as_ref(ctx).get_root_for_path(dir)
                     {
@@ -851,10 +867,9 @@ impl WorkingDirectoriesModel {
             self.emit_repositories_changed(pane_group_id, ctx);
         }
 
-        if old_focused_repo != focused_repo {
-            self.focused_repo
-                .insert(pane_group_id, focused_repo.clone());
-            self.emit_focused_repo_changed(pane_group_id, focused_repo, ctx);
+        if old_focused_dir != focused_dir {
+            self.focused_dir.insert(pane_group_id, focused_dir.clone());
+            self.emit_focused_repo_changed(pane_group_id, focused_repo, focused_dir, ctx);
         }
     }
 
@@ -922,6 +937,7 @@ impl WorkingDirectoriesModel {
         &mut self,
         pane_group_id: EntityId,
         focused_repo: Option<LocalOrRemotePath>,
+        focused_dir: Option<LocalOrRemotePath>,
         ctx: &mut ModelContext<Self>,
     ) {
         ctx.emit(WorkingDirectoriesEvent::FocusedRepoChanged {
@@ -932,6 +948,7 @@ impl WorkingDirectoriesModel {
                 .cloned()
                 .unwrap_or_default(),
             focused_repo,
+            focused_dir,
         });
     }
 
