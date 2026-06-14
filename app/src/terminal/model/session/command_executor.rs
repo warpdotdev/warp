@@ -11,6 +11,8 @@ mod noop_command_executor;
 mod remote_command_executor;
 #[cfg(feature = "local_tty")]
 pub(crate) mod remote_server_executor;
+#[cfg(feature = "local_tty")]
+mod sandbox_command_executor;
 mod shared;
 
 use std::any::Any;
@@ -279,6 +281,16 @@ fn new_command_executor_for_local_tty_session(
                 }
                 Some(ShellLaunchData::WSL { distro }) => {
                     Arc::new(WslCommandExecutor::new(distro.to_owned(), shell_type))
+                }
+                Some(ShellLaunchData::Sandbox {
+                    sandbox_path,
+                    shell_type: sandbox_shell_type,
+                }) => {
+                    Arc::new(SandboxCommandExecutor::new(
+                        Some(sandbox_path.to_owned()),
+                        *sandbox_shell_type,
+                        SandboxOptions::default(),
+                    ))
                 }
                 None => {
                     if let Some(wsl_name) = session_info.wsl_name() {

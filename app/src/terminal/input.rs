@@ -37,6 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{anyhow, Result};
 use ai::skills::SkillReference;
 use async_channel::Sender;
 use base64::Engine as _;
@@ -299,7 +300,10 @@ use crate::terminal::input::suggestions_mode_model::{
 use crate::terminal::input::terminal_message_bar::TerminalInputMessageBar;
 use crate::terminal::input::user_query::{UserQueryMenuEvent, UserQueryMenuView};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::terminal::model::session::command_executor::sandbox_command_executor::SandboxCommandExecutor;
+use crate::terminal::model::session::command_executor::{ExecuteCommandOptions, CommandOutput};
 use crate::terminal::model::session::shell_quote_arg;
+use crate::terminal::shell::Shell;
 use crate::terminal::package_installers::command_at_cursor_has_common_package_installer_prefix;
 use crate::terminal::prompt_render_helper::should_render_ps1_prompt;
 use crate::terminal::universal_developer_input::AtContextMenuDisabledReason;
@@ -7113,6 +7117,17 @@ impl Input {
         source: CommandExecutionSource,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
+        // Handle the `sandbox` command
+        if command.trim().starts_with("sandbox") {
+            let command_clone = command.to_string();
+            ctx.spawn(async move {
+                if let Err(e) = handle_sandbox_command(&command_clone, ctx).await {
+                    log::error!("Error executing sandbox command: {}", e);
+                }
+            });
+            return true;
+        }
+
         if let CanExecuteCommand::No(reason) = self.can_execute_command(ctx) {
             if reason.is_existing_active_command() {
                 const MAX_COMMAND_LENGTH: usize = 43;
@@ -16198,6 +16213,39 @@ fn maybe_render_ai_input_indicators(
             .with_margin_right(em_width)
             .finish(),
     )
+}
+
+/// Handles the `sandbox` command by executing the provided command in a sandboxed environment.
+async fn handle_sandbox_command(
+    &mut self,
+    command: &str,
+    ctx: &mut ViewContext<Self>,
+) -> Result<(), anyhow::Error> {
+    let sandbox_command = command.trim_start_matches("sandbox").trim();
+    if sandbox_command.is_empty() {
+        return Err(anyhow::anyhow!("No command provided for sandbox"));
+    }
+
+    // Execute the command in a sandboxed environment
+    let executor = SandboxCommandExecutor::new(
+        None,
+        ShellType::Bash,
+        SandboxOptions::default(),
+    );
+    let output = executor
+        .execute_command(
+            sandbox_command,
+            &Shell::default(),
+            None,
+            None,
+            ExecuteCommandOptions::default(),
+        )
+        .await?;
+
+    // Display the output in the terminal
+    ctx.emit(TerminalAction::WriteOutput(output.stdout));
+
+    Ok(())
 }
 
 #[cfg(feature = "integration_tests")]
