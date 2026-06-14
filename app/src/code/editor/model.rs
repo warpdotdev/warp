@@ -10,13 +10,13 @@ use std::{cmp, mem};
 
 use ai::diff_validation::DiffDelta;
 use itertools::Itertools;
-use languages::{language_by_filename, language_by_local_filename, language_by_name, Language};
+use languages::{Language, language_by_filename, language_by_local_filename, language_by_name};
 use line_ending::LineEnding;
 use num_traits::SaturatingSub;
 use rangemap::{RangeMap, RangeSet};
 use string_offset::CharOffset;
 use syntax_tree::{ColorMap, DecorationStateEvent, SyntaxTreeState};
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 use vim::vim::{
     BracketChar, CharacterMotion, Direction, FindCharMotion, FirstNonWhitespaceMotion,
     InsertPosition, LineMotion, MotionType, TextObjectInclusion, TextObjectType, VimOperator,
@@ -45,7 +45,7 @@ use warp_editor::content::version::BufferVersion;
 use warp_editor::decoration::DecorationLayer;
 use warp_editor::editor::TextDecoration;
 use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
-use warp_editor::multiline::{AnyMultilineString, MultilineString, LF};
+use warp_editor::multiline::{AnyMultilineString, LF, MultilineString};
 use warp_editor::render::model::{
     AutoScrollMode, BlockItem, Decoration, LineCount, LineDecoration, RenderEvent,
     RenderLineLocation, RenderState, RichTextStyles, StyleUpdateAction,
@@ -57,15 +57,15 @@ use warpui::elements::{
     AnchorPair, OffsetPositioning, OffsetType, PositionedElementOffsetBounds, PositioningAxis,
     XAxisAnchor, YAxisAnchor,
 };
-use warpui::text::point::Point;
 use warpui::text::TextBuffer;
+use warpui::text::point::Point;
 use warpui::units::{IntoPixels, Pixels};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::super::DiffResult;
 use super::comments::{EditorCommentsModel, PendingComment, PendingCommentEvent};
 use super::diff::{
-    add_inline_overlay_color, DiffModel, DiffModelEvent, DiffStatus, RenderableDiffHunk,
+    DiffModel, DiffModelEvent, DiffStatus, RenderableDiffHunk, add_inline_overlay_color,
 };
 use super::line::EditorLineLocation;
 use crate::appearance::Appearance;
@@ -1340,7 +1340,19 @@ impl CodeEditorModel {
                 // If we are hiding lines based on active diffs, there are 3 steps here once the diff is computed:
                 // 1) If we should, recalculate hidden lines based on the updated diff state.
                 // 2) Flush any delayed rendering based on diff update trigger.
-                // 3) If hidden lines are recalculated, rebuild the current layout.
+                // 3) If hidden lines are recalculated AND the ranges changed, rebuild the current layout.
+
+                // Snapshot hidden ranges before recalculation so we can skip the expensive full-buffer
+                // layout rebuild when the diff recomputes but the visible/hidden line boundaries are
+                // unchanged (e.g. the same file is viewed multiple times or the diff result is stable).
+                let pre_recalc_hidden_ranges = if *should_recalculate_hidden_lines
+                    && self.hide_lines_outside_of_active_diff.is_some()
+                {
+                    Some(self.hidden_lines.as_ref(ctx).hidden_ranges_at_latest(ctx))
+                } else {
+                    None
+                };
+
                 if *should_recalculate_hidden_lines {
                     self.calculate_hidden_lines(ctx);
                 }
@@ -1354,6 +1366,15 @@ impl CodeEditorModel {
                 let will_rebuild_layout = *should_recalculate_hidden_lines
                     && self.hide_lines_outside_of_active_diff.is_some();
 
+                // Skip the expensive full-buffer layout rebuild if the hidden line ranges did not
+                // change. `invalidate_layout` materializes a `Vec<StyledBufferBlock>` proportional
+                // to the entire buffer, which can be extremely large for big files.
+                let should_rebuild_layout = will_rebuild_layout && {
+                    let new_hidden_ranges =
+                        self.hidden_lines.as_ref(ctx).hidden_ranges_at_latest(ctx);
+                    pre_recalc_hidden_ranges.as_ref() != Some(&new_hidden_ranges)
+                };
+
                 if self
                     .delay_rendering
                     .as_ref()
@@ -1361,7 +1382,7 @@ impl CodeEditorModel {
                     .unwrap_or(false)
                 {
                     let delay_rendering = self.delay_rendering.take().expect("Checked above");
-                    if will_rebuild_layout {
+                    if should_rebuild_layout {
                         // Full rebuild will supersede pending edits — skip the expensive render state update.
                         delay_rendering.skip(ctx);
                     } else {
@@ -1374,7 +1395,7 @@ impl CodeEditorModel {
                 //
                 // Realistically, the impact of rebuilding layout should be minimal given 1) it is only triggered on the first edit within
                 // the hidden range 2) we are not re-rendering hidden sections.
-                if will_rebuild_layout {
+                if should_rebuild_layout {
                     self.rebuild_layout_and_refresh_diff(ctx);
                 }
 
