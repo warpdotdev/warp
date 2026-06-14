@@ -1,6 +1,33 @@
 //! Parallelism utilities.
 
+use std::sync::OnceLock;
+
 use rayon::iter::{FromParallelIterator, IntoParallelIterator, ParallelExtend, ParallelIterator};
+
+/// Maximum number of concurrent threads for text layout operations.
+///
+/// Limiting concurrency prevents unbounded CoreText memory growth when opening large
+/// files. Each concurrent layout task holds a `CTFramesetter`, `CTFrame`, and per-line
+/// glyph/caret-position vectors in memory simultaneously; capping threads bounds the
+/// peak allocation to roughly `TEXT_LAYOUT_MAX_THREADS * <per-task overhead>` instead
+/// of `num_cpus * <per-task overhead>`.
+const TEXT_LAYOUT_MAX_THREADS: usize = 4;
+
+static TEXT_LAYOUT_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+
+/// Returns the shared, bounded Rayon thread pool used for parallel text layout.
+///
+/// Callers should wrap parallel layout work in `text_layout_pool().install(|| { ... })`
+/// to ensure the bounded pool is used instead of Rayon's global pool.
+pub fn text_layout_pool() -> &'static rayon::ThreadPool {
+    TEXT_LAYOUT_POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(TEXT_LAYOUT_MAX_THREADS)
+            .thread_name(|i| format!("warp-text-layout-{i}"))
+            .build()
+            .expect("failed to build text-layout thread pool")
+    })
+}
 
 /// `Last` is a helper to extract the last value of a [`ParallelIterator`].
 ///

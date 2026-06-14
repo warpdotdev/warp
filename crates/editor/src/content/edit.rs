@@ -29,7 +29,7 @@ use super::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use super::text::{
     BufferBlockItem, BufferBlockStyle, CodeBlockType, FormattedTable, TableBlockCache,
 };
-use crate::parallel_util::Last;
+use crate::parallel_util::{Last, text_layout_pool};
 use crate::render::layout::{InlineTextLayoutInput, TextLayout, add_link_to_style_and_font};
 use crate::render::model::{
     BlockItem, BlockLocation, BlockSpacing, CellLayout, Cursor, Decoration, FrameOffset,
@@ -536,31 +536,39 @@ impl EditDelta {
 
         // Then, run each task in parallel, collecting (a) the laid out BlockItems and (b) whether
         // or not the last item ends with a newline.
-        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) = layout_tasks
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(idx, (task, is_hidden))| {
-                let location = if idx == 0 {
-                    BlockLocation::Start
-                } else if idx >= last_task {
-                    BlockLocation::End
-                } else {
-                    BlockLocation::Middle
-                };
+        //
+        // We use a bounded thread pool (see `parallel_util::text_layout_pool`) to cap the number
+        // of concurrent CoreText operations. Without this limit, opening a large file spawns O(N)
+        // concurrent layout tasks each holding `CTFramesetter`/`CTFrame` memory and per-line glyph
+        // vectors simultaneously, which can exhaust 10+ GB of heap.
+        let (block_items, has_trailing_newline): (Vec<_>, Last<_>) =
+            text_layout_pool().install(|| {
+                layout_tasks
+                    .into_par_iter()
+                    .enumerate()
+                    .filter_map(|(idx, (task, is_hidden))| {
+                        let location = if idx == 0 {
+                            BlockLocation::Start
+                        } else if idx >= last_task {
+                            BlockLocation::End
+                        } else {
+                            BlockLocation::Middle
+                        };
 
-                match task.run(layout, location, is_hidden) {
-                    Ok(result) => Some(result),
-                    Err(e) => {
-                        log::error!(
-                            "Failed to lay out BlockItem at offset {:?}: {:?}",
-                            self.old_offset,
-                            e
-                        );
-                        None
-                    }
-                }
-            })
-            .unzip();
+                        match task.run(layout, location, is_hidden) {
+                            Ok(result) => Some(result),
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to lay out BlockItem at offset {:?}: {:?}",
+                                    self.old_offset,
+                                    e
+                                );
+                                None
+                            }
+                        }
+                    })
+                    .unzip()
+            });
 
         // Iterate through block_items, and collapse adjacent Hidden items.
         let block_items = block_items.into_iter().fold(Vec::new(), |mut acc, item| {
@@ -622,27 +630,30 @@ pub fn layout_temporary_blocks(
 
     let last_task = layout_tasks.len().saturating_sub(1);
 
-    let results: Vec<_> = layout_tasks
-        .into_par_iter()
-        .enumerate()
-        .filter_map(|(idx, (task, line_count))| {
-            let location = if idx == 0 {
-                BlockLocation::Start
-            } else if idx >= last_task {
-                BlockLocation::End
-            } else {
-                BlockLocation::Middle
-            };
+    // Use the bounded text-layout thread pool to cap concurrent CoreText allocations.
+    let results: Vec<_> = text_layout_pool().install(|| {
+        layout_tasks
+            .into_par_iter()
+            .enumerate()
+            .filter_map(|(idx, (task, line_count))| {
+                let location = if idx == 0 {
+                    BlockLocation::Start
+                } else if idx >= last_task {
+                    BlockLocation::End
+                } else {
+                    BlockLocation::Middle
+                };
 
-            match task.run(layout, location, false) {
-                Ok(result) => Some((line_count, result.0)),
-                Err(e) => {
-                    log::error!("Failed to lay out temporary blocks: {e:?}");
-                    None
+                match task.run(layout, location, false) {
+                    Ok(result) => Some((line_count, result.0)),
+                    Err(e) => {
+                        log::error!("Failed to lay out temporary blocks: {e:?}");
+                        None
+                    }
                 }
-            }
-        })
-        .collect();
+            })
+            .collect()
+    });
 
     results.into_iter().into_group_map()
 }
