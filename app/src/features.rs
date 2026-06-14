@@ -99,6 +99,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SshDragAndDrop,
         #[cfg(feature = "drag_tabs_to_windows")]
         FeatureFlag::DragTabsToWindows,
+        #[cfg(feature = "drag_tab_to_pane_split")]
+        FeatureFlag::DragTabToPaneSplit,
         #[cfg(feature = "cycle_next_command_suggestion")]
         FeatureFlag::CycleNextCommandSuggestion,
         #[cfg(feature = "multi_workspace")]

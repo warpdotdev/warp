@@ -15,9 +15,10 @@ use warp::integration_testing::terminal::util::{
     current_shell_starter_and_version, ExpectedExitStatus,
 };
 use warp::integration_testing::terminal::{
-    assert_active_session_local_path, assert_command_executed_for_single_terminal_in_tab,
-    assert_focused_editor_in_tab, assert_long_running_block_executing_for_single_terminal_in_tab,
-    execute_command, execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_pane,
+    assert_active_session_local_path, assert_command_executed,
+    assert_command_executed_for_single_terminal_in_tab, assert_focused_editor_in_tab,
+    assert_long_running_block_executing_for_single_terminal_in_tab, execute_command,
+    execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_pane,
     wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{terminal_view, workspace_view};
@@ -1165,4 +1166,319 @@ pub fn test_single_tab_handoff_continues_drag() -> Builder {
                 .add_assertion(assert_focused_editor_in_tab(0)),
         )
         .with_step(focus_saved_window(TARGET_WINDOW_KEY).add_assertion(assert_tab_count(1)))
+}
+
+// ---------------------------------------------------------------------------
+// drag_tab_to_pane_split coverage
+//
+// Synthesizes the tab-drag pipeline by dispatching `WorkspaceAction::DragTab`
+// and `DropTab` directly, instead of driving the `Draggable` element with
+// mouse events. This keeps the tests focused on the workspace's drop
+// handling (`Workspace::try_drop_tab_on_pane`) and avoids tripping the
+// `DragAxis::HorizontalOnly` lock on the horizontal tab bar (which would
+// otherwise require also enabling `drag_tabs_to_windows`).
+// ---------------------------------------------------------------------------
+
+fn drag_tab_to_pane_split_feature_enabled() -> bool {
+    cfg!(feature = "drag_tab_to_pane_split")
+}
+
+fn active_tab_first_pane_bounds(app: &mut warpui::App, window_id: WindowId) -> RectF {
+    let workspace = workspace_view(app, window_id);
+    let (pane_group, active_idx) = workspace.read(app, |ws, _| {
+        let idx = ws.active_tab_index();
+        let pg = ws
+            .get_pane_group_view(idx)
+            .expect("active tab pane group should exist")
+            .clone();
+        (pg, idx)
+    });
+    let pane_id = pane_group.read(app, |pg, _| {
+        pg.visible_pane_ids()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("tab {active_idx} should have a visible pane"))
+    });
+    let position_id = pane_id.position_id();
+    let presenter = app.presenter(window_id).expect("presenter should exist");
+    let bounds = presenter
+        .borrow()
+        .position_cache()
+        .get_position(position_id)
+        .unwrap_or_else(|| panic!("active pane position should exist for {window_id:?}"));
+    bounds
+}
+
+fn dispatch_workspace_action(
+    app: &mut warpui::App,
+    window_id: WindowId,
+    action: WorkspaceAction,
+) {
+    let workspace_view_id = workspace_view(app, window_id).id();
+    app.dispatch_typed_action(window_id, &[workspace_view_id], &action);
+}
+
+fn point_to_rect(p: Vector2F) -> RectF {
+    // Tab-position rect doesn't need realistic dimensions; only its center
+    // is read by `find_drop_target_pane` via `drop_pos.center()`.
+    RectF::new(p - vec2f(0.5, 0.5), vec2f(1.0, 1.0))
+}
+
+fn assert_pane_count_in_active_tab(expected: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let workspace = workspace_view(app, window_id);
+        let (pane_group, idx) = workspace.read(app, |ws, _| {
+            let idx = ws.active_tab_index();
+            let pg = ws
+                .get_pane_group_view(idx)
+                .expect("active tab pane group should exist")
+                .clone();
+            (pg, idx)
+        });
+        let actual = pane_group.read(app, |pg, _| pg.visible_pane_count());
+        async_assert_eq!(actual, expected, "tab {idx} pane count")
+    })
+}
+
+fn assert_pane_count_in_tab(tab_index: usize, expected: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let workspace = workspace_view(app, window_id);
+        let pane_group = workspace.read(app, |ws, _| {
+            ws.get_pane_group_view(tab_index)
+                .expect("pane group should exist")
+                .clone()
+        });
+        let actual = pane_group.read(app, |pg, _| pg.visible_pane_count());
+        async_assert_eq!(actual, expected, "tab {tab_index} pane count")
+    })
+}
+
+fn split_two_tabs_setup() -> Vec<TestStep> {
+    // Tab 0 + first command, then a fresh second tab + distinct command so
+    // we can verify that the transplanted pane's session was preserved
+    // (`DetachType::Moved` in `remove_pane_for_move`).
+    vec![
+        wait_until_bootstrapped_single_pane_for_tab(0),
+        execute_command_for_single_terminal_in_tab(
+            0,
+            "echo source-zero".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ),
+        new_step_with_default_assertions("Open a new tab")
+            .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        wait_until_bootstrapped_single_pane_for_tab(1),
+        execute_command_for_single_terminal_in_tab(
+            1,
+            "echo source-one".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ),
+    ]
+}
+
+/// Happy path: drag the (non-active) source tab onto the right half of the
+/// active tab's pane → destination tab becomes a 2-pane split, source tab
+/// is gone, both terminal sessions intact.
+pub fn test_drag_tab_to_pane_split_right() -> Builder {
+    FeatureFlag::DragTabToPaneSplit.set_enabled(true);
+    let mut builder = new_builder().set_should_run_test(drag_tab_to_pane_split_feature_enabled);
+    for step in split_two_tabs_setup() {
+        builder = builder.with_step(step);
+    }
+    builder
+        .with_step(
+            TestStep::new("Drag tab 0 onto active tab's pane (right half)")
+                .with_action(|app, window_id, _| {
+                    let bounds = active_tab_first_pane_bounds(app, window_id);
+                    // Right half: 75% across, vertical center.
+                    let target = vec2f(
+                        bounds.min_x() + bounds.width() * 0.75,
+                        bounds.min_y() + bounds.height() * 0.5,
+                    );
+                    dispatch_workspace_action(
+                        app,
+                        window_id,
+                        WorkspaceAction::DragTab {
+                            tab_index: 0,
+                            tab_position: point_to_rect(target),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    dispatch_workspace_action(app, window_id, WorkspaceAction::DropTab);
+                })
+                .add_assertion(assert_tab_count(1))
+                .add_assertion(assert_pane_count_in_active_tab(2))
+                // Both panes retained their pre-drop block history.
+                .add_assertion(assert_command_executed(
+                    0,
+                    0,
+                    "echo source-one".to_string(),
+                ))
+                .add_assertion(assert_command_executed(
+                    0,
+                    1,
+                    "echo source-zero".to_string(),
+                )),
+        )
+}
+
+/// Direction picking: dropping on the bottom half should land the new pane
+/// underneath the anchor, producing a vertical split (anchor on top).
+pub fn test_drag_tab_to_pane_split_down() -> Builder {
+    FeatureFlag::DragTabToPaneSplit.set_enabled(true);
+    let mut builder = new_builder().set_should_run_test(drag_tab_to_pane_split_feature_enabled);
+    for step in split_two_tabs_setup() {
+        builder = builder.with_step(step);
+    }
+    builder
+        .with_step(
+            TestStep::new("Drag tab 0 onto active tab's pane (bottom half)")
+                .with_action(|app, window_id, _| {
+                    let bounds = active_tab_first_pane_bounds(app, window_id);
+                    let target = vec2f(
+                        bounds.min_x() + bounds.width() * 0.5,
+                        bounds.min_y() + bounds.height() * 0.85,
+                    );
+                    dispatch_workspace_action(
+                        app,
+                        window_id,
+                        WorkspaceAction::DragTab {
+                            tab_index: 0,
+                            tab_position: point_to_rect(target),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    dispatch_workspace_action(app, window_id, WorkspaceAction::DropTab);
+                })
+                .add_assertion(assert_tab_count(1))
+                .add_assertion(assert_pane_count_in_active_tab(2))
+                .add_assertion(|app, window_id| {
+                    // After a Down split, the two panes stack vertically:
+                    // their x ranges overlap and one's min_y is below the
+                    // other's. (For a Right split the opposite would hold.)
+                    let workspace = workspace_view(app, window_id);
+                    let pane_group = workspace.read(app, |ws, _| {
+                        ws.get_pane_group_view(ws.active_tab_index())
+                            .expect("pane group")
+                            .clone()
+                    });
+                    let pane_ids = pane_group.read(app, |pg, _| pg.visible_pane_ids());
+                    let presenter = app.presenter(window_id).expect("presenter");
+                    let cache = presenter.borrow();
+                    let rects: Vec<RectF> = pane_ids
+                        .iter()
+                        .filter_map(|id| cache.position_cache().get_position(id.position_id()))
+                        .collect();
+                    if rects.len() != 2 {
+                        return AssertionOutcome::PreconditionFailed(format!(
+                            "expected 2 pane rects, got {}",
+                            rects.len()
+                        ));
+                    }
+                    let (a, b) = (rects[0], rects[1]);
+                    let stacked_vertically =
+                        (a.min_y() - b.min_y()).abs() > 1.0 && (a.min_x() - b.min_x()).abs() < 2.0;
+                    async_assert!(
+                        stacked_vertically,
+                        "panes should stack vertically after a Down split: a={a:?}, b={b:?}"
+                    )
+                }),
+        )
+}
+
+/// Source tab with internal splits is currently not supported (smallest
+/// slice) — drop is a no-op, both tabs and their panes survive.
+pub fn test_drag_tab_to_pane_split_source_with_split_is_noop() -> Builder {
+    FeatureFlag::DragTabToPaneSplit.set_enabled(true);
+    new_builder()
+        .set_should_run_test(drag_tab_to_pane_split_feature_enabled)
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo source-zero".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        // Split tab 0 horizontally so it has 2 visible panes — source must be
+        // single-pane for the new split logic to engage.
+        .with_step(
+            new_step_with_default_assertions("Split tab 0 into two panes")
+                .with_keystrokes(&[cmd_or_ctrl_shift("d")]),
+        )
+        .with_step(wait_until_bootstrapped_pane(0, 1))
+        .with_step(
+            new_step_with_default_assertions("Open a fresh single-pane tab")
+                .with_keystrokes(&[cmd_or_ctrl_shift("t")]),
+        )
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(1))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            1,
+            "echo source-one".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            TestStep::new("Drag the split source tab onto the active tab's pane")
+                .with_action(|app, window_id, _| {
+                    let bounds = active_tab_first_pane_bounds(app, window_id);
+                    let target = vec2f(
+                        bounds.min_x() + bounds.width() * 0.75,
+                        bounds.min_y() + bounds.height() * 0.5,
+                    );
+                    dispatch_workspace_action(
+                        app,
+                        window_id,
+                        WorkspaceAction::DragTab {
+                            tab_index: 0,
+                            tab_position: point_to_rect(target),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    dispatch_workspace_action(app, window_id, WorkspaceAction::DropTab);
+                })
+                // No mutation: still 2 tabs, source still split, dest still single.
+                .add_assertion(assert_tab_count(2))
+                .add_assertion(assert_pane_count_in_tab(0, 2))
+                .add_assertion(assert_pane_count_in_tab(1, 1)),
+        )
+}
+
+/// Dragging the active tab onto its own pane is rejected — the bug fix
+/// restricts `find_drop_target_pane` to the active tab and returns `None`
+/// when `src_idx == active_tab_index`.
+pub fn test_drag_tab_to_pane_split_active_self_drop_is_noop() -> Builder {
+    FeatureFlag::DragTabToPaneSplit.set_enabled(true);
+    let mut builder = new_builder().set_should_run_test(drag_tab_to_pane_split_feature_enabled);
+    for step in split_two_tabs_setup() {
+        builder = builder.with_step(step);
+    }
+    builder
+        .with_step(
+            TestStep::new("Drag the active tab (tab 1) onto its own pane")
+                .with_action(|app, window_id, _| {
+                    let bounds = active_tab_first_pane_bounds(app, window_id);
+                    let target = vec2f(
+                        bounds.min_x() + bounds.width() * 0.75,
+                        bounds.min_y() + bounds.height() * 0.5,
+                    );
+                    dispatch_workspace_action(
+                        app,
+                        window_id,
+                        WorkspaceAction::DragTab {
+                            tab_index: 1,
+                            tab_position: point_to_rect(target),
+                        },
+                    );
+                })
+                .with_action(|app, window_id, _| {
+                    dispatch_workspace_action(app, window_id, WorkspaceAction::DropTab);
+                })
+                .add_assertion(assert_tab_count(2))
+                .add_assertion(assert_pane_count_in_tab(0, 1))
+                .add_assertion(assert_pane_count_in_tab(1, 1)),
+        )
 }

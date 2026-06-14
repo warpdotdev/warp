@@ -1358,6 +1358,61 @@ fn add_vertical_tab_insertion_target_overlay(
     );
 }
 
+/// Height of the tail drop zone appended below the last tab so the empty
+/// area in the vertical tabs panel below all tabs catches pane drags.
+/// Sized "tall enough" to cover the empty space in typical panels.
+const TAIL_DROP_ZONE_HEIGHT: f32 = 800.0;
+
+/// Builds a tall drop target row appended as a regular column child below
+/// the last tab. Catches drops landing in the empty area below the tab
+/// list — without it, that area has no drop target and the hover state
+/// flickers as the cursor enters/leaves the small `insert_after_index`
+/// sliver on the last tab. The blue insertion indicator renders at the top
+/// of the row so it sits directly below the last tab, previewing where the
+/// new tab will land.
+///
+/// As a regular column child (not an overlay) it inherits the column's
+/// stretch width — no manual width constraint needed — and only the
+/// height is fixed.
+///
+/// Drop semantics are identical to the existing `insert_after_index`
+/// sliver: `TabBarHoverIndex::BeforeTab(insert_index)` — i.e. "append new
+/// tab at end" when `insert_index == tabs.len()`.
+fn render_vertical_tab_tail_drop_zone(
+    insert_index: usize,
+    tab_count: usize,
+    is_drag_target: bool,
+    theme: &WarpTheme,
+) -> Box<dyn Element> {
+    let indicator: Box<dyn Element> = if is_drag_target {
+        render_vertical_tab_hover_indicator(theme)
+    } else {
+        Empty::new().finish()
+    };
+    // Reuse the existing insertion-target slot so the blue line at the top
+    // matches the inter-tab insertion indicators pixel-for-pixel. Below it
+    // a plain spacer pads the zone out to its full height.
+    let spacer_height = (TAIL_DROP_ZONE_HEIGHT - GROUP_INSERTION_TARGET_HEIGHT).max(0.);
+    let inner = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_child(render_vertical_tab_insertion_target_content(indicator))
+        .with_child(
+            ConstrainedBox::new(Empty::new().finish())
+                .with_height(spacer_height)
+                .finish(),
+        )
+        .finish();
+    DropTarget::new(
+        inner,
+        VerticalTabsPaneDropTargetData {
+            tab_bar_location: vertical_tabs_tab_bar_location(insert_index, tab_count),
+            tab_hover_index: TabBarHoverIndex::BeforeTab(insert_index),
+        },
+    )
+    .finish()
+}
+
 fn render_control_bar(
     state: &VerticalTabsPanelState,
     workspace: &Workspace,
@@ -1930,6 +1985,20 @@ fn render_groups(
         groups.add_child(render_ghost_vertical_tab_slot(workspace, app));
     }
 
+    // Tail drop zone: a tall row appended below the last tab so the empty
+    // area in the panel catches pane drags as "append new tab". Without it
+    // the cursor falls into a no-drop-target gap below the last tab's
+    // bottom-edge sliver and the hover state flickers on/off as it moves.
+    if is_any_pane_dragging {
+        let insert_index = workspace.tabs.len();
+        groups.add_child(render_vertical_tab_tail_drop_zone(
+            insert_index,
+            workspace.tabs.len(),
+            workspace.hovered_tab_index == Some(TabBarHoverIndex::BeforeTab(insert_index)),
+            theme,
+        ));
+    }
+
     // Prune stale badge mouse states for panes that no longer exist.
     let all_pane_ids: std::collections::HashSet<PaneId> = workspace
         .tabs
@@ -2455,10 +2524,12 @@ fn render_tab_group_internal(
             .on_drop(|ctx, _, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::DropTab);
             });
-        // Only lock the drag to the vertical axis when cross-window tab drag is
-        // disabled. When it is enabled, the user needs to be able to drag
-        // horizontally out of the panel to detach the tab into a new window.
-        let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
+        // Only lock the drag to the vertical axis when neither cross-window tab
+        // drag nor tab-to-pane split is enabled. Both features need horizontal
+        // movement out of the panel.
+        let allow_horizontal = FeatureFlag::DragTabsToWindows.is_enabled()
+            || FeatureFlag::DragTabToPaneSplit.is_enabled();
+        let draggable = if allow_horizontal {
             draggable
         } else {
             draggable.with_drag_axis(DragAxis::VerticalOnly)

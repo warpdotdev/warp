@@ -360,6 +360,10 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_detach_tab_to_new_window_with_drag);
     register_test!(test_attach_tab_to_other_window_and_continue_drag);
     register_test!(test_single_tab_handoff_continues_drag);
+    register_test!(test_drag_tab_to_pane_split_right);
+    register_test!(test_drag_tab_to_pane_split_down);
+    register_test!(test_drag_tab_to_pane_split_source_with_split_is_noop);
+    register_test!(test_drag_tab_to_pane_split_active_self_drop_is_noop);
 
     register_test!(test_restore_single_closed_pane);
     register_test!(test_restore_multiple_closed_panes);

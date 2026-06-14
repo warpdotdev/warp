@@ -164,7 +164,7 @@ trait FindPaneByDirection {
     ) -> FindPaneByDirectionResult;
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     Left,
     Right,
@@ -277,7 +277,14 @@ impl PaneData {
     }
 
     pub fn hide_pane_for_move(&mut self, id: PaneId) {
+        if pane_hidden_for_move(&self.hidden_panes, &id) {
+            return;
+        }
         self.hidden_panes.push(HiddenPane::from_move(id));
+    }
+
+    pub fn is_pane_hidden_for_move(&self, id: PaneId) -> bool {
+        pane_hidden_for_move(&self.hidden_panes, &id)
     }
 
     pub fn clear_hidden_panes_from_move(&mut self) {
