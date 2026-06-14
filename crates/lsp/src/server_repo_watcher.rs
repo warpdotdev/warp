@@ -11,7 +11,7 @@ use warpui_core::{ModelContext, SingletonEntity, WeakModelHandle};
 
 use crate::model::LspServerModel;
 use crate::types::WatchedFileChangeEvent;
-use crate::LspServerConfig;
+use crate::LspServerConfigKind;
 
 enum RepoWatchState {
     NotWatching,
@@ -56,7 +56,7 @@ impl LspRepoWatcher {
         }
     }
 
-    pub fn ensure(&mut self, config: &LspServerConfig, ctx: &mut ModelContext<LspServerModel>) {
+    pub fn ensure(&mut self, config: &LspServerConfigKind, ctx: &mut ModelContext<LspServerModel>) {
         if !matches!(self.state, RepoWatchState::NotWatching) {
             return;
         }

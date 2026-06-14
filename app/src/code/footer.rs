@@ -33,8 +33,9 @@ use warpui::{
 #[cfg(feature = "local_fs")]
 use crate::ai::persisted_workspace::PersistedWorkspaceEvent;
 use crate::ai::persisted_workspace::{
-    LSPEnablementResultForFile, LspRepoStatus, PersistedWorkspace,
+    CustomLspRepoStatus, LSPEnablementResultForFile, LspRepoStatus, PersistedWorkspace,
 };
+use crate::code::lsp_dispatch::{resolve_server_for_path, ResolvedLspServer};
 use crate::code::lsp_telemetry::{LspControlActionType, LspEnablementSource, LspTelemetryEvent};
 use crate::settings::AISettings;
 use crate::ui_components::blended_colors;
@@ -74,8 +75,11 @@ enum FooterMode {
     SingleFile {
         path: PathBuf,
         mouse_states: SingleFileMouseStates,
-        /// Status of LSP server relevance and installation for the file's repo.
-        lsp_repo_status: LspRepoStatus,
+        /// Built-in LSP install/enablement status for the file's repo, or
+        /// `None` when this footer was resolved to a custom descriptor
+        /// (customs have no install state and render via
+        /// `compute_custom_status_message`).
+        lsp_repo_status: Option<LspRepoStatus>,
     },
     /// Workspace-level — tracks all servers for a repo root.
     Workspace {
@@ -103,17 +107,18 @@ impl FooterMode {
             FooterMode::TabConfig { .. } => vec![],
             FooterMode::SingleFile {
                 lsp_repo_status, ..
-            } => {
-                if matches!(
-                    lsp_repo_status,
-                    LspRepoStatus::DisabledAndInstalled { .. }
-                        | LspRepoStatus::DisabledAndNotInstalled { .. }
-                ) {
-                    vec![lsp_repo_status]
-                } else {
-                    vec![]
+            } => match lsp_repo_status {
+                Some(status)
+                    if matches!(
+                        status,
+                        LspRepoStatus::DisabledAndInstalled { .. }
+                            | LspRepoStatus::DisabledAndNotInstalled { .. }
+                    ) =>
+                {
+                    vec![status]
                 }
-            }
+                _ => vec![],
+            },
             FooterMode::Workspace {
                 lsp_repo_statuses, ..
             } => lsp_repo_statuses
@@ -237,7 +242,7 @@ impl LspRepoStatuses {
     ) {
         let is_live = lsp_servers.iter().any(|w| {
             w.upgrade(app)
-                .is_some_and(|s| s.as_ref(app).server_type() == server_type)
+                .is_some_and(|s| s.as_ref(app).server_type() == Some(server_type))
         });
         let effective = if is_live {
             LspRepoStatus::Ready
@@ -262,6 +267,27 @@ impl LspRepoStatuses {
 }
 
 impl CodeFooterView {
+    /// Test seam: true iff this footer is in `SingleFile` mode with no
+    /// built-in install status set. That state is produced by the
+    /// custom-resolved code path — built-in install detection is skipped,
+    /// so `lsp_repo_status` stays `None`.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn is_single_file_without_builtin_status(&self) -> bool {
+        matches!(
+            &self.mode,
+            FooterMode::SingleFile {
+                lsp_repo_status: None,
+                ..
+            }
+        )
+    }
+
+    /// Test seam: returns the enable button if one was built at construction.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn enable_lsp_button(&self) -> Option<&ViewHandle<ActionButton>> {
+        self.enable_lsp_button.as_ref()
+    }
+
     #[cfg(feature = "local_fs")]
     fn is_tab_config_path(path: &Path) -> bool {
         is_tab_config_toml(path)
@@ -361,12 +387,14 @@ impl CodeFooterView {
             return footer;
         }
 
-        let server_type = LanguageId::from_path(&path).map(|id| id.server_type());
+        // Resolve via the unified dispatch so custom descriptors take
+        // precedence over the built-in `LanguageId` map.
+        let lsp_server = resolve_server_for_path(&path, ctx);
 
         // Create a button that dispatches EnableLSP action
         // The action handler will check lsp_repo_status to decide whether to install first
-        let enable_lsp_button = server_type.map(|st| {
-            let label = format!("Enable {}", st.binary_name());
+        let enable_lsp_button = lsp_server.as_ref().map(|server| {
+            let label = format!("Enable {}", server.display_name());
             ctx.add_typed_action_view(|_ctx| {
                 ActionButton::new(label, NakedTheme)
                     .with_size(ButtonSize::Small)
@@ -376,65 +404,71 @@ impl CodeFooterView {
             })
         });
 
-        // Kick off detection via PersistedWorkspace and subscribe for updates
+        // Built-in install-status detection would re-label the button to the
+        // built-in's `binary_name()`, stomping the custom descriptor's name.
+        // For customs, `lsp_repo_status` stays `None` and rendering goes
+        // through `compute_custom_status_message`.
         #[cfg(feature = "local_fs")]
-        let initial_status = {
-            let status = Self::detect_installation_status(&path, ctx);
+        let initial_status: Option<LspRepoStatus> =
+            if matches!(lsp_server, Some(ResolvedLspServer::Custom(_))) {
+                None
+            } else {
+                let status = Self::detect_installation_status(&path, ctx);
 
-            // Update button label based on initial status (handles cached results)
-            if let Some(enable_button) = &enable_lsp_button {
-                if let Some(label) = Self::button_label_for_status(&status) {
-                    enable_button.update(ctx, |button, ctx| {
-                        button.set_label(label, ctx);
-                    });
-                }
-            }
-
-            // Subscribe to InstallStatusUpdate events from PersistedWorkspace
-            let persisted = PersistedWorkspace::handle(ctx);
-            ctx.subscribe_to_model(&persisted, move |me, _model_handle, event, ctx| {
-                // Only handle InstallStatusUpdate events for our server type
-                let PersistedWorkspaceEvent::InstallStatusUpdate {
-                    server_type: event_server_type,
-                    status,
-                } = event
-                else {
-                    return;
-                };
-
-                let FooterMode::SingleFile { path, .. } = &me.mode else {
-                    return;
-                };
-
-                let Some(current_server_type) =
-                    LanguageId::from_path(path).map(|id| id.server_type())
-                else {
-                    return;
-                };
-
-                // Only update if the event is for the server type we're tracking
-                if *event_server_type != current_server_type {
-                    return;
+                // Update button label based on initial status (handles cached results)
+                if let Some(enable_button) = &enable_lsp_button {
+                    if let Some(label) = Self::button_label_for_status(&status) {
+                        enable_button.update(ctx, |button, ctx| {
+                            button.set_label(label, ctx);
+                        });
+                    }
                 }
 
-                // Convert LSPInstallationStatus to LspRepoStatus
-                let new_status =
-                    LspRepoStatus::from_installation_status(status, *event_server_type);
+                // Subscribe to InstallStatusUpdate events from PersistedWorkspace
+                let persisted = PersistedWorkspace::handle(ctx);
+                ctx.subscribe_to_model(&persisted, move |me, _model_handle, event, ctx| {
+                    // Only handle InstallStatusUpdate events for our server type
+                    let PersistedWorkspaceEvent::InstallStatusUpdate {
+                        server_type: event_server_type,
+                        status,
+                    } = event
+                    else {
+                        return;
+                    };
 
-                if let FooterMode::SingleFile {
-                    lsp_repo_status, ..
-                } = &mut me.mode
-                {
-                    *lsp_repo_status = new_status;
-                }
-                me.update_enable_button_label(ctx);
-                ctx.notify();
-            });
+                    let FooterMode::SingleFile { path, .. } = &me.mode else {
+                        return;
+                    };
 
-            status
-        };
+                    let Some(current_server_type) =
+                        LanguageId::from_path(path).map(|id| id.server_type())
+                    else {
+                        return;
+                    };
+
+                    // Only update if the event is for the server type we're tracking
+                    if *event_server_type != current_server_type {
+                        return;
+                    }
+
+                    // Convert LSPInstallationStatus to LspRepoStatus
+                    let new_status =
+                        LspRepoStatus::from_installation_status(status, *event_server_type);
+
+                    if let FooterMode::SingleFile {
+                        lsp_repo_status, ..
+                    } = &mut me.mode
+                    {
+                        *lsp_repo_status = Some(new_status);
+                    }
+                    me.update_enable_button_label(ctx);
+                    ctx.notify();
+                });
+
+                Some(status)
+            };
         #[cfg(not(feature = "local_fs"))]
-        let initial_status = LspRepoStatus::CheckingForInstallation;
+        let initial_status: Option<LspRepoStatus> = None;
 
         Self {
             mode: FooterMode::SingleFile {
@@ -623,13 +657,18 @@ impl CodeFooterView {
         } = &mut self.mode
         {
             for server in &new_servers {
-                let server_type = server.as_ref(ctx).server_type();
-                lsp_repo_statuses.update_status(
-                    server_type,
-                    LspRepoStatus::Ready,
-                    &self.lsp_servers,
-                    ctx,
-                );
+                // `update_status` is keyed by `LSPServerType` and tracks
+                // built-in repo statuses only. Custom servers don't
+                // participate in this status tracking yet — that lands
+                // when Phase 4 broadens the footer's render path.
+                if let Some(server_type) = server.as_ref(ctx).server_type() {
+                    lsp_repo_statuses.update_status(
+                        server_type,
+                        LspRepoStatus::Ready,
+                        &self.lsp_servers,
+                        ctx,
+                    );
+                }
             }
         }
 
@@ -753,7 +792,7 @@ impl CodeFooterView {
             lsp_repo_status, ..
         } = &mut self.mode
         {
-            *lsp_repo_status = LspRepoStatus::Ready;
+            *lsp_repo_status = Some(LspRepoStatus::Ready);
         }
 
         self.lsp_status_button.update(ctx, |button, ctx| {
@@ -783,7 +822,7 @@ impl CodeFooterView {
             ..
         } = &mut self.mode
         {
-            *lsp_repo_status = Self::detect_installation_status(path, ctx);
+            *lsp_repo_status = Some(Self::detect_installation_status(path, ctx));
             self.update_enable_button_label(ctx);
         }
         #[cfg(not(feature = "local_fs"))]
@@ -791,7 +830,7 @@ impl CodeFooterView {
             lsp_repo_status, ..
         } = &mut self.mode
         {
-            *lsp_repo_status = LspRepoStatus::CheckingForInstallation;
+            *lsp_repo_status = None;
         }
 
         ctx.notify();
@@ -1585,38 +1624,58 @@ impl CodeFooterView {
                 path,
                 lsp_repo_status,
                 ..
-            } => match PersistedWorkspace::as_ref(app).has_enabled_lsp_server_for_file_path(path) {
-                LSPEnablementResultForFile::UnsupportedLanguage => (
-                    Some("Language support is unavailable for this file type".to_string()),
-                    false,
-                ),
-                LSPEnablementResultForFile::LSPNotEnabled { root_name } => match lsp_repo_status {
-                    LspRepoStatus::CheckingForInstallation => (
-                        Some(format!(
-                            "Language support is not currently enabled for {}",
-                            root_name.unwrap_or("this codebase".to_string())
-                        )),
+            } => {
+                // Custom-first dispatch: if the file is claimed by a
+                // user-configured descriptor, drive the status off
+                // `CustomLspRepoStatus` instead of the built-in install
+                // flow. Customs have no install state (invariant 26).
+                if let Some(ResolvedLspServer::Custom(descriptor)) =
+                    resolve_server_for_path(path, app)
+                {
+                    return self.compute_custom_status_message(path, &descriptor.name, app);
+                }
+                match PersistedWorkspace::as_ref(app).has_enabled_lsp_server_for_file_path(path) {
+                    LSPEnablementResultForFile::UnsupportedLanguage => (
+                        Some("Language support is unavailable for this file type".to_string()),
                         false,
                     ),
-                    LspRepoStatus::Ready | LspRepoStatus::Enabled => (
-                        Some("Language server is unavailable for this codebase".to_string()),
-                        false,
-                    ),
-                    LspRepoStatus::DisabledAndNotInstalled { .. }
-                    | LspRepoStatus::DisabledAndInstalled { .. } => (
-                        Some(format!(
-                            "Language support is not currently enabled for {}",
-                            root_name.unwrap_or("this codebase".to_string())
-                        )),
-                        true,
-                    ),
-                    LspRepoStatus::Installing { server_type } => (
-                        Some(format!("Installing {}...", server_type.binary_name())),
-                        false,
-                    ),
-                },
-                LSPEnablementResultForFile::Enabled => (None, false),
-            },
+                    LSPEnablementResultForFile::LSPNotEnabled { root_name } => {
+                        // Unreachable for `None` on this branch — the
+                        // custom-first early-return above handles the
+                        // custom-resolved case where lsp_repo_status is None.
+                        match lsp_repo_status {
+                            Some(LspRepoStatus::CheckingForInstallation) | None => (
+                                Some(format!(
+                                    "Language support is not currently enabled for {}",
+                                    root_name.unwrap_or("this codebase".to_string())
+                                )),
+                                false,
+                            ),
+                            Some(LspRepoStatus::Ready | LspRepoStatus::Enabled) => (
+                                Some(
+                                    "Language server is unavailable for this codebase".to_string(),
+                                ),
+                                false,
+                            ),
+                            Some(
+                                LspRepoStatus::DisabledAndNotInstalled { .. }
+                                | LspRepoStatus::DisabledAndInstalled { .. },
+                            ) => (
+                                Some(format!(
+                                    "Language support is not currently enabled for {}",
+                                    root_name.unwrap_or("this codebase".to_string())
+                                )),
+                                true,
+                            ),
+                            Some(LspRepoStatus::Installing { server_type }) => (
+                                Some(format!("Installing {}...", server_type.binary_name())),
+                                false,
+                            ),
+                        }
+                    }
+                    LSPEnablementResultForFile::Enabled => (None, false),
+                }
+            }
             FooterMode::Workspace {
                 root_path,
                 lsp_repo_statuses,
@@ -1661,6 +1720,41 @@ impl CodeFooterView {
                     false,
                 )
             }
+        }
+    }
+
+    /// Status-message dispatch for a SingleFile mode where the file is
+    /// claimed by a custom descriptor. Returns `(message, show_enable_button)`.
+    /// Customs have no install flow, so the disabled state immediately
+    /// surfaces the Enable CTA — no `CheckingForInstallation` interstitial.
+    fn compute_custom_status_message(
+        &self,
+        path: &Path,
+        name: &str,
+        app: &AppContext,
+    ) -> (Option<String>, bool) {
+        let persisted = PersistedWorkspace::as_ref(app);
+        let Some(repo_root) = persisted.root_for_workspace(path) else {
+            return (
+                Some("Language support is not currently enabled for this codebase".to_string()),
+                true,
+            );
+        };
+        let root_name = repo_root
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("this codebase");
+
+        match persisted.custom_lsp_repo_status(repo_root, name, app) {
+            // Enabled or running — no status message; rendering shows the
+            // live indicator instead.
+            CustomLspRepoStatus::Ready | CustomLspRepoStatus::Enabled => (None, false),
+            CustomLspRepoStatus::Disabled => (
+                Some(format!(
+                    "Language support is not currently enabled for {root_name}"
+                )),
+                true,
+            ),
         }
     }
 }
@@ -1811,6 +1905,21 @@ impl TypedActionView for CodeFooterView {
             }
             CodeFooterViewAction::EnableLSP => {
                 let path = self.mode.path().to_path_buf();
+
+                // Custom-first dispatch: customs have no install flow, so
+                // emit EnableLSP directly without server_type (the
+                // downstream handler re-resolves via the unified helper).
+                if matches!(self.mode, FooterMode::SingleFile { .. }) {
+                    if let Some(ResolvedLspServer::Custom(_)) = resolve_server_for_path(&path, ctx)
+                    {
+                        ctx.emit(CodeFooterViewEvent::EnableLSP {
+                            path: path.clone(),
+                            server_type: None,
+                        });
+                        return;
+                    }
+                }
+
                 let cta_statuses: Vec<LspRepoStatus> = self
                     .mode
                     .cta_lsp_repo_statuses()
@@ -1924,24 +2033,32 @@ impl TypedActionView for CodeFooterView {
                 self.is_lsp_menu_open = false;
                 if let Some(server) = self.lsp_servers.first().and_then(|w| w.upgrade(ctx)) {
                     let workspace_root = server.as_ref(ctx).initial_workspace().to_path_buf();
-                    let server_type = server.as_ref(ctx).server_type();
+                    let key = server.as_ref(ctx).key();
+                    let display_name = server.as_ref(ctx).server_name();
 
                     send_telemetry_from_ctx!(
                         LspTelemetryEvent::ServerRemoved {
-                            server_type: server_type.binary_name().to_string(),
+                            server_type: display_name,
                             source: LspEnablementSource::FooterButton,
                         },
                         ctx
                     );
 
-                    // Remove from manager (stops and removes)
                     LspManagerModel::handle(ctx).update(ctx, |manager, ctx| {
-                        manager.remove_server(&workspace_root, server_type, ctx);
+                        manager.remove_server(&workspace_root, &key, ctx);
                     });
 
-                    // Disable in PersistedWorkspace
-                    PersistedWorkspace::handle(ctx).update(ctx, |workspace, _| {
-                        workspace.disable_lsp_server_for_path(&workspace_root, server_type);
+                    // The persisted-workspace disable path is split by kind:
+                    // built-in is `LSPServerType`-keyed (with SQLite write),
+                    // custom is descriptor-name-keyed (in-memory only until
+                    // Phase 4c lands SQLite persistence for customs).
+                    PersistedWorkspace::handle(ctx).update(ctx, |workspace, _| match &key {
+                        lsp::ServerKey::BuiltIn(server_type) => {
+                            workspace.disable_lsp_server_for_path(&workspace_root, *server_type);
+                        }
+                        lsp::ServerKey::Custom(name) => {
+                            workspace.disable_custom_lsp_server_for_path(&workspace_root, name);
+                        }
                     });
                 }
                 ctx.notify();

@@ -38,6 +38,7 @@ strum.workspace = true
 strum_macros.workspace = true
 sum_tree.workspace = true
 version-compare.workspace = true
+lsp.workspace = true
 warp = { workspace = true, features = ["integration_tests"] }
 warp_cli = { workspace = true, features = ["integration_tests"] }
 warp_core.workspace = true

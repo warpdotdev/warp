@@ -810,3 +810,74 @@ mod group_roots_by_common_ancestor_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod workspace_hash_tests {
+    use super::workspace_hash;
+    use std::path::Path;
+
+    #[test]
+    fn stable_for_same_path() {
+        let path = Path::new("/Users/test/project");
+        assert_eq!(workspace_hash(path), workspace_hash(path));
+    }
+
+    #[test]
+    fn different_for_different_paths() {
+        let a = workspace_hash(Path::new("/Users/test/project-a"));
+        let b = workspace_hash(Path::new("/Users/test/project-b"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn returns_16_hex_chars() {
+        let hash = workspace_hash(Path::new("/tmp/x"));
+        assert_eq!(hash.len(), 16);
+        assert!(hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    }
+
+    #[test]
+    fn safe_as_directory_segment() {
+        let hash = workspace_hash(Path::new("/some/path with spaces/and-dashes"));
+        assert!(!hash.contains('/'));
+        assert!(!hash.contains('\\'));
+        assert!(!hash.contains(' '));
+        assert!(!hash.contains('.'));
+    }
+}
+
+#[cfg(test)]
+mod short_hash_tests {
+    use super::short_hash;
+
+    #[test]
+    fn stable_for_same_input() {
+        assert_eq!(short_hash("ruby-lsp"), short_hash("ruby-lsp"));
+    }
+
+    #[test]
+    fn different_for_different_inputs() {
+        assert_ne!(short_hash("ruby-lsp"), short_hash("gopls"));
+    }
+
+    #[test]
+    fn returns_16_lowercase_hex_chars() {
+        let hash = short_hash("ruby-lsp");
+        assert_eq!(hash.len(), 16);
+        assert!(hash
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+    }
+
+    #[test]
+    fn safe_segment_even_for_unsafe_input() {
+        // The input may contain separators or reserved chars; the hash never does.
+        let hash = short_hash("../foo/bar baz\\qux");
+        assert!(!hash.contains('/'));
+        assert!(!hash.contains('\\'));
+        assert!(!hash.contains(' '));
+        assert!(!hash.contains('.'));
+    }
+}

@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 #[cfg(not(target_arch = "wasm32"))]
 use command::r#async::Command;
 use lsp_types::{
@@ -12,6 +13,10 @@ use lsp_types::{
     WindowClientCapabilities, WorkDoneProgressParams, WorkspaceClientCapabilities, WorkspaceFolder,
 };
 
+use crate::command_builder::CommandBuilder;
+use crate::descriptor::{placeholder, LspServerDescriptor};
+use crate::log_redaction::LogRedactor;
+use crate::manager::ServerKey;
 use crate::supported_servers::LSPServerType;
 
 /// Result of resolving an LSP server command, including the command and init params.
@@ -210,6 +215,234 @@ impl LspServerConfig {
 
     pub(crate) fn server_type(&self) -> LSPServerType {
         self.server_type
+    }
+
+    pub(crate) fn key(&self) -> ServerKey {
+        ServerKey::BuiltIn(self.server_type)
+    }
+}
+
+/// Spawn-time configuration for a user-defined custom LSP server, paralleling
+/// `LspServerConfig` (which carries the built-in `LSPServerType`). Held by
+/// `LspServerModel` via `LspServerConfigKind`; the model dispatches to the
+/// right inner config's `command_and_params()` at spawn time.
+#[derive(Clone)]
+pub struct CustomLspServerConfig {
+    descriptor: LspServerDescriptor,
+    initial_workspace: PathBuf,
+    /// Resolves the `{{workspace_slug}}` placeholder.
+    workspace_slug: String,
+    /// Per-server cache directory owned by Warp, used to resolve `{{cache_dir}}`.
+    cache_dir: PathBuf,
+    /// Same `PATH` semantics as `LspServerConfig::path_env_var` — propagated to
+    /// the spawned process so the user's `command` resolves correctly when Warp
+    /// is launched without a shell parent.
+    path_env_var: Option<String>,
+    client_name: String,
+    /// Optional path relative to the LSP log namespace for server stderr output.
+    log_relative_path: Option<PathBuf>,
+    /// Masks secret-shaped substrings of the substituted `command`/`args`
+    /// before they are logged.
+    redactor: Arc<dyn LogRedactor>,
+}
+
+impl fmt::Debug for CustomLspServerConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CustomLspServerConfig")
+            .field("descriptor.name", &self.descriptor.name)
+            .field("initial_workspace", &self.initial_workspace)
+            .field("workspace_slug", &self.workspace_slug)
+            .field("cache_dir", &self.cache_dir)
+            .field("path_env_var", &self.path_env_var)
+            .field("client_name", &self.client_name)
+            .field("log_relative_path", &self.log_relative_path)
+            .finish()
+    }
+}
+
+impl CustomLspServerConfig {
+    pub fn new(
+        descriptor: LspServerDescriptor,
+        initial_workspace: PathBuf,
+        workspace_slug: String,
+        cache_dir: PathBuf,
+        path_env_var: Option<String>,
+        client_name: String,
+        redactor: Arc<dyn LogRedactor>,
+    ) -> Self {
+        Self {
+            descriptor,
+            initial_workspace,
+            workspace_slug,
+            cache_dir,
+            path_env_var,
+            client_name,
+            log_relative_path: None,
+            redactor,
+        }
+    }
+
+    /// Sets the relative log path for this server's stderr output.
+    pub fn with_log_relative_path(mut self, log_relative_path: PathBuf) -> Self {
+        self.log_relative_path = Some(log_relative_path);
+        self
+    }
+
+    /// Returns the relative log path if configured.
+    pub fn log_relative_path(&self) -> Option<&PathBuf> {
+        self.log_relative_path.as_ref()
+    }
+
+    /// Returns the initial workspace path.
+    pub fn initial_workspace(&self) -> &Path {
+        &self.initial_workspace
+    }
+
+    /// Returns the descriptor this config wraps.
+    pub fn descriptor(&self) -> &LspServerDescriptor {
+        &self.descriptor
+    }
+
+    pub(crate) fn server_name(&self) -> String {
+        self.descriptor.name.clone()
+    }
+
+    pub(crate) fn key(&self) -> ServerKey {
+        ServerKey::Custom(self.descriptor.name.clone())
+    }
+
+    /// Builds the spawn `Command` and `InitializeParams` for this custom
+    /// server. Runs placeholder substitution (`placeholder::expand`) over the
+    /// command path, args, and env-var values; runs `placeholder::expand_json`
+    /// over `initialization_options`. Sets `current_dir` to `initial_workspace`.
+    ///
+    /// No `PATH` fallback / install machinery: there is no install flow for
+    /// custom servers, so if `descriptor.command` does not resolve, the
+    /// launch fails through the existing `LspState::Failed` path. The
+    /// descriptor's `name` is attached to any build-time error and included
+    /// in the log message so failures are attributable when multiple custom
+    /// servers exist.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn command_and_params(self) -> Result<ResolvedLspCommand> {
+        let placeholder_ctx = placeholder::LspPlaceholderContext::new(
+            self.initial_workspace.clone(),
+            self.workspace_slug,
+            self.cache_dir,
+        );
+
+        log::info!(
+            "Custom LSP \"{}\" placeholder context: workspace_root={}, workspace_slug={}, cache_dir={}",
+            self.descriptor.name,
+            placeholder_ctx.workspace_root.display(),
+            placeholder_ctx.workspace_slug,
+            placeholder_ctx.cache_dir.display(),
+        );
+
+        let resolved_command = placeholder::expand(&self.descriptor.command, &placeholder_ctx);
+        let resolved_args: Vec<String> = self
+            .descriptor
+            .args
+            .iter()
+            .map(|arg| placeholder::expand(arg, &placeholder_ctx))
+            .collect();
+
+        let executor = CommandBuilder::new(self.path_env_var);
+        let mut command = executor.command(&resolved_command);
+        command.args(&resolved_args);
+        command.current_dir(&self.initial_workspace);
+        for (key, value) in &self.descriptor.env {
+            command.env(key, placeholder::expand(value, &placeholder_ctx));
+        }
+
+        let mut params = default_init_params(&self.initial_workspace, self.client_name)
+            .with_context(|| {
+                format!(
+                    "building init params for custom LSP \"{}\"",
+                    self.descriptor.name
+                )
+            })?;
+        if let Some(init_options) = &self.descriptor.initialization_options {
+            params.initialization_options =
+                Some(placeholder::expand_json(init_options, &placeholder_ctx));
+        }
+
+        // Redact the substituted command/args before logging. `name` is logged
+        // verbatim; `env` values and `initialization_options` are not logged.
+        let logged_command = self.redactor.redact_for_log(&resolved_command);
+        let logged_args: Vec<Cow<'_, str>> = resolved_args
+            .iter()
+            .map(|arg| self.redactor.redact_for_log(arg))
+            .collect();
+        log::info!(
+            "Custom LSP \"{}\" starting with command: {} {:?}",
+            self.descriptor.name,
+            logged_command,
+            logged_args
+        );
+
+        Ok(ResolvedLspCommand { command, params })
+    }
+}
+
+/// Spawn-time configuration for an LSP server. Warp supports two kinds:
+///
+/// - `BuiltIn` — the frozen built-in servers. Deprecated path: no new
+///   languages are added here, and eventually customs will absorb its
+///   role entirely.
+/// - `Custom` — user-defined via `[[editor.language_servers]]` in
+///   `settings.toml`. The forward path for all new language support.
+///
+/// `Custom` is boxed because `CustomLspServerConfig` is ~3x the size of
+/// `LspServerConfig`; without the box every `LspServerConfigKind` value
+/// would carry the worst-case footprint even for built-ins.
+#[derive(Clone, Debug)]
+pub enum LspServerConfigKind {
+    BuiltIn(LspServerConfig),
+    Custom(Box<CustomLspServerConfig>),
+}
+
+impl LspServerConfigKind {
+    /// Identifier for the server, used in log messages and footer rendering.
+    pub fn server_name(&self) -> String {
+        match self {
+            Self::BuiltIn(c) => c.server_name(),
+            Self::Custom(c) => c.server_name(),
+        }
+    }
+
+    /// Uniform identity for this server across both kinds. Used by the
+    /// manager for duplicate detection and emitted in
+    /// `LspManagerModelEvent::ServerRemoved`.
+    pub fn key(&self) -> ServerKey {
+        match self {
+            Self::BuiltIn(c) => c.key(),
+            Self::Custom(c) => c.key(),
+        }
+    }
+
+    pub fn initial_workspace(&self) -> &Path {
+        match self {
+            Self::BuiltIn(c) => c.initial_workspace(),
+            Self::Custom(c) => c.initial_workspace(),
+        }
+    }
+
+    pub fn log_relative_path(&self) -> Option<&PathBuf> {
+        match self {
+            Self::BuiltIn(c) => c.log_relative_path(),
+            Self::Custom(c) => c.log_relative_path(),
+        }
+    }
+
+    /// Builds the spawn `Command` and `InitializeParams`. Dispatches to the
+    /// inner config's `command_and_params()`; below this call the LSP
+    /// runtime treats both kinds identically.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) async fn command_and_params(self) -> Result<ResolvedLspCommand> {
+        match self {
+            Self::BuiltIn(c) => c.command_and_params().await,
+            Self::Custom(c) => (*c).command_and_params().await,
+        }
     }
 }
 

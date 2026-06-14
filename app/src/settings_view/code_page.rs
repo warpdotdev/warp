@@ -741,7 +741,11 @@ impl TypedActionView for CodeSettingsPageView {
                         ctx
                     );
                     LspManagerModel::handle(ctx).update(ctx, |manager, ctx| {
-                        manager.remove_server(workspace_path, *server_type, ctx);
+                        manager.remove_server(
+                            workspace_path,
+                            &lsp::ServerKey::BuiltIn(*server_type),
+                            ctx,
+                        );
                     });
                     PersistedWorkspace::handle(ctx).update(ctx, |workspace, _| {
                         workspace.disable_lsp_server_for_path(workspace_path, *server_type);
@@ -2067,7 +2071,7 @@ impl CodePageWidget {
                 let server_model = server_models.and_then(|servers| {
                     servers
                         .iter()
-                        .find(|s| s.as_ref(app).server_type() == *server_type)
+                        .find(|s| s.as_ref(app).server_type() == Some(*server_type))
                 });
 
                 content.add_child(self.render_lsp_server_row(

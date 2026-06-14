@@ -197,6 +197,7 @@ pub struct PersistedData {
     pub ai_queries: Vec<PersistedAIInput>,
     pub codebase_indices: Vec<CodeWorkspaceMetadata>,
     pub workspace_language_servers: HashMap<PathBuf, HashMap<LSPServerType, EnablementState>>,
+    pub workspace_custom_language_servers: HashMap<PathBuf, HashMap<String, EnablementState>>,
     pub multi_agent_conversations: Vec<AgentConversation>,
     pub projects: Vec<Project>,
     pub project_rules: Vec<ProjectRulePath>,
@@ -378,6 +379,11 @@ pub enum ModelEvent {
     UpsertWorkspaceLanguageServer {
         workspace_path: PathBuf,
         lsp_type: LSPServerType,
+        enabled: EnablementState,
+    },
+    UpsertWorkspaceCustomLanguageServer {
+        workspace_path: PathBuf,
+        name: String,
         enabled: EnablementState,
     },
     UpdateBlockAgentViewVisibility {
