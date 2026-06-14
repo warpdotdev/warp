@@ -1228,8 +1228,29 @@ impl CodeEditorModel {
 
     /// Rebuild layout and make sure the temporary blocks for diff state has the right styling + anchored
     /// at the right lines after the rebuild. This should be used over the default implementation of rebuild_layout.
+    ///
+    /// When hidden lines are active, uses [`Buffer::invalidate_layout_with_hidden_ranges`] to
+    /// avoid materializing styled blocks for hidden content.  This can save gigabytes of transient
+    /// allocations for large files with collapsed diff sections.
     fn rebuild_layout_and_refresh_diff(&self, ctx: &mut ModelContext<Self>) {
-        self.rebuild_layout(ctx);
+        // If hidden lines are active, pass them to the buffer so it can skip
+        // building expensive styled blocks for those ranges.
+        let hidden_ranges = self.hidden_ranges(ctx);
+        if hidden_ranges.is_empty() {
+            self.rebuild_layout(ctx);
+        } else {
+            log::debug!("Rebuilding layout state (skipping hidden ranges)");
+            let delta = self
+                .content()
+                .as_ref(ctx)
+                .invalidate_layout_with_hidden_ranges(&hidden_ranges);
+            let buffer_version = self.content().as_ref(ctx).buffer_version();
+            self.render_state().update(ctx, move |render_state, _ctx| {
+                let scroll_position = render_state.snapshot_scroll_position();
+                render_state.add_pending_edit(delta, buffer_version);
+                render_state.scroll_to(scroll_position);
+            });
+        }
         if self.diff_nav_is_active() {
             self.refresh_diff_state(ctx);
         }

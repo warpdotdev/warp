@@ -2526,6 +2526,98 @@ impl Buffer {
         self.invalidate_layout_internal(full_range)
     }
 
+    /// Like [`invalidate_layout`](Self::invalidate_layout), but avoids materializing styled blocks
+    /// for `hidden_ranges`. Hidden ranges are represented as lightweight placeholder blocks with
+    /// correct `content_length` but no text data, dramatically reducing memory for large files
+    /// with hidden sections (e.g. diff view with collapsed regions).
+    pub fn invalidate_layout_with_hidden_ranges(
+        &self,
+        hidden_ranges: &rangemap::RangeSet<CharOffset>,
+    ) -> EditDelta {
+        let full_range = CharOffset::from(1)..self.max_charoffset();
+
+        if hidden_ranges.is_empty() {
+            return self.invalidate_layout_internal(full_range);
+        }
+
+        let full_points = self.offset_range_to_point_range(full_range.clone());
+        let old_byte_start = full_range.start.to_buffer_byte_offset(self);
+        let old_byte_end = full_range.end.to_buffer_byte_offset(self);
+
+        let new_lines =
+            self.styled_blocks_skipping_hidden(full_range.clone(), hidden_ranges);
+
+        EditDelta {
+            precise_deltas: vec![PreciseDelta {
+                replaced_range: full_range.clone(),
+                replaced_points: full_points.clone(),
+                resolved_range: full_range.clone(),
+                replaced_byte_range: old_byte_start..old_byte_end,
+                new_byte_length: old_byte_end
+                    .as_usize()
+                    .saturating_sub(old_byte_start.as_usize()),
+                new_end_point: full_points.end,
+            }],
+            old_offset: full_range,
+            new_lines,
+        }
+    }
+
+    /// Build styled blocks for a range, using lightweight placeholders for hidden ranges.
+    /// Visible segments get full styled blocks via the normal iterator; hidden segments
+    /// get a single empty [`StyledBufferBlock::Text`] whose `content_length` preserves
+    /// correct offset tracking in the downstream layout pipeline.
+    fn styled_blocks_skipping_hidden(
+        &self,
+        range: Range<CharOffset>,
+        hidden_ranges: &rangemap::RangeSet<CharOffset>,
+    ) -> Vec<StyledBufferBlock> {
+        let mut blocks = Vec::new();
+        let mut current = range.start;
+
+        for hidden in hidden_ranges.iter() {
+            let hidden_start = hidden.start.max(current);
+            let hidden_end = hidden.end.min(range.end);
+
+            if hidden_start >= range.end {
+                break;
+            }
+            if hidden_end <= current {
+                continue;
+            }
+
+            // Emit styled blocks for the visible gap before this hidden range.
+            if current < hidden_start {
+                blocks.extend(self.styled_blocks_in_range(
+                    current..hidden_start,
+                    StyledBlockBoundaryBehavior::Exclusive,
+                ));
+            }
+
+            // Emit a lightweight placeholder for the hidden range.
+            if hidden_start < hidden_end {
+                let content_length = hidden_end - hidden_start;
+                blocks.push(StyledBufferBlock::Text(StyledTextBlock {
+                    block: Vec::new(),
+                    style: BufferBlockStyle::PlainText,
+                    content_length,
+                }));
+            }
+
+            current = hidden_end;
+        }
+
+        // Emit styled blocks for any remaining visible content.
+        if current < range.end {
+            blocks.extend(self.styled_blocks_in_range(
+                current..range.end,
+                StyledBlockBoundaryBehavior::Exclusive,
+            ));
+        }
+
+        blocks
+    }
+
     fn invalidate_layout_internal(&self, range: Range<CharOffset>) -> EditDelta {
         let full_points = self.offset_range_to_point_range(range.clone());
         // No content change—compute a no-op byte edit.
