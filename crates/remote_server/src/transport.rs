@@ -121,17 +121,51 @@ impl Error {
             Self::UnsupportedOs { os } => Some(format!("Unsupported OS: {os}")),
             Self::UnsupportedArch { arch } => Some(format!("Unsupported architecture: {arch}")),
             Self::ScriptFailed { exit_code, stderr } => {
-                let truncated = if stderr.chars().count() > MAX_STDERR_DISPLAY_CHARS {
-                    let end: usize = stderr
-                        .char_indices()
-                        .nth(MAX_STDERR_DISPLAY_CHARS)
-                        .map(|(i, _)| i)
-                        .unwrap_or(stderr.len());
-                    format!("{}…", &stderr[..end])
+                let detail = if stderr.contains("Permission denied")
+                    || stderr.contains("Read-only file system")
+                {
+                    format!(
+                        "Cannot create install directory — check write permissions \
+                         on your home directory (exit code {exit_code})"
+                    )
+                } else if stderr.contains("No space left on device")
+                    || stderr.contains("Failure writing output to destination")
+                {
+                    format!(
+                        "Not enough disk space on the remote host — free up space \
+                         and try again (exit code {exit_code})"
+                    )
+                } else if *exit_code == 255 && stderr.trim().is_empty() {
+                    "SSH connection was lost during installation — please \
+                     reconnect and try again"
+                        .to_string()
+                } else if stderr.contains("unsupported arch") {
+                    let arch = stderr
+                        .lines()
+                        .find(|l| l.contains("unsupported arch"))
+                        .and_then(|l| l.split("unsupported arch: ").nth(1))
+                        .unwrap_or("unknown")
+                        .trim();
+                    format!(
+                        "This remote host uses a {arch} processor, which is not \
+                         supported. Warp SSH extension requires x86_64 or \
+                         aarch64 (arm64)."
+                    )
                 } else {
-                    stderr.clone()
+                    // Default: truncated stderr
+                    let truncated = if stderr.chars().count() > MAX_STDERR_DISPLAY_CHARS {
+                        let end: usize = stderr
+                            .char_indices()
+                            .nth(MAX_STDERR_DISPLAY_CHARS)
+                            .map(|(i, _)| i)
+                            .unwrap_or(stderr.len());
+                        format!("{}…", &stderr[..end])
+                    } else {
+                        stderr.clone()
+                    };
+                    format!("Script exited with code {exit_code}: {truncated}")
                 };
-                Some(format!("Script exited with code {exit_code}: {truncated}"))
+                Some(detail)
             }
             Self::Other(_) => None,
         };
@@ -304,3 +338,7 @@ pub trait RemoteTransport: Send + Sync + std::fmt::Debug {
     /// the reconnect loop entirely.
     fn is_reconnectable(&self, exit_status: Option<&RemoteServerExitStatus>) -> bool;
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;
