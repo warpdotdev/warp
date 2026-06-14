@@ -8116,8 +8116,24 @@ impl Workspace {
         layout: EditorLayout,
         ctx: &mut ViewContext<Self>,
     ) {
-        // TODO(ben): It might be worth managing file-based notebooks via NotebookManager
-        //   (e.g. for open-or-switch behavior). See if it overcomplicates things.
+        let existing_file_pane = {
+            let pane_group = self.active_tab_pane_group();
+            pane_group
+                .as_ref(ctx)
+                .file_notebook_panes(ctx)
+                .find(|(pane_id, file_view)| {
+                    !pane_group.as_ref(ctx).is_pane_hidden_for_close(*pane_id)
+                        && file_view.as_ref(ctx).path() == Some(&path)
+                })
+                .map(|(pane_id, _)| pane_id)
+        };
+
+        if let Some(pane_id) = existing_file_pane {
+            self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.focus_pane_by_id(pane_id, ctx);
+            });
+            return;
+        }
         let pane = FilePane::new(
             Some(path),
             session,
