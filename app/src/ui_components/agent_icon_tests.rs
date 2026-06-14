@@ -74,6 +74,10 @@ enum CanonicalRunState {
     PlainTerminal,
     /// Local Warp-native (Oz) conversation, in-progress.
     LocalOzInProgress,
+    /// Local orchestration child (Oz), in-progress. Carries a server-side task id for
+    /// orchestration tracking (so the inputs look ambient), but executes locally, so the
+    /// icon must render as a local Oz agent with no cloud lobe.
+    LocalOzChildInProgress,
     /// Cloud-mode Oz run, in-progress.
     CloudOzInProgress,
     /// Cloud Claude harness selected, pre-dispatch (no session, no status yet).
@@ -100,6 +104,7 @@ impl CanonicalRunState {
         &[
             PlainTerminal,
             LocalOzInProgress,
+            LocalOzChildInProgress,
             CloudOzInProgress,
             CloudClaudePreDispatch,
             CloudClaudeInProgress,
@@ -117,6 +122,14 @@ impl CanonicalRunState {
         match self {
             PlainTerminal => None,
             LocalOzInProgress => Some(AgentIconFields {
+                is_cli: false,
+                cli_agent: None,
+                status: Some(ConversationStatus::InProgress),
+                is_ambient: false,
+            }),
+            // A local orchestration child renders as a local Oz agent (no cloud lobe) even
+            // though its inputs carry a server-side task id.
+            LocalOzChildInProgress => Some(AgentIconFields {
                 is_cli: false,
                 cli_agent: None,
                 status: Some(ConversationStatus::InProgress),
@@ -175,6 +188,7 @@ impl CanonicalRunState {
         match self {
             PlainTerminal => TerminalIconInputs {
                 is_ambient: false,
+                is_local_orchestration_child: false,
                 cli_session: None,
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: None,
@@ -182,6 +196,18 @@ impl CanonicalRunState {
             },
             LocalOzInProgress => TerminalIconInputs {
                 is_ambient: false,
+                is_local_orchestration_child: false,
+                cli_session: None,
+                selected_third_party_cli_agent: None,
+                selected_conversation_status: Some(ConversationStatus::InProgress),
+                has_selected_conversation: true,
+            },
+            // A live local orchestration child carries a server-side task id, so its inputs
+            // look ambient, but `is_local_orchestration_child` collapses that to the local
+            // Oz treatment.
+            LocalOzChildInProgress => TerminalIconInputs {
+                is_ambient: true,
+                is_local_orchestration_child: true,
                 cli_session: None,
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: Some(ConversationStatus::InProgress),
@@ -189,6 +215,7 @@ impl CanonicalRunState {
             },
             CloudOzInProgress => TerminalIconInputs {
                 is_ambient: true,
+                is_local_orchestration_child: false,
                 cli_session: None,
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: Some(ConversationStatus::InProgress),
@@ -196,6 +223,7 @@ impl CanonicalRunState {
             },
             CloudClaudePreDispatch => TerminalIconInputs {
                 is_ambient: true,
+                is_local_orchestration_child: false,
                 cli_session: None,
                 selected_third_party_cli_agent: Some(CLIAgent::Claude),
                 selected_conversation_status: None,
@@ -203,6 +231,7 @@ impl CanonicalRunState {
             },
             CloudClaudeInProgress => TerminalIconInputs {
                 is_ambient: true,
+                is_local_orchestration_child: false,
                 cli_session: None,
                 selected_third_party_cli_agent: Some(CLIAgent::Claude),
                 selected_conversation_status: Some(ConversationStatus::InProgress),
@@ -212,6 +241,7 @@ impl CanonicalRunState {
                 // VM has shut down: the caller resolves these fields from the conversation's
                 // server metadata, so the waterfall sees the same shape as a live run.
                 is_ambient: true,
+                is_local_orchestration_child: false,
                 cli_session: None,
                 selected_third_party_cli_agent: Some(CLIAgent::Codex),
                 selected_conversation_status: Some(ConversationStatus::Success),
@@ -219,6 +249,7 @@ impl CanonicalRunState {
             },
             LocalClaudePluginInProgress => TerminalIconInputs {
                 is_ambient: false,
+                is_local_orchestration_child: false,
                 cli_session: Some(CLISessionInputs {
                     agent: CLIAgent::Claude,
                     has_listener: true,
@@ -231,6 +262,7 @@ impl CanonicalRunState {
             },
             LocalClaudePluginBlocked => TerminalIconInputs {
                 is_ambient: false,
+                is_local_orchestration_child: false,
                 cli_session: Some(CLISessionInputs {
                     agent: CLIAgent::Claude,
                     has_listener: true,
@@ -245,6 +277,7 @@ impl CanonicalRunState {
             },
             LocalClaudeCommandDetected => TerminalIconInputs {
                 is_ambient: false,
+                is_local_orchestration_child: false,
                 cli_session: Some(CLISessionInputs {
                     agent: CLIAgent::Claude,
                     has_listener: false,
@@ -272,6 +305,7 @@ impl CanonicalRunState {
             }
             PlainTerminal
             | LocalOzInProgress
+            | LocalOzChildInProgress
             | LocalClaudePluginInProgress
             | LocalClaudePluginBlocked
             | LocalClaudeCommandDetected => None,
@@ -311,7 +345,9 @@ fn every_canonical_state_produces_consistent_icon_across_surfaces() {
 }
 
 /// Structural invariant: the `is_ambient` flag on the rendered variant must match the
-/// `is_ambient` flag on the terminal inputs. Catches accidental drift in the waterfall.
+/// effective ambient value derived from the inputs — `is_ambient` unless the run is a
+/// locally-hosted orchestration child, which collapses it to false. Catches accidental
+/// drift in the waterfall.
 #[test]
 fn terminal_is_ambient_matches_inputs_for_every_state() {
     for state in CanonicalRunState::all() {
@@ -321,8 +357,9 @@ fn terminal_is_ambient_matches_inputs_for_every_state() {
         };
         let fields = AgentIconFields::from_variant(&variant)
             .expect("terminal helper must only return agent variants");
+        let expected_is_ambient = inputs.is_ambient && !inputs.is_local_orchestration_child;
         assert_eq!(
-            fields.is_ambient, inputs.is_ambient,
+            fields.is_ambient, expected_is_ambient,
             "is_ambient drifted for {state:?}"
         );
     }
