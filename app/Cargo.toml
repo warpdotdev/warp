@@ -572,6 +572,7 @@ default = [
     "summarization_cancellation_confirmation",
     "ui_zoom",
     "discard_per_file_and_all_changes",
+    "collapse_expand_all_files",
     "auto_open_code_review_pane",
     "diff_set_as_context",
     "summarize_conversation_command",
@@ -917,6 +918,7 @@ api_key_authentication = []
 api_key_management = []
 diff_set_as_context = []
 discard_per_file_and_all_changes = []
+collapse_expand_all_files = []
 ui_zoom = []
 summarization_cancellation_confirmation = []
 code_review_find = []

@@ -434,6 +434,9 @@ pub enum FeatureFlag {
     /// Enables discarding per-file and discarding all changes
     DiscardPerFileAndAllChanges,
 
+    /// Enables "Expand all" / "Collapse all" actions in the code review header overflow menu.
+    CollapseExpandAllFiles,
+
     /// Enables UI zoom support (scaling the entire UI by a given percentage).
     UIZoom,
 

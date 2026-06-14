@@ -137,6 +137,15 @@ impl CodeReviewHeader {
             } else {
                 right_section_wide.add_child(self.render_add_diff_set_context_button(appearance));
             }
+        } else if !has_no_changes
+            && FeatureFlag::FileAndDiffSetComments.is_enabled()
+            && FeatureFlag::CollapseExpandAllFiles.is_enabled()
+        {
+            right_section_wide.add_child(self.render_header_dropdown_button(
+                &code_review_header_fields.header_dropdown_button,
+                &code_review_header_fields.header_menu,
+                code_review_header_fields.header_menu_open,
+            ));
         }
 
         if code_review_header_fields.is_in_split_pane {
@@ -219,6 +228,15 @@ impl CodeReviewHeader {
                 right_subsection_compact
                     .add_child(self.render_add_diff_set_context_button(appearance));
             }
+        } else if !has_no_changes
+            && FeatureFlag::FileAndDiffSetComments.is_enabled()
+            && FeatureFlag::CollapseExpandAllFiles.is_enabled()
+        {
+            right_subsection_compact.add_child(self.render_header_dropdown_button(
+                &code_review_header_fields.header_dropdown_button,
+                &code_review_header_fields.header_menu,
+                code_review_header_fields.header_menu_open,
+            ));
         }
 
         if code_review_header_fields.is_in_split_pane {

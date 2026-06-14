@@ -321,6 +321,8 @@ pub enum CodeReviewAction {
         line_and_column: Option<LineAndColumnArg>,
     },
     ToggleFileExpanded(String),
+    ExpandAllFiles,
+    CollapseAllFiles,
     OpenHeaderMenu,
     SetDiffMode(DiffMode),
     ToggleFileSidebar,
@@ -4208,7 +4210,8 @@ impl CodeReviewView {
     ) -> Box<dyn Element> {
         let has_menu_flags = FeatureFlag::DiscardPerFileAndAllChanges.is_enabled()
             || FeatureFlag::DiffSetAsContext.is_enabled()
-            || FeatureFlag::FileAndDiffSetComments.is_enabled();
+            || FeatureFlag::FileAndDiffSetComments.is_enabled()
+            || FeatureFlag::CollapseExpandAllFiles.is_enabled();
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
         let has_header_menu_items =
             has_menu_flags && (!FeatureFlag::GitOperationsInCodeReview.is_enabled() || has_changes);
@@ -6808,6 +6811,8 @@ impl CodeReviewView {
             has_changes = !loaded.to_diff_stats().has_no_changes();
         }
 
+        Self::append_collapse_expand_menu_items(&mut items, has_changes);
+
         if FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
             items.push(
                 MenuItemFields::new("Add diff set as context")
@@ -6841,6 +6846,8 @@ impl CodeReviewView {
         let mut items = Vec::new();
 
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
+
+        Self::append_collapse_expand_menu_items(&mut items, has_changes);
 
         let is_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         if is_ai_enabled && FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
@@ -6878,6 +6885,31 @@ impl CodeReviewView {
         }
 
         items
+    }
+
+    /// Appends "Expand all" and "Collapse all" items to the header overflow
+    /// menu when the feature flag is enabled and there are changes to
+    /// collapse or expand.
+    fn append_collapse_expand_menu_items(
+        items: &mut Vec<MenuItem<CodeReviewAction>>,
+        has_changes: bool,
+    ) {
+        if !FeatureFlag::CollapseExpandAllFiles.is_enabled() || !has_changes {
+            return;
+        }
+
+        items.push(
+            MenuItemFields::new("Expand all")
+                .with_icon(Icon::ExpandUpAndDown)
+                .with_on_select_action(CodeReviewAction::ExpandAllFiles)
+                .into_item(),
+        );
+        items.push(
+            MenuItemFields::new("Collapse all")
+                .with_icon(Icon::ListCollapsed)
+                .with_on_select_action(CodeReviewAction::CollapseAllFiles)
+                .into_item(),
+        );
     }
 
     fn get_unsaved_file_paths(&self, app: &AppContext) -> Vec<String> {
@@ -7238,6 +7270,61 @@ impl TypedActionView for CodeReviewView {
                 // If the file gets collapsed and had a sticky header, then we scroll to make the header in view.
                 if !now_expanded && self.viewported_list_state.is_scrolled_to_item(file_index) {
                     self.viewported_list_state.scroll_to(file_index);
+                }
+
+                if self.find_model.as_ref(ctx).is_find_bar_open()
+                    && FeatureFlag::CodeReviewFind.is_enabled()
+                {
+                    self.find_model.update(ctx, |model, model_ctx| {
+                        model.run_search(self.editor_handles(), model_ctx);
+                    });
+                }
+
+                ctx.notify();
+            }
+            CodeReviewAction::ExpandAllFiles | CodeReviewAction::CollapseAllFiles => {
+                let target_expanded = matches!(action, CodeReviewAction::ExpandAllFiles);
+
+                // Phase 1: flip every file whose state differs, collecting the chevron
+                // handles to update outside the `active_repo` borrow.
+                let updates: Vec<(usize, ViewHandle<ActionButton>)> = {
+                    let Some(repo) = self.active_repo.as_mut() else {
+                        return;
+                    };
+                    let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+                        return;
+                    };
+
+                    state
+                        .file_states
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(index, (path, file))| {
+                            if file.is_expanded == target_expanded {
+                                return None;
+                            }
+                            file.is_expanded = target_expanded;
+                            repo.file_expanded.insert(path.clone(), target_expanded);
+                            Some((index, file.chevron_button.clone()))
+                        })
+                        .collect()
+                };
+
+                if updates.is_empty() {
+                    return;
+                }
+
+                let icon = if target_expanded {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                };
+                for (index, chevron) in &updates {
+                    chevron.update(ctx, |button, ctx| {
+                        button.set_icon(Some(icon), ctx);
+                    });
+                    self.viewported_list_state
+                        .invalidate_height_for_index(*index);
                 }
 
                 if self.find_model.as_ref(ctx).is_find_bar_open()
