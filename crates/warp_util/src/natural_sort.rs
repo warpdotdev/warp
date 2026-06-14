@@ -3,18 +3,19 @@
 use std::cmp::Ordering;
 
 /// Compares two strings in natural (numeric-aware) order: runs of ASCII digits
-/// are compared by numeric value, all other characters by `char` (so the
-/// comparison is case-sensitive). The result is a total order, suitable for
-/// `sort_by`.
+/// are compared by numeric value, all other bytes by value (equivalent to
+/// `str::cmp`, so the comparison is case-sensitive). Operating on UTF-8 bytes is
+/// sound because byte-wise lexicographic order matches code-point order, and it
+/// avoids the per-call allocation a `Vec<char>` would incur. The result is a
+/// total order, suitable for `sort_by`.
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
+    let (a, b) = (a.as_bytes(), b.as_bytes());
     let (mut i, mut j) = (0, 0);
 
     while i < a.len() && j < b.len() {
-        let (char_a, char_b) = (a[i], b[j]);
+        let (byte_a, byte_b) = (a[i], b[j]);
 
-        if char_a.is_ascii_digit() && char_b.is_ascii_digit() {
+        if byte_a.is_ascii_digit() && byte_b.is_ascii_digit() {
             let (start_a, start_b) = (i, j);
             while i < a.len() && a[i].is_ascii_digit() {
                 i += 1;
@@ -26,11 +27,11 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
                 Ordering::Equal => {}
                 ordering => return ordering,
             }
-        } else if char_a == char_b {
+        } else if byte_a == byte_b {
             i += 1;
             j += 1;
         } else {
-            return char_a.cmp(&char_b);
+            return byte_a.cmp(&byte_b);
         }
     }
 
@@ -42,7 +43,7 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
 /// length, then digit by digit (never parsing into an integer, so runs of any
 /// length cannot overflow). Equal values are ordered by raw length so leading
 /// zeros (`1` vs `01`) stay deterministic.
-fn compare_number_runs(a: &[char], b: &[char]) -> Ordering {
+fn compare_number_runs(a: &[u8], b: &[u8]) -> Ordering {
     let digits_a = trim_leading_zeros(a);
     let digits_b = trim_leading_zeros(b);
 
@@ -53,10 +54,10 @@ fn compare_number_runs(a: &[char], b: &[char]) -> Ordering {
         .then_with(|| a.len().cmp(&b.len()))
 }
 
-/// Drops leading `'0'` characters from a digit run, keeping at least one digit.
-fn trim_leading_zeros(digits: &[char]) -> &[char] {
+/// Drops leading `'0'` bytes from a digit run, keeping at least one digit.
+fn trim_leading_zeros(digits: &[u8]) -> &[u8] {
     let mut start = 0;
-    while start + 1 < digits.len() && digits[start] == '0' {
+    while start + 1 < digits.len() && digits[start] == b'0' {
         start += 1;
     }
     &digits[start..]

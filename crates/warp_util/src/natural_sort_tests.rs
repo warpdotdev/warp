@@ -37,3 +37,17 @@ fn non_numeric_falls_back_to_char_order() {
     assert_eq!(natural_cmp("a", "ab"), Ordering::Less);
     assert_eq!(natural_cmp("same", "same"), Ordering::Equal);
 }
+
+#[test]
+fn non_ascii_without_digits_matches_str_cmp() {
+    for (a, b) in [
+        ("café", "cafz"),
+        ("한글", "한국"),
+        ("z", "é"),
+        ("résumé", "resume"),
+        ("naïve", "naive"),
+    ] {
+        assert_eq!(natural_cmp(a, b), a.cmp(b));
+        assert_eq!(natural_cmp(b, a), b.cmp(a));
+    }
+}
