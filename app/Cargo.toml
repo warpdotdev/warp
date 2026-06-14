@@ -529,7 +529,6 @@ default = [
     "grep_tool",
     "validate_autosuggestions",
     "clear_autosuggestion_on_escape",
-    "file_retrieval_tools",
     "mcp_server",
     "fast_forward_autoexecute_button",
     "image_as_context",
@@ -721,7 +720,6 @@ nld_classifier_v3 = ["input_classifier/nld_classifier_v3"]
 nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 msys2_shells = []
-file_retrieval_tools = []
 welcome_tab = []
 get_started_tab = []
 code_mode_chip = []

@@ -169,8 +169,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ImageAsContext,
         #[cfg(feature = "msys2_shells")]
         FeatureFlag::MSYS2Shells,
-        #[cfg(feature = "file_retrieval_tools")]
-        FeatureFlag::FileRetrievalTools,
         #[cfg(feature = "reload_stale_conversation_files")]
         FeatureFlag::ReloadStaleConversationFiles,
         #[cfg(feature = "shared_block_title_generation")]

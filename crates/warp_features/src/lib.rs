@@ -266,9 +266,6 @@ pub enum FeatureFlag {
     /// UNIX shells running "natively" on Windows via MSYS2.
     MSYS2Shells,
 
-    /// Allows AI to call the file retrieval tools.
-    FileRetrievalTools,
-
     /// Reload files in an AI conversation to prevent stale files.
     ReloadStaleConversationFiles,
 
