@@ -375,6 +375,38 @@ impl Matcher {
         }
         MatchResult::None
     }
+
+    /// Attempt to match a keystroke against bindings that were registered through a custom action.
+    ///
+    /// This is used by macOS key-equivalent handling, where custom actions are normally delivered
+    /// through the application menu instead of the regular keydown path.
+    pub fn match_custom_keystroke(&self, keystroke: &Keystroke, ctx: &Context) -> MatchResult {
+        for binding in self.keymap.custom_action_bindings() {
+            if !binding.context_predicate.eval(ctx) {
+                continue;
+            }
+
+            match binding.trigger {
+                Trigger::Keystrokes(keystrokes)
+                    if keystrokes.len() == 1 && keystrokes[0] == *keystroke =>
+                {
+                    return MatchResult::Action(binding.action.clone());
+                }
+                Trigger::Custom(tag)
+                    if self
+                        .default_keystroke_trigger_for_custom_action(*tag)
+                        .is_some_and(|default_keystroke| default_keystroke == *keystroke) =>
+                {
+                    return MatchResult::Action(binding.action.clone());
+                }
+                Trigger::Keystrokes(_)
+                | Trigger::Custom(_)
+                | Trigger::Standard(_)
+                | Trigger::Empty => {}
+            }
+        }
+        MatchResult::None
+    }
 }
 
 #[cfg(test)]

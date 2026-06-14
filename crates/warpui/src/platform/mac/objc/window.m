@@ -465,6 +465,11 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         BOOL keystrokeIsAssigned = warp_app_has_binding_for_keystroke(application, event);
 
         BOOL triggersCustomAction = warp_app_has_custom_action_for_keystroke(application, event);
+        if (triggersCustomAction) {
+            if (warp_app_dispatch_custom_action_for_keystroke(application, event, self)) {
+                return YES;
+            }
+        }
 
         if (keyBindingsDisabled || (keystrokeIsAssigned && !triggersCustomAction)) {
             if ([self.contentView keyDownImpl:event]) {
