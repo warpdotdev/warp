@@ -339,3 +339,26 @@ fn infer_from_foreground_color_test() {
         ColorScheme::DarkOnLight
     );
 }
+
+#[test]
+fn inactive_pane_overlay_dims_toward_background_not_foreground() {
+    // Regression test for GH#5401: on dark themes the dimming overlay must fade
+    // inactive panes toward the (dark) background, not the (light) foreground —
+    // otherwise enabling "Dim inactive panes" brightens them instead of dimming.
+    let background = ColorU::from_u32(0x101010FF);
+    let foreground = ColorU::from_u32(0xF0F0F0FF);
+    let theme = WarpTheme::new(
+        Fill::Solid(background),
+        foreground,
+        Fill::Solid(ColorU::from_u32(0x20A5BAFF)),
+        None,
+        None,
+        mock_terminal_colors(),
+        None,
+        None,
+    );
+
+    let overlay = theme.inactive_pane_overlay_with_opacity(50);
+    assert_eq!(overlay, Fill::Solid(background).with_opacity(50));
+    assert_ne!(overlay, Fill::Solid(foreground).with_opacity(50));
+}

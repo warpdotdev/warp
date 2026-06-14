@@ -59,9 +59,9 @@ use crate::settings::app_icon::{AppIcon, AppIconSettings};
 use crate::settings::{
     active_theme_kind, respect_system_theme, AIFontName, AppEditorSettings, CursorBlink,
     CursorBlinkEnabled, CursorDisplayType, EnforceMinimumContrast, FocusPaneOnHover, FontSettings,
-    FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputModeState,
-    InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
-    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
+    FontSettingsChangedEvent, GPUSettings, InactivePaneDimmingPercentage, InputBoxType,
+    InputModeSettings, InputModeState, InputSettings, InputSettingsChangedEvent, MonospaceFontName,
+    PaneSettings, ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
     DEFAULT_MONOSPACE_FONT_NAME,
 };
 use crate::terminal::block_list_viewport::InputMode;
@@ -492,6 +492,8 @@ pub enum AppearancePageAction {
     SetBlur(f32),
     OpacitySliderDragged(f32),
     BlurSliderDragged(f32),
+    SetDimmingPercentage(f32),
+    DimmingPercentageSliderDragged(f32),
     SetFontFamily(String),
     SetAIFontFamily(String),
     SetThinStrokes(ThinStrokes),
@@ -652,6 +654,9 @@ impl TypedActionView for AppearanceSettingsPageView {
             SetCursorType(cursor_display_type) => self.set_cursor_type(*cursor_display_type, ctx),
             OpacitySliderDragged(val) => self.set_opacity(*val, false, ctx),
             BlurSliderDragged(val) => self.set_blur(*val, false, ctx),
+            SetDimmingPercentage(val) | DimmingPercentageSliderDragged(val) => {
+                self.set_dimming_percentage(*val, ctx)
+            }
             OpenUrl(url) => {
                 ctx.open_url(url);
             }
@@ -1393,6 +1398,7 @@ impl AppearanceSettingsPageView {
             "Panes",
             vec![
                 Box::new(DimInactivePanesWidget::default()),
+                Box::new(InactivePaneDimmingWidget::default()),
                 Box::new(FocusFollowsMouseWidget::default()),
             ],
         ));
@@ -1845,6 +1851,15 @@ impl AppearanceSettingsPageView {
             report_if_error!(window_settings
                 .background_opacity
                 .set_value(opacity_value as u8, ctx));
+        });
+        ctx.notify();
+    }
+
+    fn set_dimming_percentage(&mut self, percentage: f32, ctx: &mut ViewContext<Self>) {
+        PaneSettings::handle(ctx).update(ctx, |pane_settings, ctx| {
+            report_if_error!(pane_settings
+                .inactive_pane_dimming_percentage
+                .set_value(percentage as u8, ctx));
         });
         ctx.notify();
     }
@@ -3618,6 +3633,71 @@ impl SettingsWidget for DimInactivePanesWidget {
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::ToggleDimInactivePanes);
                 })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct InactivePaneDimmingWidget {
+    slider_state: SliderStateHandle,
+}
+
+impl SettingsWidget for InactivePaneDimmingWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "inactive pane dimming percentage amount"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let pane_settings = PaneSettings::as_ref(app);
+        // Only relevant when dimming is enabled; hide otherwise.
+        if !*pane_settings.should_dim_inactive_panes {
+            return Empty::new().finish();
+        }
+
+        let dimming_value = *pane_settings.inactive_pane_dimming_percentage;
+        render_body_item::<AppearancePageAction>(
+            format!("Inactive pane dimming: {dimming_value}%"),
+            None,
+            LocalOnlyIconState::for_setting(
+                InactivePaneDimmingPercentage::storage_key(),
+                InactivePaneDimmingPercentage::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .slider(self.slider_state.clone())
+                .with_range(
+                    InactivePaneDimmingPercentage::MIN as f32
+                        ..InactivePaneDimmingPercentage::MAX as f32,
+                )
+                .with_default_value(dimming_value as f32)
+                .with_style(UiComponentStyles {
+                    width: Some(OPACITY_SLIDER_WIDTH),
+                    // Margin is 3. to add up with 7. padding on slider for a total of 10.
+                    margin: Some(Coords::default().top(3.).bottom(3.)),
+                    ..Default::default()
+                })
+                .on_drag(|ctx, _, val| {
+                    ctx.dispatch_typed_action(AppearancePageAction::DimmingPercentageSliderDragged(
+                        val,
+                    ))
+                })
+                .on_change(|ctx, _, val| {
+                    ctx.dispatch_typed_action(AppearancePageAction::SetDimmingPercentage(val))
+                })
+                .build()
                 .finish(),
             None,
         )
