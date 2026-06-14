@@ -255,7 +255,7 @@ impl<T: Action + Clone> SearchMixer<T> {
     ///
     /// Old results remain visible while new results are buffered. The visible result set is
     /// replaced atomically once all sources finish, or after [`INITIAL_RESULTS_TIMEOUT`] elapses.
-    /// Late-arriving async results are appended without reordering existing results.
+    /// Late-arriving async results are placed at the low-priority edge without reordering existing results.
     pub fn run_query(&mut self, query: Query, ctx: &mut ModelContext<Self>) {
         self.pending_results = Some(Vec::new());
         self.finished_sources.clear();
@@ -472,8 +472,9 @@ impl<T: Action + Clone> SearchMixer<T> {
                 } else if self.initial_results_emitted {
                     let mut late_results = results_with_order;
                     late_results.sort_by_key(|r| (r.priority_tier(), r.score(), r.source_order));
-
-                    self.results.extend(late_results);
+                    let mut existing_results = std::mem::take(&mut self.results);
+                    self.results = late_results;
+                    self.results.append(&mut existing_results);
 
                     if matches!(self.dedupe_strategy, DedupeStrategy::HighestScore) {
                         self.results = dedupe_score(std::mem::take(&mut self.results));
@@ -501,7 +502,8 @@ impl<T: Action + Clone> SearchMixer<T> {
     }
 
     /// Commits buffered results from the current query, replacing the visible result set.
-    /// After this, any late-arriving results are added directly to `results`.
+    /// After this, any late-arriving results are added directly to the low-priority edge of
+    /// `results`.
     fn commit_pending_results(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(pending) = self.pending_results.take() else {
             return;
