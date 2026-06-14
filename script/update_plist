@@ -48,7 +48,21 @@ if [[ -n "$WARP_SCHEME_NAME" ]]; then
   echo "Updating plist to support a custom url scheme"
   # Update the plist that cargo bundle creates to add support for custom URL schemes. Unfortunately, cargo bundle does not support
   # setting arbitrary plist fields, so we must do this after the fact.
-  plutil -insert CFBundleURLTypes -xml "<array><dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$WARP_SCHEME_NAME</string></array></dict></array>" "$WARP_PLIST_PATH"
+  URL_TYPES_XML="<dict><key>CFBundleURLName</key><string>Custom App</string><key>CFBundleURLSchemes</key><array><string>$WARP_SCHEME_NAME</string></array></dict>"
+
+  # Optionally register additional URL schemes as Alternate handlers. Used by
+  # the Preview channel to advertise the canonical `warp://` scheme so a
+  # Preview-only install can open public app.warp.dev deeplinks (#10473). The
+  # Alternate rank tells LaunchServices we are a fallback, not the primary
+  # owner — if Stable is also installed it keeps its claim on `warp://`.
+  if [[ -n "$WARP_ADDITIONAL_SCHEMES" ]]; then
+    for SCHEME in $WARP_ADDITIONAL_SCHEMES; do
+      echo "  Also registering '$SCHEME' as an Alternate URL scheme handler"
+      URL_TYPES_XML="$URL_TYPES_XML<dict><key>CFBundleURLName</key><string>$SCHEME (alternate)</string><key>CFBundleURLSchemes</key><array><string>$SCHEME</string></array><key>LSHandlerRank</key><string>Alternate</string></dict>"
+    done
+  fi
+
+  plutil -insert CFBundleURLTypes -xml "<array>$URL_TYPES_XML</array>" "$WARP_PLIST_PATH"
 fi
 
 if [[ -z "$WARP_PLIST_NO_FILE_TYPES" ]]; then
