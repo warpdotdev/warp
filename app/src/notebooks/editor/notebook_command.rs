@@ -86,6 +86,25 @@ lazy_static! {
         "JSON",
         "PHP",
     ];
+
+    /// Shared syntax highlighting configuration. The `SyntaxSet` deserialization
+    /// from bincode is expensive (~10 GB cumulative allocations in heap profiles),
+    /// so we load it once and share via `Arc`.
+    static ref SYNTAX_CONFIG: Option<(Arc<SyntaxSet>, Arc<Theme>)> = {
+        let ps = SyntaxSet::load_defaults_newlines();
+        if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
+            let mut cursor = std::io::Cursor::new(asset);
+            match ThemeSet::load_from_reader(&mut cursor) {
+                Ok(theme) => Some((Arc::new(ps), Arc::new(theme))),
+                Err(e) => {
+                    log::debug!("Failed to load theme set from asset: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
 }
 
 #[derive(Default)]
@@ -161,7 +180,7 @@ pub struct NotebookCommand {
     syntax_highlighting_handle: Option<SpawnedFutureHandle>,
     cached_highlight_delta: Option<CachedHighlightColors>,
 
-    syntax_config: Option<(SyntaxSet, Theme)>,
+    syntax_config: Option<(Arc<SyntaxSet>, Arc<Theme>)>,
 
     handle: WeakModelHandle<Self>,
 }
@@ -221,21 +240,7 @@ impl NotebookCommand {
             dropdown
         });
 
-        let syntax_config = {
-            let ps = SyntaxSet::load_defaults_newlines();
-            if let Ok(asset) = ASSETS.get("bundled/syntax_theme/base16.tmTheme") {
-                let mut cursor = std::io::Cursor::new(asset);
-                match ThemeSet::load_from_reader(&mut cursor) {
-                    Ok(theme) => Some((ps, theme)),
-                    Err(e) => {
-                        log::debug!("Failed to load theme set from asset: {e}");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        };
+        let syntax_config = SYNTAX_CONFIG.clone();
 
         ctx.subscribe_to_model(&content, Self::on_buffer_content_updated);
 
@@ -873,8 +878,8 @@ impl ChildModelHandle for ModelHandle<NotebookCommand> {
 async fn parse_code_into_style_ranges(
     buffer_text: String,
     language: String,
-    syntax_set: SyntaxSet,
-    theme: Theme,
+    syntax_set: Arc<SyntaxSet>,
+    theme: Arc<Theme>,
 ) -> Option<CodeHighlightResult> {
     // Find the syntax corresponding to the input language.
     let syntax = syntax_set.find_syntax_by_name(&language)?;
