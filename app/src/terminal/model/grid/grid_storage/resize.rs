@@ -340,7 +340,20 @@ impl GridStorage {
 
             loop {
                 // Remove all cells which require reflowing.
-                let mut wrapped = match row.shrink(columns) {
+                let shrunk = row.shrink(columns);
+                if !reflow
+                    && columns > 0
+                    && row[columns - 1].flags().contains(Flags::WIDE_CHAR)
+                    && shrunk.as_ref().is_some_and(|wrapped| {
+                        wrapped
+                            .first()
+                            .is_some_and(|cell| cell.flags().contains(Flags::WIDE_CHAR_SPACER))
+                    })
+                {
+                    row[columns - 1].flags_mut().remove(Flags::WIDE_CHAR);
+                }
+
+                let mut wrapped = match shrunk {
                     Some(wrapped) if reflow => wrapped,
                     _ => {
                         let cursor_buffer_line =

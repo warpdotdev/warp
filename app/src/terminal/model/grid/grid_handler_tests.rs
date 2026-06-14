@@ -2243,6 +2243,39 @@ fn test_full_grid_clear_resize_then_scroll_does_not_panic_on_row_iteration() {
 }
 
 #[test]
+fn test_full_grid_clear_shrink_cols_does_not_orphan_wide_char_at_boundary() {
+    let old_cols = 155;
+    let new_cols = 117;
+    let num_rows = 3;
+
+    let mut grid =
+        GridHandler::new_for_test_with_scroll_limit(num_rows, old_cols, MAX_SCROLL_LIMIT);
+    grid.enable_full_grid_clear_behavior();
+
+    for col in 0..116 {
+        grid.grid_storage_mut()[VisibleRow(0)][col].c = char::from(b'a' + (col as u8 % 26));
+    }
+    grid.grid_storage_mut()[VisibleRow(0)][116].c = '\u{4e2d}';
+    grid.grid_storage_mut()[VisibleRow(0)][116]
+        .flags
+        .insert(Flags::WIDE_CHAR);
+    grid.grid_storage_mut()[VisibleRow(0)][117]
+        .flags
+        .insert(Flags::WIDE_CHAR_SPACER);
+    grid.grid_storage_mut()[VisibleRow(0)].occ = old_cols;
+
+    grid.resize(SizeInfo::new_without_font_metrics(num_rows, new_cols));
+
+    assert_no_orphaned_wide_chars(&grid, VisibleRow(0));
+
+    let row = grid.grid_storage()[VisibleRow(0)].clone();
+    grid.flat_storage.push_rows_without_truncation([&row]);
+    let rows = grid.flat_storage.pop_rows(1);
+
+    assert_eq!(rows.len(), 1);
+}
+
+#[test]
 fn test_full_grid_clear_resize_narrower_then_scroll_does_not_panic() {
     // Same scenario but resizing to a narrower width.
     let old_cols = 20;
