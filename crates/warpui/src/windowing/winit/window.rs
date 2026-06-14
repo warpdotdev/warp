@@ -1423,7 +1423,11 @@ fn create_window(
             window_target.display_handle().map(|dh| dh.as_raw()),
             Ok(RawDisplayHandle::Xlib(_)) | Ok(RawDisplayHandle::Xcb(_))
         );
-        if is_x11 {
+        let is_kde_wayland = !is_x11
+            && std::env::var("XDG_CURRENT_DESKTOP")
+                .map(|v| v.to_uppercase().contains("KDE"))
+                .unwrap_or(false);
+        if !is_kde_wayland {
             window.set_ime_allowed(true);
         }
     }
