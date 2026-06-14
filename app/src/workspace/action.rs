@@ -130,6 +130,7 @@ pub enum WorkspaceAction {
     ActivateLastTab,
     CyclePrevSession,
     CycleNextSession,
+    CtrlTabPaletteCommit,
     MoveActiveTabLeft,
     MoveActiveTabRight,
     MoveTabLeft(usize),
@@ -1109,6 +1110,7 @@ impl WorkspaceAction {
             | OpenLocalToCloudHandoffPane { .. }
             | AutoHandoffActiveAgentToCloud { .. }
             | ShowHandoffEnvironmentCreationModal
+            | CtrlTabPaletteCommit => false,
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
             | OpenNetworkLogPane => false,

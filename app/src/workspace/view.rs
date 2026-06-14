@@ -13903,7 +13903,11 @@ impl Workspace {
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
         }
 
-        ctx.focus(&self.palette);
+        if matches!(source, PaletteSource::CtrlTab { .. }) {
+            ctx.focus(&self.ctrl_tab_palette);
+        } else {
+            ctx.focus(&self.palette);
+        }
 
         send_telemetry_from_ctx!(TelemetryEvent::PaletteSearchOpened { mode, source }, ctx);
 
@@ -22793,6 +22797,15 @@ impl TypedActionView for Workspace {
             ActivateLastTab => self.activate_last_tab(ctx),
             CyclePrevSession => self.cycle_prev_session(ctx),
             CycleNextSession => self.cycle_next_session(ctx),
+            CtrlTabPaletteCommit => {
+                if self.current_workspace_state.is_ctrl_tab_palette_open {
+                    self.ctrl_tab_palette.update(ctx, |_, palette_ctx| {
+                        palette_ctx.dispatch_typed_action_deferred(
+                            crate::search::command_palette::view::Action::CtrlPressed(false),
+                        );
+                    });
+                }
+            }
             MoveActiveTabLeft => self.move_tab(self.active_tab_index, TabMovement::Left, ctx),
             MoveActiveTabRight => self.move_tab(self.active_tab_index, TabMovement::Right, ctx),
             MoveTabLeft(index) => self.move_tab(*index, TabMovement::Left, ctx),
@@ -26382,6 +26395,20 @@ impl View for Workspace {
 
         #[cfg_attr(not(any(windows, target_os = "linux")), allow(unused_mut))]
         let mut event_handler = EventHandler::new(stack);
+
+        event_handler =
+            event_handler.on_modifier_state_changed(|ctx, _app, key_code, state| {
+                if matches!(state, warpui::event::KeyState::Released)
+                    && matches!(
+                        key_code,
+                        warpui::platform::keyboard::KeyCode::ControlLeft
+                            | warpui::platform::keyboard::KeyCode::ControlRight
+                    )
+                {
+                    ctx.dispatch_typed_action(WorkspaceAction::CtrlTabPaletteCommit);
+                }
+                DispatchEventResult::PropagateToParent
+            });
 
         #[cfg(any(windows, target_os = "linux"))]
         {
