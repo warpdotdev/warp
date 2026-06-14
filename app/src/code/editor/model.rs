@@ -1228,10 +1228,53 @@ impl CodeEditorModel {
 
     /// Rebuild layout and make sure the temporary blocks for diff state has the right styling + anchored
     /// at the right lines after the rebuild. This should be used over the default implementation of rebuild_layout.
-    fn rebuild_layout_and_refresh_diff(&self, ctx: &mut ModelContext<Self>) {
-        self.rebuild_layout(ctx);
+    fn rebuild_layout_and_refresh_diff(&mut self, ctx: &mut ModelContext<Self>) {
+        self.rebuild_layout_with_hidden_ranges(ctx);
         if self.diff_nav_is_active() {
             self.refresh_diff_state(ctx);
+        }
+    }
+
+    /// Like `rebuild_layout` from `CoreEditorModel`, but generates lightweight
+    /// placeholder styled blocks for hidden ranges instead of materializing full
+    /// text content. This dramatically reduces memory usage when most of the buffer
+    /// is hidden (e.g. code review editors that only show diff context lines).
+    fn rebuild_layout_with_hidden_ranges(&mut self, ctx: &mut ModelContext<Self>) {
+        let content = self.content.as_ref(ctx);
+        let hidden_ranges = self.hidden_lines.as_ref(ctx).hidden_ranges_at_latest(ctx);
+        let delta = if hidden_ranges.is_empty() {
+            content.invalidate_layout()
+        } else {
+            content.invalidate_layout_with_hidden_ranges(&hidden_ranges)
+        };
+        let buffer_version = content.buffer_version();
+        if self.should_defer_syntax_tree_parsing() {
+            self.pending_syntax_tree_bootstrap = true;
+        } else {
+            let buffer_snapshot = content.buffer_snapshot();
+            let precise_deltas = delta.precise_deltas.clone();
+
+            self.syntax_tree.update(ctx, move |syntax_tree, ctx| {
+                syntax_tree.update_internal_state_with_delta(
+                    &precise_deltas,
+                    buffer_version,
+                    buffer_snapshot,
+                    ctx,
+                )
+            });
+        }
+
+        if self.delay_rendering.is_some() {
+            // If delay rendering is active, don't push to render state yet.
+            // This path shouldn't normally be hit since we call this after
+            // delay_rendering is consumed, but handle it defensively.
+            log::debug!("rebuild_layout_with_hidden_ranges called while delay_rendering is active");
+        } else {
+            self.render_state.update(ctx, move |render_state, _| {
+                let scroll_position = render_state.snapshot_scroll_position();
+                render_state.add_pending_edit(delta, buffer_version);
+                render_state.scroll_to(scroll_position);
+            });
         }
     }
 
@@ -1630,7 +1673,7 @@ impl CodeEditorModel {
     /// Handle a theme or font change, applying the new rich text styles to the editor.
     /// This will also set the syntax color map and cursor line highlight based on the new theme.
     pub fn handle_appearance_or_font_change(
-        &self,
+        &mut self,
         new_styles: RichTextStyles,
         ctx: &mut ModelContext<Self>,
     ) {

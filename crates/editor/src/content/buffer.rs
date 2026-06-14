@@ -15,6 +15,7 @@ use markdown_parser::{
 use num_traits::SaturatingSub;
 use pathfinder_color::ColorU;
 use rand::Rng;
+use rangemap::RangeSet;
 use rand::distributions::Alphanumeric;
 use serde_yaml::Mapping;
 use string_offset::{ByteOffset, CharOffset};
@@ -2526,6 +2527,20 @@ impl Buffer {
         self.invalidate_layout_internal(full_range)
     }
 
+    /// Like [`invalidate_layout`], but generates lightweight placeholder blocks for hidden
+    /// ranges instead of materializing full styled content. This dramatically reduces memory
+    /// when most of the buffer is hidden (e.g. code review editors that only show diff context).
+    pub fn invalidate_layout_with_hidden_ranges(
+        &self,
+        hidden_ranges: &RangeSet<CharOffset>,
+    ) -> EditDelta {
+        let full_range = CharOffset::from(1)..self.max_charoffset();
+        if hidden_ranges.is_empty() {
+            return self.invalidate_layout_internal(full_range);
+        }
+        self.invalidate_layout_internal_with_hidden(full_range, hidden_ranges)
+    }
+
     fn invalidate_layout_internal(&self, range: Range<CharOffset>) -> EditDelta {
         let full_points = self.offset_range_to_point_range(range.clone());
         // No content change—compute a no-op byte edit.
@@ -2544,6 +2559,86 @@ impl Buffer {
             }],
             old_offset: range.clone(),
             new_lines: self.styled_blocks_in_range(range, StyledBlockBoundaryBehavior::Exclusive),
+        }
+    }
+
+    /// Internal method that builds an EditDelta with full styled blocks for visible ranges
+    /// and lightweight placeholder blocks for hidden ranges. The placeholder blocks have the
+    /// correct `content_length` so offset tracking in `layout_delta` works, but carry no
+    /// string data, avoiding the bulk of memory allocation.
+    fn invalidate_layout_internal_with_hidden(
+        &self,
+        range: Range<CharOffset>,
+        hidden_ranges: &RangeSet<CharOffset>,
+    ) -> EditDelta {
+        let full_points = self.offset_range_to_point_range(range.clone());
+        let old_byte_start = range.start.to_buffer_byte_offset(self);
+        let old_byte_end = range.end.to_buffer_byte_offset(self);
+
+        // Build styled blocks, substituting placeholders for hidden segments.
+        // We walk through the range and alternate between visible segments
+        // (full styled blocks) and hidden segments (placeholder blocks).
+        let mut new_lines = Vec::new();
+        let mut cursor = range.start;
+
+        // Iterate over each hidden range that overlaps with our invalidation range
+        for hidden in hidden_ranges.iter() {
+            let hidden_start = hidden.start.max(range.start);
+            let hidden_end = hidden.end.min(range.end);
+            if hidden_start >= hidden_end || hidden_start < cursor {
+                continue;
+            }
+
+            // Visible segment before this hidden range
+            if cursor < hidden_start {
+                let visible_range = cursor..hidden_start;
+                new_lines.extend(
+                    self.styled_blocks_in_range(
+                        visible_range,
+                        StyledBlockBoundaryBehavior::Exclusive,
+                    ),
+                );
+            }
+
+            // Placeholder block for the hidden segment. Uses correct content_length
+            // but carries no string data. The layout step will convert this to
+            // BlockItem::Hidden regardless of the styled content.
+            let content_length = hidden_end.saturating_sub(&hidden_start);
+            if content_length > CharOffset::zero() {
+                new_lines.push(StyledBufferBlock::Text(StyledTextBlock {
+                    block: Vec::new(),
+                    style: BufferBlockStyle::PlainText,
+                    content_length,
+                }));
+            }
+
+            cursor = hidden_end;
+        }
+
+        // Remaining visible segment after the last hidden range
+        if cursor < range.end {
+            let visible_range = cursor..range.end;
+            new_lines.extend(
+                self.styled_blocks_in_range(
+                    visible_range,
+                    StyledBlockBoundaryBehavior::Exclusive,
+                ),
+            );
+        }
+
+        EditDelta {
+            precise_deltas: vec![PreciseDelta {
+                replaced_range: range.clone(),
+                replaced_points: full_points.clone(),
+                resolved_range: range.clone(),
+                replaced_byte_range: old_byte_start..old_byte_end,
+                new_byte_length: old_byte_end
+                    .as_usize()
+                    .saturating_sub(old_byte_start.as_usize()),
+                new_end_point: full_points.end,
+            }],
+            old_offset: range,
+            new_lines,
         }
     }
 
