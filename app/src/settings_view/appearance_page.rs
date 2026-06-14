@@ -59,9 +59,9 @@ use crate::settings::app_icon::{AppIcon, AppIconSettings};
 use crate::settings::{
     active_theme_kind, respect_system_theme, AIFontName, AppEditorSettings, CursorBlink,
     CursorBlinkEnabled, CursorDisplayType, EnforceMinimumContrast, FocusPaneOnHover, FontSettings,
-    FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputModeState,
-    InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
-    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
+    FontSettingsChangedEvent, GPUSettings, InactivePaneDimStrength, InputBoxType,
+    InputModeSettings, InputModeState, InputSettings, InputSettingsChangedEvent, MonospaceFontName,
+    PaneSettings, ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes,
     DEFAULT_MONOSPACE_FONT_NAME,
 };
 use crate::terminal::block_list_viewport::InputMode;
@@ -492,6 +492,8 @@ pub enum AppearancePageAction {
     SetBlur(f32),
     OpacitySliderDragged(f32),
     BlurSliderDragged(f32),
+    SetInactivePaneDimStrength(f32),
+    InactivePaneDimStrengthSliderDragged(f32),
     SetFontFamily(String),
     SetAIFontFamily(String),
     SetThinStrokes(ThinStrokes),
@@ -652,6 +654,10 @@ impl TypedActionView for AppearanceSettingsPageView {
             SetCursorType(cursor_display_type) => self.set_cursor_type(*cursor_display_type, ctx),
             OpacitySliderDragged(val) => self.set_opacity(*val, false, ctx),
             BlurSliderDragged(val) => self.set_blur(*val, false, ctx),
+            SetInactivePaneDimStrength(val) => self.set_inactive_pane_dim_strength(*val, ctx),
+            InactivePaneDimStrengthSliderDragged(val) => {
+                self.set_inactive_pane_dim_strength(*val, ctx)
+            }
             OpenUrl(url) => {
                 ctx.open_url(url);
             }
@@ -1393,6 +1399,7 @@ impl AppearanceSettingsPageView {
             "Panes",
             vec![
                 Box::new(DimInactivePanesWidget::default()),
+                Box::new(DimInactivePanesStrengthWidget::default()),
                 Box::new(FocusFollowsMouseWidget::default()),
             ],
         ));
@@ -2237,6 +2244,17 @@ impl AppearanceSettingsPageView {
                 }
             }
         });
+    }
+
+    fn set_inactive_pane_dim_strength(&mut self, value: f32, ctx: &mut ViewContext<Self>) {
+        let clamped =
+            (value as u8).clamp(InactivePaneDimStrength::MIN, InactivePaneDimStrength::MAX);
+        PaneSettings::handle(ctx).update(ctx, |pane_settings, ctx| {
+            report_if_error!(pane_settings
+                .inactive_pane_dim_strength
+                .set_value(clamped, ctx));
+        });
+        ctx.notify();
     }
 
     pub fn toggle_blur_texture(&mut self, ctx: &mut ViewContext<Self>) {
@@ -3618,6 +3636,75 @@ impl SettingsWidget for DimInactivePanesWidget {
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::ToggleDimInactivePanes);
                 })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct DimInactivePanesStrengthWidget {
+    slider_state: SliderStateHandle,
+}
+
+impl SettingsWidget for DimInactivePanesStrengthWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "dim inactive panes strength amount radiance slider"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let pane_settings = PaneSettings::as_ref(app);
+        let dim_enabled = *pane_settings.should_dim_inactive_panes;
+        let dim_strength = *pane_settings.inactive_pane_dim_strength;
+
+        // The strength slider only has an effect while dimming is enabled, so reflect that
+        // in the label's toggle state.
+        let toggle_state = if dim_enabled {
+            ToggleState::Enabled
+        } else {
+            ToggleState::Disabled
+        };
+
+        render_body_item::<AppearancePageAction>(
+            format!("Inactive pane dim strength: {dim_strength}%"),
+            None,
+            LocalOnlyIconState::for_setting(
+                InactivePaneDimStrength::storage_key(),
+                InactivePaneDimStrength::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            toggle_state,
+            appearance,
+            appearance
+                .ui_builder()
+                .slider(self.slider_state.clone())
+                .with_range(
+                    InactivePaneDimStrength::MIN as f32..InactivePaneDimStrength::MAX as f32,
+                )
+                .with_default_value(dim_strength as f32)
+                .with_style(UiComponentStyles {
+                    width: Some(OPACITY_SLIDER_WIDTH),
+                    // Margin is 3. to add up with 7. padding on slider for a total of 10.
+                    margin: Some(Coords::default().top(3.).bottom(3.)),
+                    ..Default::default()
+                })
+                .on_drag(|ctx, _, val| {
+                    ctx.dispatch_typed_action(
+                        AppearancePageAction::InactivePaneDimStrengthSliderDragged(val),
+                    )
+                })
+                .on_change(|ctx, _, val| {
+                    ctx.dispatch_typed_action(AppearancePageAction::SetInactivePaneDimStrength(val))
+                })
+                .build()
                 .finish(),
             None,
         )
