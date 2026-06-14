@@ -95,6 +95,14 @@ const AUGGIE_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Kimi brand color (#1883FF)
+const KIMI_BLUE: ColorU = ColorU {
+    r: 24,
+    g: 131,
+    b: 255,
+    a: 255,
+};
+
 /// Cursor brand color (#26251E, from official brand assets)
 const CURSOR_COLOR: ColorU = ColorU {
     r: 38,
@@ -127,7 +135,7 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
+/// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe, Kimi)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
 pub enum CLIAgent {
     Claude,
@@ -143,6 +151,7 @@ pub enum CLIAgent {
     Goose,
     Hermes,
     Vibe,
+    Kimi,
     /// Represents an unknown/custom CLI agent matched by user-configured regex patterns.
     Unknown,
 }
@@ -164,6 +173,7 @@ impl CLIAgent {
             CLIAgent::Goose => "goose",
             CLIAgent::Hermes => "hermes",
             CLIAgent::Vibe => "vibe",
+            CLIAgent::Kimi => "kimi",
             CLIAgent::Unknown => "",
         }
     }
@@ -192,6 +202,7 @@ impl CLIAgent {
             Harness::Gemini => Some(CLIAgent::Gemini),
             Harness::OpenCode => Some(CLIAgent::OpenCode),
             Harness::Codex => Some(CLIAgent::Codex),
+            Harness::Kimi => Some(CLIAgent::Kimi),
             Harness::Unknown => Some(CLIAgent::Unknown),
         }
     }
@@ -211,6 +222,7 @@ impl CLIAgent {
             CLIAgent::Goose => "Goose",
             CLIAgent::Hermes => "Hermes",
             CLIAgent::Vibe => "Mistral Vibe",
+            CLIAgent::Kimi => "Kimi",
             CLIAgent::Unknown => "CLI Agent",
         }
     }
@@ -234,6 +246,7 @@ impl CLIAgent {
             // still drives the toolbar tile; an `Icon::MistralLogo` can be wired
             // up in a follow-up once an officially licensed SVG is available.
             CLIAgent::Vibe => None,
+            CLIAgent::Kimi => Some(Icon::KimiLogo),
             CLIAgent::Unknown => None,
         }
     }
@@ -264,6 +277,7 @@ impl CLIAgent {
             CLIAgent::Goose => &[SkillProvider::Agents],
             CLIAgent::Hermes => &[SkillProvider::Agents],
             CLIAgent::Vibe => &[SkillProvider::Agents],
+            CLIAgent::Kimi => &[SkillProvider::Agents],
             CLIAgent::Unknown => &[],
         }
     }
@@ -306,6 +320,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
+            CLIAgent::Kimi => Some(KIMI_BLUE),
             CLIAgent::Unknown => None,
         }
     }
@@ -569,6 +584,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Goose => CLIAgentType::Goose,
             CLIAgent::Hermes => CLIAgentType::Hermes,
             CLIAgent::Vibe => CLIAgentType::Vibe,
+            CLIAgent::Kimi => CLIAgentType::Kimi,
             CLIAgent::Unknown => CLIAgentType::Unknown,
         }
     }
