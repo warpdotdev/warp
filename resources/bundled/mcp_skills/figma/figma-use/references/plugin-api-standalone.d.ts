@@ -1594,7 +1594,7 @@ interface PluginAPI {
    *
    * A common question is whether a plugin needs to be careful about calling `loadFontAsync(font)` for the same font multiple times. The answer is somewhat nuanced. The result of loading a font is cached, so calling `loadFontAsync` won't re-fetch the same font from disk. Therefore, calling `loadFontAsync` on every frame would be perfectly ok.
    *
-   * However, note that `loadFontAsync` returns a Promise. Even a Promise resolves immediately, it still needs to round-trip to the JavaScript event loop. So you probably shouldn't call `loadFontAsync` on the same font repeatedly inside a loop.
+   * However, note that `loadFontAsync` returns a Promise. Even if a Promise resolves immediately, it still needs to round-trip to the JavaScript event loop. So you probably shouldn't call `loadFontAsync` on the same font repeatedly inside a loop.
    */
   loadFontAsync(fontName: FontName): Promise<void>
   /**
@@ -3085,7 +3085,7 @@ interface TimerAPI {
  */
 interface ViewportAPI {
   /**
-   * Center of the the current page that is currently visible on screen.
+   * Center of the current page that is currently visible on screen.
    */
   center: Vector
   /**
@@ -5411,13 +5411,13 @@ interface BaseNodeMixin extends PluginDataMixin, DevResourcesMixin {
    */
   setRelaunchData(data: { [command: string]: string }): void
   /**
-   * Retreives the reluanch data stored on this node using {@link BaseNodeMixin.setRelaunchData}
+   * Retrieves the relaunch data stored on this node using {@link BaseNodeMixin.setRelaunchData}
    */
   getRelaunchData(): {
     [command: string]: string
   }
   /**
-   * Returns true if Figma detects that a node is an asset, otherwise returns false. An asset is is either an icon or a raster image.
+   * Returns true if Figma detects that a node is an asset, otherwise returns false. An asset is either an icon or a raster image.
    *
    * This property is useful if you're building a [plugin for code generation](https://developers.figma.com/docs/plugins/codegen-plugins).
    *
