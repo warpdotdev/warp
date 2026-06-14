@@ -105,6 +105,9 @@ pub enum SharedSessionStatus {
     /// We're in the process of joining the session but have not
     /// established the connection with the server yet, or have not received all the events that occurred before the viewer joined yet.
     ViewPending,
+    /// We failed to join the session before receiving its initial content.
+    /// Retryable failures remain available for a same-pane retry.
+    FailedViewerJoin { error: String, can_retry: bool },
 
     /// This session is a shared session that we are actively viewing.
     /// We have received all the scrollback and events for the shared session that occurred before the viewer joined, and are caught up and receiving events live.
@@ -145,13 +148,32 @@ impl SharedSessionStatus {
     pub fn is_active_viewer(&self) -> bool {
         matches!(self, SharedSessionStatus::ActiveViewer { .. })
     }
+    pub fn failed_viewer_join_error(&self) -> Option<&str> {
+        match self {
+            SharedSessionStatus::FailedViewerJoin { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+
+    pub fn can_retry_failed_viewer_join(&self) -> bool {
+        matches!(
+            self,
+            SharedSessionStatus::FailedViewerJoin {
+                can_retry: true,
+                ..
+            }
+        )
+    }
 
     pub fn is_finished_viewer(&self) -> bool {
         matches!(self, SharedSessionStatus::FinishedViewer)
     }
 
     pub fn is_viewer(&self) -> bool {
-        self.is_view_pending() || self.is_active_viewer() || self.is_finished_viewer()
+        self.is_view_pending()
+            || self.failed_viewer_join_error().is_some()
+            || self.is_active_viewer()
+            || self.is_finished_viewer()
     }
 
     pub fn is_executor(&self) -> bool {
@@ -189,6 +211,7 @@ impl SharedSessionStatus {
         match self {
             Self::NotShared => "SharedSessionStatus_NotShared",
             Self::ViewPending => "SharedSessionStatus_ViewPending",
+            Self::FailedViewerJoin { .. } => "SharedSessionStatus_FailedViewerJoin",
             Self::ActiveViewer { role: Role::Reader } => "SharedSessionStatus_Reader",
             Self::ActiveViewer {
                 role: Role::Executor | Role::Full,

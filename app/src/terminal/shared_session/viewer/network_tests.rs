@@ -8,7 +8,7 @@ use parking_lot::FairMutex;
 use session_sharing_protocol::viewer::UpstreamMessage;
 use warpui::{App, ModelHandle};
 
-use super::{Network, PtyBytesBatchStatus, Stage};
+use super::{FailedToJoinReason, Network, PtyBytesBatchStatus, Stage};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::shared_session::shared_handlers::RemoteUpdateGuard;
 use crate::terminal::TerminalModel;
@@ -38,6 +38,50 @@ fn create_network(app: &mut App) -> (ModelHandle<Network>, Sender<Vec<u8>>) {
     });
 
     (network, write_to_pty_events_tx)
+}
+
+#[test]
+fn test_initial_join_retry_uses_bounded_exponential_delays() {
+    assert_eq!(Network::initial_join_retry_delay(1), Duration::from_secs(1));
+    assert_eq!(Network::initial_join_retry_delay(2), Duration::from_secs(2));
+    assert_eq!(Network::initial_join_retry_delay(3), Duration::from_secs(4));
+    assert_eq!(Network::initial_join_retry_delay(4), Duration::from_secs(8));
+    assert_eq!(Network::initial_join_retry_delay(5), Duration::from_secs(8));
+}
+#[test]
+fn test_initial_join_failure_only_schedules_one_pending_retry() {
+    App::test((), |mut app| async move {
+        let (network, _) = create_network(&mut app);
+        network.update(&mut app, |network, ctx| {
+            network.stage = Stage::before_joined();
+            network.retry_initial_join_after_transport_failure(ctx);
+            network.retry_initial_join_after_transport_failure(ctx);
+        });
+
+        network.read(&app, |network, _| {
+            let Stage::BeforeJoined {
+                retry_count,
+                retry_timer,
+                ..
+            } = &network.stage
+            else {
+                panic!("network should still be before joined");
+            };
+            assert_eq!(*retry_count, 1);
+            assert!(retry_timer.is_some());
+        });
+    });
+}
+
+#[test]
+fn test_failed_initial_join_only_allows_retry_for_transient_failures() {
+    assert!(FailedToJoinReason::FailedToConnectToServer.is_retryable());
+    assert!(FailedToJoinReason::InternalServerError.is_retryable());
+    assert!(!FailedToJoinReason::Unknown.is_retryable());
+    assert!(!FailedToJoinReason::SessionNotFound.is_retryable());
+    assert!(!FailedToJoinReason::WrongPassword.is_retryable());
+    assert!(!FailedToJoinReason::MaxNumberOfParticipantsReached.is_retryable());
+    assert!(!FailedToJoinReason::SessionNotAccessible.is_retryable());
 }
 
 #[test]
