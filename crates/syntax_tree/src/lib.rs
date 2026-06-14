@@ -23,6 +23,12 @@ use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 
+/// Maximum file size in bytes for which tree-sitter parsing is enabled.
+/// Files larger than this limit are skipped to prevent the tree-sitter parser's
+/// error recovery paths (`_ts_parser__recover`, `_ts_subtree_new_leaf`) from
+/// allocating gigabytes of memory on large or pathological inputs.
+const MAX_FILE_BYTES_FOR_SYNTAX_TREE: usize = 1024 * 1024; // 1 MB
+
 thread_local! {
     static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
@@ -318,6 +324,14 @@ impl DecorationLayer for SyntaxTreeState {
         else {
             return;
         };
+
+        // Skip tree-sitter parsing for files that exceed the size limit.
+        // The parser's error recovery paths can allocate gigabytes of memory on large files,
+        // causing the process to trigger an excessive memory usage alert.
+        if content.byte_len().as_usize() > MAX_FILE_BYTES_FOR_SYNTAX_TREE {
+            self.buffer_version = version;
+            return;
+        }
 
         let mut syntax_tree_lock = self.syntax_tree.lock();
         let mut tree = syntax_tree_lock.get(&self.buffer_version).cloned();
