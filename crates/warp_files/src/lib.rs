@@ -382,6 +382,13 @@ impl FileModel {
         file_id
     }
 
+    /// Maximum file size (in bytes) that the editor will load into a buffer.
+    /// Files larger than this are rejected with [`FileLoadError::FileTooLarge`]
+    /// to avoid multi-GB memory spikes when opening very large files.
+    /// 200 MB is generous enough for virtually all source files while guarding
+    /// against accidentally opening log files, database dumps, etc.
+    const MAX_OPEN_FILE_SIZE: u64 = 200 * 1024 * 1024;
+
     /// Open a file to get its content asynchronously. This also opts in to receiving file watcher updates.
     pub fn open(
         &mut self,
@@ -411,6 +418,22 @@ impl FileModel {
         let use_individual_watcher = watcher_type == WatcherType::Individual;
         let future = ctx.spawn(
             async move {
+                // Check file size before reading to prevent multi-GB memory
+                // spikes when a user opens a very large file.
+                let metadata = async_fs::metadata(&file_path_buf).await;
+                if let Ok(meta) = &metadata {
+                    let size = meta.len();
+                    if size > Self::MAX_OPEN_FILE_SIZE {
+                        return (
+                            file_id,
+                            Err(FileLoadError::FileTooLarge {
+                                size_bytes: size,
+                                limit_bytes: Self::MAX_OPEN_FILE_SIZE,
+                            }),
+                        );
+                    }
+                }
+
                 let contents = async_fs::read_to_string(&file_path_buf)
                     .await
                     .map_err(FileLoadError::from);
