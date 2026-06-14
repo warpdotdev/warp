@@ -6731,6 +6731,20 @@ impl Workspace {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn reveal_active_session_in_finder(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(path) = self
+            .active_session_view(ctx)
+            .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))
+            .map(PathBuf::from)
+        else {
+            log::warn!("Reveal in Finder requested, but the active session has no local cwd");
+            return;
+        };
+
+        ctx.open_file_path_in_explorer(&path);
+    }
+
     /// Writes the default tab config template to an unused path in `~/.warp/tab_configs/`
     /// and opens it respecting the user's configured editor setting.
     #[cfg(feature = "local_fs")]
@@ -24311,6 +24325,10 @@ impl TypedActionView for Workspace {
             }
             OpenRepository { path } => {
                 self.open_repository(path.as_deref(), ctx);
+            }
+            #[cfg(target_os = "macos")]
+            RevealInFinder => {
+                self.reveal_active_session_in_finder(ctx);
             }
             OpenTabConfigRepoPicker { param_index } => {
                 self.open_repo_picker_for_tab_config_modal(*param_index, ctx);
