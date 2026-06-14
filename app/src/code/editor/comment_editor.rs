@@ -522,7 +522,8 @@ where
     let window_id = ctx.window_id();
     let parent_view_id = ctx.view_id();
 
-    let model = ctx.add_model(|ctx| NotebooksEditorModel::new(rich_text_styles, window_id, ctx));
+    let model =
+        ctx.add_model(|ctx| NotebooksEditorModel::new(rich_text_styles, window_id, false, ctx));
     let links = ctx.add_model(|ctx| NotebookLinks::new(SessionSource::Active(window_id), ctx));
 
     let parent_view_name = ctx.view_name(window_id, parent_view_id).unwrap_or_default();

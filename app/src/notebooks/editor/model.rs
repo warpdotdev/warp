@@ -157,19 +157,25 @@ impl NotebooksEditorModel {
     pub fn new(
         text_styles: RichTextStyles,
         rte_window_id: WindowId,
+        lazy_layout: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        Self::new_internal(text_styles, Some(rte_window_id), ctx)
+        Self::new_internal(text_styles, Some(rte_window_id), lazy_layout, ctx)
     }
 
     /// Create a model that is not yet bound to a window. The window id should be set later via `set_window_id`.
-    pub fn new_unbound(text_styles: RichTextStyles, ctx: &mut ModelContext<Self>) -> Self {
-        Self::new_internal(text_styles, None, ctx)
+    pub fn new_unbound(
+        text_styles: RichTextStyles,
+        lazy_layout: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        Self::new_internal(text_styles, None, lazy_layout, ctx)
     }
 
     fn new_internal(
         text_styles: RichTextStyles,
         rte_window_id: Option<WindowId>,
+        lazy_layout: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let content = ctx.add_model(|_| {
@@ -182,7 +188,8 @@ impl NotebooksEditorModel {
 
         let selection_model = ctx.add_model(|_ctx| BufferSelectionModel::new(content.clone()));
 
-        let render_state = ctx.add_model(|ctx| RenderState::new(text_styles, false, None, ctx));
+        let render_state =
+            ctx.add_model(|ctx| RenderState::new(text_styles, lazy_layout, None, ctx));
         ctx.subscribe_to_model(&render_state, Self::handle_render_model_event);
 
         let selection = ctx.add_model(|ctx| {
