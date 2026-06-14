@@ -3263,6 +3263,35 @@ fn test_scroll_fixed_to_bottom() {
 }
 
 #[test]
+fn test_viewport_can_scroll_by_delta() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                for _ in 0..100 {
+                    model.simulate_block("ls", "foo");
+                }
+            }
+
+            let model = view.model.lock();
+            let viewport = view.viewport_state(model.block_list(), InputMode::PinnedToBottom, ctx);
+            assert!(viewport.can_scroll_by_delta(1.0.into_lines()));
+            assert!(!viewport.can_scroll_by_delta((-1.0).into_lines()));
+            drop(model);
+
+            view.scroll(10_000.0.into_lines(), ctx);
+            let model = view.model.lock();
+            let viewport = view.viewport_state(model.block_list(), InputMode::PinnedToBottom, ctx);
+            assert!(!viewport.can_scroll_by_delta(1.0.into_lines()));
+            assert!(viewport.can_scroll_by_delta((-1.0).into_lines()));
+        });
+    })
+}
+
+#[test]
 fn test_scroll_to_row() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

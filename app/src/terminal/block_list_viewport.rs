@@ -1328,6 +1328,16 @@ impl<'a> ViewportState<'a> {
         }
     }
 
+    /// Returns whether applying the given scroll delta would move the block list.
+    pub fn can_scroll_by_delta(&self, delta: Lines) -> bool {
+        let current_top = self.scroll_top_in_lines();
+        let new_top = (current_top - delta)
+            .max(Lines::zero())
+            .min(self.max_scroll_top_in_lines());
+
+        new_top != current_top
+    }
+
     /// Returns the block index at the given block list point, or None if
     /// there is no block at that point in the blocklist.
     pub fn block_index_from_point(&self, point: BlockListPoint) -> Option<BlockIndex> {
