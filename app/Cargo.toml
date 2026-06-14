@@ -523,7 +523,6 @@ default = [
     "render_agent_mode_output_markdown",
     "agent_mode_primary_xml",
     "agent_mode_pre_plan_xml",
-    "command_correction_key",
     "kitty_images",
     "global_ai_analytics_collection",
     "grep_tool",
@@ -869,7 +868,6 @@ validate_autosuggestions = []
 autoupdate_ui_revamp = []
 warp_packs = []
 suggested_rules = []
-command_correction_key = []
 full_source_code_embedding = []
 use_tantivy_search = []
 agent_management_popup = []
