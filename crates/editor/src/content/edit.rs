@@ -123,6 +123,19 @@ const DEFAULT_IMAGE_HEIGHT_LINE_MULTIPLIER: f32 = 10.0;
 const MIN_TABLE_CELL_CONTENT_WIDTH_EMS: f32 = 1.0;
 const MAX_TABLE_CELL_CONTENT_WIDTH_PX: f32 = 500.0;
 
+/// Maximum number of paragraphs that will be fully laid out (via CoreText /
+/// platform text layout) in a single `EditDelta::layout_delta` call. When a
+/// delta contains more paragraphs than this limit — typically when a very large
+/// file is loaded or restored — paragraphs beyond this threshold are converted
+/// to lightweight `BlockItem::Hidden` items that track content length and line
+/// count but skip the expensive glyph / caret-position computation.
+///
+/// This prevents multi-gigabyte memory spikes caused by eagerly computing
+/// `Vec<Glyph>` and `Vec<CaretPosition>` for every line of a large file at
+/// once. 5 000 paragraphs comfortably covers several screens worth of content;
+/// the hidden sections can be expanded on demand when scrolled to.
+const MAX_EAGER_LAYOUT_PARAGRAPHS: usize = 5_000;
+
 /// Metadata for rendering a temporary block in the render model. Temporary blocks are not selectable or editable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemporaryBlock {
@@ -507,7 +520,11 @@ impl EditDelta {
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
         let mut current_offset = (self.old_offset.start).max(CharOffset::from(1));
 
-        // First, build a Vec of layout tasks with information about whether they're hidden
+        // First, build a Vec of layout tasks with information about whether they're hidden.
+        // To prevent multi-gigabyte memory spikes when loading very large files, we
+        // cap the number of paragraphs that receive full (expensive) text layout.
+        // Paragraphs beyond the cap are treated as hidden.
+        let mut eager_count: usize = 0;
         let layout_tasks: Vec<_> = self
             .new_lines
             .into_iter()
@@ -526,6 +543,14 @@ impl EditDelta {
                         document_path,
                     );
                     let is_hidden = hidden_ranges.contains(&current_offset);
+                    // When the delta is very large, mark paragraphs beyond the
+                    // cap as hidden to avoid massive glyph/caret allocations.
+                    let is_hidden = if !is_hidden {
+                        eager_count += 1;
+                        eager_count > MAX_EAGER_LAYOUT_PARAGRAPHS
+                    } else {
+                        true
+                    };
                     current_offset += content_length;
                     Some((task, is_hidden))
                 }
