@@ -249,6 +249,11 @@ pub struct BlocklistAIHistoryModel {
     /// history.
     persisted_queries: Vec<PersistedAIInput>,
 
+    /// Recent agent prompts (text and submission time) read from the `ai_queries` table at
+    ///combined with in-memory conversation queries by [`Self::nld_prompt_history`] for 
+    /// NLD input classification.
+    nld_persisted_prompts: Vec<(String, DateTime<Local>)>,
+
     /// Metadata for both local and ambient agent conversations.
     /// Does not include the actual content of the conversations.
     all_conversations_metadata: HashMap<AIConversationId, AIConversationMetadata>,
@@ -305,6 +310,16 @@ impl BlocklistAIHistoryModel {
         model.initialize_historical_conversations(multi_agent_conversations);
 
         model
+    }
+
+    /// Seeds the lightweight prompt set read from the `ai_queries` table at startup, used
+    /// by [`Self::nld_prompt_history`] for NLD prompt-history matching.
+    pub(crate) fn with_nld_persisted_prompts(
+        mut self,
+        nld_persisted_prompts: Vec<(String, DateTime<Local>)>,
+    ) -> Self {
+        self.nld_persisted_prompts = nld_persisted_prompts;
+        self
     }
 
     #[cfg(test)]
@@ -2215,6 +2230,35 @@ impl BlocklistAIHistoryModel {
             .chain(live_queries_vec)
     }
 
+    /// Returns the prompt-history candidates for NLD input classification: 
+    ///
+    /// Combines the queries from [`Self::all_ai_queries`] (live and cleared in-memory
+    /// conversations plus the small persisted up-arrow set) with the larger lightweight
+    /// set read from the `ai_queries` table at startup. Dedup keeps the latest timestamp per text
+    pub(crate) fn nld_prompt_history(&self) -> Vec<(String, DateTime<Local>)> {
+        let mut latest_by_text: HashMap<String, DateTime<Local>> = HashMap::new();
+        let candidates = self
+            .all_ai_queries(None)
+            .map(|query| (query.query_text, query.start_time))
+            .chain(self.nld_persisted_prompts.iter().cloned());
+        for (text, start_ts) in candidates {
+            if text.trim().is_empty() {
+                continue;
+            }
+            latest_by_text
+                .entry(text)
+                .and_modify(|latest| {
+                    if *latest < start_ts {
+                        *latest = start_ts;
+                    }
+                })
+                .or_insert(start_ts);
+        }
+        let mut prompts = latest_by_text.into_iter().collect_vec();
+        prompts.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+        prompts
+    }
+
     /// Returns `Some` with the [`AIConversationId`] of the active conversation inside the
     /// [`crate::terminal::TerminalView`] with the given [`EntityId`] if there is one. Returns
     /// `None` otherwise.
@@ -2622,6 +2666,7 @@ impl BlocklistAIHistoryModel {
         self.conversation_transcript_viewer_terminal_view_ids
             .clear();
         self.persisted_queries.clear();
+        self.nld_persisted_prompts.clear();
         self.all_conversations_metadata.clear();
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();

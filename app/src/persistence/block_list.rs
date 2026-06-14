@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{Local, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use diesel::prelude::*;
 use diesel::result::Error;
 use diesel::sqlite::SqliteConnection;
@@ -11,7 +11,7 @@ use itertools::Itertools;
 
 use super::model::Block;
 use super::{model, schema};
-use crate::ai::blocklist::{PersistedAIInput, SerializedBlockListItem};
+use crate::ai::blocklist::{PersistedAIInput, PersistedAIInputType, SerializedBlockListItem};
 use crate::app_state::PaneUuid;
 use crate::persistence::schema::ai_queries;
 use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlock};
@@ -103,6 +103,53 @@ pub(super) fn read_ai_queries(
         .into_iter()
         .filter_map(|ai_query| PersistedAIInput::try_from(ai_query).ok())
         .rev()
+        .collect_vec())
+}
+
+/// The maximum number of AI queries read for NLD prompt-history matching. Bounds the
+/// startup read and the per-keystroke fuzzy-match cost.
+const MAX_AI_QUERIES_TO_READ_FOR_NLD: i64 = 2000;
+
+/// Reads recent AI query prompts (text and submission time) for NLD prompt-history
+/// matching, newest-first.
+///
+/// Rows with an empty serialized input (`[]`) are excluded in SQL before the limit is
+/// applied: rows written before empty inputs were skipped at write time remain in the
+/// table until FIFO eviction removes them. The result is intentionally not deduped;
+/// deduplication happens after these rows are combined with in-memory conversation
+/// queries in [`crate::ai::blocklist::BlocklistAIHistoryModel::nld_prompt_history`].
+pub(super) fn read_nld_prompts(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<(String, DateTime<Local>)>, diesel::result::Error> {
+    read_nld_prompts_with_limit(conn, MAX_AI_QUERIES_TO_READ_FOR_NLD)
+}
+
+/// Split out from [`read_nld_prompts`] so tests can exercise the read cap with a small
+/// limit instead of inserting thousands of rows.
+fn read_nld_prompts_with_limit(
+    conn: &mut SqliteConnection,
+    limit: i64,
+) -> Result<Vec<(String, DateTime<Local>)>, diesel::result::Error> {
+    Ok(schema::ai_queries::table
+        .select((
+            schema::ai_queries::columns::input,
+            schema::ai_queries::columns::start_ts,
+        ))
+        .filter(schema::ai_queries::columns::input.ne("[]"))
+        .order_by(schema::ai_queries::columns::id.desc())
+        .limit(limit)
+        .load::<(String, NaiveDateTime)>(conn)?
+        .into_iter()
+        .filter_map(|(input, start_ts)| {
+            let inputs: Vec<PersistedAIInputType> = serde_json::from_str(&input).ok()?;
+            let text = inputs.into_iter().next().map(|input| match input {
+                PersistedAIInputType::Query { text, .. } => text,
+            })?;
+            if text.trim().is_empty() {
+                return None;
+            }
+            Some((text, Local.from_utc_datetime(&start_ts)))
+        })
         .collect_vec())
 }
 

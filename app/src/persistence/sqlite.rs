@@ -88,7 +88,7 @@ use crate::code::editor_management::CodeSource;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::notebooks::NotebookId;
 use crate::persistence::agent::read_agent_conversations;
-use crate::persistence::block_list::{get_all_restored_blocks, read_ai_queries};
+use crate::persistence::block_list::{get_all_restored_blocks, read_ai_queries, read_nld_prompts};
 use crate::persistence::model::{
     NewPersistedObjectAction, NewTeamSettings, ProjectRules, UserProfile, CODE_REVIEW_PANE_KIND,
     GET_STARTED_PANE_KIND,
@@ -2772,6 +2772,7 @@ fn read_sqlite_data(
     let time_of_next_force_object_refresh = read_time_of_next_force_object_refresh(conn)?;
 
     let ai_queries = read_ai_queries(conn)?;
+    let nld_prompts = read_nld_prompts(conn)?;
 
     let codebase_indices = get_all_codebase_index_metadata(conn)?;
     let workspace_language_servers = get_all_workspace_language_servers_by_workspace(conn)?;
@@ -2793,6 +2794,7 @@ fn read_sqlite_data(
         object_actions,
         experiments: server_experiments,
         ai_queries,
+        nld_prompts,
         codebase_indices,
         workspace_language_servers,
         multi_agent_conversations,

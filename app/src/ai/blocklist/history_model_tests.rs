@@ -835,6 +835,81 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
 }
 
 #[test]
+fn nld_prompt_history_merges_sources_dedups_and_sorts_newest_first() {
+    App::test((), |mut app| async move {
+        let now = Local::now();
+        let terminal_view_id = EntityId::new();
+
+        // Up-arrow persisted set (small, full rows) for a conversation that is not loaded
+        // in memory, so it flows in via `all_ai_queries`.
+        let persisted_queries = vec![create_persisted_query(
+            "restored query",
+            AIConversationId::new(),
+            now - chrono::Duration::seconds(30),
+        )];
+        // Lightweight NLD set, including a stale duplicate of the live prompt below and a
+        // whitespace-only prompt that must be dropped.
+        let nld_prompts = vec![
+            ("deploy it".to_string(), now - chrono::Duration::seconds(10)),
+            (
+                "live query".to_string(),
+                now - chrono::Duration::seconds(20),
+            ),
+            ("   ".to_string(), now),
+        ];
+
+        let history_model = app.add_singleton_model(|_| {
+            BlocklistAIHistoryModel::new(persisted_queries, &[])
+                .with_nld_persisted_prompts(nld_prompts)
+        });
+
+        // Add a live in-memory exchange that duplicates an NLD persisted prompt with a
+        // newer timestamp.
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            let exchange = create_exchange_with_query("live query", now, None);
+            let task_id = history_model
+                .conversation(&conversation_id)
+                .unwrap()
+                .get_root_task_id()
+                .clone();
+            let request_input = RequestInput {
+                conversation_id,
+                input_messages: std::collections::HashMap::from([(task_id, exchange.input)]),
+                working_directory: exchange.working_directory,
+                model_id: exchange.model_id,
+                coding_model_id: exchange.coding_model_id,
+                cli_agent_model_id: exchange.cli_agent_model_id,
+                computer_use_model_id: exchange.computer_use_model_id,
+                shared_session_response_initiator: exchange.response_initiator,
+                request_start_ts: exchange.start_time,
+                supported_tools_override: None,
+            };
+            history_model
+                .update_conversation_for_new_request_input(
+                    request_input,
+                    ResponseStreamId::new_for_test(),
+                    terminal_view_id,
+                    ctx,
+                )
+                .unwrap();
+        });
+
+        let prompts = history_model.read(&app, |model, _| model.nld_prompt_history());
+        let texts: Vec<&str> = prompts.iter().map(|(text, _)| text.as_str()).collect();
+        // Whitespace-only prompts are dropped, "live query" is deduped to its newer
+        // in-memory occurrence, and the result is sorted newest-first.
+        assert_eq!(texts, vec!["live query", "deploy it", "restored query"]);
+        assert_eq!(
+            prompts[0].1, now,
+            "the duplicate prompt should keep the newer in-memory timestamp",
+        );
+    });
+}
+
+#[test]
 fn test_ai_queries_for_terminal_view_up_arrow_history() {
     App::test((), |mut app| async move {
         let now = Local::now();

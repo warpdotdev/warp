@@ -1263,6 +1263,7 @@ pub(crate) fn initialize_app(
         mut object_actions,
         mut experiments,
         mut ai_queries,
+        mut nld_prompts,
         persisted_workspaces,
         mut workspace_language_servers,
         mut multi_agent_conversations,
@@ -1284,6 +1285,7 @@ pub(crate) fn initialize_app(
                 sqlite_data.object_actions,
                 sqlite_data.experiments,
                 sqlite_data.ai_queries,
+                sqlite_data.nld_prompts,
                 sqlite_data.codebase_indices,
                 sqlite_data.workspace_language_servers,
                 sqlite_data.multi_agent_conversations,
@@ -1296,6 +1298,7 @@ pub(crate) fn initialize_app(
         })
         .unwrap_or_else(|| {
             (
+                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -1332,6 +1335,7 @@ pub(crate) fn initialize_app(
         object_actions = Default::default();
         experiments = Default::default();
         ai_queries = Default::default();
+        nld_prompts = Default::default();
         workspace_language_servers = Default::default();
         multi_agent_conversations = Default::default();
         persisted_projects = Default::default();
@@ -1808,7 +1812,10 @@ pub(crate) fn initialize_app(
         .collect();
     {
         let conversations = &multi_agent_conversations;
-        ctx.add_singleton_model(move |_| BlocklistAIHistoryModel::new(ai_queries, conversations));
+        ctx.add_singleton_model(move |_| {
+            BlocklistAIHistoryModel::new(ai_queries, conversations)
+                .with_nld_persisted_prompts(nld_prompts)
+        });
     }
     // Per-conversation queued prompts. Registered after the history model
     // since it subscribes to history events for cleanup.

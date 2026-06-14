@@ -10,7 +10,7 @@ use diesel::sqlite::SqliteConnection;
 use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use diesel_migrations::MigrationHarness;
 
-use super::upsert_ai_query_with_limit;
+use super::{read_nld_prompts_with_limit, upsert_ai_query_with_limit};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::{AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType};
@@ -155,6 +155,50 @@ fn upsert_ai_query_updates_existing_exchange_without_evicting() {
         input_json.contains("first-updated"),
         "existing row should have been updated in place, got: {input_json}"
     );
+}
+
+/// Builds a [`PersistedAIInput`] whose inputs serialize to `[]`, mirroring legacy rows
+/// written before empty inputs were skipped at write time.
+fn make_empty_input_query() -> Arc<PersistedAIInput> {
+    Arc::new(PersistedAIInput {
+        inputs: vec![],
+        ..(*make_query("unused")).clone()
+    })
+}
+
+#[test]
+fn read_nld_prompts_filters_empty_and_whitespace_inputs_newest_first() {
+    let mut conn = test_connection();
+
+    for query in [
+        make_query("older prompt"),
+        make_query("   "),
+        make_empty_input_query(),
+        make_query("newer prompt"),
+    ] {
+        upsert_ai_query_with_limit(&mut conn, query, 10).expect("upsert should succeed");
+    }
+
+    let prompts = read_nld_prompts_with_limit(&mut conn, 10).expect("read should succeed");
+    let texts: Vec<&str> = prompts.iter().map(|(text, _)| text.as_str()).collect();
+    // `[]` and whitespace-only rows are dropped; the rest come back newest-first.
+    assert_eq!(texts, vec!["newer prompt", "older prompt"]);
+}
+
+#[test]
+fn read_nld_prompts_filters_empty_inputs_before_applying_limit() {
+    let mut conn = test_connection();
+
+    // The newest row has an empty input. If the limit were applied before the filter, the
+    // two-row window would be (empty, q1) and only "q1" would survive; filtering in SQL
+    // before the limit returns the two newest query-bearing rows instead.
+    for query in [make_query("q0"), make_query("q1"), make_empty_input_query()] {
+        upsert_ai_query_with_limit(&mut conn, query, 10).expect("upsert should succeed");
+    }
+
+    let prompts = read_nld_prompts_with_limit(&mut conn, 2).expect("read should succeed");
+    let texts: Vec<&str> = prompts.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(texts, vec!["q1", "q0"]);
 }
 
 #[test]
