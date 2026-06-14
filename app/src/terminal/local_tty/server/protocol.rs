@@ -161,7 +161,7 @@ fn try_receive_message_internal(socket_fd: impl AsRawFd) -> Result<TryReceiveMes
         None,
         socket::MsgFlags::empty(),
     )
-    .expect("should not fail to receive");
+    .context("Failed to receive message payload from socket")?;
     ensure!(
         msg.bytes == payload_size,
         "Received unexpected amount of data in second recvmsg call!"
