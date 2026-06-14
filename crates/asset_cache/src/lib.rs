@@ -15,7 +15,7 @@ impl AsyncAssetType for UrlAssetWithoutPersistence {}
 
 /// Namespace marker for URL-based async asset sources with persistence.
 ///
-/// This is intentionally separate from `UrlAssetWithoutPersistence` to allow
+/// This is intentionally separate from `UrlAssetWithoutPersistence` to
 /// ensure we persist the asset even if we fetched it once already without
 /// persistence.
 pub struct UrlAssetWithPersistence;

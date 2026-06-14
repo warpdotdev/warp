@@ -1,4 +1,4 @@
-//! This crate provides an ipmlementation of a basic IPC request/response protocol.
+//! This crate provides an implementation of a basic IPC request/response protocol.
 //!
 //! Users may instantiate a server that implements any number of [`Service`]s as well as
 //! corresponding typed "clients" ([`ServiceCaller`]s) which provide a typed interface to call the

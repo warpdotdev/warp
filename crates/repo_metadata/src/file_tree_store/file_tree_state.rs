@@ -212,7 +212,7 @@ impl FileTreeMapStore {
         self.parent_to_child_map
             .extend(child_store.parent_to_child_map);
 
-        // ATODO test this
+        // TODO test this
         if let Some(parent) = self.parent_directory(&path) {
             self.parent_to_child_map
                 .entry(parent)

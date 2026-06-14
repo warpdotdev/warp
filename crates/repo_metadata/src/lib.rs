@@ -1,7 +1,7 @@
 //! Repository metadata utilities for Warp.
 //!
 //! This crate provides utilities for managing repository metadata, including file trees,
-//! gitignore processing, and filesystem watching capabilities.s
+//! gitignore processing, and filesystem watching capabilities.
 use std::borrow::Borrow;
 use std::path::{Path, PathBuf};
 
