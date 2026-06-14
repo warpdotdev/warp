@@ -55,7 +55,7 @@ use crate::pane_group::{
     CodePane, NotebookPane, PaneGroup, PaneId, TabBarHoverIndex, TerminalPane, WorkflowPane,
 };
 use crate::safe_triangle::SafeTriangle;
-use crate::tab::{tab_position_id, SelectedTabColor, TabData};
+use crate::tab::{tab_position_id, SelectedTabColor, TabData, TAB_INDICATOR_SYNCED_COLOR};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
@@ -70,6 +70,7 @@ use crate::util::color::Opacity;
 use crate::workspace::action::{NewSessionMenuAnchor, WorkspaceAction};
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::hoa_onboarding::HoaOnboardingStep;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::tab_settings::{
     TabSettings, VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity,
@@ -395,6 +396,7 @@ fn render_pane_row_element(
         stack_position,
         is_in_multi_selection,
         is_in_multi_tab_selection,
+        is_inputs_synced: _,
         pane_color,
         badge_mouse_states: _,
         detail_hover_state,
@@ -828,6 +830,10 @@ struct PaneProps<'a> {
     /// The right-click handler dispatches the selection menu when set,
     /// otherwise the single-pane menu.
     is_in_multi_tab_selection: bool,
+    /// True when this row's pane group has synchronized inputs enabled, mirroring
+    /// the synced indicator shown on horizontal tabs (`tab.rs`). Drives the
+    /// `LinkHorizontal` indicator rendered next to the row title.
+    is_inputs_synced: bool,
     pane_color: Option<ThemeFill>,
     badge_mouse_states: PaneRowBadgeMouseStates,
     detail_hover_state: VerticalTabsDetailHoverState,
@@ -3182,6 +3188,7 @@ fn has_unread_activity_for_terminal_view(terminal_view_id: EntityId, app: &AppCo
 }
 
 const INDICATOR_DOT_SIZE: f32 = 8.;
+const SYNCED_INDICATOR_ICON_SIZE: f32 = 12.;
 
 fn render_title_indicator(theme: &WarpTheme) -> Box<dyn Element> {
     ConstrainedBox::new(
@@ -3191,6 +3198,20 @@ fn render_title_indicator(theme: &WarpTheme) -> Box<dyn Element> {
     )
     .with_width(INDICATOR_DOT_SIZE)
     .with_height(INDICATOR_DOT_SIZE)
+    .finish()
+}
+
+/// Blue link indicator for a vertical-tabs row whose pane group has synchronized
+/// inputs enabled. Mirrors the horizontal tab bar's synced indicator
+/// (`Indicator::Synced` in `tab.rs`) so the sidebar shows where keystrokes broadcast.
+fn render_synced_inputs_indicator() -> Box<dyn Element> {
+    ConstrainedBox::new(
+        WarpIcon::LinkHorizontal
+            .to_warpui_icon(ColorU::from_u32(TAB_INDICATOR_SYNCED_COLOR).into())
+            .finish(),
+    )
+    .with_width(SYNCED_INDICATOR_ICON_SIZE)
+    .with_height(SYNCED_INDICATOR_ICON_SIZE)
     .finish()
 }
 
@@ -3248,6 +3269,13 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
             )
             .finish(),
         );
+        if props.is_inputs_synced {
+            title_row.add_child(
+                Container::new(render_synced_inputs_indicator())
+                    .with_margin_left(4.)
+                    .finish(),
+            );
+        }
         if has_indicator {
             title_row.add_child(
                 Container::new(render_title_indicator(theme))
@@ -3638,6 +3666,9 @@ impl<'a> PaneProps<'a> {
             stack_position: PaneRowStackPosition::Standalone,
             is_in_multi_selection,
             is_in_multi_tab_selection,
+            // Read `window_id` (a Copy) before `detail_hover_state` is moved into the struct below.
+            is_inputs_synced: SyncedInputState::as_ref(app)
+                .should_sync_this_pane_group(pane_group_id, detail_hover_state.window_id),
             pane_color: pane_row_state.pane_color,
             badge_mouse_states: pane_row_state.badge_mouse_states,
             detail_hover_state,
@@ -4471,20 +4502,27 @@ fn render_summary_tab_item(
         }
     }
     let title_region = title_region.finish();
-    if summary.has_unread_activity {
-        text_col.add_child(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(Shrinkable::new(1., title_region).finish())
-                .with_child(
-                    Container::new(render_title_indicator(theme))
-                        .with_margin_left(4.)
-                        .finish(),
-                )
-                .finish(),
-        );
+    if summary.has_unread_activity || props.is_inputs_synced {
+        let mut title_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(1., title_region).finish());
+        if props.is_inputs_synced {
+            title_row.add_child(
+                Container::new(render_synced_inputs_indicator())
+                    .with_margin_left(4.)
+                    .finish(),
+            );
+        }
+        if summary.has_unread_activity {
+            title_row.add_child(
+                Container::new(render_title_indicator(theme))
+                    .with_margin_left(4.)
+                    .finish(),
+            );
+        }
+        text_col.add_child(title_row.finish());
     } else {
         text_col.add_child(title_region);
     }
@@ -7023,19 +7061,28 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
             (title, subtitle)
         };
 
-    // Title row with optional indicator
-    let title_row = if has_indicator {
-        Flex::row()
+    // Title row with optional indicators (synced inputs link + unread/badge dot).
+    let title_row = if has_indicator || props.is_inputs_synced {
+        let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(Shrinkable::new(1., title_element).finish())
-            .with_child(
+            .with_child(Shrinkable::new(1., title_element).finish());
+        if props.is_inputs_synced {
+            row.add_child(
+                Container::new(render_synced_inputs_indicator())
+                    .with_margin_left(4.)
+                    .finish(),
+            );
+        }
+        if has_indicator {
+            row.add_child(
                 Container::new(render_title_indicator(theme))
                     .with_margin_left(4.)
                     .finish(),
-            )
-            .finish()
+            );
+        }
+        row.finish()
     } else {
         title_element
     };
