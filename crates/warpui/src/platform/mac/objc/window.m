@@ -954,9 +954,67 @@ void open_save_file_picker(void *callback, NSString *defaultFilename, NSString *
     }];
 }
 
+static BOOL is_warp_url(NSURL *url) {
+    NSString *scheme = [[url scheme] lowercaseString];
+    return [scheme isEqualToString:@"warp"] || [scheme isEqualToString:@"warppreview"] ||
+           [scheme isEqualToString:@"warpdev"] || [scheme isEqualToString:@"warplocal"] ||
+           [scheme isEqualToString:@"warposs"] || [scheme isEqualToString:@"warpintegration"];
+}
+
+static NSURL *current_application_bundle_url(void) {
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *bundleIdentifier = [bundle bundleIdentifier];
+    NSURL *bundleURL = [bundle bundleURL];
+
+    if ([bundleIdentifier length] == 0 || bundleURL == nil) {
+        return nil;
+    }
+
+    BOOL isAppBundle = [[bundleURL pathExtension] caseInsensitiveCompare:@"app"] == NSOrderedSame;
+    return isAppBundle ? bundleURL : nil;
+}
+
 // Open a given url.
 void open_url(NSString *urlString) {
     NSURL *url = [NSURL URLWithString:urlString];
+    if (url == nil) {
+        return;
+    }
+
+    // Warp deeplinks should reopen this exact channel/build. Letting LaunchServices
+    // choose the default handler can select a stale Warp.app when multiple builds
+    // have registered the same URL scheme.
+    if (is_warp_url(url)) {
+        NSURL *applicationURL = current_application_bundle_url();
+        if (applicationURL != nil) {
+            if (@available(macOS 10.15, *)) {
+                NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+                [configuration setActivates:YES];
+                [[NSWorkspace sharedWorkspace] openURLs:@[ url ]
+                                  withApplicationAtURL:applicationURL
+                                         configuration:configuration
+                                     completionHandler:^(NSRunningApplication *app, NSError *error) {
+                                       if (error != nil) {
+                                           NSLog(@"Failed to open Warp URL with current app bundle: %@", error);
+                                           [[NSWorkspace sharedWorkspace] openURL:url];
+                                       }
+                                     }];
+            } else {
+                NSError *error = nil;
+                BOOL didOpen = [[NSWorkspace sharedWorkspace] openURLs:@[ url ]
+                                                  withApplicationAtURL:applicationURL
+                                                               options:NSWorkspaceLaunchDefault
+                                                         configuration:@{}
+                                                                 error:&error];
+                if (!didOpen) {
+                    NSLog(@"Failed to open Warp URL with current app bundle: %@", error);
+                    [[NSWorkspace sharedWorkspace] openURL:url];
+                }
+            }
+            return;
+        }
+    }
+
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
