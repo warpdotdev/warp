@@ -28,7 +28,8 @@ use crate::ai::llms::LLMId;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
 use crate::input_suggestions::HistoryInputSuggestion;
 use crate::persistence::model::{
-    AgentConversation, AgentConversationData, AgentConversationRecord, PersistedAutoexecuteMode,
+    AgentConversation, AgentConversationData, AgentConversationRecord, PendingConversationHandoff,
+    PersistedAutoexecuteMode,
 };
 use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
@@ -609,6 +610,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     conversation_usage_metadata: None,
                     reverted_action_ids: None,
                     forked_from_server_conversation_token: None,
+                    pending_conversation_handoff: None,
                     artifacts_json: None,
                     parent_agent_id: Some(parent_run_id.clone()),
                     agent_name: Some("Child agent".to_string()),
@@ -631,6 +633,7 @@ fn test_initialize_historical_conversations_resolves_parent_agent_id_children_vi
                     conversation_usage_metadata: None,
                     reverted_action_ids: None,
                     forked_from_server_conversation_token: None,
+                    pending_conversation_handoff: None,
                     artifacts_json: None,
                     parent_agent_id: None,
                     agent_name: None,
@@ -681,6 +684,7 @@ fn test_initialize_historical_conversations_uses_root_task_description_title() {
                     conversation_usage_metadata: None,
                     reverted_action_ids: None,
                     forked_from_server_conversation_token: None,
+                    pending_conversation_handoff: None,
                     artifacts_json: None,
                     parent_agent_id: None,
                     agent_name: None,
@@ -745,6 +749,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     conversation_usage_metadata: None,
                     reverted_action_ids: None,
                     forked_from_server_conversation_token: None,
+                    pending_conversation_handoff: None,
                     artifacts_json: None,
                     parent_agent_id: Some(parent_run_id.clone()),
                     agent_name: Some("Agent 1".to_string()),
@@ -768,6 +773,7 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
                     conversation_usage_metadata: None,
                     reverted_action_ids: None,
                     forked_from_server_conversation_token: None,
+                    pending_conversation_handoff: None,
                     artifacts_json: None,
                     parent_agent_id: None,
                     agent_name: None,
@@ -2915,6 +2921,7 @@ fn test_find_by_token_after_insert_forked_conversation_from_tasks() {
             conversation_usage_metadata: None,
             reverted_action_ids: None,
             forked_from_server_conversation_token: None,
+            pending_conversation_handoff: None,
             artifacts_json: None,
             parent_agent_id: None,
             agent_name: None,
@@ -3110,6 +3117,7 @@ fn test_fork_then_bind_handoff_token_resolves_to_forked_conversation() {
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
@@ -3135,7 +3143,7 @@ fn test_fork_then_bind_handoff_token_resolves_to_forked_conversation() {
                 .expect("source conversation must be in memory after restore")
                 .clone();
             let forked = model
-                .fork_conversation(&source, "[Fork] ", false, None, ctx)
+                .fork_conversation(&source, "[Fork] ", false, None, None, ctx)
                 .expect("fork must succeed when sqlite sender is wired up");
             assert_eq!(
                 forked
@@ -3197,6 +3205,7 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
@@ -3221,7 +3230,7 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
                 .expect("source conversation must be in memory after restore")
                 .clone();
             model
-                .fork_conversation(&source, "[Fork] ", false, None, ctx)
+                .fork_conversation(&source, "[Fork] ", false, None, None, ctx)
                 .expect("fork must succeed when sqlite sender is wired up")
                 .id()
         });
@@ -3272,6 +3281,117 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
 }
 
 #[test]
+fn test_fork_with_pending_handoff_persists_through_token_binding() {
+    use crate::ai::agent::conversation::AIConversation;
+    use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let terminal_view_id = EntityId::new();
+        let source_id = AIConversationId::new();
+        let root_task = create_api_task(
+            "root-task",
+            vec![create_message("root-task-message", "root-task")],
+        );
+        let source = AIConversation::new_restored(
+            source_id,
+            vec![root_task],
+            Some(AgentConversationData {
+                server_conversation_token: Some("src-token".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: None,
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            }),
+        )
+        .expect("restored source conversation should build");
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![source], ctx);
+        });
+
+        let forked_id = history_model.update(&mut app, |model, ctx| {
+            let source = model
+                .conversation(&source_id)
+                .expect("source conversation must be in memory after restore")
+                .clone();
+            let forked = model
+                .fork_conversation(
+                    &source,
+                    "[Fork] ",
+                    false,
+                    None,
+                    Some(PendingConversationHandoff::CloudToLocal),
+                    ctx,
+                )
+                .expect("fork must succeed when sqlite sender is wired up");
+            assert_eq!(
+                forked.pending_conversation_handoff(),
+                Some(PendingConversationHandoff::CloudToLocal),
+            );
+            forked.id()
+        });
+
+        history_model.update(&mut app, |model, ctx| {
+            model.set_server_conversation_token_for_conversation_and_persist(
+                forked_id,
+                "cloud-T".to_string(),
+                ctx,
+            );
+        });
+
+        let mut persisted_fork = None;
+        for _ in 0..2 {
+            let event = receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("fork creation and token bind should both persist");
+            let persisted = persisted_agent_conversation_from_update_event(event);
+            if persisted.conversation.conversation_id == forked_id.to_string()
+                && persisted
+                    .conversation
+                    .conversation_data
+                    .contains("\"server_conversation_token\":\"cloud-T\"")
+            {
+                persisted_fork = Some(persisted);
+                break;
+            }
+        }
+
+        let restored = convert_persisted_conversation_to_ai_conversation_with_metadata(
+            persisted_fork.expect("token-bound fork should be persisted"),
+        )
+        .expect("persisted token-bound fork should be restorable");
+        assert_eq!(
+            restored.pending_conversation_handoff(),
+            Some(PendingConversationHandoff::CloudToLocal),
+        );
+        assert_eq!(
+            restored
+                .server_conversation_token()
+                .map(ServerConversationToken::as_str),
+            Some("cloud-T"),
+        );
+    });
+}
+
+#[test]
 fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_events() {
     use crate::ai::agent::conversation::AIConversation;
     use crate::persistence::model::AgentConversationData;
@@ -3309,6 +3429,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
@@ -3333,7 +3454,7 @@ fn test_fork_then_bind_handoff_token_updates_cached_metadata_and_emits_refresh_e
                 .expect("source conversation must be in memory after restore")
                 .clone();
             model
-                .fork_conversation(&source, "[Fork] ", false, None, ctx)
+                .fork_conversation(&source, "[Fork] ", false, None, None, ctx)
                 .expect("fork must succeed when sqlite sender is wired up")
         });
         let forked_id = forked_conversation.id();
@@ -3437,6 +3558,7 @@ fn test_fork_conversation_preserves_task_ids_when_requested() {
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
@@ -3461,7 +3583,7 @@ fn test_fork_conversation_preserves_task_ids_when_requested() {
                 .expect("source conversation must be in memory after restore")
                 .clone();
             let forked = model
-                .fork_conversation(&source, "[Fork] ", true, None, ctx)
+                .fork_conversation(&source, "[Fork] ", true, None, None, ctx)
                 .expect("fork must succeed when sqlite sender is wired up");
 
             let forked_tasks: Vec<&warp_multi_agent_api::Task> =
@@ -3587,6 +3709,7 @@ fn test_fork_conversation_title_override_replaces_prefix() {
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,
@@ -3611,7 +3734,7 @@ fn test_fork_conversation_title_override_replaces_prefix() {
                 .expect("source must be in memory")
                 .clone();
             let forked = model
-                .fork_conversation(&source, "[Fork] ", false, Some("Custom title"), ctx)
+                .fork_conversation(&source, "[Fork] ", false, Some("Custom title"), None, ctx)
                 .expect("fork must succeed");
 
             let forked_root = forked
@@ -3679,6 +3802,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id: Some("parent-agent-id".to_string()),
                 agent_name: Some("worker".to_string()),
@@ -3725,6 +3849,7 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id: None,
                 agent_name: None,

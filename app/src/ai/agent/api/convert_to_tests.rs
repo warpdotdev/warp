@@ -4,7 +4,7 @@ use warp_multi_agent_api as api;
 
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentContext,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentContext, AIAgentInput,
     TransferShellCommandControlToUserResult,
 };
 use crate::terminal::model::block::BlockId;
@@ -104,6 +104,23 @@ fn git_context_deserializes_legacy_string_pull_request_number() {
         .pull_request
         .expect("expected pull request context");
     assert_eq!(pull_request.number, 42);
+}
+
+#[test]
+fn conversation_handoff_converts_to_user_inputs_marker() {
+    let input =
+        super::convert_input(vec![AIAgentInput::ConversationHandoff]).expect("marker converts");
+    let Some(api::request::input::Type::UserInputs(user_inputs)) = input.r#type else {
+        panic!("handoff marker should serialize as UserInputs");
+    };
+
+    assert!(matches!(
+        user_inputs
+            .inputs
+            .first()
+            .and_then(|input| input.input.as_ref()),
+        Some(api::request::input::user_inputs::user_input::Input::ConversationHandoff(_))
+    ));
 }
 
 #[test]

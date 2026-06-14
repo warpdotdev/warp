@@ -1031,6 +1031,13 @@ impl<'de> Deserialize<'de> for PersistedAutoexecuteMode {
         })
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum PendingConversationHandoff {
+    CloudToLocal,
+    // Currently unused, but enumerated for future local-to-cloud handoff propagation.
+    LocalToCloud,
+}
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -1046,6 +1053,8 @@ pub struct AgentConversationData {
     /// The server conversation ID of the source conversation if this conversation was forked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from_server_conversation_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_conversation_handoff: Option<PendingConversationHandoff>,
     /// Serialized Vec<Artifact> for local artifact tracking.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifacts_json: Option<String>,

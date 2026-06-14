@@ -378,6 +378,7 @@ fn persisted_remote_child_conversation(
                 conversation_usage_metadata: None,
                 reverted_action_ids: None,
                 forked_from_server_conversation_token: None,
+                pending_conversation_handoff: None,
                 artifacts_json: None,
                 parent_agent_id,
                 agent_name: Some("Agent 1".to_string()),

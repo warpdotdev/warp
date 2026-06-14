@@ -292,6 +292,9 @@ pub(super) fn convert_input(
     })
 }
 
+pub(crate) fn can_convert_to_user_input(input: &AIAgentInput) -> bool {
+    convert_input_to_user_input(input.clone()).is_ok()
+}
 fn convert_input_to_user_input(
     input: AIAgentInput,
 ) -> Result<api::request::input::user_inputs::user_input::Input, ConvertToAPITypeError> {
@@ -444,6 +447,11 @@ fn convert_input_to_user_input(
                     config: Some(config.to_proto()),
                     status: status.to_proto(),
                 },
+            ),
+        ),
+        AIAgentInput::ConversationHandoff => Ok(
+            api::request::input::user_inputs::user_input::Input::ConversationHandoff(
+                api::request::input::user_inputs::ConversationHandoff {},
             ),
         ),
         AIAgentInput::ResumeConversation { .. } => Err(ConvertToAPITypeError::Ignore),

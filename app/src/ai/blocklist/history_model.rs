@@ -37,7 +37,9 @@ use crate::ai::agent::{
 use crate::ai::artifacts::Artifact;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::input_suggestions::HistoryOrder;
-use crate::persistence::model::{AgentConversation, AgentConversationData};
+use crate::persistence::model::{
+    AgentConversation, AgentConversationData, PendingConversationHandoff,
+};
 use crate::persistence::ModelEvent;
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_scope, establish_ro_connection, PersistenceScope};
@@ -1468,6 +1470,7 @@ impl BlocklistAIHistoryModel {
         prefix: &str,
         preserve_task_ids: bool,
         title_override: Option<&str>,
+        pending_conversation_handoff: Option<PendingConversationHandoff>,
         app: &AppContext,
     ) -> Result<AIConversation, anyhow::Error> {
         let tasks: Vec<warp_multi_agent_api::Task> = source_conversation
@@ -1519,6 +1522,7 @@ impl BlocklistAIHistoryModel {
             forked_from_server_conversation_token: source_conversation
                 .server_conversation_token()
                 .map(|t| t.as_str().to_string()),
+            pending_conversation_handoff,
             // We reset artifacts on fork
             artifacts_json: None,
             // Forked conversation loses its parentage
@@ -1567,6 +1571,7 @@ impl BlocklistAIHistoryModel {
         fork_from_exact_exchange: bool,
         prefix: &str,
         title_override: Option<&str>,
+        pending_conversation_handoff: Option<PendingConversationHandoff>,
         app: &AppContext,
     ) -> Result<AIConversation, anyhow::Error> {
         let conversation = source_conversation;
@@ -1678,6 +1683,7 @@ impl BlocklistAIHistoryModel {
             forked_from_server_conversation_token: conversation
                 .server_conversation_token()
                 .map(|t| t.as_str().to_string()),
+            pending_conversation_handoff,
             // We reset artifacts on fork
             artifacts_json: None,
             // Forked conversation loses its parentage.
@@ -2662,6 +2668,7 @@ fn merged_remote_child_placeholder_conversation_data(
         forked_from_server_conversation_token: cloud_conversation
             .forked_from_server_conversation_token()
             .map(|t| t.as_str().to_string()),
+        pending_conversation_handoff: cloud_conversation.pending_conversation_handoff(),
         artifacts_json: serde_json::to_string(cloud_conversation.artifacts()).ok(),
         last_event_sequence: cloud_conversation.last_event_sequence(),
 

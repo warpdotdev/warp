@@ -2629,6 +2629,9 @@ pub enum AIAgentInput {
         config: OrchestrationConfig,
         status: OrchestrationConfigStatus,
     },
+
+    /// Sent on the next outbound request after conversation handoff.
+    ConversationHandoff,
 }
 
 /// Data for a single message received by an agent from another agent.
@@ -2723,6 +2726,7 @@ impl Display for AIAgentInput {
             }
             Self::PassiveSuggestionResult { .. } => write!(f, "PassiveSuggestionResult"),
             Self::OrchestrationConfigUpdate { .. } => write!(f, "OrchestrationConfigUpdate"),
+            Self::ConversationHandoff => write!(f, "ConversationHandoff"),
         }
     }
 }
@@ -2781,7 +2785,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::ConversationHandoff => None,
         }
     }
 
@@ -2879,7 +2884,8 @@ impl AIAgentInput {
             Self::SummarizeConversation { context, .. } => Some(context),
             Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::ConversationHandoff => None,
         }
     }
 
@@ -2911,7 +2917,8 @@ impl AIAgentInput {
             | Self::MessagesReceivedFromAgents { .. }
             | Self::EventsFromAgents { .. }
             | Self::PassiveSuggestionResult { .. }
-            | Self::OrchestrationConfigUpdate { .. } => None,
+            | Self::OrchestrationConfigUpdate { .. }
+            | Self::ConversationHandoff => None,
         }
     }
 

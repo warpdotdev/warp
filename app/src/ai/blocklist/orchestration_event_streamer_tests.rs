@@ -150,6 +150,7 @@ fn ai_conversation_new_restored_preserves_last_event_sequence() {
         conversation_usage_metadata: None,
         reverted_action_ids: None,
         forked_from_server_conversation_token: None,
+        pending_conversation_handoff: None,
         artifacts_json: None,
         parent_agent_id: None,
         agent_name: None,

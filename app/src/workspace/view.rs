@@ -283,6 +283,7 @@ use crate::pane_group::{
     ExecutionProfileEditorPane, NetworkLogPane, NewTerminalOptions, PaneGroup, PaneId, PanesLayout,
     TabBarHoverIndex, TerminalPaneId,
 };
+use crate::persistence::model::PendingConversationHandoff;
 use crate::persistence::ModelEvent;
 use crate::projects::ProjectManagementModel;
 use crate::prompt::editor_modal::{
@@ -12898,6 +12899,7 @@ impl Workspace {
         initial_prompt: Option<String>,
         initial_attachments: Vec<PendingAttachment>,
         destination: ForkedConversationDestination,
+        pending_conversation_handoff: Option<PendingConversationHandoff>,
         ctx: &mut ViewContext<Self>,
     ) {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
@@ -12987,6 +12989,7 @@ impl Workspace {
                             has_initial_query,
                             source_terminal_view_id,
                             server_forked_id,
+                            pending_conversation_handoff,
                             window_id,
                             ctx,
                         );
@@ -13005,6 +13008,7 @@ impl Workspace {
                     has_initial_query,
                     source_terminal_view_id,
                     None,
+                    pending_conversation_handoff,
                     window_id,
                     ctx,
                 );
@@ -13029,6 +13033,7 @@ impl Workspace {
         has_initial_query: bool,
         source_terminal_view_id: Option<EntityId>,
         server_forked_conversation_id: Option<String>,
+        pending_conversation_handoff: Option<PendingConversationHandoff>,
         window_id: WindowId,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -13041,6 +13046,7 @@ impl Workspace {
                     fork_from.fork_from_exact_exchange,
                     FORK_PREFIX,
                     None,
+                    pending_conversation_handoff,
                     ctx,
                 )
             } else {
@@ -13049,6 +13055,7 @@ impl Workspace {
                     FORK_PREFIX,
                     true, /* preserve_task_ids */
                     None,
+                    pending_conversation_handoff,
                     ctx,
                 )
             }
@@ -15137,6 +15144,7 @@ impl Workspace {
                 FORK_PREFIX,
                 true,
                 title_override.as_deref(),
+                None,
                 ctx,
             )
         }) {
@@ -24412,19 +24420,26 @@ impl TypedActionView for Workspace {
                     initial_prompt.clone(),
                     initial_attachments.clone(),
                     *destination,
+                    None,
                     ctx,
                 );
             }
             #[cfg(not(target_family = "wasm"))]
-            ContinueConversationLocally { conversation_id } => {
+            ContinueConversationLocally {
+                conversation_id,
+                initial_prompt,
+                initial_attachments,
+                destination,
+            } => {
                 self.fork_ai_conversation(
                     *conversation_id,
                     None,
                     false,
                     None,
-                    None,
-                    vec![],
-                    ForkedConversationDestination::SplitPane,
+                    initial_prompt.clone(),
+                    initial_attachments.clone(),
+                    *destination,
+                    Some(PendingConversationHandoff::CloudToLocal),
                     ctx,
                 );
             }

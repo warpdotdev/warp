@@ -582,6 +582,12 @@ pub enum WorkspaceAction {
     #[cfg(not(target_family = "wasm"))]
     ContinueConversationLocally {
         conversation_id: AIConversationId,
+        /// Initial prompt to send in the forked conversation.
+        initial_prompt: Option<String>,
+        /// Attachments (images/files) to send along with the initial prompt in the forked pane.
+        initial_attachments: Vec<PendingAttachment>,
+        /// Where to open the forked conversation.
+        destination: ForkedConversationDestination,
     },
     /// Insert the /fork slash command into the active terminal's input.
     InsertForkSlashCommand,

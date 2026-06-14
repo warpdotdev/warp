@@ -106,7 +106,8 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
             // No user-provided text to redact in inter-agent relay inputs.
             AIAgentInput::MessagesReceivedFromAgents { .. }
             | AIAgentInput::EventsFromAgents { .. }
-            | AIAgentInput::OrchestrationConfigUpdate { .. } => {}
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+            | AIAgentInput::ConversationHandoff => {}
             AIAgentInput::ActionResult { result, context } => {
                 redact_context(Arc::make_mut(context));
                 match &mut result.result {
