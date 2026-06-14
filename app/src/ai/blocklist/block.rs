@@ -436,6 +436,12 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handle for the fork conversation button
     fork_conversation_handle: MouseStateHandle,
 
+    /// Mouse state handle for the pinned messages document button
+    pinned_messages_handle: MouseStateHandle,
+
+    /// Mouse state handle for the notes document button
+    notes_handle: MouseStateHandle,
+
     /// Mouse state handle for the usage button
     usage_button_handle: MouseStateHandle,
 
@@ -6012,6 +6018,12 @@ pub enum AIBlockAction {
     /// Fork the conversation
     ForkConversation,
 
+    /// Pin the current assistant response and open the conversation's pinned messages document.
+    PinResponse,
+
+    /// Open the conversation's notes document.
+    OpenNotes,
+
     /// Manually cancel sending an AI request or streaming an AI response for a requested action.
     /// View-based inline actions (`RequestedCommandView`, etc.) should be handling AI block
     /// cancellation via their own View events.
@@ -6201,6 +6213,58 @@ impl TypedActionView for AIBlock {
                     );
                 }
                 ctx.notify();
+            }
+            AIBlockAction::PinResponse => {
+                let conversation_id = self.client_ids.conversation_id;
+                let exchange_id = self.client_ids.client_exchange_id;
+                let prompt_text = self.get_preceding_user_query(ctx);
+                let output_text = self.get_output_text(ctx);
+                let conversation_link = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.server_conversation_token())
+                    .map(|token| format!("warp://conversation/{}", token.as_str()));
+                let (document_id, document_version, added) =
+                    AIDocumentModel::handle(ctx).update(ctx, |documents, ctx| {
+                        documents.pin_message_to_document(
+                            conversation_id,
+                            exchange_id,
+                            &prompt_text,
+                            &output_text,
+                            conversation_link.as_deref(),
+                            ctx,
+                        )
+                    });
+                ctx.emit(AIBlockEvent::OpenAIDocumentPane {
+                    document_id,
+                    document_version,
+                    is_auto_open: false,
+                });
+                let window_id = ctx.window_id();
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let message = if added {
+                        "Pinned response"
+                    } else {
+                        "Response already pinned"
+                    };
+                    toast_stack.add_ephemeral_toast(
+                        DismissibleToast::success(message.to_string()),
+                        window_id,
+                        ctx,
+                    );
+                });
+                ctx.notify();
+            }
+            AIBlockAction::OpenNotes => {
+                let conversation_id = self.client_ids.conversation_id;
+                let (document_id, document_version) = AIDocumentModel::handle(ctx)
+                    .update(ctx, |documents, ctx| {
+                        documents.get_or_create_notes_document(conversation_id, ctx)
+                    });
+                ctx.emit(AIBlockEvent::OpenAIDocumentPane {
+                    document_id,
+                    document_version,
+                    is_auto_open: false,
+                });
             }
             AIBlockAction::SelectText => {
                 // If there's an ongoing text selection, clear all other selections within the

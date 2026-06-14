@@ -6,6 +6,7 @@ use warpui::{App, SingletonEntity};
 
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::AIAgentExchangeId;
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{
@@ -188,6 +189,149 @@ fn publish_refreshes_pending_saving_document_content() {
             assert_eq!(pending.content, latest_content);
         });
     });
+}
+
+#[test]
+fn test_get_or_create_notes_document_reuses_conversation_document() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+
+        let (first_id, first_version) = model_handle.update(&mut app, |model, ctx| {
+            model.get_or_create_notes_document(conversation_id, ctx)
+        });
+        let (second_id, second_version) = model_handle.update(&mut app, |model, ctx| {
+            model.get_or_create_notes_document(conversation_id, ctx)
+        });
+
+        model_handle.read(&app, |model, ctx| {
+            assert_eq!(first_id, second_id);
+            assert_eq!(first_version, second_version);
+            assert_eq!(
+                model.get_current_document(&first_id).unwrap().title,
+                NOTES_DOCUMENT_TITLE
+            );
+            assert_eq!(
+                model.get_document_content(&first_id, ctx).unwrap(),
+                NOTES_DOCUMENT_INITIAL_CONTENT.trim_end()
+            );
+        });
+    });
+}
+
+#[test]
+fn test_auxiliary_documents_preserve_latest_document_pointer() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+
+        let primary_document_id = model_handle.update(&mut app, |model, ctx| {
+            model.create_document("Plan", "# Plan", conversation_id, None, ctx)
+        });
+        model_handle.update(&mut app, |model, ctx| {
+            model.get_or_create_notes_document(conversation_id, ctx);
+        });
+        model_handle.update(&mut app, |model, ctx| {
+            model.pin_message_to_document(
+                conversation_id,
+                AIAgentExchangeId::new(),
+                "How should I proceed?",
+                "Use the plan.",
+                None,
+                ctx,
+            );
+        });
+
+        model_handle.read(&app, |model, _ctx| {
+            assert_eq!(
+                model.get_document_id_by_conversation_id(conversation_id),
+                Some(primary_document_id)
+            );
+        });
+    });
+}
+
+#[test]
+fn test_auxiliary_document_without_primary_does_not_set_latest_document_pointer() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+
+        model_handle.update(&mut app, |model, ctx| {
+            model.get_or_create_notes_document(conversation_id, ctx);
+        });
+
+        model_handle.read(&app, |model, _ctx| {
+            assert_eq!(
+                model.get_document_id_by_conversation_id(conversation_id),
+                None
+            );
+        });
+    });
+}
+
+#[test]
+fn test_pin_message_to_document_creates_reuses_and_deduplicates() {
+    App::test((), |mut app| async move {
+        initialize_app_for_ai_document_tests(&mut app);
+        let model_handle = app.add_model(|_ctx| AIDocumentModel::new_for_test());
+        let conversation_id = AIConversationId::new();
+        let exchange_id = AIAgentExchangeId::new();
+
+        let (first_id, _, added_first) = model_handle.update(&mut app, |model, ctx| {
+            model.pin_message_to_document(
+                conversation_id,
+                exchange_id,
+                "What did we decide?",
+                "Keep a checklist of the important response.",
+                Some("warp://conversation/server-token"),
+                ctx,
+            )
+        });
+        let (second_id, _, added_second) = model_handle.update(&mut app, |model, ctx| {
+            model.pin_message_to_document(
+                conversation_id,
+                exchange_id,
+                "What did we decide?",
+                "Keep a checklist of the important response.",
+                Some("warp://conversation/server-token"),
+                ctx,
+            )
+        });
+
+        model_handle.read(&app, |model, ctx| {
+            assert_eq!(first_id, second_id);
+            assert!(added_first);
+            assert!(!added_second);
+            assert!(model.is_message_pinned(conversation_id, exchange_id, ctx));
+
+            let content = model.get_document_content(&first_id, ctx).unwrap();
+            assert!(content.contains(PINNED_MESSAGES_DOCUMENT_TITLE));
+            assert!(content.contains(&pinned_message_marker(exchange_id)));
+            assert!(content.contains("[Jump to conversation](warp://conversation/server-token)"));
+            assert_eq!(
+                content.matches(&pinned_message_marker(exchange_id)).count(),
+                1
+            );
+        });
+    });
+}
+
+#[test]
+fn test_pinned_message_excerpt_truncates_by_chars() {
+    let text = "alpha\n\tbeta  gamma";
+    assert_eq!(pinned_message_excerpt(text), "alpha beta gamma");
+
+    let long_text = "a".repeat(PINNED_MESSAGE_EXCERPT_CHAR_LIMIT + 1);
+    let excerpt = pinned_message_excerpt(&long_text);
+    assert_eq!(
+        excerpt.chars().count(),
+        PINNED_MESSAGE_EXCERPT_CHAR_LIMIT + 1
+    );
+    assert!(excerpt.ends_with('…'));
 }
 
 #[test]
