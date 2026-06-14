@@ -898,6 +898,14 @@ impl TerminalManager {
                     if !is_owner {
                         Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
                     }
+                    // The spawn-status stream completes once the setup session
+                    // is joinable, so a setup-command failure surfaces only as
+                    // the session ending mid-setup. Leave the stuck "Running
+                    // setup commands…" / queued state for a terminal failed
+                    // state when that happens (no-op outside the setup phase).
+                    view.update(ctx, |terminal_view, ctx| {
+                        terminal_view.maybe_fail_cloud_mode_setup_on_session_end(ctx);
+                    });
                 } else {
                     Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
                     Self::shared_session_ended(&view, model.clone(), ctx);
