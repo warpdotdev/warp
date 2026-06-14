@@ -480,8 +480,16 @@ impl BlocklistAIController {
                 cancellation_reason.is_some_and(|reason| reason.is_lrc_command_completed());
             let should_preserve_in_progress_status = cancellation_reason
                 .is_some_and(|reason| reason.should_preserve_in_progress_status());
+            // When the user explicitly cancels (e.g. pressing the stop button), do not send a
+            // follow-up even if earlier results in the same batch would normally trigger one.
+            // Without this check, a successfully-completed action earlier in the same batch
+            // (e.g. ReadFiles) could cause a spurious follow-up that re-enters InProgress
+            // despite the cancellation, leaving the "Warping..." indicator stuck indefinitely.
+            let is_manually_cancelled =
+                cancellation_reason.is_some_and(|reason| reason.is_manually_cancelled());
             let should_trigger_follow_up_request = (!is_passive_code_diff
                 && !is_lrc_command_completed
+                && !is_manually_cancelled
                 && finished_action_results
                     .iter()
                     .any(|result| result.result.should_trigger_request_upon_completion()))

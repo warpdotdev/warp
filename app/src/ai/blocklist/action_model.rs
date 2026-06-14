@@ -1292,14 +1292,21 @@ impl BlocklistAIActionModel {
         {
             if !cancellation_reason.is_some_and(|r| r.should_preserve_in_progress_status()) {
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    let status = if self
+                    let all_results_cancelled = self
                         .finished_action_results
                         .get(&conversation_id)
                         .is_some_and(|finished_results| {
                             finished_results
                                 .iter()
                                 .all(|result| result.result.is_cancelled())
-                        }) {
+                        });
+                    // Also mark as Cancelled when the user explicitly stopped the agent, even if
+                    // some earlier actions in the same batch completed successfully.  Without this,
+                    // the InProgress status set here could persist and override a prior explicit
+                    // Cancelled update, leaving the "Warping..." indicator stuck.
+                    let is_manually_cancelled =
+                        cancellation_reason.is_some_and(|r| r.is_manually_cancelled());
+                    let status = if all_results_cancelled || is_manually_cancelled {
                         ConversationStatus::Cancelled
                     } else {
                         ConversationStatus::InProgress
