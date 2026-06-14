@@ -18559,6 +18559,28 @@ impl TerminalView {
         self.clear_buffer(ctx);
     }
 
+    /// Simulates an OSC 52 clipboard write event for use in tests.
+    #[cfg(test)]
+    pub fn test_handle_osc52_store(&mut self, contents: String, ctx: &mut ViewContext<Self>) {
+        use crate::terminal::model_events::ModelEvent;
+        self.handle_terminal_event(
+            &ModelEvent::ClipboardStore(crate::terminal::ClipboardType::Clipboard, contents),
+            ctx,
+        );
+    }
+
+    #[cfg(test)]
+    pub fn test_handle_osc52_load(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::terminal::model_events::ModelEvent;
+        self.handle_terminal_event(
+            &ModelEvent::ClipboardLoad(
+                crate::terminal::ClipboardType::Clipboard,
+                std::sync::Arc::new(|text| format!("osc52:{text}")),
+            ),
+            ctx,
+        );
+    }
+
     /// Performs a variant of the "clear buffer" action that is special for the agent view.
     /// Returns true iff the clear was successful.
     fn try_clear_buffer_in_agent_view(&mut self, ctx: &mut ViewContext<Self>) -> bool {

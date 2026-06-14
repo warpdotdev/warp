@@ -3,8 +3,11 @@ use settings_value::SettingsValue;
 use super::*;
 
 #[test]
-fn osc52_default_is_deny() {
-    assert_eq!(Osc52ClipboardAccess::default(), Osc52ClipboardAccess::Deny);
+fn osc52_default_allows_writes_only() {
+    assert_eq!(
+        Osc52ClipboardAccess::default(),
+        Osc52ClipboardAccess::WriteOnly
+    );
 }
 
 #[test]

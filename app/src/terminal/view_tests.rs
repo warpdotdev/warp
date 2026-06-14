@@ -2703,6 +2703,174 @@ fn test_insert_into_input() {
 }
 
 #[test]
+fn test_osc52_clipboard_write_allowed_when_read_write() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            TerminalSettings::handle(ctx).update(ctx, |settings, ctx| {
+                let _ = settings
+                    .osc52_clipboard_access
+                    .set_value(crate::terminal::settings::Osc52ClipboardAccess::ReadWrite, ctx);
+            });
+            assert_eq!("", &read_from_clipboard(ctx));
+            view.test_handle_osc52_store("osc52-test".to_owned(), ctx);
+            assert_eq!("osc52-test", &read_from_clipboard(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_osc52_clipboard_write_allowed_when_write_only() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            TerminalSettings::handle(ctx).update(ctx, |settings, ctx| {
+                let _ = settings
+                    .osc52_clipboard_access
+                    .set_value(crate::terminal::settings::Osc52ClipboardAccess::WriteOnly, ctx);
+            });
+            assert_eq!("", &read_from_clipboard(ctx));
+            view.test_handle_osc52_store("osc52-write-only".to_owned(), ctx);
+            assert_eq!("osc52-write-only", &read_from_clipboard(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_osc52_clipboard_write_blocked_when_deny() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            TerminalSettings::handle(ctx).update(ctx, |settings, ctx| {
+                let _ = settings
+                    .osc52_clipboard_access
+                    .set_value(crate::terminal::settings::Osc52ClipboardAccess::Deny, ctx);
+            });
+            assert_eq!("", &read_from_clipboard(ctx));
+            view.test_handle_osc52_store("should-be-blocked".to_owned(), ctx);
+            // Clipboard must remain empty when OSC 52 access is denied.
+            assert_eq!("", &read_from_clipboard(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_osc52_default_allows_write_without_read() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            // Default setting must allow writes so OSC 52 copy works out of the box,
+            // while keeping clipboard reads opt-in.
+            let access = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+            assert_eq!(
+                access,
+                crate::terminal::settings::Osc52ClipboardAccess::WriteOnly
+            );
+            assert_eq!("", &read_from_clipboard(ctx));
+            view.test_handle_osc52_store("default-test".to_owned(), ctx);
+            assert_eq!("default-test", &read_from_clipboard(ctx));
+        });
+    })
+}
+
+#[test]
+fn test_osc52_clipboard_read_allowed_when_read_write() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            TerminalSettings::handle(ctx).update(ctx, |settings, ctx| {
+                let _ = settings
+                    .osc52_clipboard_access
+                    .set_value(crate::terminal::settings::Osc52ClipboardAccess::ReadWrite, ctx);
+            });
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("readable".to_owned()));
+            view.test_handle_osc52_load(ctx);
+        });
+
+        assert_eq!(*pty_writes.borrow(), vec![b"osc52:readable".to_vec()]);
+    })
+}
+
+#[test]
+fn test_osc52_clipboard_read_blocked_by_default() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let access = *TerminalSettings::as_ref(ctx).osc52_clipboard_access;
+            assert_eq!(
+                access,
+                crate::terminal::settings::Osc52ClipboardAccess::WriteOnly
+            );
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("not-readable".to_owned()));
+            view.test_handle_osc52_load(ctx);
+        });
+
+        assert!(pty_writes.borrow().is_empty());
+    })
+}
+
+#[test]
+fn test_osc52_clipboard_read_blocked_when_deny() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            TerminalSettings::handle(ctx).update(ctx, |settings, ctx| {
+                let _ = settings
+                    .osc52_clipboard_access
+                    .set_value(crate::terminal::settings::Osc52ClipboardAccess::Deny, ctx);
+            });
+            ctx.clipboard()
+                .write(ClipboardContent::plain_text("not-readable".to_owned()));
+            view.test_handle_osc52_load(ctx);
+        });
+
+        assert!(pty_writes.borrow().is_empty());
+    })
+}
+
+#[test]
 fn test_copy_on_select() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

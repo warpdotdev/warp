@@ -24,9 +24,9 @@ use crate::settings::{AISettings, InputSettings, TerminalSpacing};
     rename_all = "snake_case"
 )]
 pub enum Osc52ClipboardAccess {
-    #[default]
     #[schemars(description = "Deny all OSC 52 clipboard access.")]
     Deny,
+    #[default]
     #[schemars(description = "Allow terminal programs to write to the clipboard, but not read.")]
     WriteOnly,
     #[schemars(description = "Allow terminal programs to both read and write the clipboard.")]
@@ -185,7 +185,7 @@ define_settings_group!(TerminalSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "terminal.osc52_clipboard_access",
-        description: "Controls whether terminal programs can access the system clipboard via OSC 52 escape sequences. Options: deny (default), write_only, read_write.",
+        description: "Controls whether terminal programs can access the system clipboard via OSC 52 escape sequences. Options: deny, write_only (default), read_write.",
     },
     // Opt-in toggle for running terminal find on a background thread. Only consulted on
     // channels where `FeatureFlag::AsyncFind` is off; channels with the flag on force the
