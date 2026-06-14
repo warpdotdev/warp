@@ -72,6 +72,16 @@ use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientat
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 
+/// Reason attached to the `Denied` result when the user explicitly picks
+/// "Accept w/o orchestration". It distinguishes the deliberate user opt-out
+/// from system denials (disapproved config, duplicate agents, never-allow
+/// policy, missing auth secret) so the terminal-state card can render a
+/// neutral message instead of telling the user to re-enable orchestration.
+/// The text is also surfaced to the agent as the denial reason, signalling
+/// that it should complete the task itself without starting child agents.
+pub(crate) const RUN_WITHOUT_ORCHESTRATION_DENY_REASON: &str =
+    "The user chose to run without orchestration; complete the task yourself without starting child agents.";
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -1050,7 +1060,11 @@ impl TypedActionView for RunAgentsCardView {
                 self.emit_decision(RunAgentsCardDecision::AcceptWithoutOrchestration, ctx);
                 let action_id = self.action_id.clone();
                 self.action_model.update(ctx, |action_model, action_ctx| {
-                    action_model.deny_run_agents(&action_id, String::new(), action_ctx);
+                    action_model.deny_run_agents(
+                        &action_id,
+                        RUN_WITHOUT_ORCHESTRATION_DENY_REASON.to_string(),
+                        action_ctx,
+                    );
                 });
             }
             RunAgentsCardViewAction::ToggleAcceptMenu => {
@@ -1381,6 +1395,15 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
             (label, kind)
         }
         RunAgentsResult::Denied { reason } => {
+            // The user deliberately chose "Accept w/o orchestration": this is
+            // not a failure and must not tell the user to re-enable
+            // orchestration. The agent proceeds without child agents.
+            if reason == RUN_WITHOUT_ORCHESTRATION_DENY_REASON {
+                return (
+                    "Continuing without orchestration".to_string(),
+                    StatusKind::Cancelled,
+                );
+            }
             let body = if reason.is_empty() {
                 "Orchestration is currently disabled. Re-enable on the plan card to launch."
                     .to_string()

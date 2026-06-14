@@ -345,6 +345,18 @@ mod format_terminal_state_tests {
     }
 
     #[test]
+    fn user_opt_out_denial_renders_neutral_message() {
+        // "Accept w/o orchestration" is a deliberate user choice, not a
+        // failure. It must not instruct the user to re-enable orchestration.
+        let (label, kind) = format_terminal_state(&RunAgentsResult::Denied {
+            reason: super::super::RUN_WITHOUT_ORCHESTRATION_DENY_REASON.to_string(),
+        });
+        assert_eq!(label, "Continuing without orchestration");
+        assert!(!label.contains("Re-enable"));
+        assert!(matches!(kind, StatusKind::Cancelled));
+    }
+
+    #[test]
     fn cancelled_uses_cancelled_status() {
         let (label, kind) = format_terminal_state(&RunAgentsResult::Cancelled);
         assert_eq!(label, "Spawn agents cancelled");
