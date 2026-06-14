@@ -1397,12 +1397,8 @@ impl CurrentPrompt {
             }
         }
 
-        // Repo detached, clear GitDiffStats.
         if handle.is_none() {
-            if let Some(state) = self.states.get_mut(&ContextChipKind::GitDiffStats) {
-                state.clear_abort_handlers();
-                state.clear_cache();
-            }
+            self.clear_git_backed_chips();
             let _ = self.update_tx.try_send(());
             return;
         }
@@ -1482,6 +1478,8 @@ impl CurrentPrompt {
             .and_then(|h| h.as_ref(ctx).metadata(ctx).cloned());
 
         let Some(metadata) = metadata else {
+            self.clear_git_backed_chips();
+            let _ = self.update_tx.try_send(());
             return;
         };
 
@@ -1531,6 +1529,20 @@ impl CurrentPrompt {
             .cloned();
         if current_pr != new_pr_value {
             self.update_chip_value(&ContextChipKind::GithubPullRequest, new_pr_value);
+        }
+    }
+
+    #[cfg(feature = "local_fs")]
+    fn clear_git_backed_chips(&mut self) {
+        for chip_kind in [
+            ContextChipKind::ShellGitBranch,
+            ContextChipKind::GitDiffStats,
+            ContextChipKind::GithubPullRequest,
+        ] {
+            if let Some(state) = self.states.get_mut(&chip_kind) {
+                state.clear_abort_handlers();
+                state.clear_cache();
+            }
         }
     }
 
