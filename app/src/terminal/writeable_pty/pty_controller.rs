@@ -734,6 +734,11 @@ fn bytes_to_execute_command(
     is_bracketed_paste_enabled: bool,
 ) -> Vec<u8> {
     let mut command_bytes = shell_type.kill_buffer_bytes().to_vec();
+    let command_without_escapes = command.replace(escape_sequences::C0::ESC as char, "");
+    // Match the user paste path by sending command line breaks as carriage returns. Some shell
+    // line editors handle literal line feeds inside bracketed paste differently than a normal
+    // pasted multi-line command, which can leave continuation prompts open for complex blocks.
+    let command_without_newlines = LINEFEED_REGEX.replace_all(&command_without_escapes, "\r");
 
     // Only execute the command via bracketed paste if the command is not empty. Some ZSH
     // bracketed paste magic functions return errors if bracketed paste is used without text
@@ -753,27 +758,22 @@ fn bytes_to_execute_command(
                 //
                 // We don't care about preserving trailing whitespace; it would just take up
                 // unnecessary space in the blocklist.
-                let (leading_whitespace, rest_of_command) =
-                    command.split_at(command.len() - command.trim_start().len());
+                let (leading_whitespace, rest_of_command) = command_without_newlines.split_at(
+                    command_without_newlines.len() - command_without_newlines.trim_start().len(),
+                );
                 command_bytes.extend(leading_whitespace.as_bytes());
                 command_bytes.extend(wrap_bytes_in_bracketed_paste(
-                    rest_of_command
-                        .replace(escape_sequences::C0::ESC as char, "")
-                        .into_bytes(),
+                    rest_of_command.as_bytes().to_vec(),
                 ));
             }
             _ => command_bytes.extend(wrap_bytes_in_bracketed_paste(
-                command
-                    .replace(escape_sequences::C0::ESC as char, "")
-                    .into_bytes(),
+                command_without_newlines.as_bytes().to_vec(),
             )),
         }
     } else {
-        let command_without_escapes = command.replace(escape_sequences::C0::ESC as char, "");
         // This is a fix for PLAT-770 to allow multi-line commands in Powershell.
         // In general, shells without bracketed paste don't handle `\n` that well,
         // and in the case of PowerShell, it is explicitly ignored.
-        let command_without_newlines = LINEFEED_REGEX.replace_all(&command_without_escapes, "\r");
         command_bytes.extend(command_without_newlines.as_bytes());
     }
     command_bytes.extend(shell_type.execute_command_bytes().to_vec());
@@ -801,3 +801,7 @@ pub enum EventLoopSendError {
 pub trait EventLoopSender: 'static {
     fn send(&self, message: Message) -> Result<(), EventLoopSendError>;
 }
+
+#[cfg(test)]
+#[path = "pty_controller_command_bytes_tests.rs"]
+mod tests;
