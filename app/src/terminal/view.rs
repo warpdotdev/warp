@@ -6850,6 +6850,16 @@ impl TerminalView {
         }
     }
 
+    fn is_autoexecute_mode_enabled(&self, ctx: &AppContext) -> bool {
+        self.ai_context_model
+            .as_ref(ctx)
+            .pending_query_autoexecute_override(ctx)
+            .is_autoexecute_any_action()
+    }
+
+    fn should_accept_pending_action_before_autoexecute_toggle(&self, ctx: &AppContext) -> bool {
+        !self.is_autoexecute_mode_enabled(ctx)
+    }
     /// Returns true if the window is wide enough to auto-open side panels.
     pub fn can_auto_open_panel(&self) -> bool {
         self.size_info.pane_width_px().as_f32() > MINIMUM_WIDTH_TO_AUTO_OPEN_PANE
@@ -26526,11 +26536,17 @@ impl TypedActionView for TerminalView {
                     return;
                 }
 
-                // If there's a pending (blocked) requested code diff, accept it first.
-                if let Some(ai_block) = self.last_ai_block() {
-                    ai_block.update(ctx, |ai_block, ctx| {
-                        ai_block.accept_pending_action(ctx);
-                    });
+                // When Fast Forward is currently off, Cmd/Ctrl+Shift+I doubles as the
+                // "Auto-approve" affordance on pending action speed-bumps: approve the
+                // current action and enable Fast Forward for the rest of the task. When
+                // Fast Forward is currently on, the same shortcut should only turn it off;
+                // approving a blocked command while disabling Fast Forward is surprising.
+                if self.should_accept_pending_action_before_autoexecute_toggle(ctx) {
+                    if let Some(ai_block) = self.last_ai_block() {
+                        ai_block.update(ctx, |ai_block, ctx| {
+                            ai_block.accept_pending_action(ctx);
+                        });
+                    }
                 }
 
                 self.ai_context_model.update(ctx, |context_model, ctx| {

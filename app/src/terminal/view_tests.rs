@@ -7027,6 +7027,51 @@ fn ctrl_c_does_not_accept_prompt_suggestion_banner() {
     })
 }
 
+#[test]
+fn toggle_autoexecute_mode_accepts_pending_actions_only_when_enabling() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let conversation_id = view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        None,
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("Should be able to enter agent view")
+            });
+
+            assert!(
+                view.should_accept_pending_action_before_autoexecute_toggle(ctx),
+                "when Fast Forward is off, the toggle should still auto-accept the pending action"
+            );
+
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                history_model.toggle_autoexecute_override(&conversation_id, view.view_id, ctx);
+            });
+
+            assert!(
+                !view.should_accept_pending_action_before_autoexecute_toggle(ctx),
+                "when Fast Forward is already on, the toggle should only disable it"
+            );
+
+            view.handle_action(&TerminalAction::ToggleAutoexecuteMode, ctx);
+
+            assert!(
+                view.should_accept_pending_action_before_autoexecute_toggle(ctx),
+                "after disabling Fast Forward, the next toggle may auto-accept while enabling again"
+            );
+        });
+    })
+}
+
 /// Regression test for GH703: a Linear deeplink prompt must never be auto-submitted
 /// to the LLM. Because `LinearDeepLink` returns `AutoTriggerBehavior::Never`, the
 /// prompt must land in the input buffer as a draft and the "press enter again to
