@@ -515,11 +515,23 @@ impl TerminalView {
             )
         });
         ctx.subscribe_to_view(&setup_command_block, |me, _, event, _| {
-            let super::CloudModeSetupCommandBlockEvent::ToggleBlockVisibility(block_id) = event;
-            me.model
-                .lock()
-                .block_list_mut()
-                .toggle_visibility_of_block(block_id);
+            match event {
+                super::CloudModeSetupCommandBlockEvent::ToggleBlockVisibility(block_id) => {
+                    me.model
+                        .lock()
+                        .block_list_mut()
+                        .toggle_visibility_of_block(block_id);
+                }
+                super::CloudModeSetupCommandBlockEvent::SendInputToCommand(text) => {
+                    // Forward user-typed input to the running setup command's stdin.
+                    // This sends bytes through the shared-session write-to-PTY channel,
+                    // which the session-sharing server routes to the cloud agent's PTY.
+                    let bytes = text.as_bytes().to_vec();
+                    me.model
+                        .lock()
+                        .send_write_to_pty_events_for_shared_session(bytes);
+                }
+            }
         });
         self.insert_rich_content(
             None,
