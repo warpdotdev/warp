@@ -6056,9 +6056,7 @@ impl EditorView {
         {
             self.vim_escape(ctx);
         } else if self.can_select(ctx) {
-            if FeatureFlag::ClearAutosuggestionOnEscape.is_enabled()
-                && (!self.vim_mode_enabled(ctx) || self.vim_mode(ctx) == Some(VimMode::Normal))
-            {
+            if !self.vim_mode_enabled(ctx) || self.vim_mode(ctx) == Some(VimMode::Normal) {
                 self.clear_autosuggestion(ctx);
             }
 

@@ -113,8 +113,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ValidateAutosuggestions,
         #[cfg(feature = "prompt_suggestions_via_maa")]
         FeatureFlag::PromptSuggestionsViaMAA,
-        #[cfg(feature = "clear_autosuggestion_on_escape")]
-        FeatureFlag::ClearAutosuggestionOnEscape,
         #[cfg(feature = "autoupdate_ui_revamp")]
         FeatureFlag::AutoupdateUIRevamp,
         #[cfg(all(not(windows), feature = "kitty_images"))]
