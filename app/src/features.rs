@@ -135,8 +135,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentOnboarding,
         #[cfg(feature = "agent_shared_sessions")]
         FeatureFlag::AgentSharedSessions,
-        #[cfg(feature = "suggested_rules")]
-        FeatureFlag::SuggestedRules,
         #[cfg(feature = "suggested_agent_mode_workflows")]
         FeatureFlag::SuggestedAgentModeWorkflows,
         #[cfg(feature = "command_correction_key")]

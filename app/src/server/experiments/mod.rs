@@ -86,7 +86,6 @@ impl ServerExperiment {
             Self::AgentModeAnalyticsExperiment => {
                 FeatureFlag::AgentModeAnalytics.set_enabled(true);
                 FeatureFlag::AIRules.set_enabled(true);
-                FeatureFlag::SuggestedRules.set_enabled(true);
             }
             Self::WindowsLaunchExperiment => {
                 // TODO(alokedesai): Clean this up now that we no longer gate access to the Windows
