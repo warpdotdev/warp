@@ -37,6 +37,8 @@ pub enum Experiment {
     PromptSuggestionsViaMaaControl,
     PromptSuggestionsViaMaaExperiment,
     PromptSuggestionsViaMaaOob,
+    FreeAiRemovalControl,
+    FreeAiRemovalExperiment,
     FreeUserNoAiControl,
     FreeUserNoAiExperiment,
     ReverseProTrialControl,

@@ -30,8 +30,8 @@ impl Display for ServerExperiment {
             Self::PromptSuggestionsViaMaaOutOfBandExperiment => {
                 "PROMPT_SUGGESTIONS_VIA_MAA_OOB_EXPERIMENT"
             }
-            Self::FreeUserNoAiControl => "FREE_USER_NO_AI_CONTROL",
-            Self::FreeUserNoAiExperiment => "FREE_USER_NO_AI_EXPERIMENT",
+            Self::FreeAiRemovalControl => "FREE_AI_REMOVAL_CONTROL",
+            Self::FreeAiRemovalExperiment => "FREE_AI_REMOVAL_EXPERIMENT",
             Self::OzMultiHarnessControl => "OZ_MULTI_HARNESS_CONTROL",
             Self::OzMultiHarnessExperiment => "OZ_MULTI_HARNESS_EXPERIMENT",
             #[cfg(test)]
@@ -61,8 +61,8 @@ impl ServerExperiment {
             }
             "PROMPT_SUGGESTIONS_VIA_MAA_CONTROL" => Ok(Self::PromptSuggestionsViaMaaControl),
             "PROMPT_SUGGESTIONS_VIA_MAA_EXPERIMENT" => Ok(Self::PromptSuggestionsViaMaaExperiment),
-            "FREE_USER_NO_AI_CONTROL" => Ok(Self::FreeUserNoAiControl),
-            "FREE_USER_NO_AI_EXPERIMENT" => Ok(Self::FreeUserNoAiExperiment),
+            "FREE_AI_REMOVAL_CONTROL" => Ok(Self::FreeAiRemovalControl),
+            "FREE_AI_REMOVAL_EXPERIMENT" => Ok(Self::FreeAiRemovalExperiment),
             "OZ_MULTI_HARNESS_CONTROL" => Ok(Self::OzMultiHarnessControl),
             "OZ_MULTI_HARNESS_EXPERIMENT" => Ok(Self::OzMultiHarnessExperiment),
             s => Err(anyhow::anyhow!(
@@ -98,8 +98,8 @@ impl TryFrom<Experiment> for ServerExperiment {
             Experiment::PromptSuggestionsViaMaaOob => {
                 Ok(Self::PromptSuggestionsViaMaaOutOfBandExperiment)
             }
-            Experiment::FreeUserNoAiControl => Ok(Self::FreeUserNoAiControl),
-            Experiment::FreeUserNoAiExperiment => Ok(Self::FreeUserNoAiExperiment),
+            Experiment::FreeAiRemovalControl => Ok(Self::FreeAiRemovalControl),
+            Experiment::FreeAiRemovalExperiment => Ok(Self::FreeAiRemovalExperiment),
             Experiment::OzMultiHarnessControl => Ok(Self::OzMultiHarnessControl),
             Experiment::OzMultiHarnessExperiment => Ok(Self::OzMultiHarnessExperiment),
             // Experiments that we no longer support on the client.

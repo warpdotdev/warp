@@ -18,8 +18,6 @@ use warpui::SingletonEntity as _;
 use warpui::SingletonEntity;
 
 use crate::features::FeatureFlag;
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::CustomerType;
 
 mod convert;
 mod model;
@@ -46,8 +44,8 @@ pub enum ServerExperiment {
     PromptSuggestionsViaMaaControl,
     PromptSuggestionsViaMaaExperiment,
     PromptSuggestionsViaMaaOutOfBandExperiment,
-    FreeUserNoAiControl,
-    FreeUserNoAiExperiment,
+    FreeAiRemovalControl,
+    FreeAiRemovalExperiment,
     OzMultiHarnessControl,
     OzMultiHarnessExperiment,
     /// A test-only experiment.
@@ -129,12 +127,9 @@ impl ServerExperiment {
             }
             // The normal experiment arm is no longer used.
             Self::PromptSuggestionsViaMaaExperiment => {}
-            Self::FreeUserNoAiControl => {
-                FeatureFlag::FreeUserNoAi.set_enabled(false);
-            }
-            Self::FreeUserNoAiExperiment => {
-                FeatureFlag::FreeUserNoAi.set_enabled(true);
-            }
+            // Enrollment is queried directly via `is_free_ai_removal_experiment_enabled`;
+            // there is no client feature flag to toggle.
+            Self::FreeAiRemovalControl | Self::FreeAiRemovalExperiment => {}
             Self::OzMultiHarnessControl => {
                 FeatureFlag::AgentHarness.set_enabled(false);
             }
@@ -151,15 +146,15 @@ impl ServerExperiment {
     }
 }
 
-/// Returns `true` when the user is in the `FreeUserNoAiExperiment` arm **and** is on the
-/// free tier. This is the single source of truth for gating any client-side behaviour
-/// that should be locked/disabled for users without AI credits.
-pub fn is_free_user_no_ai_experiment_active(ctx: &AppContext) -> bool {
-    let in_experiment = FeatureFlag::FreeUserNoAi.is_enabled();
-    let is_free_tier = UserWorkspaces::handle(ctx)
+/// Returns `true` when the user is enrolled in the `FREE_AI_REMOVAL` experiment arm,
+/// under which the Free plan includes no Warp-provided agent AI. This is the single
+/// source of truth for the arm check; callers gating Free-plan behavior must combine
+/// it with their own plan/billing checks.
+// TODO(REV-1625): remove this allow once the stacked onboarding/gated-state PRs consume
+// the helper.
+#[allow(dead_code)]
+pub fn is_free_ai_removal_experiment_enabled(ctx: &AppContext) -> bool {
+    ServerExperiments::handle(ctx)
         .as_ref(ctx)
-        .current_team()
-        .map(|team| team.billing_metadata.customer_type == CustomerType::Free)
-        .unwrap_or(true); // no team = solo free user
-    in_experiment && is_free_tier
+        .is_experiment_enabled(&ServerExperiment::FreeAiRemovalExperiment)
 }
