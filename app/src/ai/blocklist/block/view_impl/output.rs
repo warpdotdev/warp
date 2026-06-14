@@ -97,7 +97,7 @@ use crate::ai::blocklist::inline_action::web_search::WebSearchView;
 use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
-use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::view_util::{format_credits, format_token_count};
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
 use crate::ai::skills::{
@@ -3334,6 +3334,15 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
                     format!("{credit_usage_text} (+{credits_spent_for_last_block:.1})");
             }
         }
+    }
+
+    let total_tokens: u64 = conversation
+        .token_usage()
+        .iter()
+        .map(|u| u64::from(u.warp_tokens + u.byok_tokens + u.custom_endpoint_tokens))
+        .sum();
+    if total_tokens > 0 {
+        credit_usage_text = format!("{credit_usage_text} · {}", format_token_count(total_tokens));
     }
 
     let icon_size = icon_size(app);
