@@ -23,6 +23,13 @@ use warpui_core::{AppContext, Entity, ModelContext, WeakModelHandle};
 
 const MAX_SYNTAX_TREES: usize = 3;
 
+/// Maximum buffer size (in bytes) that we will attempt to parse with tree-sitter.
+/// Files larger than this skip syntax highlighting to prevent unbounded memory
+/// growth inside tree-sitter's error-recovery path (`ts_parser__recover`).
+/// 10 MB is generous for source code while guarding against multi-GB allocations
+/// observed in production (Sentry issue 7259255054).
+const MAX_PARSEABLE_BYTES: usize = 10 * 1024 * 1024;
+
 thread_local! {
     static PARSER: RefCell<Parser> = RefCell::new(Parser::new());
 }
@@ -309,6 +316,18 @@ impl DecorationLayer for SyntaxTreeState {
         // If there is an active parsing in progress. Abort that first before starting another one.
         if let Some(handle) = self.parsing_handle.take() {
             handle.abort();
+        }
+
+        // Skip tree-sitter parsing for very large buffers to prevent unbounded memory
+        // growth inside the parser's error-recovery path.
+        if content.byte_len().as_usize() > MAX_PARSEABLE_BYTES {
+            log::warn!(
+                "Skipping tree-sitter parse: buffer size {} bytes exceeds {} byte limit",
+                content.byte_len().as_usize(),
+                MAX_PARSEABLE_BYTES,
+            );
+            self.buffer_version = version;
+            return;
         }
 
         let Some(language) = self
