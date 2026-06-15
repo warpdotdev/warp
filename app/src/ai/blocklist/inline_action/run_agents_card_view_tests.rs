@@ -306,6 +306,26 @@ mod format_terminal_state_tests {
     }
 
     #[test]
+    fn all_failed_uses_failure_status_not_mixed() {
+        let result = launched_result(vec![
+            failed("a", "boom"),
+            failed("b", "boom"),
+            failed("c", "boom"),
+        ]);
+        let (label, kind) = format_terminal_state(&result);
+        assert_eq!(label, "Failed to spawn 3 agents");
+        assert!(matches!(kind, StatusKind::Failure));
+    }
+
+    #[test]
+    fn single_failed_uses_singular_failure_label() {
+        let result = launched_result(vec![failed("a", "boom")]);
+        let (label, kind) = format_terminal_state(&result);
+        assert_eq!(label, "Failed to spawn agent");
+        assert!(matches!(kind, StatusKind::Failure));
+    }
+
+    #[test]
     fn failure_with_error_includes_error_text() {
         let (label, kind) = format_terminal_state(&RunAgentsResult::Failure {
             error: "server rejected request".to_string(),

@@ -1364,21 +1364,28 @@ pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, Status
                 .iter()
                 .filter(|a| matches!(a.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
                 .count();
-            let label = if launched == total {
-                if total == 1 {
+            if launched == total {
+                let label = if total == 1 {
                     "Spawned 1 agent".to_string()
                 } else {
                     format!("Spawned {total} agents")
-                }
+                };
+                (label, StatusKind::Success)
+            } else if launched == 0 {
+                // Every child failed to launch: surface a terminal failure
+                // rather than the in-progress-looking mixed state.
+                let label = if total == 1 {
+                    "Failed to spawn agent".to_string()
+                } else {
+                    format!("Failed to spawn {total} agents")
+                };
+                (label, StatusKind::Failure)
             } else {
-                format!("Spawned {launched} of {total} agents")
-            };
-            let kind = if launched == total {
-                StatusKind::Success
-            } else {
-                StatusKind::Mixed
-            };
-            (label, kind)
+                (
+                    format!("Spawned {launched} of {total} agents"),
+                    StatusKind::Mixed,
+                )
+            }
         }
         RunAgentsResult::Denied { reason } => {
             let body = if reason.is_empty() {
@@ -1434,7 +1441,10 @@ fn render_status_only_card(
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
     let icon = match kind {
-        StatusKind::Spawning | StatusKind::Mixed => icons::yellow_running_icon(appearance).finish(),
+        StatusKind::Spawning => icons::yellow_running_icon(appearance).finish(),
+        // Partial success is terminal, so use a static warning glyph rather
+        // than the in-progress-looking running circle.
+        StatusKind::Mixed => inline_action_icons::warning_icon(appearance).finish(),
         StatusKind::Success => inline_action_icons::green_check_icon(appearance).finish(),
         StatusKind::Failure => inline_action_icons::red_x_icon(appearance).finish(),
         StatusKind::Cancelled => inline_action_icons::cancelled_icon(appearance).finish(),
