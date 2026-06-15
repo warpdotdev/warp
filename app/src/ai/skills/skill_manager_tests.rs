@@ -714,6 +714,10 @@ fn get_skills_for_working_directory_respects_location() {
             remote_bundled_descriptor.reference,
             SkillReference::Path(remote_bundled_path.clone())
         );
+        // Path-referenced remote bundled descriptors keep their bundled scope:
+        // filters that hide non-invokable bundled skills (e.g. the `/open-skill`
+        // selector) key off the scope, not the reference variant.
+        assert_eq!(remote_bundled_descriptor.scope, SkillScope::Bundled);
         let resolved_content = handle.read(&app, |manager, ctx| {
             manager
                 .active_skill_by_reference(&remote_bundled_descriptor.reference, ctx)

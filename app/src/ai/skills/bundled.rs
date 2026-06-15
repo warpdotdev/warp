@@ -236,7 +236,9 @@ impl BundledSkill {
                 // the local figma catalog loaded from `mcp_skills/figma`.
                 let icon = match &activation {
                     BundledSkillActivation::RequiresMcp(McpIntegration::Figma) => Icon::Figma,
-                    BundledSkillActivation::Always | BundledSkillActivation::RequiresFile(_) => {
+                    BundledSkillActivation::Always
+                    | BundledSkillActivation::RequiresFeature(_)
+                    | BundledSkillActivation::RequiresFile(_) => {
                         icon_for_bundled_skill(&id)
                     }
                 };
