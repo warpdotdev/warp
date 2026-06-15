@@ -11873,18 +11873,17 @@ impl Workspace {
         // If the tab belonged to a group, try to re-join it by appending after
         // the group's current last member. If the group no longer exists (it was
         // pruned when the tab was closed), drop the membership and fall back to
-        // the original index instead.
+        // the original index instead. On restoration, we must ensure the pin
+        // invariant holds. That is, pinned items appear before unpinned items.
         let insert_index = if let Some(group_id) = tab_data.group_id {
             if self.tab_groups.contains_key(&group_id) {
-                // Group still exists — append after its current last member.
                 self.index_after_group(group_id).unwrap_or(self.tabs.len())
             } else {
-                // Group was pruned — drop membership.
                 tab_data.group_id = None;
-                tab_index
+                self.index_for_restored_tab(&tab_data, tab_index)
             }
         } else {
-            tab_index
+            self.index_for_restored_tab(&tab_data, tab_index)
         };
 
         self.tabs.insert(insert_index, tab_data);
@@ -11899,6 +11898,44 @@ impl Workspace {
         self.activate_tab(insert_index, ctx);
 
         ctx.notify();
+    }
+
+    /// Insertion index for a restored tab that is not part of an existing group.
+    /// If the tab was pinned, it must land at it's original index or the end of
+    /// the pinned region. If the tab is not pinned, it must land at it's original
+    /// index or after all pinned items.
+    fn index_for_restored_tab(&self, tab: &TabData, original_index: usize) -> usize {
+        let boundary = self.pinned_boundary_index(&self.tabs);
+        let region_clamped = if tab.pinned {
+            // Original index or before all unpinned items.
+            original_index.min(boundary)
+        } else {
+            // Original index or after all pinned items.
+            original_index.max(boundary)
+        };
+        // Safety net so the new index is not beyond the lists bounds.
+        // By definition of MRU ordering, this is not possible.
+        let index = region_clamped.min(self.tabs.len());
+
+        // Ensure that the index we are restoring to does not land
+        // in the middle of a group.
+        self.index_avoiding_group_split(index)
+    }
+
+    /// If `index` would split a group (same group on both sides of the slot),
+    /// returns the slot just past that group; otherwise returns `index`.
+    fn index_avoiding_group_split(&self, index: usize) -> usize {
+        if index == 0 || index >= self.tabs.len() {
+            return index;
+        }
+        let before = self.tabs[index - 1].group_id;
+        let after = self.tabs[index].group_id;
+        match before {
+            Some(group_id) if before == after => {
+                self.index_after_group(group_id).unwrap_or(index)
+            }
+            _ => index,
+        }
     }
 
     pub fn open_autoupdate_failure_link(&mut self, ctx: &mut ViewContext<Self>) {
