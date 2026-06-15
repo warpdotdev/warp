@@ -105,6 +105,50 @@ use environment::PrepareEnvironmentError;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;
 
+/// Races `run_future` against optional background credential refresh loops,
+/// dropping the loops automatically when `run_future` resolves.
+///
+/// Both refresh loops run forever when active; they are dropped when
+/// `futures::select!` picks the `run_future` arm. This consolidates the
+/// otherwise-repeated 4-arm `match (git, bedrock)` pattern that would
+/// otherwise appear once per harness type.
+async fn with_credential_refreshes<F, T>(
+    run_future: F,
+    git_task_id: Option<String>,
+    ai_client: Arc<dyn AIClient>,
+    oidc_strategy: Option<(String, String, String)>,
+    foreground: &ModelSpawner<AgentDriver>,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    let git_refresh = async move {
+        match git_task_id {
+            Some(task_id) => git_credentials::refresh_loop(task_id, ai_client).await,
+            None => future::pending::<()>().await,
+        }
+    }
+    .fuse();
+
+    let bedrock_refresh = async move {
+        match oidc_strategy {
+            Some((task_id, role_arn, region)) => {
+                bedrock_credentials::refresh_loop(task_id, role_arn, region, foreground).await
+            }
+            None => future::pending::<()>().await,
+        }
+    }
+    .fuse();
+
+    let run_future = run_future.fuse();
+    futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
+    futures::select! {
+        result = run_future => result,
+        _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
+        _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+    }
+}
+
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Timeout for individual harness auth preflight commands.
@@ -2099,73 +2143,29 @@ impl AgentDriver {
             })
             .await?;
 
-        // Run the harness with a prompt, racing it against infinite background refresh
-        // loops for git credentials and (when configured) Bedrock OIDC credentials.
-        // Refresh futures never resolve on their own — they are dropped automatically
-        // when `select!` resolves on the harness result.
+        // Run the harness with a prompt, racing it against optional background refresh
+        // loops for git credentials and Bedrock OIDC credentials via
+        // `with_credential_refreshes`. Refresh futures never resolve on their own —
+        // they are dropped automatically when the harness result resolves.
         match task.harness {
             HarnessKind::Oz => {
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
 
-                let conversation_status = match (task_id_for_refresh, oidc_strategy_for_refresh) {
-                    (Some(git_task_id), Some((bedrock_task_id, role_arn, region))) => {
-                        let git_refresh =
-                            git_credentials::refresh_loop(git_task_id, ai_client_for_refresh)
-                                .fuse();
-                        let bedrock_refresh = bedrock_credentials::refresh_loop(
-                            bedrock_task_id,
-                            role_arn,
-                            region,
-                            &foreground,
-                        )
-                        .fuse();
-                        futures::pin_mut!(git_refresh, bedrock_refresh);
-                        futures::select! {
-                            result = status_rx.fuse() => result.map_err(|_| {
-                                log::error!("Subscription dropped before agent finished");
-                                AgentDriverError::InvalidRuntimeState
-                            })?,
-                            _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
-                            _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
-                        }
-                    }
-                    (Some(git_task_id), None) => {
-                        let git_refresh =
-                            git_credentials::refresh_loop(git_task_id, ai_client_for_refresh)
-                                .fuse();
-                        futures::pin_mut!(git_refresh);
-                        futures::select! {
-                            result = status_rx.fuse() => result.map_err(|_| {
-                                log::error!("Subscription dropped before agent finished");
-                                AgentDriverError::InvalidRuntimeState
-                            })?,
-                            _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
-                        }
-                    }
-                    (None, Some((bedrock_task_id, role_arn, region))) => {
-                        let bedrock_refresh = bedrock_credentials::refresh_loop(
-                            bedrock_task_id,
-                            role_arn,
-                            region,
-                            &foreground,
-                        )
-                        .fuse();
-                        futures::pin_mut!(bedrock_refresh);
-                        futures::select! {
-                            result = status_rx.fuse() => result.map_err(|_| {
-                                log::error!("Subscription dropped before agent finished");
-                                AgentDriverError::InvalidRuntimeState
-                            })?,
-                            _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
-                        }
-                    }
-                    (None, None) => status_rx.await.map_err(|_| {
-                        log::error!("Subscription dropped before agent finished");
-                        AgentDriverError::InvalidRuntimeState
-                    })?,
-                };
+                let conversation_status = with_credential_refreshes(
+                    async move {
+                        status_rx.await.map_err(|_| {
+                            log::error!("Subscription dropped before agent finished");
+                            AgentDriverError::InvalidRuntimeState
+                        })
+                    },
+                    task_id_for_refresh,
+                    ai_client_for_refresh,
+                    oidc_strategy_for_refresh,
+                    &foreground,
+                )
+                .await?;
 
                 log::info!(
                     "Ambient agent Oz lifecycle: event=run_exit_received idle_on_complete_elapsed_or_not_configured=true next=terminal_teardown_after_flush"
@@ -2200,84 +2200,20 @@ impl AgentDriver {
                     .await?;
                 let runtime_error_patterns = harness.runtime_error_patterns();
 
-                match (task_id_for_refresh, oidc_strategy_for_refresh) {
-                    (Some(git_task_id), Some((bedrock_task_id, role_arn, region))) => {
-                        let harness_fut = Self::run_harness(
-                            runner,
-                            runtime_error_patterns,
-                            &foreground,
-                            harness_exit_rx,
-                            &setup_events,
-                        )
-                        .fuse();
-                        let git_refresh =
-                            git_credentials::refresh_loop(git_task_id, ai_client_for_refresh)
-                                .fuse();
-                        let bedrock_refresh = bedrock_credentials::refresh_loop(
-                            bedrock_task_id,
-                            role_arn,
-                            region,
-                            &foreground,
-                        )
-                        .fuse();
-                        futures::pin_mut!(harness_fut, git_refresh, bedrock_refresh);
-                        futures::select! {
-                            result = harness_fut => result,
-                            _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
-                            _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
-                        }
-                    }
-                    (Some(git_task_id), None) => {
-                        let harness_fut = Self::run_harness(
-                            runner,
-                            runtime_error_patterns,
-                            &foreground,
-                            harness_exit_rx,
-                            &setup_events,
-                        )
-                        .fuse();
-                        let git_refresh =
-                            git_credentials::refresh_loop(git_task_id, ai_client_for_refresh)
-                                .fuse();
-                        futures::pin_mut!(harness_fut, git_refresh);
-                        futures::select! {
-                            result = harness_fut => result,
-                            _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
-                        }
-                    }
-                    (None, Some((bedrock_task_id, role_arn, region))) => {
-                        let harness_fut = Self::run_harness(
-                            runner,
-                            runtime_error_patterns,
-                            &foreground,
-                            harness_exit_rx,
-                            &setup_events,
-                        )
-                        .fuse();
-                        let bedrock_refresh = bedrock_credentials::refresh_loop(
-                            bedrock_task_id,
-                            role_arn,
-                            region,
-                            &foreground,
-                        )
-                        .fuse();
-                        futures::pin_mut!(harness_fut, bedrock_refresh);
-                        futures::select! {
-                            result = harness_fut => result,
-                            _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
-                        }
-                    }
-                    (None, None) => {
-                        Self::run_harness(
-                            runner,
-                            runtime_error_patterns,
-                            &foreground,
-                            harness_exit_rx,
-                            &setup_events,
-                        )
-                        .await
-                    }
-                }
+                with_credential_refreshes(
+                    Self::run_harness(
+                        runner,
+                        runtime_error_patterns,
+                        &foreground,
+                        harness_exit_rx,
+                        &setup_events,
+                    ),
+                    task_id_for_refresh,
+                    ai_client_for_refresh,
+                    oidc_strategy_for_refresh,
+                    &foreground,
+                )
+                .await
             }
             HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
                 harness: harness.to_string(),
