@@ -134,7 +134,12 @@ impl TextFileAccumulator {
         let line_range = if self.whole_file && !self.truncated {
             None
         } else if self.truncated {
-            Some(range.start..self.last_line)
+            // `last_line` is the last line that was successfully buffered, or 0
+            // when the first in-range line already exceeded the byte budget (so
+            // nothing was buffered). Clamp to `range.start` so a truncated
+            // segment with no buffered lines yields an empty `start..start`
+            // range instead of a reversed `start..0`.
+            Some(range.start..self.last_line.max(range.start))
         } else {
             Some(range)
         };
