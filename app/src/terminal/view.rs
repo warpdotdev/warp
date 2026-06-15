@@ -4766,6 +4766,10 @@ impl TerminalView {
         self.block_completed_callbacks.push(Box::new(callback));
     }
 
+    #[cfg_attr(
+        all(feature = "local_acp", not(target_family = "wasm")),
+        allow(dead_code)
+    )]
     fn set_pending_cloud_mode_start_callback(
         &mut self,
         callback: TerminalViewCallback,
@@ -4786,6 +4790,10 @@ impl TerminalView {
         ));
     }
 
+    #[cfg_attr(
+        all(feature = "local_acp", not(target_family = "wasm")),
+        allow(dead_code)
+    )]
     fn clear_pending_cloud_mode_start_callback(&mut self) {
         if let Some(handle) = self.pending_cloud_mode_start_abort_handle.take() {
             handle.abort();
@@ -21214,6 +21222,10 @@ impl TerminalView {
         }
     }
 
+    #[cfg_attr(
+        all(feature = "local_acp", not(target_family = "wasm")),
+        allow(dead_code)
+    )]
     fn restore_followup_prompt_after_failed_submission(
         &mut self,
         prompt: &str,
@@ -21230,6 +21242,10 @@ impl TerminalView {
         ctx.notify();
     }
 
+    #[cfg_attr(
+        all(feature = "local_acp", not(target_family = "wasm")),
+        allow(dead_code)
+    )]
     fn try_submit_pending_cloud_followup(
         &mut self,
         prompt: String,
@@ -21336,6 +21352,32 @@ impl TerminalView {
                     ctx,
                 );
             }
+            #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+            InputEvent::ExecuteLocalAcpQuery {
+                prompt,
+                harness,
+                model_id,
+                cwd,
+                conversation_id,
+                stream_id,
+                terminal_view_id,
+            } => {
+                if let Err(error) = crate::ai::acp::submit::try_submit_local_acp_query(
+                    prompt.clone(),
+                    *harness,
+                    model_id.clone(),
+                    cwd.clone(),
+                    *conversation_id,
+                    stream_id.clone(),
+                    *terminal_view_id,
+                    ctx,
+                ) {
+                    self.show_error_toast(
+                        format!("Couldn't start local ACP agent: {error:#}"),
+                        ctx,
+                    );
+                }
+            }
             InputEvent::SendAgentPrompt {
                 server_conversation_token,
                 prompt,
@@ -21348,11 +21390,22 @@ impl TerminalView {
                 });
             }
             InputEvent::SubmitCloudFollowup { prompt } => {
+                #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+                {
+                    let _ = prompt;
+                    self.show_error_toast(
+                        "Cloud task continuation is unavailable.".to_string(),
+                        ctx,
+                    );
+                    return;
+                }
+                #[cfg(not(all(feature = "local_acp", not(target_family = "wasm"))))]
                 if FeatureFlag::HandoffCloudCloud.is_enabled()
                     && self.try_submit_pending_cloud_followup(prompt.clone(), ctx)
                 {
                     return;
                 }
+                #[cfg(not(all(feature = "local_acp", not(target_family = "wasm"))))]
                 self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
             }
             InputEvent::CancelSharedSessionConversation {
@@ -21448,6 +21501,15 @@ impl TerminalView {
                 }
             },
             InputEvent::EnterCloudAgentView { initial_prompt } => {
+                #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+                self.enter_agent_view_for_new_conversation(
+                    initial_prompt.clone(),
+                    AgentViewEntryOrigin::Input {
+                        was_prompt_autodetected: false,
+                    },
+                    ctx,
+                );
+                #[cfg(not(all(feature = "local_acp", not(target_family = "wasm"))))]
                 self.enter_cloud_agent_view(initial_prompt.clone(), ctx);
             }
             InputEvent::CreateDockerSandbox => {
@@ -27410,6 +27472,15 @@ impl TypedActionView for TerminalView {
                 let mut draft_text = self.input.as_ref(ctx).buffer_text(ctx);
                 draft_text.truncate(draft_text.trim_end().len());
                 let initial_prompt = (!draft_text.trim().is_empty()).then_some(draft_text);
+                #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+                self.enter_agent_view_for_new_conversation(
+                    initial_prompt,
+                    AgentViewEntryOrigin::Input {
+                        was_prompt_autodetected: false,
+                    },
+                    ctx,
+                );
+                #[cfg(not(all(feature = "local_acp", not(target_family = "wasm"))))]
                 self.enter_cloud_agent_view(initial_prompt, ctx);
             }
             StartNewAgentConversation { origin } => {
