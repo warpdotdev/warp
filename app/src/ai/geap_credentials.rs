@@ -18,9 +18,8 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 
-/// Floor on the proactive refresh timer delay so a near-expired store (e.g. a
-/// badly skewed local clock) cannot spin mint -> store -> re-mint as a hot
-/// loop; the floor rate-limits timer-driven re-mints to once per minute.
+/// Floor on the proactive refresh timer delay so a near-expired store
+/// cannot spin mint -> store -> re-mint as a hot loop;
 const GEAP_MIN_TIMER_DELAY: Duration = Duration::from_secs(60);
 
 const STS_TOKEN_URL: &str = "https://sts.googleapis.com/v1/token";
