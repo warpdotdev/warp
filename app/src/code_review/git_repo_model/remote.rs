@@ -7,14 +7,11 @@ use crate::remote_server::proto;
 
 /// Client-side per-repo git status for a repository on an SSH host.
 ///
-/// Presents the same read surface as [`super::LocalGitRepoStatusModel`] and emits the
-/// same [`GitRepoStatusEvent`]s so the unified [`super::GitRepoStatusModel`] can
-/// substitute it transparently (mirrors `RemoteDiffStateModel`).
-///
-/// Holds the latest status for its `(host_id, repo_path)`. On construction
-/// (and again on reconnect) it sends an `UpdateGitStatus` notification
-/// requesting the daemon to push the current snapshot; live watcher updates
-/// then arrive as `GitStatusPush` messages filtered by `(host_id, repo_path)`.
+/// Holds the latest [`GitStatusMetadata`] for its `(host_id, repo_path)`,
+/// emitting [`GitRepoStatusEvent`]s on change. On construction (and again on
+/// reconnect) it sends an `UpdateGitStatus` notification asking the daemon to
+/// push the current snapshot; live watcher updates then arrive as
+/// `GitStatusPush` messages filtered by `(host_id, repo_path)`.
 /// `HostDisconnected` preserves stale data.
 pub struct RemoteGitRepoStatusModel {
     remote_path: RemotePath,
@@ -47,7 +44,7 @@ impl RemoteGitRepoStatusModel {
                 host_id,
                 repo_path,
                 metadata,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 self.apply_push(metadata, ctx);
             }
             RemoteServerManagerEvent::HostConnected { host_id }

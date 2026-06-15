@@ -49,8 +49,7 @@ use super::proto::{
     FragmentMetadataLookupError as ProtoFragmentMetadataLookupError,
     FragmentMetadataLookupErrorCode, GetBranchesError, GetBranchesResponse, GetBranchesSuccess,
     GetDiffStateResponse, GetFragmentMetadataFromHash, GetFragmentMetadataFromHashResponse,
-    GetFragmentMetadataFromHashSuccess, GetGitHubPrInfoRequest, GetGitHubPrInfoResponse,
-    GetGitHubRepoInfoRequest, GetGitHubRepoInfoResponse, GitCommitChainMode, GitCommitChainRequest,
+    GetFragmentMetadataFromHashSuccess, GitCommitChainMode, GitCommitChainRequest,
     GitCommitChainResponse, GitCommitChainSuccess, GitCreatePrRequest, GitCreatePrResponse,
     GitGenerateCommitMessageRequest, GitGenerateCommitMessageResponse,
     GitGetCommittedBranchFilesRequest, GitGetCommittedBranchFilesResponse,
@@ -58,11 +57,11 @@ use super::proto::{
     GitOpError, GitPushRequest, GitPushResponse, GitStatusPush, IndexCodebase, Initialize,
     InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
-    RepositoryInfo, ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess,
-    ResyncCodebase, RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse,
-    RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage,
-    SessionBootstrapped, TextEdit, UpdateGitStatus, UploadHandoffSnapshot, WriteFile,
-    WriteFileResponse, WriteFileSuccess,
+    ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
+    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
+    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
+    TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, UploadHandoffSnapshot,
+    WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
@@ -860,12 +859,6 @@ impl ServerModel {
                     Some(host_scoped_request::Message::GitGetCommittedBranchFiles(m)) => {
                         self.handle_get_committed_branch_files(m, &request_id, conn_id, ctx)
                     }
-                    Some(host_scoped_request::Message::GetGithubPrInfo(m)) => {
-                        self.handle_get_github_pr_info(m, &request_id, conn_id, ctx)
-                    }
-                    Some(host_scoped_request::Message::GetGithubRepositoryInfo(m)) => {
-                        self.handle_get_github_repo_info(m, &request_id, conn_id, ctx)
-                    }
                     None => {
                         log::warn!(
                             "HostScopedRequest with no inner message (request_id={request_id})"
@@ -941,6 +934,12 @@ impl ServerModel {
                     }
                     Some(notification::Message::UpdateGitStatus(m)) => {
                         self.handle_update_git_status(m, conn_id, ctx);
+                    }
+                    Some(notification::Message::UpdateGithubPrInfo(m)) => {
+                        self.handle_update_github_pr_info(m, ctx);
+                    }
+                    Some(notification::Message::UpdateGithubRepoInfo(m)) => {
+                        self.handle_update_github_repo_info(m, ctx);
                     }
                     None => {
                         log::warn!("Notification with no inner message (request_id={request_id})");
@@ -3414,8 +3413,14 @@ impl ServerModel {
             }
         };
 
-        self.subscribe_git_status(conn_id, &std_path);
-        self.subscribe_to_git_status_updates(&std_path, ctx);
+        // This notification rides an arbitrary connection for the host, so it
+        // says nothing about which repo the connection's session is in.
+        // Register only when the connection is untracked, which keeps the requested repo's model
+        // alive across reconnect until `NavigatedToDirectory` lands.
+        if !self.git_status_repo_by_conn.contains_key(&conn_id) {
+            self.subscribe_git_status(conn_id, &std_path);
+            self.subscribe_to_git_status_updates(&std_path, ctx);
+        }
         self.push_git_status(&std_path, ctx);
     }
 
@@ -3437,120 +3442,52 @@ impl ServerModel {
         );
     }
 
-    /// Handles `GetGitHubPrInfoRequest` host-scoped request.
-    fn handle_get_github_pr_info(
+    /// Handles the `UpdateGitHubPrInfo` notification (fire-and-forget).
+    ///
+    /// Ensures the per-repo `GitHubRepoModel` exists and refreshes PR info.
+    fn handle_update_github_pr_info(
         &mut self,
-        msg: GetGitHubPrInfoRequest,
-        request_id: &RequestId,
-        conn_id: ConnectionId,
+        msg: UpdateGitHubPrInfo,
         ctx: &mut ModelContext<Self>,
-    ) -> HandlerOutcome {
+    ) {
         let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
             Ok(p) => p,
             Err(e) => {
-                return invalid_request_response(format!(
-                    "Invalid repo_path for GetGitHubPrInfoRequest: {e}"
-                ));
+                log::warn!("Invalid repo_path for UpdateGitHubPrInfo: {e}");
+                return;
             }
         };
-
-        // Ensure the per-repo model exists so its own lifecycle (creation
-        // fetch, 60s timer, branch change) keeps broadcasting PR-info pushes
-        // to all connections. We deliberately do NOT trigger `refresh_pr_info`
-        // here: the `get_pr_for_branch` fetch below already produces this
-        // request's fresh result for the direct response, so triggering the
-        // model too would run a redundant `gh pr view`.
+        let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-
-        let repo_path = std_path.to_local_path_lossy();
-        let path_future = Self::interactive_path_future(ctx);
-        let request_id_for_response = request_id.clone();
-        let handle = self.spawn_request_handler(
-            request_id.clone(),
-            async move {
-                let path_env = path_future.await;
-                git::get_pr_for_branch(&repo_path, path_env.as_deref()).await
-            },
-            move |me, result, _ctx| {
-                let response = match result {
-                    Ok(pr_info) => GetGitHubPrInfoResponse {
-                        pr_info: pr_info.as_ref().map(super::proto::PrInfo::from),
-                        error: None,
-                    },
-                    Err(e) => GetGitHubPrInfoResponse {
-                        pr_info: None,
-                        error: Some(GitOpError {
-                            message: format!("{e:#}"),
-                        }),
-                    },
-                };
-                me.send_server_message(
-                    Some(conn_id),
-                    Some(&request_id_for_response),
-                    server_message::Message::GetGithubPrInfoResponse(response),
-                );
-            },
-            ctx,
-        );
-        HandlerOutcome::Async(Some(handle))
+        if already_tracked {
+            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+                handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
+            }
+        }
     }
 
-    /// Handles `GetGitHubRepoInfoRequest` host-scoped request.
-    fn handle_get_github_repo_info(
+    /// Handles the `UpdateGitHubRepoInfo` notification (fire-and-forget).
+    ///
+    /// Ensures the per-repo `GitRepoModel` exists and refreshes repo info.
+    fn handle_update_github_repo_info(
         &mut self,
-        msg: GetGitHubRepoInfoRequest,
-        request_id: &RequestId,
-        conn_id: ConnectionId,
+        msg: UpdateGitHubRepoInfo,
         ctx: &mut ModelContext<Self>,
-    ) -> HandlerOutcome {
+    ) {
         let std_path = match StandardizedPath::from_local_canonicalized(Path::new(&msg.repo_path)) {
             Ok(p) => p,
             Err(e) => {
-                return invalid_request_response(format!(
-                    "Invalid repo_path for GetGitHubRepoInfoRequest: {e}"
-                ));
+                log::warn!("Invalid repo_path for UpdateGitHubRepoInfo: {e}");
+                return;
             }
         };
-
-        // Ensure the per-repo model exists so its own lifecycle (creation
-        // fetch, 60s timer) keeps broadcasting repository-info pushes to all
-        // connections. We deliberately do NOT trigger `refresh_repository_info`
-        // here: the `get_repository_info` fetch below already produces this
-        // request's fresh result for the direct response, so triggering the
-        // model too would run a redundant `gh repo view`.
+        let already_tracked = self.github_repo_models.contains_key(&std_path);
         self.subscribe_to_github_info_updates(&std_path, ctx);
-
-        let repo_path = std_path.to_local_path_lossy();
-        let path_future = Self::interactive_path_future(ctx);
-        let request_id_for_response = request_id.clone();
-        let handle = self.spawn_request_handler(
-            request_id.clone(),
-            async move {
-                let path_env = path_future.await;
-                git::get_repository_info(&repo_path, path_env.as_deref()).await
-            },
-            move |me, result, _ctx| {
-                let response = match result {
-                    Ok(repository_info) => GetGitHubRepoInfoResponse {
-                        repository_info: repository_info.as_ref().map(RepositoryInfo::from),
-                        error: None,
-                    },
-                    Err(e) => GetGitHubRepoInfoResponse {
-                        repository_info: None,
-                        error: Some(GitOpError {
-                            message: format!("{e:#}"),
-                        }),
-                    },
-                };
-                me.send_server_message(
-                    Some(conn_id),
-                    Some(&request_id_for_response),
-                    server_message::Message::GetGithubRepoInfoResponse(response),
-                );
-            },
-            ctx,
-        );
-        HandlerOutcome::Async(Some(handle))
+        if already_tracked {
+            if let Some(handle) = self.github_repo_models.get(&std_path).cloned() {
+                handle.update(ctx, |model, ctx| model.refresh_repository_info(ctx));
+            }
+        }
     }
 
     fn push_github_pr_info(&mut self, repo_path: &StandardizedPath, ctx: &mut ModelContext<Self>) {

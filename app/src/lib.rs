@@ -151,6 +151,7 @@ use auth::auth_manager::AuthManager;
 use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
+use code_review::git_repo_model::GitRepoModels;
 use code_review::GlobalCodeReviewModel;
 use quit_warning::UnsavedStateSummary;
 #[cfg(feature = "local_fs")]
@@ -1644,11 +1645,7 @@ pub(crate) fn initialize_app(
         });
     }
 
-    #[cfg(feature = "local_fs")]
-    {
-        use code_review::git_repo_model::GitRepoModels;
-        ctx.add_singleton_model(|_| GitRepoModels::new());
-    }
+    ctx.add_singleton_model(|_| GitRepoModels::new());
 
     ctx.add_singleton_model(|ctx| {
         ProjectManagementModel::new(persisted_projects, persistence_writer.sender(), ctx)

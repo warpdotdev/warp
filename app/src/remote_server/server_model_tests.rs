@@ -278,6 +278,37 @@ fn navigating_between_repos_moves_the_subscription() {
 }
 
 #[test]
+fn snapshot_request_does_not_move_another_repos_subscription() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn = uuid::Uuid::new_v4();
+        let repo_a = StandardizedPath::try_new("/repo-a").unwrap();
+        let repo_b = StandardizedPath::try_new("/repo-b").unwrap();
+
+        // Navigation put the connection in repo A.
+        model.subscribe_git_status(conn, &repo_a);
+
+        // A snapshot request for repo B riding this connection must not move
+        // the navigation-driven subscription off repo A (mirrors the guard in
+        // `handle_update_git_status`).
+        if !model.git_status_repo_by_conn.contains_key(&conn) {
+            model.subscribe_git_status(conn, &repo_b);
+        }
+        assert_eq!(model.git_status_repo_by_conn.get(&conn), Some(&repo_a));
+        assert!(model.git_status_subscribers[&repo_a].contains(&conn));
+        assert!(!model.git_status_subscribers.contains_key(&repo_b));
+
+        // An untracked connection is registered normally.
+        let conn2 = uuid::Uuid::new_v4();
+        if !model.git_status_repo_by_conn.contains_key(&conn2) {
+            model.subscribe_git_status(conn2, &repo_b);
+        }
+        assert!(model.git_status_subscribers[&repo_b].contains(&conn2));
+        assert_eq!(model.git_status_repo_by_conn.get(&conn2), Some(&repo_b));
+    });
+}
+
+#[test]
 fn last_subscriber_leaving_evicts_the_repo() {
     App::test((), |mut app| async move {
         let mut model = test_model(&mut app);

@@ -12,17 +12,18 @@ use crate::util::git::{PrInfo, RepositoryInfo};
 /// same [`GitHubRepoEvent`]s so the unified [`super::GitHubRepoModel`] can substitute
 /// it transparently (mirrors `RemoteGitRepoStatusModel`).
 ///
-/// Holds the latest PR / repository info for its `(host_id, repo_path)`. On
-/// construction (and again on reconnect) it sends host-scoped requests for the
-/// current snapshots; live updates then arrive as server-broadcast PR-info and
-/// repository-info push messages, filtered by `(host_id, repo_path)`.
-/// `HostDisconnected` preserves stale data.
+/// Pure push receiver: holds the latest PR / repository info for its
+/// `(host_id, repo_path)`. On construction (and again on reconnect) it sends
+/// `UpdateGitHubPrInfo` / `UpdateGitHubRepoInfo` notifications asking the daemon
+/// to create the per-repo model if needed and refresh; results then arrive as
+/// server-broadcast push messages filtered by `(host_id, repo_path)`. The
+/// daemon's `GitHubRepoModel` is the single source of truth, so there is no
+/// request/response and no client-side refresh state. `HostDisconnected`
+/// preserves stale data.
 pub struct RemoteGitHubRepoModel {
     remote_path: RemotePath,
     pr_info: Option<PrInfo>,
     repository_info: Option<RepositoryInfo>,
-    refreshing_pr_info: bool,
-    refreshing_repository_info: bool,
 }
 
 impl Entity for RemoteGitHubRepoModel {
@@ -33,12 +34,10 @@ impl RemoteGitHubRepoModel {
     pub fn new(remote_path: RemotePath, ctx: &mut ModelContext<Self>) -> Self {
         let mgr = RemoteServerManager::handle(ctx);
         ctx.subscribe_to_model(&mgr, Self::handle_manager_event);
-        let mut model = Self {
+        let model = Self {
             remote_path,
             pr_info: None,
             repository_info: None,
-            refreshing_pr_info: false,
-            refreshing_repository_info: false,
         };
         model.request_github_info(ctx);
         model
@@ -54,29 +53,15 @@ impl RemoteGitHubRepoModel {
                 host_id,
                 repo_path,
                 pr_info,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 self.apply_pr_info_push(pr_info.as_ref(), ctx);
             }
             RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived {
                 host_id,
                 repo_path,
                 repository_info,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 self.apply_repository_info_push(repository_info.as_ref(), ctx);
-            }
-            RemoteServerManagerEvent::GetGitHubPrInfoResponse {
-                host_id,
-                repo_path,
-                result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
-                self.handle_pr_info_response(result, ctx);
-            }
-            RemoteServerManagerEvent::GetGitHubRepoInfoResponse {
-                host_id,
-                repo_path,
-                result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
-                self.handle_repository_info_response(result, ctx);
             }
             RemoteServerManagerEvent::HostConnected { host_id }
                 if host_id == &self.remote_path.host_id =>
@@ -87,35 +72,26 @@ impl RemoteGitHubRepoModel {
         }
     }
 
-    fn request_github_info(&mut self, ctx: &mut ModelContext<Self>) {
+    /// Asks the daemon to (create and) refresh both PR and repository info.
+    /// Fire-and-forget; results arrive as push broadcasts.
+    fn request_github_info(&self, ctx: &mut ModelContext<Self>) {
         self.request_pr_info(ctx);
         self.request_repository_info(ctx);
     }
 
-    fn request_pr_info(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.refreshing_pr_info {
-            return;
-        }
-        self.refreshing_pr_info = true;
-        ctx.emit(GitHubRepoEvent::PrInfoChanged);
-
+    fn request_pr_info(&self, ctx: &mut ModelContext<Self>) {
         let host_id = self.remote_path.host_id.clone();
         let repo_path = self.remote_path.path.clone();
-        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.get_github_pr_info(host_id, repo_path, ctx);
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, _| {
+            mgr.update_github_pr_info(host_id, &repo_path);
         });
     }
 
-    fn request_repository_info(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.refreshing_repository_info {
-            return;
-        }
-        self.refreshing_repository_info = true;
-
+    fn request_repository_info(&self, ctx: &mut ModelContext<Self>) {
         let host_id = self.remote_path.host_id.clone();
         let repo_path = self.remote_path.path.clone();
-        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.get_github_repo_info(host_id, repo_path, ctx);
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, _| {
+            mgr.update_github_repo_info(host_id, &repo_path);
         });
     }
 
@@ -127,14 +103,8 @@ impl RemoteGitHubRepoModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let pr_info = pr_info.map(PrInfo::from);
-        let pr_changed = if self.refreshing_pr_info && pr_info.is_none() {
-            false
-        } else {
-            let changed = self.pr_info != pr_info;
+        if self.pr_info != pr_info {
             self.pr_info = pr_info;
-            changed
-        };
-        if pr_changed {
             ctx.emit(GitHubRepoEvent::PrInfoChanged);
         }
     }
@@ -147,60 +117,8 @@ impl RemoteGitHubRepoModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let repository_info = repository_info.map(RepositoryInfo::from);
-        let repo_changed = if self.refreshing_repository_info && repository_info.is_none() {
-            false
-        } else {
-            let changed = self.repository_info != repository_info;
+        if self.repository_info != repository_info {
             self.repository_info = repository_info;
-            changed
-        };
-        if repo_changed {
-            ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
-        }
-    }
-
-    fn handle_pr_info_response(
-        &mut self,
-        result: &Result<Option<proto::PrInfo>, String>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let mut pr_changed = false;
-        match result {
-            Ok(pr_info) => {
-                let pr_info = pr_info.as_ref().map(PrInfo::from);
-                pr_changed = self.pr_info != pr_info;
-                self.pr_info = pr_info;
-            }
-            Err(error) => {
-                log::debug!("RemoteGitHubRepoModel: PR info load failed: {error}");
-            }
-        }
-
-        let refreshing_changed = self.refreshing_pr_info;
-        self.refreshing_pr_info = false;
-        if pr_changed || refreshing_changed {
-            ctx.emit(GitHubRepoEvent::PrInfoChanged);
-        }
-    }
-
-    fn handle_repository_info_response(
-        &mut self,
-        result: &Result<Option<proto::RepositoryInfo>, String>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let mut repo_changed = false;
-        match result {
-            Ok(repository_info) => {
-                let repository_info = repository_info.as_ref().map(RepositoryInfo::from);
-                repo_changed = self.repository_info != repository_info;
-                self.repository_info = repository_info;
-            }
-            Err(error) => {
-                log::debug!("RemoteGitHubRepoModel: repository info load failed: {error}");
-            }
-        }
-        self.refreshing_repository_info = false;
-        if repo_changed {
             ctx.emit(GitHubRepoEvent::RepositoryInfoChanged);
         }
     }
@@ -213,15 +131,17 @@ impl RemoteGitHubRepoModel {
         self.repository_info.as_ref()
     }
 
+    /// Always `false`: the remote backend does not track refresh state, since
+    /// results arrive as broadcasts with no request correlation.
     pub fn is_refreshing_pr_info(&self) -> bool {
-        self.refreshing_pr_info
+        false
     }
 
-    pub fn refresh_pr_info(&mut self, ctx: &mut ModelContext<Self>) {
+    pub fn refresh_pr_info(&self, ctx: &mut ModelContext<Self>) {
         self.request_pr_info(ctx);
     }
 
-    pub fn refresh_repository_info(&mut self, ctx: &mut ModelContext<Self>) {
+    pub fn refresh_repository_info(&self, ctx: &mut ModelContext<Self>) {
         self.request_repository_info(ctx);
     }
 }

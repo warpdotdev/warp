@@ -160,8 +160,6 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             | RemoteServerManagerEvent::CreatePrResponse { .. }
             | RemoteServerManagerEvent::GenerateCommitMessageResponse { .. }
             | RemoteServerManagerEvent::GetCommittedBranchFilesResponse { .. }
-            | RemoteServerManagerEvent::GetGitHubPrInfoResponse { .. }
-            | RemoteServerManagerEvent::GetGitHubRepoInfoResponse { .. }
             | RemoteServerManagerEvent::GitStatusPushReceived { .. }
             | RemoteServerManagerEvent::GitHubPrInfoPushReceived { .. }
             | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}

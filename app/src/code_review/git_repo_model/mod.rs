@@ -1,6 +1,4 @@
-#[cfg(feature = "local_fs")]
-use warpui::ModelHandle;
-use warpui::{AppContext, Entity, ModelContext};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 #[cfg(feature = "local_fs")]
 mod local;
@@ -54,7 +52,6 @@ impl Entity for GitRepoStatusModel {
 impl GitRepoStatusModel {
     /// Re-emit a sub-model event so subscribers of the unified model observe
     /// the same `GitRepoStatusEvent`s regardless of backend.
-    #[cfg(feature = "local_fs")]
     fn forward_event(&mut self, event: &GitRepoStatusEvent, ctx: &mut ModelContext<Self>) {
         match event {
             GitRepoStatusEvent::MetadataChanged => ctx.emit(GitRepoStatusEvent::MetadataChanged),

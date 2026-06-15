@@ -491,24 +491,17 @@ message GitHubRepositoryInfoPush {
   string repo_path = 1;
   optional RepositoryInfo repository_info = 2;
 }
-// Client -> server request: ask the daemon to create the per-repo
-// GitHubRepoModel if needed and refresh PR info for the current branch.
-message GetGitHubPrInfoRequest {
+// Client -> server notification: ask the daemon to create the per-repo
+// GitHubRepoModel if needed and refresh PR info for the current branch. The
+// result is delivered as a `GitHubPrInfoPush` broadcast (single source of
+// truth: the daemon's `GitHubRepoModel`). Fire-and-forget; no response.
+message UpdateGitHubPrInfo {
   string repo_path = 1;
 }
-// Server -> client response for GetGitHubPrInfoRequest. `pr_info = None`
-// means the lookup completed and the current branch has no PR.
-message GetGitHubPrInfoResponse {
-  optional PrInfo pr_info = 1;
-  GitOpError error = 2;
-}
-// Client -> server request: ask the daemon to create the per-repo
-// GitHubRepoModel if needed and refresh repository name/owner.
-message GetGitHubRepoInfoRequest {
+// Client -> server notification: ask the daemon to create the per-repo
+// GitHubRepoModel if needed and refresh repository name/owner. The result is
+// delivered as a `GitHubRepositoryInfoPush` broadcast. Fire-and-forget; no
+// response.
+message UpdateGitHubRepoInfo {
   string repo_path = 1;
-}
-// Server -> client response for GetGitHubRepoInfoRequest.
-message GetGitHubRepoInfoResponse {
-  optional RepositoryInfo repository_info = 1;
-  GitOpError error = 2;
 }

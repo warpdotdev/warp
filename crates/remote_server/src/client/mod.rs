@@ -19,7 +19,8 @@ use crate::proto::{
     DiffStateFileDelta, DiffStateMetadataUpdate, DiffStateSnapshot, ErrorCode, GitStatusMetadata,
     Initialize, InitializeResponse, LoadRepoMetadataDirectoryResponse,
     NavigatedToDirectoryResponse, PrInfo, RepositoryInfo, RunCommandRequest, RunCommandResponse,
-    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UpdateGitStatus,
+    ServerMessage, SessionBootstrapped, TextEdit, UnsubscribeDiffState, UpdateGitHubPrInfo,
+    UpdateGitHubRepoInfo, UpdateGitStatus,
 };
 use crate::repo_metadata_proto::{proto_snapshot_to_update, proto_to_repo_metadata_update};
 
@@ -759,6 +760,29 @@ impl RemoteServerClient {
             ClientMessage::notification(notification::Message::UpdateGitStatus(UpdateGitStatus {
                 repo_path: repo_path.to_string(),
             }));
+        self.send_notification(msg);
+    }
+
+    /// Sends an `UpdateGitHubPrInfo` notification (fire-and-forget). The daemon
+    /// refreshes PR info and broadcasts the result as a `GitHubPrInfoPush`.
+    pub fn update_github_pr_info(&self, repo_path: &StandardizedPath) {
+        let msg = ClientMessage::notification(notification::Message::UpdateGithubPrInfo(
+            UpdateGitHubPrInfo {
+                repo_path: repo_path.to_string(),
+            },
+        ));
+        self.send_notification(msg);
+    }
+
+    /// Sends an `UpdateGitHubRepoInfo` notification (fire-and-forget). The
+    /// daemon refreshes repository info and broadcasts the result as a
+    /// `GitHubRepositoryInfoPush`.
+    pub fn update_github_repo_info(&self, repo_path: &StandardizedPath) {
+        let msg = ClientMessage::notification(notification::Message::UpdateGithubRepoInfo(
+            UpdateGitHubRepoInfo {
+                repo_path: repo_path.to_string(),
+            },
+        ));
         self.send_notification(msg);
     }
 

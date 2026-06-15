@@ -114,9 +114,7 @@ impl RemoteDiffStateModel {
         mode: &proto::DiffMode,
     ) -> bool {
         let remote_mode = proto::DiffMode::from(&self.mode);
-        host_id == &self.remote_path.host_id
-            && repo_path == &self.remote_path.path
-            && mode == &remote_mode
+        self.remote_path.matches(host_id, repo_path) && mode == &remote_mode
     }
 
     fn handle_manager_event(
@@ -180,28 +178,28 @@ impl RemoteDiffStateModel {
                 host_id,
                 repo_path,
                 result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 self.handle_git_commit_chain_response(result, ctx);
             }
             RemoteServerManagerEvent::GitPushResponse {
                 host_id,
                 repo_path,
                 result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 self.handle_git_push_response(result, ctx);
             }
             RemoteServerManagerEvent::CreatePrResponse {
                 host_id,
                 repo_path,
                 result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 self.handle_create_pr_response(result, ctx);
             }
             RemoteServerManagerEvent::GenerateCommitMessageResponse {
                 host_id,
                 repo_path,
                 result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 // AI ran on the daemon; just relay the result to the dialog.
                 ctx.emit(DiffStateModelEvent::CommitMessageGenerated(result.clone()));
             }
@@ -209,7 +207,7 @@ impl RemoteDiffStateModel {
                 host_id,
                 repo_path,
                 result,
-            } if host_id == &self.remote_path.host_id && repo_path == &self.remote_path.path => {
+            } if self.remote_path.matches(host_id, repo_path) => {
                 self.handle_get_committed_branch_files_response(result, ctx);
             }
             RemoteServerManagerEvent::HostDisconnected { host_id }
