@@ -9,7 +9,7 @@ use crate::workspace::view::git_graph::data::{CommitNode, RefKind, RefLabel};
 fn node(hash: &str, parents: &[&str]) -> CommitNode {
     CommitNode {
         hash: hash.to_string(),
-        short_hash: hash.chars().take(7).collect(),
+        short_hash: hash.chars().take(8).collect(),
         parents: parents.iter().map(|s| s.to_string()).collect(),
         author_name: String::new(),
         author_email: String::new(),

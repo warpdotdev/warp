@@ -7,7 +7,7 @@ use crate::workspace::view::git_graph::data::CommitNode;
 fn commit() -> CommitNode {
     CommitNode {
         hash: "abcdef1234567890".into(),
-        short_hash: "abcdef1".into(),
+        short_hash: "abcdef12".into(),
         parents: vec!["0".into()],
         author_name: "Ada".into(),
         author_email: "ada@x".into(),
@@ -83,9 +83,9 @@ fn commit_copy_actions_carry_hash_and_subject() {
 }
 
 #[test]
-fn short_hash_menu_copies_seven_char_hash_regardless_of_write_flag() {
+fn short_hash_menu_copies_eight_char_hash_regardless_of_write_flag() {
     // A right-click on the short hash yields a single copy item carrying the
-    // 7-char short hash (not the full 40-char commit hash); copying is read-only
+    // 8-char short hash (not the full 40-char commit hash); copying is read-only
     // so the write flag doesn't change it.
     let kind = MenuKind::ShortHash { index: 0 };
     for write_enabled in [true, false] {
@@ -93,7 +93,7 @@ fn short_hash_menu_copies_seven_char_hash_regardless_of_write_flag() {
         assert_eq!(labels(&items), vec!["Copy Short Hash to Clipboard"]);
         assert_eq!(
             items[0].item_on_select_action(),
-            Some(&GitGraphAction::CopyToClipboard("abcdef1".into()))
+            Some(&GitGraphAction::CopyToClipboard("abcdef12".into()))
         );
     }
 }

@@ -333,7 +333,7 @@ impl GitWriteOp {
     /// the user always sees what is about to happen (especially history-rewriting
     /// or remote-mutating actions).
     pub(crate) fn confirm_message(&self) -> Option<String> {
-        let short = |h: &str| h.chars().take(7).collect::<String>();
+        let short = |h: &str| h.chars().take(8).collect::<String>();
         match self {
             GitWriteOp::AddTag { .. }
             | GitWriteOp::CreateBranch { .. }

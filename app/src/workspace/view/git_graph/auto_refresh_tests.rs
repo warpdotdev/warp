@@ -12,7 +12,7 @@ use crate::workspace::view::git_graph::data::CommitNode;
 fn node(hash: &str) -> CommitNode {
     CommitNode {
         hash: hash.to_string(),
-        short_hash: hash.chars().take(7).collect(),
+        short_hash: hash.chars().take(8).collect(),
         parents: Vec::new(),
         author_name: String::new(),
         author_email: String::new(),

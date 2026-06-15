@@ -35,7 +35,7 @@ const LOG_FORMAT: &str = "--pretty=format:%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1
 pub(crate) struct CommitNode {
     /// Full commit hash.
     pub hash: String,
-    /// Short hash for display (first 7 characters).
+    /// Short hash for display (first 8 characters).
     pub short_hash: String,
     /// Full hashes of the parent commits: 0 means a root, 2 or more a merge.
     pub parents: Vec<String>,
@@ -104,7 +104,7 @@ fn parse_commit_record(record: &str) -> Option<CommitNode> {
         .split_whitespace()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let short_hash = hash.chars().take(7).collect::<String>();
+    let short_hash = hash.chars().take(8).collect::<String>();
     let refs = parse_decorate(decorate);
 
     Some(CommitNode {
@@ -279,7 +279,7 @@ fn parse_stash_record(record: &str) -> Option<CommitNode> {
     // Only the base (first) parent matters for the graph; the index/untracked
     // parents are stash internals and would otherwise draw bogus nodes.
     let base = parents_raw.split_whitespace().next()?.to_string();
-    let short_hash = hash.chars().take(7).collect::<String>();
+    let short_hash = hash.chars().take(8).collect::<String>();
     Some(CommitNode {
         hash,
         short_hash,

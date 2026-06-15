@@ -3238,7 +3238,7 @@ fn render_commit_text(
 
     // Stash rows are identified by their `stash@{n}` badge, not a hash, so they
     // omit the hash column. Every real commit shows its short hash, which carries
-    // its own right-click menu (copy the 7-char hash), mirroring the ref badges:
+    // its own right-click menu (copy the 8-char hash), mirroring the ref badges:
     // its handler sits above the row's commit menu so a right-click on the hash
     // copies exactly what's shown rather than the commit menu's full hash.
     if !super::data::is_stash_node(commit) {

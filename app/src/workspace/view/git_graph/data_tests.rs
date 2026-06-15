@@ -50,7 +50,7 @@ fn parse_commit_log_parses_single_linear_commit() {
     assert_eq!(commits.len(), 1);
     let c = &commits[0];
     assert_eq!(c.hash, "abcdef1234567890");
-    assert_eq!(c.short_hash, "abcdef1");
+    assert_eq!(c.short_hash, "abcdef12");
     assert_eq!(c.parents, vec!["0987654321fedcba".to_string()]);
     assert_eq!(c.author_name, "Ada Lovelace");
     assert_eq!(c.author_email, "ada@example.com");
@@ -473,7 +473,7 @@ fn parse_stash_list_keeps_only_base_parent() {
     assert_eq!(nodes.len(), 1);
     let n = &nodes[0];
     assert_eq!(n.hash, "aaaa1111");
-    assert_eq!(n.short_hash, "aaaa111");
+    assert_eq!(n.short_hash, "aaaa1111");
     // Only the base parent survives; the index/untracked parents are dropped so
     // they don't draw stray nodes.
     assert_eq!(n.parents, vec!["base222".to_string()]);

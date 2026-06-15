@@ -20,7 +20,7 @@ pub(crate) enum MenuKind {
         index: usize,
     },
     /// The short-hash text to the left of a commit's subject. Opens a focused
-    /// menu with just "Copy Short Hash to Clipboard" (the 7-char hash), so a
+    /// menu with just "Copy Short Hash to Clipboard" (the 8-char hash), so a
     /// right-click landing on the hash copies exactly what's shown rather than
     /// the full 40-char hash offered by the commit menu.
     ShortHash {
@@ -343,7 +343,7 @@ fn build_commit_menu(commit: &CommitNode, write_enabled: bool) -> Vec<MenuItem<G
 }
 
 /// The focused menu for a right-click on the short-hash text: a single
-/// "Copy Short Hash to Clipboard" that copies the displayed 7-char hash. Always
+/// "Copy Short Hash to Clipboard" that copies the displayed 8-char hash. Always
 /// available (copying is read-only), independent of `write_enabled`. Distinct
 /// from the commit menu's "Copy Commit Hash", which copies the full hash.
 fn build_short_hash_menu(commit: &CommitNode) -> Vec<MenuItem<GitGraphAction>> {
