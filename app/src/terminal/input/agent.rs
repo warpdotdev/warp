@@ -93,7 +93,7 @@ impl Input {
         let mut column = Flex::column();
 
         if let Some(banner) =
-            self.render_input_banner(app, input_mode, /*is_compact_mode=*/ false)
+            self.render_input_banner(appearance, app, input_mode, /*is_compact_mode=*/ false)
         {
             column.add_child(
                 Container::new(banner)
