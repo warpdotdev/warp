@@ -698,6 +698,8 @@ pub struct AISettingsPageView {
     #[cfg(not(target_family = "wasm"))]
     grok_manual_code_exchange: Option<::ai::grok_subscription::oauth::ManualCodeExchange>,
     #[cfg(not(target_family = "wasm"))]
+    grok_loopback_in_progress: bool,
+    #[cfg(not(target_family = "wasm"))]
     grok_manual_code_entry_revealed: bool,
     #[cfg(not(target_family = "wasm"))]
     grok_code_reveal_button: ViewHandle<ActionButton>,
@@ -1870,6 +1872,8 @@ impl AISettingsPageView {
             #[cfg(not(target_family = "wasm"))]
             grok_manual_code_exchange: None,
             #[cfg(not(target_family = "wasm"))]
+            grok_loopback_in_progress: false,
+            #[cfg(not(target_family = "wasm"))]
             grok_manual_code_entry_revealed: false,
             #[cfg(not(target_family = "wasm"))]
             grok_code_reveal_button,
@@ -2239,6 +2243,7 @@ impl AISettingsPageView {
         // ready the moment xAI shows a code instead of redirecting. Start from a
         // clean input in case a previous attempt left text behind.
         self.grok_manual_code_exchange = Some(attempt.manual_code_exchange());
+        self.grok_loopback_in_progress = true;
         self.grok_manual_code_entry_revealed = false;
         self.grok_code_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text("", ctx);
@@ -2281,6 +2286,7 @@ impl AISettingsPageView {
                     // The loopback won the race: clear the manual fallback state
                     // (and any pasted-but-unsubmitted text) so its row hides.
                     me.grok_manual_code_exchange = None;
+                    me.grok_loopback_in_progress = false;
                     me.grok_manual_code_entry_revealed = false;
                     me.grok_code_editor.update(ctx, |editor, ctx| {
                         editor.set_buffer_text("", ctx);
@@ -2298,12 +2304,14 @@ impl AISettingsPageView {
                     DismissibleToast::success("SuperGrok subscription connected".to_string())
                 }
                 Err(err) => {
-                    // Leave the manual fallback in place and don't show an error
-                    // toast: a loopback timeout/failure is expected when xAI
-                    // displays a code for the user to paste instead.
+                    // The loopback path did not complete before its timeout (or
+                    // failed for another reason). Keep the manual code fallback
+                    // available, but exit the disabled "Connecting" state and
+                    // let the user retry the browser flow if needed.
+                    me.grok_loopback_in_progress = false;
                     safe_error!(
-                        safe: ("Grok OAuth loopback callback failed; waiting for manual code entry"),
-                        full: ("Grok OAuth loopback callback failed; waiting for manual code entry: {err:#}")
+                        safe: ("Grok OAuth loopback callback failed"),
+                        full: ("Grok OAuth loopback callback failed: {err:#}")
                     );
                     ctx.notify();
                     return;
@@ -2348,11 +2356,15 @@ impl AISettingsPageView {
         ctx.spawn(
             async move { exchange.exchange(&code).await },
             |me, result, ctx| {
+                if me.grok_manual_code_exchange.is_none() {
+                    return;
+                }
                 let window_id = ctx.window_id();
                 let toast = match result {
                     Ok(tokens) => {
                         // Hide the manual-entry row and clear the pasted code.
                         me.grok_manual_code_exchange = None;
+                        me.grok_loopback_in_progress = false;
                         me.grok_manual_code_entry_revealed = false;
                         me.grok_code_editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text("", ctx);
@@ -7608,6 +7620,7 @@ struct ApiKeysWidget {
     /// progress.
     grok_connect_button: ViewHandle<ActionButton>,
     grok_connecting_button: ViewHandle<ActionButton>,
+    grok_retry_button: ViewHandle<ActionButton>,
     grok_disconnect_button: ViewHandle<ActionButton>,
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
@@ -7749,6 +7762,13 @@ impl ApiKeysWidget {
         grok_connecting_button.update(ctx, |button, ctx| {
             button.set_disabled(true, ctx);
         });
+        let grok_retry_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Retry", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ConnectGrokSubscription);
+                })
+        });
         let grok_disconnect_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Disconnect", DangerSecondaryTheme)
                 .with_size(ButtonSize::Small)
@@ -7756,7 +7776,11 @@ impl ApiKeysWidget {
                     ctx.dispatch_typed_action(AISettingsPageAction::DisconnectGrokSubscription);
                 })
         });
-        for button in [&grok_connect_button, &grok_disconnect_button] {
+        for button in [
+            &grok_connect_button,
+            &grok_retry_button,
+            &grok_disconnect_button,
+        ] {
             button.update(ctx, |button, ctx| {
                 button.set_disabled(!(is_any_ai_enabled && is_byo_enabled), ctx);
             });
@@ -7764,7 +7788,11 @@ impl ApiKeysWidget {
 
         // The Grok subscription is BYO auth, so keep the buttons' enablement
         // in sync with the BYO API key policy, like the editors above.
-        let grok_buttons = [grok_connect_button.clone(), grok_disconnect_button.clone()];
+        let grok_buttons = [
+            grok_connect_button.clone(),
+            grok_retry_button.clone(),
+            grok_disconnect_button.clone(),
+        ];
         ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
                 let is_any_ai_enabled = AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
@@ -7793,6 +7821,7 @@ impl ApiKeysWidget {
 
             grok_connect_button,
             grok_connecting_button,
+            grok_retry_button,
             grok_disconnect_button,
 
             can_use_warp_credits_for_fallback: Default::default(),
@@ -8067,14 +8096,21 @@ impl ApiKeysWidget {
         .finish();
 
         #[cfg(not(target_family = "wasm"))]
-        let is_connecting = grok_tokens.is_none() && view.grok_manual_code_exchange.is_some();
+        let is_connecting = grok_tokens.is_none() && view.grok_loopback_in_progress;
+        #[cfg(not(target_family = "wasm"))]
+        let can_retry =
+            grok_tokens.is_none() && view.grok_manual_code_exchange.is_some() && !is_connecting;
         #[cfg(target_family = "wasm")]
         let is_connecting = false;
+        #[cfg(target_family = "wasm")]
+        let can_retry = false;
 
         let button = if grok_tokens.is_some() {
             &self.grok_disconnect_button
         } else if is_connecting {
             &self.grok_connecting_button
+        } else if can_retry {
+            &self.grok_retry_button
         } else {
             &self.grok_connect_button
         };
