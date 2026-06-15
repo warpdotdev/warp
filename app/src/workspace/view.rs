@@ -20303,9 +20303,7 @@ impl Workspace {
             .platform_window(self.window_id)
             .map(|window| window.fullscreen_state() == FullscreenState::Fullscreen)
             .unwrap_or(false);
-        if self.is_left_panel_open(ctx) {
-            0.
-        } else if is_window_fullscreen && cfg!(target_os = "macos") {
+        if is_window_fullscreen && cfg!(target_os = "macos") {
             // Full-screen mode on MacOS does not need as much padding (traffic lights are hidden).
             TAB_BAR_PADDING_LEFT
         } else {
