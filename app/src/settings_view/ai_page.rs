@@ -698,9 +698,11 @@ pub struct AISettingsPageView {
     #[cfg(not(target_family = "wasm"))]
     grok_manual_code_exchange: Option<::ai::grok_subscription::oauth::ManualCodeExchange>,
     #[cfg(not(target_family = "wasm"))]
-    grok_code_editor: ViewHandle<EditorView>,
+    grok_manual_code_entry_revealed: bool,
     #[cfg(not(target_family = "wasm"))]
-    grok_code_submit_button: ViewHandle<ActionButton>,
+    grok_code_reveal_button: ViewHandle<ActionButton>,
+    #[cfg(not(target_family = "wasm"))]
+    grok_code_editor: ViewHandle<EditorView>,
 }
 
 impl AISettingsPageView {
@@ -1778,12 +1780,12 @@ impl AISettingsPageView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Paste the code from your browser", ctx);
+            editor.set_placeholder_text("Paste sign-in code", ctx);
             editor
         });
         #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_view(&grok_code_editor, |me, _, event, ctx| {
-            if matches!(event, EditorEvent::Enter) {
+            if matches!(event, EditorEvent::Enter | EditorEvent::Paste) {
                 me.submit_grok_code(ctx);
             }
         });
@@ -1802,11 +1804,13 @@ impl AISettingsPageView {
             });
         }
         #[cfg(not(target_family = "wasm"))]
-        let grok_code_submit_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Finish connecting", SecondaryTheme)
+        let grok_code_reveal_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Enter sign-in code", SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AISettingsPageAction::SubmitGrokSubscriptionCode);
+                    ctx.dispatch_typed_action(
+                        AISettingsPageAction::RevealGrokSubscriptionCodeInput,
+                    );
                 })
         });
 
@@ -1866,9 +1870,11 @@ impl AISettingsPageView {
             #[cfg(not(target_family = "wasm"))]
             grok_manual_code_exchange: None,
             #[cfg(not(target_family = "wasm"))]
-            grok_code_editor,
+            grok_manual_code_entry_revealed: false,
             #[cfg(not(target_family = "wasm"))]
-            grok_code_submit_button,
+            grok_code_reveal_button,
+            #[cfg(not(target_family = "wasm"))]
+            grok_code_editor,
         }
     }
 
@@ -2233,6 +2239,7 @@ impl AISettingsPageView {
         // ready the moment xAI shows a code instead of redirecting. Start from a
         // clean input in case a previous attempt left text behind.
         self.grok_manual_code_exchange = Some(attempt.manual_code_exchange());
+        self.grok_manual_code_entry_revealed = false;
         self.grok_code_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text("", ctx);
         });
@@ -2274,6 +2281,7 @@ impl AISettingsPageView {
                     // The loopback won the race: clear the manual fallback state
                     // (and any pasted-but-unsubmitted text) so its row hides.
                     me.grok_manual_code_exchange = None;
+                    me.grok_manual_code_entry_revealed = false;
                     me.grok_code_editor.update(ctx, |editor, ctx| {
                         editor.set_buffer_text("", ctx);
                     });
@@ -2290,21 +2298,15 @@ impl AISettingsPageView {
                     DismissibleToast::success("SuperGrok subscription connected".to_string())
                 }
                 Err(err) => {
-                    // Leave the manual fallback in place: a failed loopback
-                    // (often a redirect that never reached 127.0.0.1, or a
-                    // timeout) is exactly when the user pastes the code instead,
-                    // and the authorization code stays valid for that exchange.
+                    // Leave the manual fallback in place and don't show an error
+                    // toast: a loopback timeout/failure is expected when xAI
+                    // displays a code for the user to paste instead.
                     safe_error!(
-                        safe: ("Grok OAuth failed"),
-                        full: ("Grok OAuth failed: {err:#}")
+                        safe: ("Grok OAuth loopback callback failed; waiting for manual code entry"),
+                        full: ("Grok OAuth loopback callback failed; waiting for manual code entry: {err:#}")
                     );
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::SuperGrokSubscriptionConnectFinished {
-                            error: Some("oauth_failed".to_string()),
-                        },
-                        ctx
-                    );
-                    DismissibleToast::error(format!("Couldn't connect SuperGrok: {err}"))
+                    ctx.notify();
+                    return;
                 }
             };
             ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
@@ -2351,6 +2353,7 @@ impl AISettingsPageView {
                     Ok(tokens) => {
                         // Hide the manual-entry row and clear the pasted code.
                         me.grok_manual_code_exchange = None;
+                        me.grok_manual_code_entry_revealed = false;
                         me.grok_code_editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text("", ctx);
                         });
@@ -3230,10 +3233,9 @@ pub enum AISettingsPageAction {
     OpenEditCustomEndpointModal(usize),
     ConnectGrokSubscription,
     DisconnectGrokSubscription,
-    /// Exchanges the authorization code the user pasted into the SuperGrok
-    /// connect row (the fallback when the browser can't reach the loopback
-    /// callback).
-    SubmitGrokSubscriptionCode,
+    /// Reveals the SuperGrok sign-in code input while an OAuth connect attempt
+    /// is in progress.
+    RevealGrokSubscriptionCodeInput,
 
     #[cfg(feature = "local_fs")]
     SetConversationLayout(crate::util::file::external_editor::settings::OpenConversationPreference),
@@ -4050,9 +4052,12 @@ impl TypedActionView for AISettingsPageView {
                 #[cfg(not(target_family = "wasm"))]
                 self.start_grok_oauth(ctx);
             }
-            AISettingsPageAction::SubmitGrokSubscriptionCode => {
+            AISettingsPageAction::RevealGrokSubscriptionCodeInput => {
                 #[cfg(not(target_family = "wasm"))]
-                self.submit_grok_code(ctx);
+                {
+                    self.grok_manual_code_entry_revealed = true;
+                    ctx.notify();
+                }
             }
             AISettingsPageAction::DisconnectGrokSubscription => {
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -7598,9 +7603,11 @@ struct ApiKeysWidget {
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
 
-    /// "Connect"/"Disconnect" buttons for the SuperGrok (xAI) subscription
-    /// row; which one renders depends on whether OAuth tokens are stored.
+    /// Buttons for the SuperGrok (xAI) subscription row; which one renders
+    /// depends on whether OAuth tokens are stored or a connect attempt is in
+    /// progress.
     grok_connect_button: ViewHandle<ActionButton>,
+    grok_connecting_button: ViewHandle<ActionButton>,
     grok_disconnect_button: ViewHandle<ActionButton>,
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
@@ -7736,6 +7743,12 @@ impl ApiKeysWidget {
                     ctx.dispatch_typed_action(AISettingsPageAction::ConnectGrokSubscription);
                 })
         });
+        let grok_connecting_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Connecting", SecondaryTheme).with_size(ButtonSize::Small)
+        });
+        grok_connecting_button.update(ctx, |button, ctx| {
+            button.set_disabled(true, ctx);
+        });
         let grok_disconnect_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Disconnect", DangerSecondaryTheme)
                 .with_size(ButtonSize::Small)
@@ -7779,6 +7792,7 @@ impl ApiKeysWidget {
             google_api_key_editor,
 
             grok_connect_button,
+            grok_connecting_button,
             grok_disconnect_button,
 
             can_use_warp_credits_for_fallback: Default::default(),
@@ -8037,6 +8051,7 @@ impl ApiKeysWidget {
     /// ..." status line underneath while a subscription is connected.
     fn render_grok_subscription_row(
         &self,
+        view: &AISettingsPageView,
         appearance: &Appearance,
         is_enabled: bool,
         app: &AppContext,
@@ -8051,8 +8066,15 @@ impl ApiKeysWidget {
         .with_color(styles::header_font_color(is_enabled, app).into())
         .finish();
 
+        #[cfg(not(target_family = "wasm"))]
+        let is_connecting = grok_tokens.is_none() && view.grok_manual_code_exchange.is_some();
+        #[cfg(target_family = "wasm")]
+        let is_connecting = false;
+
         let button = if grok_tokens.is_some() {
             &self.grok_disconnect_button
+        } else if is_connecting {
+            &self.grok_connecting_button
         } else {
             &self.grok_connect_button
         };
@@ -8121,32 +8143,15 @@ impl ApiKeysWidget {
     }
 
     /// The paste-the-code fallback row shown beneath the SuperGrok connect
-    /// header while a connect attempt is in progress. xAI displays an
-    /// authorization code (instead of redirecting to the loopback callback)
-    /// when the browser can't reach `127.0.0.1`; this lets the user paste that
-    /// code to finish connecting. Backed by `view.grok_code_editor` and
-    /// `view.grok_code_submit_button`.
+    /// header while a connect attempt is in progress. Pasting into the input
+    /// submits automatically; manually typed codes can be submitted with Enter.
     #[cfg(not(target_family = "wasm"))]
     fn render_grok_manual_code_entry(
         &self,
         view: &AISettingsPageView,
         appearance: &Appearance,
-        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-
-        let help = Container::new(
-            Text::new(
-                "If your browser shows a code instead of returning to Warp, paste it here to finish connecting.",
-                appearance.ui_font_family(),
-                CONTENT_FONT_SIZE,
-            )
-            .with_color(styles::description_font_color(true, app).into())
-            .soft_wrap(true)
-            .finish(),
-        )
-        .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
-        .finish();
 
         let editor_style = UiComponentStyles {
             padding: Some(Coords {
@@ -8170,13 +8175,11 @@ impl ApiKeysWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.)
             .with_child(Shrinkable::new(1., input).finish())
-            .with_child(view.grok_code_submit_button.as_ref(app).render(app))
             .finish();
 
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(8.)
-            .with_child(help)
             .with_child(row)
             .finish()
     }
@@ -8322,6 +8325,7 @@ impl SettingsWidget for ApiKeysWidget {
         if FeatureFlag::SuperGrok.is_enabled() {
             column.add_child(
                 Container::new(self.render_grok_subscription_row(
+                    view,
                     appearance,
                     provider_keys_enabled,
                     app,
@@ -8330,15 +8334,24 @@ impl SettingsWidget for ApiKeysWidget {
                 .finish(),
             );
 
-            // Paste-the-code fallback, revealed only while a connect attempt is
-            // in progress (see `start_grok_oauth`).
+            // Paste-the-code fallback, available only while a connect attempt
+            // is in progress (see `start_grok_oauth`) and hidden behind an
+            // explicit reveal to avoid cluttering the normal browser flow.
             #[cfg(not(target_family = "wasm"))]
             if view.grok_manual_code_exchange.is_some() {
-                column.add_child(
-                    Container::new(self.render_grok_manual_code_entry(view, appearance, app))
-                        .with_margin_top(8.)
-                        .finish(),
-                );
+                if view.grok_manual_code_entry_revealed {
+                    column.add_child(
+                        Container::new(self.render_grok_manual_code_entry(view, appearance))
+                            .with_margin_top(8.)
+                            .finish(),
+                    );
+                } else {
+                    column.add_child(
+                        Container::new(view.grok_code_reveal_button.as_ref(app).render(app))
+                            .with_margin_top(8.)
+                            .finish(),
+                    );
+                }
             }
         }
 
