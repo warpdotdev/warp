@@ -692,17 +692,13 @@ pub struct AISettingsPageView {
     // SuperGrok (xAI) manual code-entry fallback. When the browser can't reach
     // the loopback callback, xAI shows the authorization code for the user to
     // paste back into Warp. `grok_manual_code_exchange` is `Some` only while a
-    // connect attempt is in progress, which is what reveals the paste-code
-    // input row; it captures the attempt's PKCE verifier so the pasted code can
-    // be exchanged for tokens.
+    // connect attempt is in progress, which is when the paste-code input row is
+    // shown; it captures the attempt's PKCE verifier so the pasted code can be
+    // exchanged for tokens.
     #[cfg(not(target_family = "wasm"))]
     grok_manual_code_exchange: Option<::ai::grok_subscription::oauth::ManualCodeExchange>,
     #[cfg(not(target_family = "wasm"))]
     grok_loopback_in_progress: bool,
-    #[cfg(not(target_family = "wasm"))]
-    grok_manual_code_entry_revealed: bool,
-    #[cfg(not(target_family = "wasm"))]
-    grok_code_reveal_button: ViewHandle<ActionButton>,
     #[cfg(not(target_family = "wasm"))]
     grok_code_editor: ViewHandle<EditorView>,
 }
@@ -1767,8 +1763,8 @@ impl AISettingsPageView {
 
         // SuperGrok (xAI) manual code-entry fallback: a single-line input for
         // the authorization code xAI shows when the browser can't reach the
-        // loopback callback, plus a button to submit it. Hidden until a connect
-        // attempt is in progress (see `grok_manual_code_exchange`).
+        // loopback callback. Hidden until a connect attempt is in progress (see
+        // `grok_manual_code_exchange`).
         #[cfg(not(target_family = "wasm"))]
         let grok_code_editor = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
@@ -1805,17 +1801,6 @@ impl AISettingsPageView {
                 }
             });
         }
-        #[cfg(not(target_family = "wasm"))]
-        let grok_code_reveal_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Enter sign-in code", SecondaryTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(
-                        AISettingsPageAction::RevealGrokSubscriptionCodeInput,
-                    );
-                })
-        });
-
         Self {
             page: Self::build_page(None, ctx),
             active_subpage: None,
@@ -1873,10 +1858,6 @@ impl AISettingsPageView {
             grok_manual_code_exchange: None,
             #[cfg(not(target_family = "wasm"))]
             grok_loopback_in_progress: false,
-            #[cfg(not(target_family = "wasm"))]
-            grok_manual_code_entry_revealed: false,
-            #[cfg(not(target_family = "wasm"))]
-            grok_code_reveal_button,
             #[cfg(not(target_family = "wasm"))]
             grok_code_editor,
         }
@@ -2238,13 +2219,12 @@ impl AISettingsPageView {
             }
         };
 
-        // Capture the attempt's PKCE verifier and reveal the manual code-entry
-        // row before opening the browser, so the paste-the-code fallback is
-        // ready the moment xAI shows a code instead of redirecting. Start from a
-        // clean input in case a previous attempt left text behind.
+        // Capture the attempt's PKCE verifier before opening the browser, so
+        // the paste-the-code fallback is ready the moment xAI shows a code
+        // instead of redirecting. Start from a clean input in case a previous
+        // attempt left text behind.
         self.grok_manual_code_exchange = Some(attempt.manual_code_exchange());
         self.grok_loopback_in_progress = true;
-        self.grok_manual_code_entry_revealed = false;
         self.grok_code_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text("", ctx);
         });
@@ -2287,7 +2267,6 @@ impl AISettingsPageView {
                     // (and any pasted-but-unsubmitted text) so its row hides.
                     me.grok_manual_code_exchange = None;
                     me.grok_loopback_in_progress = false;
-                    me.grok_manual_code_entry_revealed = false;
                     me.grok_code_editor.update(ctx, |editor, ctx| {
                         editor.set_buffer_text("", ctx);
                     });
@@ -2365,7 +2344,6 @@ impl AISettingsPageView {
                         // Hide the manual-entry row and clear the pasted code.
                         me.grok_manual_code_exchange = None;
                         me.grok_loopback_in_progress = false;
-                        me.grok_manual_code_entry_revealed = false;
                         me.grok_code_editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text("", ctx);
                         });
@@ -3245,9 +3223,6 @@ pub enum AISettingsPageAction {
     OpenEditCustomEndpointModal(usize),
     ConnectGrokSubscription,
     DisconnectGrokSubscription,
-    /// Reveals the SuperGrok sign-in code input while an OAuth connect attempt
-    /// is in progress.
-    RevealGrokSubscriptionCodeInput,
 
     #[cfg(feature = "local_fs")]
     SetConversationLayout(crate::util::file::external_editor::settings::OpenConversationPreference),
@@ -4063,13 +4038,6 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::ConnectGrokSubscription => {
                 #[cfg(not(target_family = "wasm"))]
                 self.start_grok_oauth(ctx);
-            }
-            AISettingsPageAction::RevealGrokSubscriptionCodeInput => {
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    self.grok_manual_code_entry_revealed = true;
-                    ctx.notify();
-                }
             }
             AISettingsPageAction::DisconnectGrokSubscription => {
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -8371,23 +8339,14 @@ impl SettingsWidget for ApiKeysWidget {
             );
 
             // Paste-the-code fallback, available only while a connect attempt
-            // is in progress (see `start_grok_oauth`) and hidden behind an
-            // explicit reveal to avoid cluttering the normal browser flow.
+            // is in progress (see `start_grok_oauth`).
             #[cfg(not(target_family = "wasm"))]
             if view.grok_manual_code_exchange.is_some() {
-                if view.grok_manual_code_entry_revealed {
-                    column.add_child(
-                        Container::new(self.render_grok_manual_code_entry(view, appearance))
-                            .with_margin_top(8.)
-                            .finish(),
-                    );
-                } else {
-                    column.add_child(
-                        Container::new(view.grok_code_reveal_button.as_ref(app).render(app))
-                            .with_margin_top(8.)
-                            .finish(),
-                    );
-                }
+                column.add_child(
+                    Container::new(self.render_grok_manual_code_entry(view, appearance))
+                        .with_margin_top(8.)
+                        .finish(),
+                );
             }
         }
 
