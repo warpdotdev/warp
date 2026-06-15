@@ -481,17 +481,6 @@ impl History {
         }
     }
 
-    /// Returns an iterator over a tuple of (count, &HistoryEntry) for all commands in the history.
-    /// where count is the number of times the command has been run.
-    pub fn command_summaries(&self, hostname: String) -> Vec<(u32, &HistoryEntry)> {
-        self.persisted_commands_summary
-            .iter()
-            .filter(|(shell_host, _)| shell_host.hostname == hostname)
-            .flat_map(|(_, summaries)| summaries.values())
-            .map(|summary| (summary.count, &summary.most_recent_entry))
-            .collect()
-    }
-
     pub fn all_live_session_ids(&self) -> HashSet<SessionId> {
         self.session_id_to_shell_host.keys().cloned().collect()
     }

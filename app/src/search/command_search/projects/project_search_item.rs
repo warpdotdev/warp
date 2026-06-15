@@ -27,12 +27,6 @@ pub struct ProjectSearchItem {
     pub popularity_score: i32,
 }
 
-/// Mac and windows are insensitive, Linux probably IS sensitive
-/// WARNING: Don't use this function for use cases dependent on the session, e.g. a remote session or WSL on Windows. It only considers this specific host.
-pub fn os_probably_case_sensitive() -> bool {
-    !(cfg!(target_os = "macos") || cfg!(target_family = "windows"))
-}
-
 /// Extracts a display name from a project path (returns relative path from home directory).
 fn project_display_name(project_path: &str) -> String {
     let path = PathBuf::from(project_path);
@@ -147,14 +141,6 @@ impl SearchItem for ProjectSearchItem {
 
     fn accessibility_label(&self) -> String {
         format!("Project: {}", self.name)
-    }
-
-    fn dedup_key(&self) -> Option<String> {
-        if os_probably_case_sensitive() {
-            Some(self.path.clone())
-        } else {
-            Some(self.path.to_lowercase())
-        }
     }
 }
 
