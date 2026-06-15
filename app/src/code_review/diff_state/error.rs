@@ -146,6 +146,14 @@ impl DiffStateError {
         let cause = anyhow::anyhow!("{kind}");
         Self { kind, cause }
     }
+
+    /// Logs the raw underlying error locally, then reports the sanitized
+    /// [`DiffStateError`] through the normal reporting path.
+    pub(crate) fn report_and_log(&self) {
+        let cause = &self.cause;
+        log::warn!("Diff state error: {cause:#}");
+        warp_core::report_error!(self);
+    }
 }
 
 impl From<anyhow::Error> for DiffStateError {
