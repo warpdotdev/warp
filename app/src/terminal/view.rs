@@ -7458,6 +7458,15 @@ impl TerminalView {
             StartAgentExecutorEvent::CreateAgent(request) => {
                 ctx.emit(Event::StartAgentConversation(request.clone()));
             }
+            StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
+                // The child failed at launch and never started a server-side
+                // run; reuse the Kill path to drop its hidden pane and
+                // conversation so the orchestration pill bar stops showing a
+                // dead chip.
+                ctx.emit(Event::KillAgentConversation {
+                    conversation_id: *conversation_id,
+                });
+            }
         }
     }
 

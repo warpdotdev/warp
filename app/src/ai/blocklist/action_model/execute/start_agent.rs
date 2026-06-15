@@ -197,16 +197,27 @@ impl StartAgentExecutor {
     fn complete_pending_as_error(
         &mut self,
         request_id: StartAgentRequestId,
-        _child_conversation_id: AIConversationId,
+        child_conversation_id: AIConversationId,
         error_msg: String,
-        _ctx: &mut ModelContext<Self>,
+        ctx: &mut ModelContext<Self>,
     ) {
         let Some(pending) = self.pending.remove(&request_id) else {
             return;
         };
-        let _ = pending
-            .sender
-            .try_send(StartAgentOutcome::Error(error_msg.clone()));
+        let _ = pending.sender.try_send(StartAgentOutcome::Error(error_msg));
+        // A child that reaches `complete_pending_as_error` never obtained an
+        // agent id, so it failed at the launch stage. Clean up its hidden
+        // pane + conversation so the orchestration pill bar does not retain a
+        // dead chip — but only for terminal failures, leaving recoverable
+        // `Blocked` startup states (e.g. awaiting GitHub auth) intact.
+        let should_cleanup = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&child_conversation_id)
+            .is_some_and(|conversation| should_cleanup_failed_child_launch(conversation.status()));
+        if should_cleanup {
+            ctx.emit(StartAgentExecutorEvent::CleanupFailedChildLaunch {
+                conversation_id: child_conversation_id,
+            });
+        }
     }
 
     fn maybe_complete_pending_for_child_state(
@@ -556,6 +567,20 @@ impl StartAgentExecutor {
     }
 }
 
+/// Whether a child that failed before launch should have its hidden pane and
+/// conversation cleaned up. Only terminal launch failures qualify; recoverable
+/// `Blocked` startup states (e.g. awaiting GitHub auth) keep their chip so the
+/// user can resolve them.
+fn should_cleanup_failed_child_launch(status: &ConversationStatus) -> bool {
+    match status {
+        ConversationStatus::Error | ConversationStatus::Cancelled => true,
+        ConversationStatus::Blocked { .. }
+        | ConversationStatus::InProgress
+        | ConversationStatus::Success
+        | ConversationStatus::WaitingForEvents => false,
+    }
+}
+
 fn start_agent_error_message_for_status(
     status: &ConversationStatus,
     error_message: Option<&str>,
@@ -595,6 +620,12 @@ impl Entity for StartAgentExecutor {
 
 pub enum StartAgentExecutorEvent {
     CreateAgent(StartAgentRequest),
+    /// A child agent failed at the launch stage (never started a server-side
+    /// run). The owning terminal view removes its hidden pane and conversation
+    /// so the orchestration pill bar does not retain a dead chip.
+    CleanupFailedChildLaunch {
+        conversation_id: AIConversationId,
+    },
 }
 
 #[cfg(test)]
