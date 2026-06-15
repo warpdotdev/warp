@@ -26658,7 +26658,7 @@ impl Workspace {
     ///
     /// Cross-window drags carry ungrouped, unpinned tabs, so the insertion
     /// point — and the ghost slot drawn from it — must never land inside the
-    /// pinned prefix. 
+    /// pinned prefix.
     pub(crate) fn tab_insertion_index_for_cursor(
         &self,
         window_id: WindowId,
@@ -27180,14 +27180,12 @@ impl Workspace {
             let target_group_pinned = expanded_target
                 .and_then(|gid| self.tab_groups.get(&gid))
                 .is_some_and(|g| g.pinned);
-            // Check if we are dragging a pinned tab into an unpinned group. 
+            // Check if we are dragging a pinned tab into an unpinned group.
             // This is not supported as pinned items can not leave the pinned area.
             let pinned_into_unpinned_group =
                 was_pinned && expanded_target.is_some() && !target_group_pinned;
 
-            // 
             if expanded_target != source_group && !pinned_into_unpinned_group {
-
                 // Check if a tab is being dragged out of a pinned group.
                 // If the tab is currently pinned, that means the user is
                 // repositioning it within the pinned area, and passed over
@@ -27198,13 +27196,13 @@ impl Workspace {
                         .and_then(|gid| self.tab_groups.get(&gid))
                         .is_some_and(|g| g.pinned)
                     && !was_pinned;
-                
+
                 // Capture the beginning of the unpinned region during the drag.
                 // If a tab is leaving a pinned group, this is the next position
                 // that it can land.
                 let unpinned_region_start =
                     leaving_pinned_group.then(|| self.pinned_boundary_index());
-                
+
                 // The bounds of the group that a tab could be dragged into.
                 let target_group_range =
                     expanded_target.and_then(|gid| group_member_index_range(&self.tabs, gid));
@@ -27242,8 +27240,8 @@ impl Workspace {
 
         if new_index != current_index {
             // Do not allow a tab to swap places with a neighbouring tab if the
-            // pinned states do not match. This prevents an unpinned tab from 
-            // entering the pinned area (and vice versa). Dragging into a pinned tab 
+            // pinned states do not match. This prevents an unpinned tab from
+            // entering the pinned area (and vice versa). Dragging into a pinned tab
             // group is already handled by grouping logic above.
             if self.is_tab_effectively_pinned(&self.tabs[current_index])
                 != self.is_tab_effectively_pinned(&self.tabs[new_index])
