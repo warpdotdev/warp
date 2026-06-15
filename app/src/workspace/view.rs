@@ -344,7 +344,7 @@ use crate::shell_indicator::ShellIndicatorType;
 use crate::tab::{
     tab_position_id, uses_vertical_tabs, NewSessionMenuItem, PaneNameMenuTarget, SelectedTabColor,
     TabBarState, TabComponent, TabData, TabTelemetryAction, MOVE_TO_GROUP_LABEL,
-    TAB_BAR_BORDER_HEIGHT,
+    TAB_BAR_BORDER_HEIGHT, TAB_PIN_INDICATOR_ICON_SIZE,
 };
 use crate::tab_configs::action_sidecar::SidecarItemKind;
 use crate::tab_configs::remove_confirmation_dialog::{
@@ -19192,6 +19192,12 @@ impl Workspace {
             }
         }
 
+        // Pinned + expanded: trailing pin indicator after the last member.
+        let group_pinned = FeatureFlag::PinnedTabs.is_enabled() && group.pinned;
+        if group_pinned && !is_collapsed {
+            row.add_child(render_horizontal_group_pin_indicator(appearance));
+        }
+
         // Additional padding on expanded groups,
         // allowing tabs to be dropped into the last position of the group.
         const EXPANDED_GROUP_TRAILING_PADDING: f32 = 8.;
@@ -19293,12 +19299,18 @@ impl Workspace {
             .finish()
         };
 
-        let row = Flex::row()
+        let mut row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.)
             .with_child(icon_circle)
-            .with_child(name_element)
-            .finish();
+            .with_child(name_element);
+        // Collapsed + pinned: pin indicator to the right of the name, where an
+        // ungrouped tab would show its close button. Expanded groups show the
+        // pin after their last member instead.
+        if FeatureFlag::PinnedTabs.is_enabled() && group.pinned && is_collapsed {
+            row.add_child(render_horizontal_group_pin_indicator(appearance));
+        }
+        let row = row.finish();
 
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
@@ -27512,6 +27524,21 @@ fn should_reserve_traffic_light_space_in_tab_bar(side: TrafficLightSide) -> bool
 
 /// Total width/height of the collage area in the group header.
 const GROUP_ICON_COLLAGE_SIZE: f32 = 22.0;
+
+/// Renders the diagonal pin indicator shown on a pinned horizontal tab group:
+/// trailing the members of an expanded group, or to the right of the name on a
+/// collapsed group's header.
+fn render_horizontal_group_pin_indicator(appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    ConstrainedBox::new(
+        Icon::PinFilledDiagonal
+            .to_warpui_icon(theme.main_text_color(theme.background()))
+            .finish(),
+    )
+    .with_width(TAB_PIN_INDICATOR_ICON_SIZE)
+    .with_height(TAB_PIN_INDICATOR_ICON_SIZE)
+    .finish()
+}
 
 /// Renders the icon block for a tab-group header from 0-4 deduped pane kinds.
 /// 1 or 2 icons reuse the vertical Summary `Single`/`Pair` layout so the
