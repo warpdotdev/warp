@@ -176,6 +176,9 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             credits_spent_for_last_block: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
+            // The per-segment context window breakdown is live-stream only;
+            // it is not part of the historical GraphQL usage payload.
+            context_window_segments: Vec::new(),
         }
     }
 }

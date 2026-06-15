@@ -6852,6 +6852,7 @@ impl TerminalView {
             tool_calls: tool_usage.total_tool_calls(),
             models: conversation.token_usage().to_vec(),
             context_window_usage: conversation.context_window_usage(),
+            context_window_segments: conversation.context_window_segments().to_vec(),
             files_changed: tool_usage.apply_file_diff_stats.files_changed,
             lines_added: tool_usage.apply_file_diff_stats.lines_added,
             lines_removed: tool_usage.apply_file_diff_stats.lines_removed,

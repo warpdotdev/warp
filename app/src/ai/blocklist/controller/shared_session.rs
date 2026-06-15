@@ -527,6 +527,11 @@ impl BlocklistAIController {
                         .iter()
                         .filter_map(|u| u.to_proto_custom_endpoint_usage())
                         .collect(),
+                    context_window_segments: conversation
+                        .context_window_segments()
+                        .iter()
+                        .map(Into::into)
+                        .collect(),
                 })
         });
 

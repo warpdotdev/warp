@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::elements::{
@@ -25,8 +26,8 @@ use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
-    token_usage_category_display_name, ModelTokenUsage, FULL_TERMINAL_USE_CATEGORY,
-    PRIMARY_AGENT_CATEGORY,
+    token_usage_category_display_name, ContextWindowSegment, ModelTokenUsage,
+    FULL_TERMINAL_USE_CATEGORY, PRIMARY_AGENT_CATEGORY,
 };
 use crate::ui_components::blended_colors;
 
@@ -45,6 +46,9 @@ pub struct ConversationUsageInfo {
     pub tool_calls: i32,
     pub models: Vec<ModelTokenUsage>,
     pub context_window_usage: f32,
+    /// Per-segment breakdown of the context window. Scaled so the segments
+    /// sum to `context_window_usage`. Empty when the server did not emit it.
+    pub context_window_segments: Vec<ContextWindowSegment>,
     pub files_changed: i32,
     pub lines_added: i32,
     pub lines_removed: i32,
@@ -76,6 +80,8 @@ pub enum ConversationUsageViewAction {
     /// Reveal the truncated rows beyond the first 5 in the per-agent
     /// breakdown.
     ShowAllAgentRows,
+    /// Flip the context-window per-segment breakdown expand toggle.
+    ToggleContextWindowExpanded,
 }
 
 /// View to hold a conversation usage info block.
@@ -107,6 +113,11 @@ pub struct ConversationUsageView {
     /// survives across renders.
     details_toggle_mouse_state: MouseStateHandle,
     show_more_mouse_state: MouseStateHandle,
+    /// Local UI state: whether the context-window per-segment breakdown is
+    /// expanded. Resets on view rebuild, like `details_expanded`.
+    context_window_expanded: bool,
+    /// Mouse state for the context-window breakdown toggle link.
+    context_window_toggle_mouse_state: MouseStateHandle,
 }
 
 impl ConversationUsageView {
@@ -126,6 +137,8 @@ impl ConversationUsageView {
             show_all_clicked: false,
             details_toggle_mouse_state: MouseStateHandle::default(),
             show_more_mouse_state: MouseStateHandle::default(),
+            context_window_expanded: false,
+            context_window_toggle_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -197,6 +210,8 @@ impl ConversationUsageView {
             show_all_clicked: false,
             details_toggle_mouse_state: MouseStateHandle::default(),
             show_more_mouse_state: MouseStateHandle::default(),
+            context_window_expanded: false,
+            context_window_toggle_mouse_state: MouseStateHandle::default(),
         }
     }
 
@@ -439,8 +454,9 @@ impl ConversationUsageView {
         labels.push(render_label_text("Context window used", appearance));
         let context_usage_str =
             format!("{}%", (self.usage_info.context_window_usage * 100.).round());
-        let context_window_element = Flex::row()
+        let mut context_window_row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(4.)
             .with_child(
                 Text::new(context_usage_str, appearance.ui_font_family(), font_size)
@@ -456,9 +472,15 @@ impl ConversationUsageView {
                 .with_width(font_size)
                 .with_height(font_size)
                 .finish(),
-            )
-            .finish();
-        values.push(context_window_element);
+            );
+        if self.context_window_breakdown_enabled() {
+            context_window_row = context_window_row
+                .with_spacing(8.)
+                .with_child(self.render_context_window_toggle(appearance));
+        }
+        values.push(context_window_row.finish());
+
+        self.append_context_window_segment_rows(&mut labels, &mut values, appearance);
 
         // Space between sections
         labels.push(
@@ -715,6 +737,85 @@ impl ConversationUsageView {
         .finish()
     }
 
+    /// Whether the dev-only per-segment context-window breakdown should be
+    /// offered. Requires the feature flag and at least one server-emitted
+    /// segment.
+    fn context_window_breakdown_enabled(&self) -> bool {
+        FeatureFlag::ContextWindowUsageBreakdown.is_enabled()
+            && !self.usage_info.context_window_segments.is_empty()
+    }
+
+    /// Renders the "View breakdown ▾" / "Hide breakdown ▴" toggle shown
+    /// beside the "Context window used" value when the dev-only breakdown
+    /// is enabled. Styled like [`Self::render_details_toggle`].
+    fn render_context_window_toggle(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let font_size = appearance.ui_font_size() + 2.;
+        let link_color = theme.ansi_fg_blue();
+        let icon_size = font_size;
+        let (label, icon) = if self.context_window_expanded {
+            ("Hide breakdown", Icon::ChevronUp)
+        } else {
+            ("View breakdown", Icon::ChevronDown)
+        };
+        Hoverable::new(
+            self.context_window_toggle_mouse_state.clone(),
+            move |_hover_state| {
+                let text_element =
+                    Text::new(label.to_string(), appearance.ui_font_family(), font_size)
+                        .with_color(link_color)
+                        .with_selectable(false)
+                        .finish();
+                let icon_element =
+                    ConstrainedBox::new(icon.to_warpui_icon(link_color.into()).finish())
+                        .with_width(icon_size)
+                        .with_height(icon_size)
+                        .finish();
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Min)
+                    .with_spacing(4.)
+                    .with_child(text_element)
+                    .with_child(icon_element)
+                    .finish()
+            },
+        )
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(ConversationUsageViewAction::ToggleContextWindowExpanded);
+        })
+        .finish()
+    }
+
+    /// Pushes the per-segment context-window breakdown rows into the
+    /// two-column layout when the dev-only breakdown is enabled and
+    /// expanded. Segment percentages are estimated/derived, so the rows
+    /// are introduced by an "ESTIMATED BREAKDOWN" header and each value is
+    /// prefixed with `~` to signal approximation.
+    fn append_context_window_segment_rows(
+        &self,
+        labels: &mut Vec<Box<dyn Element>>,
+        values: &mut Vec<Box<dyn Element>>,
+        appearance: &Appearance,
+    ) {
+        if !self.context_window_breakdown_enabled() || !self.context_window_expanded {
+            return;
+        }
+        labels.push(render_section_header(
+            "ESTIMATED BREAKDOWN".to_string(),
+            appearance,
+        ));
+        values.push(render_section_header("".to_string(), appearance));
+        for segment in &self.usage_info.context_window_segments {
+            labels.push(render_label_text(
+                &token_usage_category_display_name(&segment.name),
+                appearance,
+            ));
+            let pct = (segment.fraction * 100.).round();
+            values.push(render_value_text(format!("~{pct}%"), appearance));
+        }
+    }
+
     /// Renders the avatar + label cell for a per-agent breakdown row,
     /// plus the credit value cell, returned as a `(label, value)` pair so
     /// the caller can append them to the existing two-column flex layout.
@@ -880,6 +981,10 @@ impl TypedActionView for ConversationUsageView {
             }
             ConversationUsageViewAction::ShowAllAgentRows => {
                 self.show_all_clicked = true;
+                ctx.notify();
+            }
+            ConversationUsageViewAction::ToggleContextWindowExpanded => {
+                self.context_window_expanded = !self.context_window_expanded;
                 ctx.notify();
             }
         }

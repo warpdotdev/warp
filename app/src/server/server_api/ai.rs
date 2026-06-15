@@ -3024,6 +3024,9 @@ fn convert_usage_metadata(
         credits_spent_for_last_block: None,
         token_usage: vec![],
         tool_usage_metadata: Default::default(),
+        // The per-segment context window breakdown is live-stream only;
+        // it is not part of the historical GraphQL conversation metadata.
+        context_window_segments: vec![],
     }
 }
 

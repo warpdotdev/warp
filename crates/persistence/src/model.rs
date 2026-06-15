@@ -1361,6 +1361,38 @@ impl From<&stream_finished::ToolUsageMetadata> for ToolUsageMetadata {
     }
 }
 
+/// A single named portion of the context window (e.g. "system_prompt"),
+/// scaled so the segments sum to `context_window_usage`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ContextWindowSegment {
+    /// Server-defined segment name (e.g. "system_prompt", "tool_definitions").
+    pub name: String,
+    /// Estimated number of tokens this segment occupies in the context window.
+    pub token_count: u32,
+    /// Fraction of the model's context window this segment occupies.
+    pub fraction: f32,
+}
+
+impl From<&stream_finished::ContextWindowSegment> for ContextWindowSegment {
+    fn from(segment: &stream_finished::ContextWindowSegment) -> Self {
+        Self {
+            name: segment.name.clone(),
+            token_count: segment.token_count,
+            fraction: segment.fraction,
+        }
+    }
+}
+
+impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
+    fn from(segment: &ContextWindowSegment) -> Self {
+        Self {
+            name: segment.name.clone(),
+            token_count: segment.token_count,
+            fraction: segment.fraction,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ConversationUsageMetadata {
     pub was_summarized: bool,
@@ -1374,6 +1406,8 @@ pub struct ConversationUsageMetadata {
     pub token_usage: Vec<ModelTokenUsage>,
     #[serde(default)]
     pub tool_usage_metadata: ToolUsageMetadata,
+    #[serde(default)]
+    pub context_window_segments: Vec<ContextWindowSegment>,
 }
 
 impl ConversationUsageMetadata {
