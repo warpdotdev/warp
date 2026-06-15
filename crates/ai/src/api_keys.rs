@@ -168,10 +168,7 @@ pub struct ApiKeyManager {
     pub(crate) grok_refresh_in_flight: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
-    /// In-memory Gemini Enterprise (GEAP) credential state. Never persisted —
-    /// a GEAP mint is rooted in the live Warp session, so there is no
-    /// long-lived credential to store. The app layer
-    /// (`app/src/ai/geap_credentials.rs`) owns the mint/refresh lifecycle.
+    /// In-memory Gemini Enterprise (GEAP) credential state.
     pub(crate) geap_credentials_state: GeapCredentialsState,
     secure_storage_write_version: u64,
     grok_secure_storage_write_version: u64,
@@ -463,11 +460,7 @@ impl ApiKeyManager {
 
         // Gemini Enterprise (GEAP) credentials attach only when the caller's
         // gate is on AND the stored token was minted for that same
-        // (user, audience, SA) binding — a token minted for a different
-        // account or a stale federation config is never attached. There is
-        // NO expiry check here: a possibly-expired token is
-        // still sent (Google is the authority on validity)
-        // A re-mint in flight keeps serving the previous token.
+        // (user, audience, SA) binding.
         let google_cloud_credentials: Option<
             api::request::settings::api_keys::GoogleCloudCredentials,
         > = geap_binding

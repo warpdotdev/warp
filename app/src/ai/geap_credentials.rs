@@ -1,31 +1,3 @@
-//! Mint/refresh lifecycle for Gemini Enterprise (GEAP) credentials.
-//!
-//! Local interactive agent requests authenticate against the workspace's GCP
-//! project with a short-lived access token minted through Workload Identity
-//! Federation. Every mint runs up to 3 legs (leg 3 is skipped when no service
-//! account is configured), rooted in the user's Warp session
-//!
-//! 1. **Warp OIDC JWT**: `IssueTaskIdentityToken` (authenticated by the Warp
-//!    session) returns a short-lived Warp-signed JWT with `aud` =
-//!    `gcpAudience`. Every mint grabs a brand-new JWT; it is consumed exactly
-//!    once by the immediately following STS exchange and never cached, so an
-//!    expired JWT can never be presented to Google.
-//! 2. **STS exchange (RFC 8693)**: the JWT becomes a Google federated token;
-//!    Google validates the issuer signature and audience here.
-//! 3. **SA impersonation**: when `gcpSaEmail` is configured, the federated
-//!    token mints a ~1h service-account access token via IAM
-//!    `generateAccessToken`; skipped entirely when empty.
-//!
-//! The resulting token lands in [`GeapCredentialsState::Loaded`] on
-//! [`ApiKeyManager`] for the request attach path. Three layers keep requests
-//! authenticated: a proactive one-shot timer that re-mints
-//! [`GEAP_REFRESH_LEAD_TIME`] before expiry, a request-time safety net that
-//! re-arms a parked chain, and the server-side 401 backstop — tokens are
-//! always sent, even past expiry, never silently dropped.
-//!
-//! Security invariants: the access token lives only in memory;
-//! no refresh token, ADC file, or SA key exists anywhere in the flow.
-
 use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{
@@ -44,9 +16,6 @@ use crate::auth::AuthStateProvider;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
-/// Requested lifetime for the Warp OIDC JWT (leg 1). The JWT only has to
-/// outlive the leg 1 -> leg 2 gap (seconds); its expiry is consulted exactly
-/// once, as the conservative no-SA fallback bound in [`sts_expires_at`].
 const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 
 /// Floor on the proactive refresh timer delay so a near-expired store (e.g. a
@@ -63,27 +32,16 @@ const ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const SA_ACCESS_TOKEN_LIFETIME: &str = "3600s";
 
-/// Hard timeout for each Google mint HTTP call.
 const GEAP_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The GEAP enablement decision for the current world, derived from auth +
-/// workspace settings + member toggle. Replaces the old
-/// `Option<GeapRequestGate>` + empty-audience encoding: the three states are
-/// explicit, and `Mintable` is guaranteed to carry a non-empty audience.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GeapPolicy {
-    /// Gate off (admin off, enforced off, member opted out, or logged out):
-    /// no token is retained while disabled.
     Disabled,
-    /// Enabled but unconfigured (empty `gcpAudience`): nothing to mint from.
     Unconfigured,
-    /// Enabled and configured: the binding to mint and attach against.
     Mintable(GeapMintBinding),
 }
 
 impl GeapPolicy {
-    /// The binding to attach against when mintable; `None` when the gate is
-    /// off or unconfigured, in which case GEAP credentials are skipped.
     pub(crate) fn mint_binding(self) -> Option<GeapMintBinding> {
         match self {
             GeapPolicy::Mintable(binding) => Some(binding),
@@ -92,10 +50,6 @@ impl GeapPolicy {
     }
 }
 
-/// Builds the mint binding from raw host-settings values, trimming whitespace
-/// and normalizing empties. `None` when the workspace is enabled but
-/// unconfigured (empty audience). A blank `gcp_sa_email` means "no
-/// impersonation" — the federated STS token is used directly (`DirectWif`).
 fn geap_mint_binding_from_parts(
     user_uid: String,
     gcp_audience: Option<&str>,
@@ -121,12 +75,7 @@ fn geap_mint_binding_from_parts(
     })
 }
 
-/// The GEAP policy for the current world — the single evaluation shared by the
-/// request build site, the refresh guard, and the mint completion re-check.
 pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
-    // Client kill switch, independent of the server-side admin config. With the
-    // flag off, every GEAP consumer (event triggers, request-time safety net,
-    // attach) sees `Disabled`, so behavior is byte-identical to today.
     if !FeatureFlag::GeminiEnterprise.is_enabled() {
         return GeapPolicy::Disabled;
     }
@@ -134,9 +83,6 @@ pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
     if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
         return GeapPolicy::Disabled;
     }
-    // The enablement gate guarantees a logged-in user, so a missing uid is
-    // unreachable; treat it as off regardless — there is no principal to mint
-    // for.
     let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
         return GeapPolicy::Disabled;
     };
@@ -153,16 +99,7 @@ pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
     }
 }
 
-/// Extension trait for [`ApiKeyManager`] wiring the GEAP credential refresh
-/// triggers, mirroring [`crate::ai::aws_credentials::AwsCredentialRefresher`].
 pub trait GeapCredentialRefresher {
-    /// Subscribes the event-driven refresh triggers:
-    /// - `UserWorkspaces`: `TeamsChanged` (startup / team or account switch)
-    ///   and `UpdateWorkspaceSettingsSuccess` (admin saves). The mint binding
-    ///   makes the refresh guard a no-op unless the audience/SA actually
-    ///   changed, so unrelated admin saves cost no STS round-trip.
-    /// - `AISettings`: the member flips their own toggle under
-    ///   `RESPECT_USER_SETTING`.
     fn subscribe_to_geap_settings_changes(&mut self, ctx: &mut ModelContext<Self>)
     where
         Self: Sized;
@@ -200,9 +137,6 @@ pub(crate) fn refresh_geap_credentials(
     refresh_geap_credentials_with_options(manager, false, ctx);
 }
 
-/// Forced refresh: re-mints unconditionally (subject to the one-mint-at-a-time
-/// rule). Consumed by the Settings "Refresh credentials" button and the inline
-/// credential error view's auto-remint/Retry, which land in a follow-up PR.
 #[allow(dead_code)]
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
@@ -211,25 +145,17 @@ pub(crate) fn force_refresh_geap_credentials(
     refresh_geap_credentials_with_options(manager, true, ctx);
 }
 
-/// Request-time safety net (the GEAP analog of
-/// `ApiKeyManager::refresh_grok_tokens_if_needed`): re-arms a parked or
-/// never-armed refresh chain on every agent request build. No-ops unless the
-/// gate is on AND (there is no usable token, the binding mismatches, or the
-/// token is within the refresh lead window / already expired). The triggering
-/// request is never delayed — it carries the currently stored token.
+/// Request-time safety net. The triggering request is never delayed —
+/// it carries the currently stored token.
 pub(crate) fn refresh_geap_credentials_if_needed(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
     let binding = match current_geap_policy(ctx) {
-        // Gate off or unconfigured: a pure no-op on the request path (the
-        // attach site already skips GEAP); state transitions are owned by the
-        // event triggers.
         GeapPolicy::Disabled | GeapPolicy::Unconfigured => return,
         GeapPolicy::Mintable(binding) => binding,
     };
     let needs_mint = match manager.geap_credentials_state() {
-        // One mint at a time; the in-flight result lands in ~1-3s.
         GeapCredentialsState::Refreshing { .. } => false,
         GeapCredentialsState::Loaded {
             credentials,
@@ -254,30 +180,21 @@ fn refresh_geap_credentials_with_options(
 ) {
     let minted_for = match current_geap_policy(ctx) {
         GeapPolicy::Disabled => {
-            // Gate off (admin off, enforced off, member opted out, or logged
-            // out): drop any held token — tokens are never retained while
-            // disabled.
             manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
             return;
         }
         GeapPolicy::Unconfigured => {
-            // Enabled but unconfigured (empty `gcpAudience`).
             manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
     };
-    // One mint at a time, force included: the in-flight result lands in ~1-3s
-    // and `KeysUpdated` re-renders whoever asked.
     if matches!(
         manager.geap_credentials_state(),
         GeapCredentialsState::Refreshing { .. }
     ) {
         return;
     }
-    // Skip-if-valid: don't hammer STS. A binding mismatch (current user/config
-    // vs. the binding recorded at mint) falls through and re-mints under the
-    // fresh principal + config.
     if !force {
         if let GeapCredentialsState::Loaded {
             credentials,
@@ -290,12 +207,6 @@ fn refresh_geap_credentials_with_options(
             }
         }
     }
-    // The previous token (if any) keeps serving requests while the re-mint is
-    // in flight — tokens stay until replaced, so a request landing in the
-    // ~1-3s mint window still authenticates. Only a token minted for the SAME
-    // binding as this mint is carried: a binding-mismatched token is
-    // unservable (the attach matrix rejects it), and restoring it on a failed
-    // re-mint would mask the `Failed` state behind a misleading `Loaded`.
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Loaded {
             credentials,
@@ -320,9 +231,6 @@ fn refresh_geap_credentials_with_options(
             requested_duration: GEAP_IDENTITY_TOKEN_DURATION,
             subject_template: vec1!["principal".to_string()],
         });
-    // The binding drives the exchange (audience + federation) and is also
-    // stamped onto the result, so clone it for the async leg — the completion
-    // closure takes ownership.
     let binding = minted_for.clone();
     let _ = ctx.spawn(
         async move {
@@ -338,8 +246,6 @@ fn refresh_geap_credentials_with_options(
     );
 }
 
-/// Stores a finished mint's result, re-checking the world first: the gate or
-/// config may have changed during the ~1-3s mint.
 fn apply_geap_mint_result(
     manager: &mut ApiKeyManager,
     result: Result<GeapCredentials, LoadGeapCredentialsError>,
@@ -347,12 +253,6 @@ fn apply_geap_mint_result(
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    // Re-evaluate the world before storing: the gate/config may have changed
-    // during the ~1-3s mint. No state transition may store credentials under a
-    // binding that does not match the world at storage time — that covers
-    // `previous` too: a carried token is only restorable while it still
-    // matches the current binding (a mismatched token is unservable, and
-    // restoring it would mask a failure behind a misleading `Loaded`).
     let current_binding = match current_geap_policy(ctx) {
         GeapPolicy::Disabled => {
             log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
@@ -374,11 +274,7 @@ fn apply_geap_mint_result(
     };
 
     // The user/account or federation config changed while the mint was in
-    // flight: the result is stamped for a stale binding and would never be
-    // attachable. Discard it (success or failure alike) and immediately
-    // re-mint under the current binding — waiting for the next trigger would
-    // leave a one-request token-less window, i.e. a silent Direct API
-    // fallback under RESPECT_USER_SETTING.
+    // flight. Discard it and immediately re-mint under the current binding.
     if minted_for != current_binding {
         log::info!("GEAP: binding changed mid-mint; discarding the result and re-minting");
         match previous {
@@ -391,8 +287,6 @@ fn apply_geap_mint_result(
                     },
                     ctx,
                 );
-                // Keep the proactive loop alive in case the re-mint below
-                // skips (the restored token may already be fresh).
                 schedule_geap_token_refresh(manager, ctx);
             }
             None => {
@@ -454,19 +348,13 @@ fn apply_geap_mint_result(
     }
 }
 
-/// Arms a one-shot timer that re-mints [`GEAP_REFRESH_LEAD_TIME`] before the
+/// A one-shot timer that re-mints [`GEAP_REFRESH_LEAD_TIME`] before the
 /// loaded token's expiry. The timer is armed once per token — no periodic
-/// polling; the process wakes exactly once per token lifetime. Stale timers
-/// from rapid mints are harmless: the callback runs the non-forced refresh,
-/// whose skip-if-valid guard no-ops when another trigger already minted a
-/// fresh token while the timer slept.
+/// polling; the process wakes exactly once per token lifetime.
 fn schedule_geap_token_refresh(manager: &mut ApiKeyManager, ctx: &mut ModelContext<ApiKeyManager>) {
     let GeapCredentialsState::Loaded { credentials, .. } = manager.geap_credentials_state() else {
         return;
     };
-    // `expires_at` is always known for GEAP (both mint paths produce one);
-    // a missing expiry is a safe default with no timer, Grok-parity by
-    // construction.
     let Some(expires_at) = credentials.expires_at() else {
         return;
     };
@@ -481,10 +369,6 @@ fn schedule_geap_token_refresh(manager: &mut ApiKeyManager, ctx: &mut ModelConte
     );
 }
 
-/// Pure timer-delay computation: fire [`GEAP_REFRESH_LEAD_TIME`] before
-/// `expires_at`, clamped up to the [`GEAP_MIN_TIMER_DELAY`] floor — never
-/// immediate, so a near-expired store (e.g. a badly skewed local clock)
-/// cannot spin mint -> store -> re-mint as a hot loop.
 fn geap_refresh_timer_delay(expires_at: SystemTime, now: SystemTime) -> Duration {
     let fire_at = expires_at
         .checked_sub(GEAP_REFRESH_LEAD_TIME)
@@ -508,8 +392,6 @@ struct StsTokenExchangeRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct StsTokenExchangeResponse {
     access_token: String,
-    /// Relative lifetime in seconds. Optional per RFC 8693; when omitted the
-    /// caller falls back to the Warp JWT's own expiry as a conservative bound.
     #[serde(default)]
     expires_in: Option<u64>,
 }
@@ -525,7 +407,6 @@ struct GenerateAccessTokenRequest {
 #[serde(rename_all = "camelCase")]
 struct GenerateAccessTokenResponse {
     access_token: String,
-    /// RFC 3339 timestamp; always present in IAM responses.
     expire_time: String,
 }
 
@@ -536,7 +417,7 @@ async fn exchange_identity_token_for_geap_credentials(
     identity_token: TaskIdentityToken,
     binding: &GeapMintBinding,
 ) -> Result<GeapCredentials, LoadGeapCredentialsError> {
-    // Leg 2: STS token exchange (RFC 8693).
+    // STS token exchange.
     let response = http_client::Client::new()
         .post(STS_TOKEN_URL)
         .form(&StsTokenExchangeRequest {
@@ -582,8 +463,7 @@ async fn exchange_identity_token_for_geap_credentials(
     );
 
     let GeapFederation::ServiceAccount { email: sa_email } = &binding.federation else {
-        // DirectWif: no impersonation — the federated STS token is used
-        // directly.
+        // DirectWif: no impersonation — the federated STS token is used directly.
         return Ok(GeapCredentials::new(
             sts_response.access_token,
             Some(federated_expires_at),
@@ -639,9 +519,6 @@ async fn exchange_identity_token_for_geap_credentials(
     ))
 }
 
-/// Absolute expiry for the STS federated token: `now + expires_in` when STS
-/// reports one; otherwise the Warp JWT's own expiry as a conservative bound
-/// (the federated token cannot outlive the JWT it was minted from).
 fn sts_expires_at(
     expires_in: Option<u64>,
     jwt_expires_at: SystemTime,
@@ -652,8 +529,6 @@ fn sts_expires_at(
         .unwrap_or(jwt_expires_at)
 }
 
-/// Parses IAM's RFC 3339 `expireTime`. The timestamp string is safe to embed
-/// in the error — it carries no credential material.
 fn parse_generate_access_token_expiry(expire_time: &str) -> Result<SystemTime, String> {
     chrono::DateTime::parse_from_rfc3339(expire_time)
         .map(SystemTime::from)
