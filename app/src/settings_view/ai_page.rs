@@ -8048,9 +8048,10 @@ impl ApiKeysWidget {
     /// ..." status line underneath while a subscription is connected.
     fn render_grok_subscription_row(
         &self,
-        view: &AISettingsPageView,
         appearance: &Appearance,
         is_enabled: bool,
+        is_connecting: bool,
+        can_retry: bool,
         app: &AppContext,
     ) -> Box<dyn Element> {
         let grok_tokens = ApiKeyManager::as_ref(app).grok_tokens();
@@ -8062,16 +8063,6 @@ impl ApiKeysWidget {
         )
         .with_color(styles::header_font_color(is_enabled, app).into())
         .finish();
-
-        #[cfg(not(target_family = "wasm"))]
-        let is_connecting = grok_tokens.is_none() && view.grok_loopback_in_progress;
-        #[cfg(not(target_family = "wasm"))]
-        let can_retry =
-            grok_tokens.is_none() && view.grok_manual_code_exchange.is_some() && !is_connecting;
-        #[cfg(target_family = "wasm")]
-        let is_connecting = false;
-        #[cfg(target_family = "wasm")]
-        let can_retry = false;
 
         let button = if grok_tokens.is_some() {
             &self.grok_disconnect_button
@@ -8327,11 +8318,24 @@ impl SettingsWidget for ApiKeysWidget {
 
         // Entrypoint for connecting a SuperGrok (xAI) subscription via OAuth.
         if FeatureFlag::SuperGrok.is_enabled() {
+            #[cfg(not(target_family = "wasm"))]
+            let grok_tokens = ApiKeyManager::as_ref(app).grok_tokens();
+            #[cfg(not(target_family = "wasm"))]
+            let is_grok_connecting = grok_tokens.is_none() && view.grok_loopback_in_progress;
+            #[cfg(not(target_family = "wasm"))]
+            let can_retry_grok_connect = grok_tokens.is_none()
+                && view.grok_manual_code_exchange.is_some()
+                && !is_grok_connecting;
+            #[cfg(target_family = "wasm")]
+            let is_grok_connecting = false;
+            #[cfg(target_family = "wasm")]
+            let can_retry_grok_connect = false;
             column.add_child(
                 Container::new(self.render_grok_subscription_row(
-                    view,
                     appearance,
                     provider_keys_enabled,
+                    is_grok_connecting,
+                    can_retry_grok_connect,
                     app,
                 ))
                 .with_margin_top(16.)
