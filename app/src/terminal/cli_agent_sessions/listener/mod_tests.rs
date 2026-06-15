@@ -174,3 +174,56 @@ fn pi_default_handler_forwards_stop() {
     };
     assert!(handler.handle_event(event).is_some());
 }
+
+#[test]
+fn droid_is_supported() {
+    assert!(is_agent_supported(&CLIAgent::Droid));
+}
+
+#[test]
+fn droid_default_handler_skips_session_start() {
+    let mut handler = DefaultSessionListener;
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Droid,
+        event: CLIAgentEventType::SessionStart,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+    assert!(handler.handle_event(event).is_none());
+}
+
+#[test]
+fn droid_default_handler_forwards_stop() {
+    let mut handler = DefaultSessionListener;
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Droid,
+        event: CLIAgentEventType::Stop,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+    assert!(handler.handle_event(event).is_some());
+}
+
+#[test]
+fn droid_default_handler_forwards_permission_request() {
+    let mut handler = DefaultSessionListener;
+    let event = CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Droid,
+        event: CLIAgentEventType::PermissionRequest,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+    assert!(handler.handle_event(event).is_some());
+}

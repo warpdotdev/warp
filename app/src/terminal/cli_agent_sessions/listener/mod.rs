@@ -44,6 +44,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
             | CLIAgent::Codex
             | CLIAgent::Gemini
             | CLIAgent::Auggie
+            | CLIAgent::Droid
             | CLIAgent::Pi
     )
 }
@@ -55,16 +56,16 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // (https://github.com/augmentmoogi/auggie-warp,
         // https://github.com/badlogic/pi-mono), which emit the same
         // structured OSC 777 events as the first-party Claude/OpenCode/Gemini
-        // plugins. We don't ship install flows for them — we just listen.
+        // plugins. Droid can emit the same events through its hooks config.
         CLIAgent::Claude
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
         | CLIAgent::Auggie
+        | CLIAgent::Droid
         | CLIAgent::Pi => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::Hermes
         | CLIAgent::Amp
-        | CLIAgent::Droid
         | CLIAgent::Copilot
         | CLIAgent::CursorCli
         | CLIAgent::Goose
