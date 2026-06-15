@@ -488,11 +488,10 @@ impl Workspace {
                 .is_some_and(|gid| self.tab_groups.get(&gid).is_some_and(|g| g.pinned))
     }
 
-    /// Index where the unpinned region begins: the count of leading tabs that
-    /// belong to the pinned region.
-    pub(super) fn pinned_boundary_index(&self) -> usize {
-        self.tabs
-            .iter()
+    /// Index where the unpinned region begins within `tabs`: the count of
+    /// leading tabs that belong to the pinned region.
+    pub(super) fn pinned_boundary_index(&self, tabs: &[TabData]) -> usize {
+        tabs.iter()
             .take_while(|tab| self.is_tab_effectively_pinned(tab))
             .count()
     }
@@ -500,11 +499,7 @@ impl Workspace {
     /// Pushes `idx` past the leading effectively-pinned tabs in `tabs` if it
     /// falls inside that prefix.
     pub(super) fn clamp_to_unpinned_region(&self, tabs: &[TabData], idx: usize) -> usize {
-        let boundary = tabs
-            .iter()
-            .take_while(|tab| self.is_tab_effectively_pinned(tab))
-            .count();
-        idx.max(boundary)
+        idx.max(self.pinned_boundary_index(tabs))
     }
 
     /// Returns the slot just past the last member of `group_id`, suitable as
@@ -534,7 +529,7 @@ impl Workspace {
         let previous_group_id = tab.group_id;
 
         // Identify where this newly pinned tab should land (after the last pinned item).
-        let target = self.pinned_boundary_index();
+        let target = self.pinned_boundary_index(&self.tabs);
 
         self.tabs[tab_index].group_id = None;
         self.tabs[tab_index].pinned = true;
@@ -563,7 +558,7 @@ impl Workspace {
         }
 
         // This tab should land right after all pinned items.
-        let target = self.pinned_boundary_index();
+        let target = self.pinned_boundary_index(&self.tabs);
 
         self.tabs[tab_index].pinned = false;
         self.move_tab_to_index(tab_index, target, ctx);
@@ -590,7 +585,7 @@ impl Workspace {
             return;
         }
 
-        let target = self.pinned_boundary_index();
+        let target = self.pinned_boundary_index(&self.tabs);
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.pinned = true;
         }
@@ -615,7 +610,7 @@ impl Workspace {
             return;
         }
 
-        let target = self.pinned_boundary_index();
+        let target = self.pinned_boundary_index(&self.tabs);
         if let Some(group) = self.tab_groups.get_mut(&group_id) {
             group.pinned = false;
         }

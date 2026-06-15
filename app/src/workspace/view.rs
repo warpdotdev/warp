@@ -6827,7 +6827,7 @@ impl Workspace {
 
         // Ensure that new tab groups always land below pinned items, but above
         // any other items in the tab list.
-        let target = self.pinned_boundary_index();
+        let target = self.pinned_boundary_index(&self.tabs);
 
         if let Some(tab) = self.tabs.get_mut(new_tab_index) {
             tab.group_id = Some(group_id);
@@ -7077,7 +7077,7 @@ impl Workspace {
                 let drained: Vec<TabData> = self.tabs.drain(first..=last).collect();
                 // Recompute boundary now that the (formerly group-pinned)
                 // block has been removed from the list.
-                let target = self.pinned_boundary_index();
+                let target = self.pinned_boundary_index(&self.tabs);
                 // Place the ungrouped tabs at their new target index.
                 self.tabs.splice(target..target, drained);
                 self.restore_active_tab_index(active_pane_group_id);
