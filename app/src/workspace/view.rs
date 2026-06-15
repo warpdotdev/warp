@@ -27201,7 +27201,7 @@ impl Workspace {
                 // If a tab is leaving a pinned group, this is the next position
                 // that it can land.
                 let unpinned_region_start =
-                    leaving_pinned_group.then(|| self.pinned_boundary_index());
+                    leaving_pinned_group.then(|| self.pinned_boundary_index(&self.tabs));
 
                 // The bounds of the group that a tab could be dragged into.
                 let target_group_range =
