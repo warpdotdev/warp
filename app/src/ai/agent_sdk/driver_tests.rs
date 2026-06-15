@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use tempfile::TempDir;
@@ -31,7 +32,7 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::cloud_environments::GithubRepo;
+use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::mcp::parsing::normalize_mcp_json;
 use crate::ai::skills::SkillManager;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
@@ -707,7 +708,11 @@ fn split_loading_env_loads_all_global_loads_subset() {
 
         // Run both loading methods through the driver's ModelSpawner.
         let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
-        let env_repos = vec![GithubRepo::new("org".to_string(), "env-repo".to_string())];
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
+            "org".to_string(),
+            "env-repo".to_string(),
+        )];
         let global_repos = vec![GithubRepo::new(
             "org".to_string(),
             "global-repo".to_string(),
@@ -826,7 +831,8 @@ fn overlap_repo_in_env_and_global_loads_all_skills_without_duplicates() {
         // The same repo is listed in both env repos and global repos.
         // The global spec targets only "deploy".
         let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
-        let env_repos = vec![GithubRepo::new(
+        let env_repos = vec![SourceRepo::new(
+            CodeForge::GitHub,
             "org".to_string(),
             "shared-repo".to_string(),
         )];
