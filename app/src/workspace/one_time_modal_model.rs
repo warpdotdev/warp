@@ -172,10 +172,6 @@ impl OneTimeModalModel {
         &mut self,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        if !FeatureFlag::AutoHandoffSleepPrompt.is_enabled() {
-            return false;
-        }
-
         let ai_settings = AISettings::as_ref(ctx);
         if *ai_settings.did_show_auto_handoff_sleep_modal {
             return false;
