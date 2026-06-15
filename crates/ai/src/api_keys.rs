@@ -21,6 +21,15 @@ pub enum ApiKeyManagerEvent {
     KeysUpdated,
 }
 
+/// UI-readable state for an in-flight SuperGrok OAuth connection attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GrokOauthSessionState {
+    /// The browser loopback callback is still waiting for the provider redirect.
+    pub loopback_in_progress: bool,
+    /// A manual pasted-code exchange is available for the current OAuth attempt.
+    pub manual_code_entry_available: bool,
+}
+
 /// User-provided API keys for AI providers.
 ///
 /// These are used for "Bring Your Own API Key" functionality, allowing
@@ -162,6 +171,13 @@ pub struct ApiKeyManager {
     /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_in_flight: bool,
+    /// In-flight SuperGrok OAuth attempt state. This is auth-flow state, not UI
+    /// state: the manual exchange holds the PKCE verifier needed to exchange a
+    /// pasted provider code for tokens, while the loopback callback races it.
+    #[cfg(not(target_family = "wasm"))]
+    grok_manual_code_exchange: Option<crate::grok_subscription::oauth::ManualCodeExchange>,
+    #[cfg(not(target_family = "wasm"))]
+    grok_loopback_in_progress: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     secure_storage_write_version: u64,
@@ -179,6 +195,10 @@ impl ApiKeyManager {
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_in_flight: false,
+            #[cfg(not(target_family = "wasm"))]
+            grok_manual_code_exchange: None,
+            #[cfg(not(target_family = "wasm"))]
+            grok_loopback_in_progress: false,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             secure_storage_write_version: 0,
@@ -196,6 +216,62 @@ impl ApiKeyManager {
         self.grok_tokens.as_ref()
     }
 
+    /// Returns the in-flight SuperGrok OAuth connection state used by the
+    /// settings UI to render the connecting/retry/manual-code affordances.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn grok_oauth_session_state(&self) -> GrokOauthSessionState {
+        GrokOauthSessionState {
+            loopback_in_progress: self.grok_loopback_in_progress,
+            manual_code_entry_available: self.grok_manual_code_exchange.is_some(),
+        }
+    }
+
+    /// Starts tracking an in-flight SuperGrok OAuth attempt. The
+    /// `ManualCodeExchange` holds the attempt's PKCE verifier so a displayed xAI
+    /// code can be exchanged even if the loopback redirect never arrives.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn set_grok_oauth_session(
+        &mut self,
+        exchange: crate::grok_subscription::oauth::ManualCodeExchange,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.grok_manual_code_exchange = Some(exchange);
+        self.grok_loopback_in_progress = true;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    /// Returns the manual-code exchange handle for the current SuperGrok OAuth
+    /// attempt, if one is still active.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn grok_manual_code_exchange(
+        &self,
+    ) -> Option<crate::grok_subscription::oauth::ManualCodeExchange> {
+        self.grok_manual_code_exchange.clone()
+    }
+
+    /// Clears the in-flight SuperGrok OAuth attempt after one path completed or
+    /// the user disconnected.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn clear_grok_oauth_session(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.grok_manual_code_exchange.is_none() && !self.grok_loopback_in_progress {
+            return;
+        }
+        self.grok_manual_code_exchange = None;
+        self.grok_loopback_in_progress = false;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    /// Marks the loopback half of the current SuperGrok OAuth attempt as
+    /// finished while keeping manual code entry available.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn finish_grok_oauth_loopback(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.grok_loopback_in_progress {
+            return;
+        }
+        self.grok_loopback_in_progress = false;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
     /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
     /// them to secure storage. No-op when the value is unchanged so we don't
     /// emit spurious events or schedule redundant keychain writes.
@@ -204,6 +280,8 @@ impl ApiKeyManager {
             return;
         }
         self.grok_tokens = tokens;
+        #[cfg(not(target_family = "wasm"))]
+        self.clear_grok_oauth_session(ctx);
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_grok_tokens_to_secure_storage(ctx);
     }

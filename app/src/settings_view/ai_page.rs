@@ -689,16 +689,9 @@ pub struct AISettingsPageView {
     custom_inference_add_button: ViewHandle<ActionButton>,
     custom_endpoint_edit_buttons: Vec<ViewHandle<ActionButton>>,
 
-    // SuperGrok (xAI) manual code-entry fallback. When the browser can't reach
-    // the loopback callback, xAI shows the authorization code for the user to
-    // paste back into Warp. `grok_manual_code_exchange` is `Some` only while a
-    // connect attempt is in progress, which is when the paste-code input row is
-    // shown; it captures the attempt's PKCE verifier so the pasted code can be
-    // exchanged for tokens.
-    #[cfg(not(target_family = "wasm"))]
-    grok_manual_code_exchange: Option<::ai::grok_subscription::oauth::ManualCodeExchange>,
-    #[cfg(not(target_family = "wasm"))]
-    grok_loopback_in_progress: bool,
+    // SuperGrok (xAI) manual code-entry fallback input. The in-flight OAuth
+    // session state itself lives in `ApiKeyManager`; the view only owns this
+    // editor so it can render and clear user-entered text.
     #[cfg(not(target_family = "wasm"))]
     grok_code_editor: ViewHandle<EditorView>,
 }
@@ -1763,8 +1756,8 @@ impl AISettingsPageView {
 
         // SuperGrok (xAI) manual code-entry fallback: a single-line input for
         // the authorization code xAI shows when the browser can't reach the
-        // loopback callback. Hidden until a connect attempt is in progress (see
-        // `grok_manual_code_exchange`).
+        // loopback callback. Hidden until `ApiKeyManager` reports an in-flight
+        // OAuth session with manual code entry available.
         #[cfg(not(target_family = "wasm"))]
         let grok_code_editor = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
@@ -1854,10 +1847,6 @@ impl AISettingsPageView {
             pending_remove_custom_endpoint_index: None,
             custom_inference_add_button,
             custom_endpoint_edit_buttons,
-            #[cfg(not(target_family = "wasm"))]
-            grok_manual_code_exchange: None,
-            #[cfg(not(target_family = "wasm"))]
-            grok_loopback_in_progress: false,
             #[cfg(not(target_family = "wasm"))]
             grok_code_editor,
         }
@@ -2223,8 +2212,9 @@ impl AISettingsPageView {
         // the paste-the-code fallback is ready the moment xAI shows a code
         // instead of redirecting. Start from a clean input in case a previous
         // attempt left text behind.
-        self.grok_manual_code_exchange = Some(attempt.manual_code_exchange());
-        self.grok_loopback_in_progress = true;
+        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.set_grok_oauth_session(attempt.manual_code_exchange(), ctx);
+        });
         self.grok_code_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text("", ctx);
         });
@@ -2257,7 +2247,10 @@ impl AISettingsPageView {
             // connection, the in-progress state is cleared. Ignore the loopback
             // result so we don't emit a duplicate success or a misleading
             // failure (e.g. the loopback timing out after a successful paste).
-            if me.grok_manual_code_exchange.is_none() {
+            if ApiKeyManager::as_ref(ctx)
+                .grok_manual_code_exchange()
+                .is_none()
+            {
                 return;
             }
             let window_id = ctx.window_id();
@@ -2265,8 +2258,6 @@ impl AISettingsPageView {
                 Ok(tokens) => {
                     // The loopback won the race: clear the manual fallback state
                     // (and any pasted-but-unsubmitted text) so its row hides.
-                    me.grok_manual_code_exchange = None;
-                    me.grok_loopback_in_progress = false;
                     me.grok_code_editor.update(ctx, |editor, ctx| {
                         editor.set_buffer_text("", ctx);
                     });
@@ -2278,6 +2269,7 @@ impl AISettingsPageView {
                     // proactive refresh loop so subsequent requests can
                     // authenticate with the connected subscription.
                     ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+                        manager.clear_grok_oauth_session(ctx);
                         manager.store_grok_tokens(tokens, ctx);
                     });
                     DismissibleToast::success("SuperGrok subscription connected".to_string())
@@ -2287,7 +2279,9 @@ impl AISettingsPageView {
                     // failed for another reason). Keep the manual code fallback
                     // available, but exit the disabled "Connecting" state and
                     // let the user retry the browser flow if needed.
-                    me.grok_loopback_in_progress = false;
+                    ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.finish_grok_oauth_loopback(ctx);
+                    });
                     safe_error!(
                         safe: ("Grok OAuth loopback callback failed"),
                         full: ("Grok OAuth loopback callback failed: {err:#}")
@@ -2324,7 +2318,7 @@ impl AISettingsPageView {
 
         // Only meaningful while a connect attempt is in progress (the row is
         // hidden otherwise, but Enter could still fire on a stale editor).
-        let Some(exchange) = self.grok_manual_code_exchange.clone() else {
+        let Some(exchange) = ApiKeyManager::as_ref(ctx).grok_manual_code_exchange() else {
             return;
         };
         let code = self.grok_code_editor.as_ref(ctx).buffer_text(ctx);
@@ -2335,15 +2329,16 @@ impl AISettingsPageView {
         ctx.spawn(
             async move { exchange.exchange(&code).await },
             |me, result, ctx| {
-                if me.grok_manual_code_exchange.is_none() {
+                if ApiKeyManager::as_ref(ctx)
+                    .grok_manual_code_exchange()
+                    .is_none()
+                {
                     return;
                 }
                 let window_id = ctx.window_id();
                 let toast = match result {
                     Ok(tokens) => {
                         // Hide the manual-entry row and clear the pasted code.
-                        me.grok_manual_code_exchange = None;
-                        me.grok_loopback_in_progress = false;
                         me.grok_code_editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text("", ctx);
                         });
@@ -2352,6 +2347,7 @@ impl AISettingsPageView {
                             ctx
                         );
                         ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
+                            manager.clear_grok_oauth_session(ctx);
                             manager.store_grok_tokens(tokens, ctx);
                         });
                         DismissibleToast::success("SuperGrok subscription connected".to_string())
@@ -8321,10 +8317,13 @@ impl SettingsWidget for ApiKeysWidget {
             #[cfg(not(target_family = "wasm"))]
             let grok_tokens = ApiKeyManager::as_ref(app).grok_tokens();
             #[cfg(not(target_family = "wasm"))]
-            let is_grok_connecting = grok_tokens.is_none() && view.grok_loopback_in_progress;
+            let grok_oauth_session_state = ApiKeyManager::as_ref(app).grok_oauth_session_state();
+            #[cfg(not(target_family = "wasm"))]
+            let is_grok_connecting =
+                grok_tokens.is_none() && grok_oauth_session_state.loopback_in_progress;
             #[cfg(not(target_family = "wasm"))]
             let can_retry_grok_connect = grok_tokens.is_none()
-                && view.grok_manual_code_exchange.is_some()
+                && grok_oauth_session_state.manual_code_entry_available
                 && !is_grok_connecting;
             #[cfg(target_family = "wasm")]
             let is_grok_connecting = false;
@@ -8345,7 +8344,7 @@ impl SettingsWidget for ApiKeysWidget {
             // Paste-the-code fallback, available only while a connect attempt
             // is in progress (see `start_grok_oauth`).
             #[cfg(not(target_family = "wasm"))]
-            if view.grok_manual_code_exchange.is_some() {
+            if grok_oauth_session_state.manual_code_entry_available {
                 column.add_child(
                     Container::new(self.render_grok_manual_code_entry(view, appearance))
                         .with_margin_top(8.)
