@@ -1,58 +1,58 @@
 # Upstream PR Grounding Check
 
-This document records the follow-up verification pass for `UPSTREAM_PORTING_ANALYSIS.md` and the resulting implementation-shaped specs. The check used `git show -s` to map candidate commits to upstream PR references in commit subjects, then used `gh pr view --repo warpdotdev/warp` to fetch public PR descriptions and linked issue references where available. Public PR metadata was available for 88 PR references; 19 references from commit subjects were not resolvable as public pull requests in `warpdotdev/warp`, so those entries remain grounded in commit diffs rather than public PR bodies.
+This document records the re-audit grounding pass for `UPSTREAM_PORTING_ANALYSIS.md`, `UPSTREAM_PORTING_SUGGESTIONS.md`, and the product specs. The pass used `git show` for commit diffs, `gh pr view --repo warpdotdev/warp` for public PR bodies and linked issue references, and current Warper code searches to verify whether each claimed path exists. Private or deleted upstream PRs are identified as not publicly resolvable; their upstream why comes from commit diffs and tests only.
 
 ## Corrections Made
 
-| Commit | Original problem | Correction |
+| Commit | Earlier problem | Correction |
 | --- | --- | --- |
-| `e59c7a49` | The generated terminal spec treated PTY response sequence queuing as generally relevant. The public PR body describes the bug as a Windows PTY issue. | Moved to deferred in `WARPER-007` and `UPSTREAM_PORTING_ANALYSIS.md`. |
-| `1df6ff13` | The generated terminal spec treated Shift+Backspace as generally relevant. The public PR body describes the bug as Windows-specific. | Moved to deferred in `WARPER-007` and `UPSTREAM_PORTING_ANALYSIS.md`. |
-| `d426c045`, `03ef4d05`, `2992d02e` | These were already changed to deferred in the previous pass, but the PR grounding check confirmed the direction: Windows behavior is not grounded in current Warper specs. | Kept deferred. |
-| `43f4f483` | The generated security spec mentioned PowerShell testing even though Warper's current specs do not define Windows as a target. | Reworded to shell families Warper actually executes. |
+| `09be9c1f` | Prior text risked treating startup inline images as terminal correctness. | Classified as `Lip gloss`. Warper has iTerm/Kitty image paths, but this fixes `fastfetch`-style visual compatibility, not Warper launch reliability or OpenRouter fidelity. |
+| `32d21d15` | Prior text deferred DCS integrity as startup-sensitive. | Promoted to `Port manually` because current Warper has DCS lifecycle hooks. Scope is local hook integrity only, not upstream remote/Windows/shared-session breadth. |
+| `c697c8f5` | Missing from the port list. | Added as `Port manually` for local conversation-restore `cd` escaping. |
+| `88c344e2` | Missing or easy to dismiss as remote fluff. | Added as `Port manually`; the useful part is shell escaping in the current SSH executor code, not remote-server product surface. |
+| `e59c7a49`, `1df6ff13`, `d426c045`, `03ef4d05`, `2992d02e`, `ebedb9fd` | Windows fixes were sometimes described as deferred. | Classified as `Skip`: upstream pain is real, and Warper has some Windows code, but current Warper specs do not target Windows. |
+| `b5a0d89b`, `3019671e` | Global rules and startup rule re-indexing were treated as possible local-rule work. | Classified as `Skip`: they add startup/watch/settings surface beyond the repo-rule fidelity Warper needs. |
+| `5146a5bf` | Rule-race fix was mixed into vague WARPER-005 language. | Promoted to `Port`: current project-rule model has the async race path, and WARPER-005 needs reliable local rule context. |
+| `fd0a9d10`, `63fe7285`, `967a9485`, `de1ac841`, `a806bfb2`, `69ffea41` | CLI-agent/plugin work was left as defer. | Classified as `Skip`: these are agent/plugin surface expansion, not required by WARPER-005. |
+| `65381be1` | Cmd+Enter context loss was treated as optional agent UI. | Promoted to `Port manually`: it is directly about preserving selected-block context in a local agent turn. |
+| `5967abf0`, `aa0a2c21` | `warpctrl` was sometimes softened as safe local automation. | Classified as `Skip`: credentialed loopback control plane and broad command catalog are new product surface. |
+| `3f83932c` | Format-on-save setting was skipped as editor preference. | Promoted to `Port`: current local editor auto-formats unconditionally, and upstream fixed unwanted LSP reformat diffs. |
+| `5fe27354`, `16933d3c`, `f004f417`, `29394232` | Already-present or low-value UI rows were kept as candidates/deferred. | Classified as `Skip` or already aligned after checking current code. |
+| `59e802ea`, `e8024b5a` | Local repo rows had vague or invalid labels. | `59e802ea` moved to `Defer` because branch-chip command behavior is outside WARPER-009; `e8024b5a` remains `Port manually` for skill/rule force-includes. |
+| `5bee7a75`, `2fe9d43c`, `1175e82f`, `ffe93a5e`, `1d2775ac` | Git/UI rows were over-promoted into WARPER-009. | Kept `Defer`: real upstream fixes, but not current OpenRouter file-tool or local repo data-plane painkillers. |
+| `1244ffbe` | Packaging repair was skipped as upstream apt repo work. | Promoted to `Port manually`: current Warper deb script references missing repo-template paths, so the Warper-specific repair is valid. |
 
-## Public PR Body Findings
+## Public PR Findings
 
 | Area | Public PR evidence | Effect on Warper decision |
 | --- | --- | --- |
-| Dependency hygiene | PRs `10263`, `10060`, `10513`, `12090`, and `9665` describe concrete dependency version bumps. `9665` specifically explains a macOS CoreText font descriptor leak. | Keep in `WARPER-006`, but apply only when Warper's current dependency graph contains the affected package. |
-| Startup inline images | PR `10478`, linked to issue `#10020`, says iTerm2/Kitty image completions during startup or early output parsed successfully but did not render like normal output. | Keep in `WARPER-007`; this is local terminal behavior, not cloud behavior. |
-| Zsh command grid rendering | PR `12438` describes zsh prompt width annotation constructs corrupting command grid rendering in Warp prompt mode. | Keep in `WARPER-007`; relevant to local zsh prompt rendering. |
-| Shell PATH capture | PR `12473` explains macOS GUI launch gets a minimal launchd `PATH`, then noisy `.zshrc` output corrupts captured path data. | Keep in `WARPER-007`; relevant to Warper's macOS app launch and local tool resolution. |
-| Page Up/Page Down | PR `9624`, linked to issue `#9008`, says Page Up/Down did editor navigation from the prompt instead of terminal scrollback when menus were closed. | Keep in `WARPER-007`; local terminal ergonomics. |
-| Selection auto-scroll | PR `9448` says blocklist drag events were filtered by z-index coverage checks, preventing terminal selection auto-scroll. | Keep in `WARPER-007`; local terminal selection behavior. |
-| Meta-key encoding | PR `9514`, linked to issue `#9517`, says Meta+Enter/Tab/Escape sent literal key names. | Keep in `WARPER-007`; local terminal input encoding. |
-| Flat storage underflow | PR `12085` mentions a Sentry crash source, but the described root cause is local terminal flat storage underflow after clear/resize. | Keep in `WARPER-007`; port the local storage fix, not Sentry plumbing. |
-| macOS IME | PRs `9711`, `9730`, and `10443` describe macOS IME candidate selection, Japanese conversion submission, and cursor-area alignment. | Keep in `WARPER-007`; directly relevant to macOS Warper. |
-| Linux X11 IME | PR `12277`, linked to issue `#11543`, enables X11 only and explicitly avoids Wayland due to an infinite-loop issue. | Keep conditional in `WARPER-007`; only relevant if Warper keeps Linux UI builds. |
-| Global rulefiles | PR `9325`, linked to issue `#9788`, says users need rules that apply across all projects, starting with `~/.agents/AGENTS.md`, but also lists cloud rules in Settings. | Evidence goes into the audit only. No spec was created because this is not yet a narrow Warper implementation target. |
-| Rule and skill scan reliability | PRs `10238`, `10377`, `11978`, and `12040` describe active rule races, startup re-indexing, duplicate skill scans, and scoped refreshes. | Audit keeps the scan-reduction fixes as candidates; no broad rules/skills spec was created. |
-| MCP reliability | PRs `10640`, `10874`, `9460`, `9436`, and `11297` describe schema coercion, log rotation, OAuth refresh timing, independent capability queries, and MCP add-path redaction. | Audit keeps MCP log rotation and path redaction as candidates; no broad MCP spec was created. |
-| CLI agent interop | PRs `9497`, `9667`, `9833`, `11627`, and `12540` describe local CLI agent recognition, image paste behavior, and Cmd+Enter context routing. | Deferred or skipped in the audit because new CLI-agent interop expands product/startup surface. |
-| Hosted Codex/plugin work | PRs `10176` and `11871` mention app.warp.dev conversations, Drive plans, cloud agents, or Codex plugin support for cloud-agent use cases. | Skipped or deferred in the audit; no hosted orchestration or plugin spec was created. |
-| Git and repo metadata | PRs `12590`, `12126`, `11987`, `12035`, `9326`, `11856`, `9905`, `11242`, `10265`, `9291`, `9238`, `9532`, `12221`, `12211`, `12235`, `12166`, `12122`, `10682`, `11464`, `9998`, `10184`, and `9623` describe local diff, worktree, file-read, watcher, and project explorer behavior. Several mention Oz or Sentry context, but the changed behavior is local repo state. | Keep in `WARPER-009`, manually excluding hosted code indexing, remote SSH state, GitHub PR creation UI, telemetry, and Oz provenance. |
-| Local control CLI | PRs `11772` and `12327` describe a local control protocol and a command catalog. `12327` says Auth, Drive, History, and Block families are excluded, but the catalog still needs Warper-specific narrowing. | Skipped for now in the audit; no spec was created because this is a new credentialed control plane. |
-| Local editor/conversation/settings UX | PRs `12254`, `10012`, `12323`, `12409`, `11512`, and `9837` describe editor settings, local settings palette coverage, and conversation rename surfaces. `12323` explicitly renames on the server for Oz/web persistence. | Mostly skipped or deferred in the audit; no spec was created. |
-| Terminal UX polish | PRs `9347`, `9305`, `9491`, `9475`, and `10612` describe reopen closed session menu entry, `/set-tab-color`, copy priority, file-link reveal tooltip, and Clear context menu. | Only copy-priority remains a port candidate; no broad UX spec was created. |
-| Markdown and Mermaid | PRs `10431`, `10432`, `11548`, `12488`, `12155`, `12613`, `10143`, `9483`, and `12371` describe local Mermaid rendering, failure states, lightbox, fit-width sizing, renderer updates, ToC anchors, Markdown Viewer preference, and header alignment. | Deferred in the audit; no Markdown/Mermaid spec was created. |
-| Developer skills/tooling | PRs `11424`, `9415`, `9701`, `10818`, `10400`, `11747`, `12313`, `9558`, and `9527` describe logged-out bug repro guidance, keybinding skill, visual-evidence review requirements, tech-spec parallelization, formatting script, macOS target-dir fix, Linux desktop Exec fix, and Linux bootstrap deps. | Only small build/package fixes remain candidates; no developer-process spec was created. |
+| Dependencies | PRs `#10263`, `#10060`, `#10513`, `#12090`, and `#9665` describe concrete dependency/security/leak fixes. | Keep in `WARPER-006` only when the package is present in Warper's current graph. |
+| Terminal images | PR `#10478` and linked issue `#10020` describe completed iTerm2/Kitty image actions before preexec not rendering. | Defer as `Lip gloss`; protocol paths exist, but the pain is visual compatibility. |
+| Terminal/input | PRs `#12438`, `#12473`, `#9514`, `#12085`, `#9711`, `#9730`, `#10443`, and `#12277` describe local zsh, PATH, key encoding, grid, macOS IME, and X11 IME pain. | Keep in `WARPER-007`. |
+| Windows terminal/input | PRs `#11906`, `#11563`, `#10442`, `#9476`, `#11714`, and `#11203` describe real Windows pain. | Skip until a Warper spec adds Windows support. |
+| Rules and skills | PRs `#10238`, `#11978`, and `#12040` describe retained local-rule/skill correctness and scan reduction. PRs `#9325` and `#10377` add global/startup rule surface. | Port the narrow local rule/skill painkillers; skip global/startup expansion. |
+| MCP | PRs `#10874` and `#11297` describe local log growth and add-path redaction bypass. PRs `#10640`, `#9460`, and `#9436` touch broader MCP tool/OAuth/startup behavior. | Port log rotation and redaction; defer broader MCP behavior. |
+| CLI agents and plugins | PRs `#10176`, `#11571`, `#11871`, `#11892`, `#9497`, `#9667`, `#9833`, and `#11627` add or extend child-agent/plugin/detection/rich-input surfaces. | Skip; WARPER-005 does not require this product expansion. |
+| Local repo/file tools | PRs `#12590`, `#11987`, `#12035`, `#9326`, `#11856`, `#9905`, `#12221`, `#12211`, `#12235`, `#12166`, `#12122`, `#10682`, `#9998`, `#10184`, and `#9623` fix retained local file-tool/repo metadata pain. | Keep in `WARPER-009`, with remote/Oz provenance stripped. |
+| Git/PR UI polish | PRs `#12126`, `#11242`, `#10265`, `#9291`, and `#9238` fix real Git UI or PR workflow issues. | Defer; not current WARPER-005 file-tool correctness. |
+| Local control | PRs `#11772` and `#12327` add a credentialed local control protocol and command catalog. | Skip; new control plane. |
+| Editor/build/package | PRs `#12254`, `#12313`, `#9558`, `#9527`, and `#10019` describe small local editor/build/package painkillers. | Port or port manually without product-surface expansion. |
+| Markdown/Mermaid/UI/process | PRs in this group mostly describe renderer UX, grouped tabs, process skills, Oz workflows, or rollout flags. | Defer or skip; no broad spec. |
 
 ## Public PR References Not Resolvable
 
-These commit-subject references could not be fetched as public pull requests from `warpdotdev/warp` with `gh pr view`. Their rationale should not cite a public PR body unless a private upstream source is provided later.
+These commit-subject references could not be fetched as public pull requests from `warpdotdev/warp`; their rationale must not cite a public PR body unless private upstream evidence is supplied later.
 
-| Reference | Affected commit area |
+| Reference | Affected area |
 | --- | --- |
-| `#25398`, `#25353`, `#25351`, `#25365`, `#25258`, `#26138`, `#25339`, `#25625`, `#25261`, `#25395` | Security hardening commits in `WARPER-006`. |
-| `#9008` | Superseded by accessible PR `#9624` for Page Up/Page Down. |
-| `#9709` | Superseded by accessible PR `#9711` for macOS IME. |
-| `#10596`, `#7723`, `#8863`, `#6798` | Superseded by accessible follow-up PRs `#10640`, `#10874`, `#9460`, `#9436` for MCP fixes. |
+| `#25398`, `#25353`, `#25351`, `#25365`, `#25258`, `#26138`, `#25339`, `#25625`, `#25261`, `#25395`, `#25383`, `#25354`, `#25377`, `#26090`, `#26091`, `#25311` | Security hardening commits in or near `WARPER-006`. |
+| `#10596`, `#7723`, `#8863`, `#6798` | Superseded by accessible MCP follow-up PRs `#10640`, `#10874`, `#9460`, and `#9436`. |
 | `#9607` | Superseded by accessible PR `#9667` for Mistral Vibe detection. |
 | `#10472` | Superseded by accessible PR `#10612` for Clear context menu. |
 | `#9381` | Superseded by accessible PR `#9558` for Linux desktop Exec. |
 
-## Remaining Limitations
+## Remaining Limits
 
-- Public PR metadata is not available for the high-numbered security PR references. Their current rationale is based on `git show` commit subjects and diffs, not PR descriptions.
-- Several public PRs contain Oz conversation links or were generated by Oz. That does not make the local code change irrelevant by itself, but any Oz, hosted conversation, telemetry, Drive, or server persistence path is excluded from the Warper port specs.
-- The current Warper specs do not establish Windows as a target. Windows-specific upstream fixes are deferred unless a later Warper spec adds Windows support.
+- The high-numbered security PRs are not public. Their upstream why is grounded in commit diffs and tests, not PR descriptions.
+- Several public PRs mention Oz, Sentry, remote daemon, hosted conversations, or cloud validation. That provenance is not a Warper rationale. Only retained local code paths survive the audit.
+- Windows fixes are not port candidates until a Warper spec explicitly adds Windows as a supported desktop target.
