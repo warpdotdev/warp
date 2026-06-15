@@ -1,4 +1,78 @@
+use ai::api_keys::CustomEndpointModel;
+use pathfinder_geometry::vector::vec2f;
+use warpui::platform::WindowStyle;
+use warpui::units::Pixels;
+use warpui::App;
+
 use super::*;
+use crate::test_util::terminal::initialize_app_for_terminal_view;
+
+fn endpoint_with_models(model_count: usize) -> CustomEndpoint {
+    CustomEndpoint {
+        name: "Test endpoint".to_string(),
+        url: "https://api.example.com/v1".to_string(),
+        api_key: "key".to_string(),
+        models: (0..model_count)
+            .map(|index| CustomEndpointModel {
+                name: format!("model-{index}"),
+                alias: None,
+                config_key: format!("config-{index}"),
+            })
+            .collect(),
+    }
+}
+
+fn init_modal_test_models(app: &mut App) {
+    initialize_app_for_terminal_view(app);
+}
+
+#[test]
+fn modal_with_many_models_lays_out() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let endpoint = endpoint_with_models(20);
+        let (window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            CustomEndpointModal::new(Some(&endpoint), Some(0), ctx)
+        });
+
+        app.update(|ctx| {
+            ctx.presenter(window_id)
+                .expect("presenter should exist")
+                .borrow_mut()
+                .build_scene(vec2f(560., 600.), 1., None, ctx);
+
+            assert_eq!(modal.as_ref(ctx).model_rows.len(), 20);
+        });
+    })
+}
+
+#[test]
+fn prefill_resets_model_scroll_position() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let endpoint = endpoint_with_models(20);
+        let (_window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            CustomEndpointModal::new(Some(&endpoint), Some(0), ctx)
+        });
+
+        modal.update(&mut app, |modal, ctx| {
+            modal
+                .model_section_scroll_state
+                .scroll_to(Pixels::new(100.));
+            assert_eq!(
+                modal.model_section_scroll_state.scroll_start(),
+                Pixels::new(100.)
+            );
+
+            modal.prefill(None, None, ctx);
+
+            assert_eq!(
+                modal.model_section_scroll_state.scroll_start(),
+                Pixels::zero()
+            );
+        });
+    })
+}
 
 #[test]
 fn validate_url_accepts_https_with_host() {

@@ -4,8 +4,9 @@ use ::ai::api_keys::CustomEndpoint;
 use url::Url;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
-    Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
-    Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, MouseStateHandle,
+    ParentElement, Radius, ScrollbarWidth, Text,
 };
 use warpui::fonts::FamilyId;
 use warpui::ui_components::button::ButtonVariant;
@@ -78,6 +79,7 @@ pub struct CustomEndpointModal {
     remove_endpoint_button: ViewHandle<ActionButton>,
     editing_index: Option<usize>,
     url_has_error: bool,
+    model_section_scroll_state: ClippedScrollStateHandle,
 }
 
 impl CustomEndpointModal {
@@ -222,6 +224,7 @@ impl CustomEndpointModal {
             remove_endpoint_button,
             editing_index,
             url_has_error,
+            model_section_scroll_state: Default::default(),
         }
     }
 
@@ -288,6 +291,7 @@ impl CustomEndpointModal {
         ctx: &mut ViewContext<Self>,
     ) {
         self.editing_index = editing_index;
+        self.model_section_scroll_state = Default::default();
         self.endpoint_name_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(endpoint.map(|e| e.name.as_str()).unwrap_or(""), ctx);
         });
@@ -641,7 +645,7 @@ impl View for CustomEndpointModal {
             ..Default::default()
         };
 
-        let mut column = Flex::column();
+        let mut column = Flex::column().with_main_axis_size(MainAxisSize::Max);
 
         // Description
         column.add_child(
@@ -747,11 +751,15 @@ impl View for CustomEndpointModal {
             );
         }
 
+        // Sticky header for model columns
         column.add_child(
             Container::new(model_labels.finish())
                 .with_margin_bottom(4.)
                 .finish(),
         );
+
+        // Scrollable section: model rows + "+ Add model" button
+        let mut model_section = Flex::column();
 
         for (i, row) in self.model_rows.iter().enumerate() {
             let name_input = appearance
@@ -802,11 +810,11 @@ impl View for CustomEndpointModal {
             }
             let row = row.finish();
 
-            column.add_child(Container::new(row).with_margin_bottom(12.).finish());
+            model_section.add_child(Container::new(row).with_margin_bottom(12.).finish());
         }
 
-        // + Add model button
-        column.add_child(
+        // + Add model button (inside scroll so it remains reachable)
+        model_section.add_child(
             Container::new(
                 appearance
                     .ui_builder()
@@ -826,7 +834,28 @@ impl View for CustomEndpointModal {
                     })
                     .finish(),
             )
-            .with_margin_bottom(24.)
+            .with_margin_bottom(8.)
+            .finish(),
+        );
+
+        let model_scrollable = ClippedScrollable::vertical(
+            self.model_section_scroll_state.clone(),
+            model_section.finish(),
+            ScrollbarWidth::Auto,
+            theme.nonactive_ui_text_color().into(),
+            theme.active_ui_text_color().into(),
+            warpui::elements::Fill::None,
+        )
+        .with_overlayed_scrollbar()
+        .finish();
+
+        column.add_child(
+            Expanded::new(
+                1.,
+                Container::new(model_scrollable)
+                    .with_margin_bottom(24.)
+                    .finish(),
+            )
             .finish(),
         );
 
