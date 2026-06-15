@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, SingletonEntity, TypedActionView, ViewHandle,
@@ -222,15 +221,13 @@ impl AutoCloudHandoffController {
 
         if AISettings::as_ref(ctx).is_auto_handoff_on_sleep_enabled(ctx) {
             self.dispatch_handoff(candidate, AutoCloudHandoffTrigger::MacOsSleep, ctx);
-        } else if FeatureFlag::AutoHandoffSleepPrompt.is_enabled() {
+        } else {
             log::info!(
                 "auto-handoff sleep prompt: recorded pending prompt for conversation {:?} in terminal {:?}",
                 candidate.conversation_id,
                 candidate.terminal_view_id,
             );
             self.pending_sleep_prompt = true;
-        } else {
-            log::info!("auto-handoff sleep prompt: skipping at sleep, feature flag disabled");
         }
     }
 
@@ -245,12 +242,7 @@ impl AutoCloudHandoffController {
             return;
         }
 
-        let should_show = {
-            let ai_settings = AISettings::as_ref(ctx);
-            FeatureFlag::AutoHandoffSleepPrompt.is_enabled()
-                && !ai_settings.is_auto_handoff_on_sleep_enabled(ctx)
-        };
-        if !should_show {
+        if AISettings::as_ref(ctx).is_auto_handoff_on_sleep_enabled(ctx) {
             log::info!(
                 "auto-handoff sleep prompt: not showing on wake, auto-handoff-on-sleep was enabled in the meantime"
             );
@@ -417,20 +409,20 @@ pub(crate) fn init(app: &mut AppContext) {
     });
 }
 
+/// Triggers an auto-handoff to the cloud. This is the entry point for the
+/// `warp://.../auto_handoff_to_cloud` URI action; the real macOS sleep path
+/// goes through the `SystemStats` subscription instead.
+///
+/// Callers that dispatch from inside an in-progress workspace view update
+/// (e.g. the debug palette entry) must defer past that update before calling
+/// this: `update_view` temporarily removes the dispatching workspace from its
+/// window, so the synchronous workspace lookup here would otherwise miss it.
 pub(crate) fn trigger_auto_handoff_to_cloud(
     trigger: AutoCloudHandoffTrigger,
     ctx: &mut AppContext,
 ) {
-    AutoCloudHandoffController::handle(ctx).update(ctx, |_, ctx| {
-        // Defer the trigger to the next executor turn so it runs outside any
-        // in-progress view update. `update_view` temporarily removes a view
-        // from its window while updating it, so when this is dispatched from
-        // a workspace action (e.g. the debug palette entry), a synchronous
-        // workspace lookup would not find the dispatching workspace — its
-        // registry weak-handle fails to upgrade and `views_of_type` misses it.
-        ctx.spawn(async {}, move |controller, _, ctx| {
-            controller.trigger(trigger, ctx);
-        });
+    AutoCloudHandoffController::handle(ctx).update(ctx, |controller, ctx| {
+        controller.trigger(trigger, ctx);
     });
 }
 

@@ -24654,18 +24654,22 @@ impl TypedActionView for Workspace {
                     }
                 });
                 let new_value = *AISettings::as_ref(ctx).did_show_auto_handoff_sleep_modal;
-                log::info!(
-                    "Auto-handoff sleep modal state: old={old_value}, new={new_value}, feature_flag_enabled={}",
-                    FeatureFlag::AutoHandoffSleepPrompt.is_enabled()
-                );
+                log::info!("Auto-handoff sleep modal state: old={old_value}, new={new_value}");
             }
             #[cfg(debug_assertions)]
             TriggerAutoHandoffToCloud => {
                 log::info!("auto handoff: debug action triggering auto handoff to cloud");
-                super::auto_handoff::trigger_auto_handoff_to_cloud(
-                    super::action::AutoCloudHandoffTrigger::Uri,
-                    ctx,
-                );
+                // Defer past this in-progress workspace view update: while a
+                // view is updating, `update_view` removes it from its window,
+                // so the handoff's synchronous workspace lookup wouldn't find
+                // the dispatching workspace. The URI and sleep entry points
+                // don't run inside a view update, so they call directly.
+                ctx.spawn(async {}, |_, _, ctx| {
+                    super::auto_handoff::trigger_auto_handoff_to_cloud(
+                        super::action::AutoCloudHandoffTrigger::Uri,
+                        ctx,
+                    );
+                });
             }
             #[cfg(debug_assertions)]
             ResetOrchestrationLaunchModalState => {
