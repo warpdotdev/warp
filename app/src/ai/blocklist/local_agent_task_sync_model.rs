@@ -320,14 +320,9 @@ fn map_conversation_status(
         // matches the local view.
         ConversationStatus::WaitingForEvents => (AgentTaskState::InProgress, None),
         ConversationStatus::Success => (AgentTaskState::Succeeded, None),
-        // An automatic recovery is pending: keep the run IN_PROGRESS so the cloud
-        // execution isn't torn down out from under it.
-        ConversationStatus::TransientError => (
-            AgentTaskState::InProgress,
-            Some(TaskStatusUpdate::message(
-                "Connection lost while receiving the agent response; attempting to resume.",
-            )),
-        ),
+        // Recovery pending: stay IN_PROGRESS, no message — `update_agent_task`
+        // can't clear it later, so a "reconnecting" note would linger after resume.
+        ConversationStatus::TransientError => (AgentTaskState::InProgress, None),
         ConversationStatus::Error => {
             // Extract the specific RenderableAIError from the last exchange to
             // classify ERROR vs FAILED and provide a PlatformErrorCode.

@@ -177,16 +177,16 @@ fn map_conversation_status_in_progress_reports_in_progress_with_no_message() {
 }
 
 #[test]
-fn transient_error_status_maps_to_in_progress() {
-    // A pending recovery is represented by the TransientError conversation status;
-    // the run is kept IN_PROGRESS so the execution isn't torn down mid-recovery.
+fn transient_error_status_maps_to_in_progress_with_no_message() {
+    // Recovery stays IN_PROGRESS with no status message; see the rationale in
+    // `map_conversation_status`.
     let mut conversation = AIConversation::new(false, false);
     conversation.set_status_for_test(ConversationStatus::TransientError);
     assert_update(
         map_conversation_status(&conversation),
         AgentTaskState::InProgress,
         None,
-        Some("attempting to resume"),
+        None,
     );
 }
 

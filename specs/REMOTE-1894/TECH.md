@@ -30,7 +30,7 @@ Key files:
 [`conversation.rs:4205`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/agent/conversation.rs#L4205): new non-terminal status ("Reconnecting", in-progress icon treatment — I5). `mark_request_completed_with_error` takes `recovery_pending: bool` and sets `TransientError` vs `Error`; the exchange itself is still marked finished-with-error so the structured error is preserved for rendering and restore. Consumers updated exhaustively (no wildcard arms):
 
 - Driver ([`driver.rs:2793`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/agent_sdk/driver.rs#L2793)): `TransientError` → `end_run_after(AUTO_RESUME_TIMEOUT = 120s)` with the last structured error (I11); a recovery flips status back to `InProgress`, cancelling the deadline. The old `will_attempt_resume` check in the Error arm is gone — `Error` is always terminal now.
-- Sync model ([`local_agent_task_sync_model.rs:322`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/blocklist/local_agent_task_sync_model.rs#L322)): `TransientError` → `IN_PROGRESS` + "attempting to resume" message (I6); `task_update_for_conversation_error` ignores the `will_attempt_resume` rendering hint (terminal classification only).
+- Sync model ([`local_agent_task_sync_model.rs:322`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/blocklist/local_agent_task_sync_model.rs#L322)): `TransientError` → `IN_PROGRESS` with no status message (I6); `task_update_for_conversation_error` ignores the `will_attempt_resume` rendering hint (terminal classification only).
 - `ambient_agents::conversation_output_status_from_conversation`: early `None` for `TransientError`; for terminal `Error` it now prefers the structured exchange error over `status_error_message`.
 - Run lists / pill bar / aggregation / notifications / queued-prompt gating treat it as working (I7, I8, I19).
 - Restore-from-disk derives status from exchanges, so `TransientError` restores as terminal `Error` (I18, accepted).
@@ -64,7 +64,7 @@ Unit (all in-tree, `cargo nextest run -p warp --lib`):
 - `response_stream_tests.rs` — exhaustive `recovery_action` matrix: retry/park/fail pre-actions (I2, I9, I13), resume gating post-actions (I3, I9), budget exhaustion and non-retryable → fail (I10, I12).
 - `server_api_tests.rs` — `is_transient_failure` classification: 5xx/timeout/transport transient; quota/overload/4xx/JSON not (I12); `UnexpectedEof` retryable + transient (I1).
 - `history_model_tests.rs` — `recovery_pending` → `TransientError` and no terminal derived outcome (I5, I6 upstream); structured exchange error preserved through conversion; non-recoverable error stays terminal.
-- `local_agent_task_sync_model_tests.rs` — `TransientError` → `IN_PROGRESS` + message (I6); `will_attempt_resume` hint ignored for terminal classification (I10, I12).
+- `local_agent_task_sync_model_tests.rs` — `TransientError` → `IN_PROGRESS` with no status message (I6); `will_attempt_resume` hint ignored for terminal classification (I10, I12).
 
 E2e (oz-local + warp-server `TransportReset` LLM mock, `simulate_maa_transport_reset: true`):
 
