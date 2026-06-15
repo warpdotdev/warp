@@ -1,76 +1,33 @@
-# WARPER-009: local Git, repo metadata, and file edit correctness
+# WARPER-009: local file-edit corruption port
 
 ## Summary
 
-Warper should port upstream fixes that make local diff handling, file edit results, project explorer metadata, and repository watchers reliable at local scale without importing Git chip polish, GitHub PR automation, remote SSH project explorer state, or hosted code indexing.
+Warper should port upstream repo/file-tool work only when it prevents local file corruption in the OpenRouter editing path. Under the XP bar, the current candidate is the multiline partial-line suffix fix in diff validation. Repo metadata scale, result-size caps, Project Explorer refreshes, watcher load, and Git UI work are deferred until a current Warper workflow fails.
 
 ## Why this matters for Warper
 
-Warper's local agent and terminal workflows depend on local repository state instead of hosted code indexing. If local diffs, worktrees, file reads, ignored paths, or project explorer metadata are wrong, the agent will reason from bad context and the user will see misleading local UI. These commits are relevant because they improve the local data plane WARPER-005 needs for file reads, edits, grep/glob/search, and follow-up context. They are not relevant where upstream solved GitHub PR creation, remote SSH project explorer state, or server-backed code intelligence.
+OpenRouter exposes `apply_file_diffs`, and the request-file-edits executor applies those diffs to local files. If that path corrupts suffix content around multiline partial lines, it damages user files. That is a survival issue for the local-first agent. Large-repo performance and context fidelity improvements may be useful, but they are not implementation work until backed by a failing acceptance test or current user pain.
 
 ## Source commits
 
-| Commit | Resolution | Scope |
-| --- | --- | --- |
-| `802a881e` | Port | Fix diff handling for untracked directories and nested worktrees. |
-| `89f61b63` | Port manually | Limit apply-diff results to changed ranges and local context. |
-| `48331870` | Port manually | Cap `get_repo_contents` results and return explicit errors. |
-| `5fa22831` | Port | Fix out-of-bounds `read_files` line ranges producing empty results. |
-| `9f459842` | Port | Fix repo attribution and watcher behavior for symlinked gitignored paths. |
-| `43828a6d` | Port | Avoid cloning whole file tree on view update. |
-| `03ad9ea9` | Port | Avoid eagerly expanding lazy-loaded repo subtrees. |
-| `e8024b5a` | Port manually | Honor force-included skill/rule paths in lazy repo metadata. |
-| `0f97ef18` | Port manually | Allow partial repo metadata builds when repos exceed max limits. |
-| `3497d184` | Port manually | Stop watching gitignored directories while force-including skill paths. |
-| `21e70d56` | Port | Avoid panic when file watcher creation fails. |
-| `5d8507e4` | Port | Avoid freshly cloned repos getting stuck in loading state. |
-| `bd7202f3` | Port manually | Refresh affected file-tree roots instead of rebuilding all roots. |
-| `a1b76c28` | Port | Preserve multiline partial-line suffixes during diff validation. |
-
-## Deferred upstream commits
-
-| Commit | Decision | Why not in this spec |
-| --- | --- | --- |
-| `5bee7a75` | Defer | Real code-review UI error-state fix, but not current OpenRouter file-tool correctness. |
-| `59e802ea` | Defer | Linked-worktree branch checkout routing is branch-chip command correctness, not OpenRouter file-tool or repo metadata correctness. |
-| `2fe9d43c` | Defer | Retained Git chip state correctness, but not current local data-plane pain. |
-| `1175e82f` | Defer | Branch/diff chip initialization race is UI state, not WARPER-005 file-tool fidelity. |
-| `ffe93a5e` | Defer | First-commit commit-message diff is outside current specs. |
-| `1d2775ac` | Defer | PR diff/fork-point workflow needs a Warper-owned local design before porting. |
-| `cb4fe42a` | Defer | Watch-filter API change needs dependency/API review before watcher churn. |
-
-## Skipped upstream commits
-
-| Commit | Decision | Why skipped |
-| --- | --- | --- |
-| `e4695f21` | Skip | Hidden-files toggle is a new Project Explorer preference, not a painkiller. |
-| `54712e5d` | Skip | Pending SSH Project Explorer state is remote-session UX, not local Warper baseline. |
-
-## Goals / Non-goals
-
-- Goal: make local Git metadata, file edit results, OpenRouter file tools, and repo metadata reliable where they feed retained local agent and Project Explorer behavior.
-- Goal: make local project explorer and repo metadata scale to large repos without excessive CPU, memory, or filesystem watching.
-- Goal: preserve force-included local skill/rule paths even when repo metadata is lazily loaded.
-- Non-goal: restore hosted code indexing, remote SSH project explorer loading state, cloud workspace state, GitHub PR creation, commit-message generation, hidden-file preferences, or Git chip polish as a required baseline feature.
-- Non-goal: upload repo metadata, diff stats, file tree state, or code review results.
+| Commit | Upstream why | Current Warper evidence | Resolution |
+| --- | --- | --- | --- |
+| `a1b76c28` | PR `#9623` fixes multiline partial-line suffix preservation in diff validation. | `app/src/ai/agent/api/openrouter.rs:529-530` exposes `apply_file_diffs`; `app/src/ai/blocklist/action_model/execute/request_file_edits.rs:270-271` applies diffs. | Port. |
 
 ## Behavior
 
-1. Local diff/repo metadata includes untracked directories and nested worktree state where agent context or retained local UI consumes that metadata.
-2. Local file edit results include the changed ranges and enough context for follow-up agent reasoning without dumping whole files unnecessarily.
-3. `read_files` returns explicit empty segments or errors for out-of-bounds line ranges instead of silently dropping requested paths.
-4. `get_repo_contents` returns a bounded result and explicit truncation or error metadata instead of materializing unbounded repo entries.
-5. Symlinked gitignored paths are attributed to the correct local repo and do not cause invalid Git commands.
-6. Large file trees avoid expensive full-tree clones, eager subtree expansion, and whole-root rebuilds when a smaller update is enough.
-7. Repo metadata can partially build when file limits are exceeded and continue lazily rather than collapsing useful local context.
-8. Gitignored directories are not watched unnecessarily, but explicitly force-included local paths such as skill/rule providers remain visible.
-9. File watcher creation failures degrade local repo metadata features gracefully and do not crash the terminal.
-10. Remote SSH loading-state commits, hidden-file preferences, GitHub PR workflow fixes, branch-chip checkout routing, and remote-server watcher motivations are not ported unless a later Warper spec owns that product path.
+1. Applying a diff to a file with multiline partial-line content preserves untouched suffix text exactly.
+2. Failed or invalid diff validation must fail closed rather than applying a corrupt edit.
+3. The port must not import GitHub PR workflow, Git chip UI behavior, remote SSH Project Explorer state, hosted code indexing, or broad repo metadata rewrites.
+
+## Deferred Repo/File Rows
+
+| Commits | Reason |
+| --- | --- |
+| `802a881e`, `89f61b63`, `48331870`, `5fa22831`, `9f459842`, `43828a6d`, `03ad9ea9`, `e8024b5a`, `0f97ef18`, `3497d184`, `21e70d56`, `5d8507e4`, `bd7202f3` | Useful upstream fixes, but not current Warper survival work without a failing OpenRouter workflow. |
+| `5bee7a75`, `59e802ea`, `2fe9d43c`, `1175e82f`, `ffe93a5e`, `1d2775ac`, `cb4fe42a` | Git UI, branch-chip, PR, or watcher API work outside current XP-critical scope. |
 
 ## Validation
 
-- Add Git fixtures for untracked directories, nested worktrees, and symlinked gitignored paths.
-- Add file edit validation tests for changed-range output, multiline partial-line suffix preservation, and out-of-bounds read ranges.
-- Add repo metadata/model tests for lazy subtree updates, force-included paths, partial metadata builds, and freshly cloned repo loading. Add UI tests only when implementation touches rendering.
-- Add watcher tests for gitignore filtering, watcher creation failure, and selective root refresh.
-- Run offline smoke tests to ensure no hosted code indexing, remote SSH, or GitHub PR network path is required.
+- Add a regression test for multiline partial-line suffix preservation in diff validation.
+- Run the local file-edit/OpenRouter test path that applies a diff to disk.

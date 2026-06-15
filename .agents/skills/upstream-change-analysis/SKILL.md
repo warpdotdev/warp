@@ -11,6 +11,7 @@ This skill exists because a previous pass produced fake analysis: dependency cla
 
 ## Hard Line
 
+- Apply XP scope control: do not recommend implementation unless Warper will fail its current local-first purpose without it. "Would be nice", "upstream fixed it", "security hygiene", "developer productivity", and "future compatibility" are not enough. A `Port` must stop an unsafe-to-run app, local data corruption, command execution exposure in a retained path, credential/local-file exposure, a crash that breaks normal terminal use, or a current build/release path from failing.
 - Do not write BS. If a human can ask "did you actually check that?" and the answer is no, the analysis is invalid.
 - Do not write conditional relevance when the repo can answer the condition. Check the code.
 - Do not write generic rationale. "Security", "correctness", "compatibility", "ergonomics", "rendering", and "developer productivity" are labels, not reasons.
@@ -75,12 +76,12 @@ Do not turn upstream's why into Warper's why. If upstream changed something for 
 
 Classify the upstream motive before the port decision:
 
-- `Painkiller`: fixes proven user pain or operational risk in a path Warper keeps, such as a crash, data loss, command execution bug, local file corruption, credential exposure, build breakage, or dependency vulnerability.
+- `Painkiller`: fixes proven current pain in a path Warper keeps, such as a normal-use crash, local data loss, command execution bug, local file corruption, credential exposure, build/release blockage, or a dependency vulnerability that is present and reachable.
 - `Lip gloss`: improves appearance, copy, discoverability, onboarding, preferences, or nice-to-have compatibility without fixing current Warper pain.
 - `Recreational drug`: adds agent orchestration, plugin/control APIs, queues, watchers, background jobs, credential reads, OAuth, cloud-shaped local plumbing, or new automation surface that Warper did not ask for.
 - `Churn`: refactors, renames, restructures, test-process changes, abstraction reshuffles, or internal platform work without a concrete retained Warper behavior fix.
 
-Warper ports painkillers. Warper skips lip gloss, recreational drugs, and churn unless the current code and `WARPER-001` through `WARPER-005` prove a specific local-only need.
+Warper ports only painkillers that clear the XP necessity bar. Warper skips lip gloss, recreational drugs, churn, and speculative hardening unless the current code and `WARPER-001` through `WARPER-005` prove that Warper will fail its local-first purpose without the change.
 
 ## Current-Code Proof
 
@@ -103,8 +104,8 @@ Do not summarize a category as "present". Show the exact files and lines.
 
 Use exactly these decisions:
 
-- `Port`: current Warper has the affected path, the change fixes security/correctness/build reliability, and the diff does not add hosted/startup/product surface.
-- `Port manually`: the local fix is valid, but upstream mixed it with hosted, telemetry, remote, branding, platform, or broad refactor work.
+- `Port`: current Warper has the affected path, the change clears the XP necessity bar, and the diff does not add hosted/startup/product surface.
+- `Port manually`: the local fix clears the XP necessity bar, but upstream mixed it with hosted, telemetry, remote, branding, platform, or broad refactor work.
 - `Defer`: the change may fit later, but it is optional, product-significant, startup-sensitive, or not on the current Warper critical path.
 - `Skip`: the dependency/path is absent, the target platform is out of scope, or the change conflicts with Warper's local-only requirements.
 
@@ -118,7 +119,7 @@ Answer these questions for each commit:
 2. Is upstream's motive a `Painkiller`, `Lip gloss`, `Recreational drug`, or `Churn`? Do not skip this classification.
 3. What exactly did upstream change?
 4. What current Warper code path does it touch? Cite files and lines.
-5. Is that path part of `WARPER-001` through `WARPER-005`, or only optional polish?
+5. What breaks, becomes unsafe, corrupts local state, or blocks current build/release work if Warper does not port it now?
 6. Does it add startup work, credential reads, watchers, OAuth, plugin management, local HTTP/control APIs, or new agent orchestration?
 7. Does it reintroduce hosted Warp, Oz, cloud tasks, server transcripts, telemetry, billing, Drive, account state, remote session sharing, or upstream branding?
 8. Can the useful part be manually ported without the bad part?

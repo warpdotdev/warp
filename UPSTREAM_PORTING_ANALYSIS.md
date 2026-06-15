@@ -1,99 +1,90 @@
 # Upstream Porting Analysis
 
-This is the subagent re-audit of the upstream candidates listed in `UPSTREAM_PORTING_SUGGESTIONS.md`. The audit used the repo skill `.agents/skills/upstream-change-analysis/SKILL.md`: upstream why first, motive classification second, current Warper code proof third, and no port recommendation unless Warper has a retained local painkiller.
+This audit uses the repo skill `.agents/skills/upstream-change-analysis/SKILL.md` with the stricter XP rule: a port recommendation means Warper is unsafe to run, can corrupt local data/state, crashes in normal retained use, or cannot complete a current local build/package path without the change. A retained code path and a real upstream bug are necessary evidence, not sufficient rationale.
 
 ## Decision Rules
 
-- `Port`: current Warper has the affected path, the upstream change fixes a security, correctness, crash, data-loss, dependency, or build reliability problem, and the useful diff does not add hosted/startup/product surface.
-- `Port manually`: the painkiller is real, but upstream mixed it with hosted, telemetry, remote, branding, broad refactor, platform, or product-surface changes.
-- `Defer`: upstream fixed a real issue, but it is optional, product-significant, startup-sensitive, lower-priority polish, or needs a separate Warper-owned design.
-- `Skip`: the path is absent, the platform is outside current Warper targets, the work conflicts with `WARPER-001`, or the motive is lip gloss, recreational product expansion, or churn.
+- `Port`: current Warper has the affected path, the change clears the XP necessity bar, and the useful diff does not add hosted/startup/product surface.
+- `Port manually`: the local fix clears the XP necessity bar, but upstream mixed it with hosted, telemetry, remote, branding, platform, or broad refactor work.
+- `Defer`: upstream fixed a real issue, but Warper does not die without it today.
+- `Skip`: the path is absent, the platform is outside current Warper targets, the work conflicts with `WARPER-001`, or the motive is product expansion/churn.
 
 ## Hard Current-Code Findings
 
-| Area | Current Warper evidence | Effect |
+| Area | Current Warper evidence | XP effect |
 | --- | --- | --- |
-| Diesel | `Cargo.toml:123`, `Cargo.lock:3670`, and `crates/persistence`/`app/src/persistence` Diesel usage. | Diesel GHSA fixes are direct painkillers. |
-| `rand`, OpenSSL, `tar` | `Cargo.lock` contains transitive `rand 0.9.1`, `openssl 0.10.78`, and `tar 0.4.45`. | Upstream dependency security bumps apply only for these present packages. |
-| `actix-http` | `rg 'actix-http' Cargo.toml Cargo.lock app/Cargo.toml crates/*/Cargo.toml` has no hits. | Upstream `actix-http` GHSA is real but irrelevant to Warper. |
-| CoreText | `Cargo.toml:467-470` patches CoreText stack; `crates/warpui/src/platform/mac/fonts.rs` enumerates font descriptors. | CoreText leak fix applies to macOS Warper. |
-| iTerm/Kitty images | `app/src/lib.rs:1770-1771`, `app/src/terminal/model/ansi/mod.rs:1042`, and `app/src/terminal/model/grid/ansi_handler.rs:1263,1409` keep image protocols. | Unsafe file download is a painkiller; startup image ordering is lip gloss. |
-| OSC 52 | `app/src/terminal/model/grid/ansi_handler.rs:1148` and `app/src/terminal/view.rs:8467-8479` still route clipboard load/store. | Clipboard gating and local UI are painkillers. |
-| DCS hooks | `app/src/terminal/model/ansi/dcs_hooks.rs:84`, `handler.rs:239-266`, and `terminal/view.rs:6657-6663` keep lifecycle DCS hooks. | Integrity checks are a local security painkiller, but upstream remote/Windows/bootstrap breadth must be manually trimmed. |
-| OpenRouter tools | `app/src/ai/agent/api/openrouter.rs:428-545` exposes local read/search/glob/apply tools. | File-tool security and result-size fixes are current WARPER-005 painkillers. |
-| Local rules and skills | `crates/ai/src/project_context/model.rs:341-348`, `app/src/ai/skills/file_watchers/skill_watcher.rs:157-169`, and `app/src/ai/skills/file_watchers/utils.rs:31-46` retain repo rules and skill scans. | Rule race and scan-reduction fixes are painkillers; global rules/startup re-indexing are not. |
-| MCP | `app/src/lib.rs:1167-1178`, `app/src/ai/mcp/logs.rs:10`, and `settings_view/edit_page.rs:428,721` retain local MCP managers, logs, and config UI. | Log rotation and path-redaction fixes are painkillers; OAuth/capability/startup changes are deferred. |
-| Local control CLI | No `app/src/local_control`, `crates/local_control`, or `warpctrl` source path. | Upstream local control is a new control plane and skipped. |
-| CLI-agent plugins/detections | CLI-agent/listener/plugin-manager code exists, but WARPER-005 does not require new child orchestration, new agent detections, or plugin auto-install. | New agent/plugin work is skipped unless a future Warper spec deliberately chooses it. |
-| Project Explorer/repo metadata | Local repo tree, watcher, diff validation, and file edit paths remain. | Large local repo stability and OpenRouter file-edit correctness are painkillers; PR/commit-message/UI chip polish mostly defers. |
-| Windows | Windows terminal/input code exists, but WARPER-001 through WARPER-005 do not define Windows as a target. | Windows-only upstream fixes are skipped, not “maybe relevant.” |
+| Display chips | `app/src/context_chips/display_chip.rs:1713` hand-quotes `cd`; `:1717` emits raw `git checkout {branch_name}`. | Command execution exposure in retained terminal UI. Port manually. |
+| OpenRouter command/search predicates | `app/src/ai/blocklist/action_model/execute.rs:1141` and `:1156` interpolate paths into shell commands. | Command execution exposure in retained local-agent path. Port. |
+| Markdown local links | `app/src/notebooks/link.rs:348` emits `OpenFileWithTarget` for local markdown links. | Port only if the upstream trust gate maps to this unsafe local open path; do not port notebook polish. |
+| OSC 52 | `app/src/terminal/model/grid/ansi_handler.rs:1159` sends clipboard stores, `:1175` sends clipboard loads, and `app/src/terminal/view.rs:8467-8471` touches the local clipboard. | Arbitrary terminal output reading/writing clipboard is unsafe-to-run. Port local default-deny gate. |
+| iTerm file payloads | `app/src/terminal/model/terminal_model.rs:2846-2916` keeps iTerm image receive/complete paths. | Non-inline payloads writing cwd files are local data corruption. Port. |
+| DCS hooks | DCS lifecycle/bootstrap hooks remain in `app/src/terminal/model/ansi/dcs_hooks.rs`; `app/src/terminal/view.rs:6657` writes InitShell DCS. | Spoofed lifecycle hooks can mutate terminal/session state. Port local integrity only. |
+| Conversation restore `cd` | `app/src/terminal/view/load_ai_conversation.rs:271-273` runs `cd "{path}"`. | Saved paths can become shell commands during restore. Port local escaping. |
+| Linux external editor | `app/src/util/file/external_editor/linux.rs:99` builds editor commands from desktop field codes and `:118` invokes `sh`. | File names must not be passed through `sh -c`. Port argv-safe launch. |
+| Terminal flat storage | `app/src/terminal/model/grid/grid_handler.rs:310` owns flat storage; `ansi_handler.rs:805`, `:853`, and `:893` clear it. | Underflow after clear/resize/write is normal-use crash/corruption. Port. |
+| OpenRouter diff validation | `app/src/ai/agent/api/openrouter.rs:529-530` exposes `apply_file_diffs`, and `app/src/ai/blocklist/action_model/execute/request_file_edits.rs:270-271` applies diffs. | Multiline diff suffix corruption can damage local files. Port. |
+| Local code editor save | `app/src/code/local_code_editor.rs:984-1079` formats before saving; `:1542-1543` always calls that path. | Saving can mutate user files unexpectedly. Port format-on-save control. |
+| macOS run script | `script/macos/run:28`, `:62`, and `:69` hardcode relative `target` bundle paths. | Current Warper bundle-testing workflow can build one target and launch/sign another. Port target-dir resolution. |
+| Linux launcher/package scripts | `app/channels/oss/dev.warper.Warper.desktop:10` says `Exec=warp-oss`; `resources/linux/debian/app/postinst.template:4-5` creates `warp-terminal...`; `script/linux/bundle_deb:105-116` reads absent common repo templates. | Current Linux packaging can generate a launcher/package that does not work. Port manually as Warper packaging, not upstream naming. |
+| Dependencies | Diesel, `rand`, OpenSSL, and `tar` are present in the lockfile. | Presence is not enough under the XP bar. Defer until a targeted advisory pass proves reachable vulnerable behavior or a low-risk update needed for release. |
+| CoreText | CoreText/font descriptor paths are present. | Leak is real, but no current Warper crash/runaway evidence was shown. Defer. |
+| Rules/skills/MCP | Local paths exist. | Existing audit did not prove current acceptance-test failure. Defer rule/skill/MCP hygiene. |
+| Repo metadata scale | Project Explorer/repo metadata paths remain. | Useful performance/fidelity work, but not stop-ship without a failing current workflow. Defer. |
+| Windows | Windows code exists. | Current WARPER specs do not target Windows. Skip. |
 
 ## Port And Port-Manually Rows
 
-| Commit | Upstream why | Motive | Current Warper path | Decision | Warper rationale |
+| Commit | Upstream why | Motive | Current Warper path | Decision | Warper survival rationale |
 | --- | --- | --- | --- | --- | --- |
-| `9d9972cb` | PR `#10263` updates Diesel for GHSA/RUSTSEC SQLite UTF-8 corruption. | Painkiller | Diesel is pinned and used in local SQLite persistence. | Port | Retained local persistence should not carry a known vulnerable Diesel version. |
-| `64a0dfbe` | PR `#10060` updates transitive `rand 0.9.1` for `GHSA-cq8v-f236-94qc`. | Painkiller | `Cargo.lock` contains transitive `rand 0.9.1`. | Port | Present vulnerable graph, not hypothetical dependency hygiene. |
-| `ac091058` | PR `#10513` updates OpenSSL after release notes called out an output-buffer overflow fix and abort fixes. | Painkiller | `Cargo.lock` contains `openssl 0.10.78`. | Port | Present native TLS dependency. |
-| `cc1ee636` | PR `#12090` updates `tar` for PAX header desync GHSA. | Painkiller | `Cargo.lock` contains `tar 0.4.45`. | Port | Present archive parser dependency. |
-| `2f84587a` | PR `#9665` fixes CoreText font descriptor leak. | Painkiller | Patched CoreText stack and font descriptor enumeration are present. | Port | Retained macOS app should not leak while enumerating fonts. |
-| `4295ec08` | Private security diff replaces display-chip shell strings with typed commands. | Painkiller | Display chips still generate shell actions from repo data. | Port manually | Port typed/quoted local commands only. |
-| `7f0c4dd2` | Private security diff hardens markdown open-link handling. | Painkiller | Local markdown/notebook link dispatch remains. | Port | Prevent unsafe local file/link launch from rendered markdown. |
-| `43f4f483` | Private security diff quotes grep/glob shell arguments. | Painkiller | OpenRouter exposes `grep` and `file_glob_v2`; executors build shell commands. | Port manually | Fix command injection in retained local tools only. |
-| `861dacea` | Private security diff removes shell construction from Linux editor launch. | Painkiller | External editor launch remains. | Port | Local path-to-editor launch must be argv-safe. |
-| `0c1e2432` | Private security diff strips env assignments before denylist checks. | Painkiller | OpenRouter exposes shell execution; denylist checks raw commands. | Port | Prevent `FOO=bar rm ...`-style bypasses. |
-| `b6caa957` | Private security diff escapes file/repo predicate paths. | Painkiller | `is_file_path`/`is_git_repository` shell predicates are still called by local tools. | Port | Repo-controlled paths must not become shell fragments. |
-| `b1a41d0b`, `164e60e4` | Private security diffs gate OSC 52 and add blocked-setting UX. | Painkiller | OSC 52 clipboard load/store remains. | Port manually | Default-deny terminal clipboard access with Warper-local setting and banner. |
-| `f3b9ce1c` | Private security diff disables non-inline iTerm file download. | Painkiller | Non-inline iTerm payloads can be written into cwd. | Port | Terminal output must not write arbitrary local files. |
-| `32d21d15` | Private security diff authenticates DCS lifecycle hooks. | Painkiller | DCS hooks can mutate session/bootstrap state. | Port manually | Port local integrity checks only; avoid remote/Windows/shared-session breadth. |
-| `c697c8f5` | Private security diff escapes restored-conversation `cd` and skips non-local conversations. | Painkiller | Local restore path builds a `cd` from saved paths. | Port manually | Prevent local restore command injection; do not restore hosted conversation semantics. |
-| `88c344e2` | Private security diff fixes SSH command injection. | Painkiller | Remote SSH command executor code still exists. | Port manually | Escape shell construction only; no remote product expansion. |
-| `ae832ff6`, `0902e973`, `fb3cb0e9`, `388f5dc1` | Public PRs fix zsh grid corruption, noisy shell `PATH` capture, Meta-key bytes, and flat-storage underflow. | Painkiller | Local terminal bootstrap, key encoding, and grid storage remain. | Port or Port manually | Core local terminal behavior and crash resistance. |
-| `fc1157e0`, `3ff78d29`, `ab081528`, `6d4201ba` | Public PRs fix macOS IME and X11 IME behavior. | Painkiller | macOS and Linux UI paths remain; X11/Wayland split exists. | Port | Native text input must work on retained desktop targets; X11 only for Linux IME. |
-| `802a881e`, `89f61b63`, `48331870`, `5fa22831`, `9f459842`, `43828a6d`, `03ad9ea9`, `e8024b5a`, `0f97ef18`, `3497d184`, `21e70d56`, `5d8507e4`, `bd7202f3`, `a1b76c28` | Public PRs fix local diff, file-tool, repo metadata, watcher, and file-tree failure modes. | Painkiller | OpenRouter file tools and local Project Explorer/repo metadata remain. | Port or Port manually | WARPER-005 needs reliable local file reads/edits/search and bounded local repo metadata. |
-| `5146a5bf`, `b48ece2e`, `ac4225c1` | Public PRs fix rule watcher race and duplicate/unrelated skill scans. | Painkiller | Local rules and skill watchers remain. | Port or Port manually | WARPER-005 depends on local skill/rule fidelity without excess filesystem churn. |
-| `92069590`, `51c380ce` | Public PRs cap MCP log size and fix add-path secret-redaction bypass. | Painkiller | Local MCP logs and config UI remain. | Port manually | Local disk and local config safety; no OAuth/startup expansion. |
-| `65381be1` | PR `#12540` preserves selected-block context on Cmd+Enter new agent conversations. | Painkiller | Current input path can bypass the context-preserving agent-view path. | Port manually | Directly supports WARPER-005 context fidelity. |
-| `3f83932c` | PR `#12254` adds format-on-save setting to stop unwanted LSP reformat diffs. | Painkiller | Current local code editor auto-formats unconditionally. | Port | Users need local control over destructive save behavior. |
-| `0446a507`, `6eefa4bb`, `e91b5a21`, `1244ffbe` | Public PRs fix dev run target dir, Linux desktop launcher, Linux build deps, and deb repo-source duplication. | Painkiller | Warper scripts/packaging paths have matching local issues. | Port or Port manually | Local build/package reliability without hosted packaging behavior. |
+| `4295ec08` | PR `#25398` is not publicly resolvable; commit body names display-chip RCE `GHSA-hgvx-4xvm-39pw` and says the fix adds shell quoting and restructures chip command construction. | Painkiller | Display-chip command formatting remains in `display_chip.rs`. | Port manually | Malicious repo/branch/path data must not execute shell commands from retained terminal chips. |
+| `43f4f483` | PR `#25351` is not publicly resolvable; title/diff target command injection in code search tools. | Painkiller | OpenRouter search/tool predicates build shell commands from paths. | Port manually | Local-agent tools cannot safely run if repo-controlled paths become shell syntax. |
+| `0c1e2432` | PR `#25258` says env-prefixed commands bypassed denylist matching. | Painkiller | `app/src/ai/blocklist/permissions.rs:831` decides autoexecution and `:852` applies the denylist. | Port | Command approval/denial is a core safety boundary for WARPER-005. |
+| `b6caa957` | PR `#26138` says `is_file_path` and `is_git_repository` interpolated untrusted paths into shell commands. | Painkiller | `execute.rs:1141` and `:1156` still do that. | Port | Path classification must not execute code. |
+| `7f0c4dd2` | PR `#25353` is not publicly resolvable; commit body says only trusted known-extension markdown targets should emit `OpenFileWithTarget`. | Painkiller | Notebook markdown links can emit local open events. | Port manually | Unsafe local file/app launch from rendered markdown would make local docs unsafe. Port only the gate. |
+| `b1a41d0b`, `164e60e4` | PR `#25339` cites OSC 52 clipboard exposure `GHSA-wgqj-4c26-7c4g`; PR `#25625` adds local setting UI/banner. | Painkiller | OSC 52 clipboard routing is in `ansi_handler.rs:1159`, `:1175`, and `terminal/view.rs:8467-8471`. | Port manually | Arbitrary terminal output must not read/write clipboard by default. |
+| `f3b9ce1c` | PR `#25261` says non-inline iTerm file payloads could overwrite cwd files. | Painkiller | iTerm image/payload handling remains. | Port | Terminal output must not write arbitrary local files. |
+| `32d21d15` | PR `#25395` says arbitrary PTY output could spoof DCS lifecycle hooks. | Painkiller | DCS lifecycle/bootstrap hooks remain. | Port manually | Raw output must not mutate session/bootstrap state. |
+| `c697c8f5` | PR `#25383` cites restore `cd` escaping advisory `GHSA-8659-m852-gmfx`. | Painkiller | Restore path runs `cd "{path}"`. | Port manually | Saved paths must not execute commands during local restore. |
+| `861dacea` | PR `#25365` says Linux external editor used `sh -c` with untrusted field-code expansions. | Painkiller | `app/src/util/file/external_editor/linux.rs:99` builds commands and `:118` invokes `sh`. | Port | Opening a local file must not execute shell metacharacters in its name. |
+| `388f5dc1` | PR `#12085` fixes flat-storage underflow after clear/resize/write. | Painkiller | `grid_handler.rs:310` owns flat storage and `ansi_handler.rs:805`, `:853`, `:893` clear it. | Port | Normal terminal output must not crash/corrupt the grid. |
+| `a1b76c28` | PR `#9623` fixes multiline partial-line suffix preservation in diff validation. | Painkiller | `openrouter.rs:529-530` exposes `apply_file_diffs`; `request_file_edits.rs:270-271` applies diffs. | Port | Agent file edits must not corrupt user files. |
+| `3f83932c` | PR `#12254` says always-on LSP format-on-save caused unwanted diffs. | Painkiller | Local code editor always formats before save. | Port | Saving a file must not unexpectedly rewrite user content. |
+| `0446a507` | PR `#12313` and issue `#11957` say `script/macos/run` ignored Cargo's target dir and failed after `cargo bundle` wrote outside `./target`. | Painkiller | `script/macos/run` hardcodes relative target paths. | Port | Warper needs explicit target-dir control to test bundles without wrong-target/arch rebuild churn. |
+| `6eefa4bb` | PR `#9558` fixes upstream OSS desktop `Exec` not matching installed launcher. | Painkiller | Warper desktop/package naming is inconsistent after rename. | Port manually | Linux packaged Warper must launch from the app menu. |
+| `1244ffbe` | PR `#10019` subject says deb packaging avoids duplicate apt sources; body has no details. | Painkiller | Warper deb bundler reads absent common repo templates. | Port manually | Current deb package generation references files that do not exist. |
 
 ## Defer Rows
 
 | Commit(s) | Upstream why | Motive | Decision reason |
 | --- | --- | --- | --- |
-| `09be9c1f` | PR `#10478` renders startup iTerm/Kitty images like `fastfetch`. | Lip gloss | Warper has image protocols, but this is visual compatibility, not launch reliability, security, or WARPER-005. |
-| `71edcac8`, `b7dd0ef8` | Local terminal scroll/selection ergonomics. | Lip gloss | Real UX fixes, but not recovery/security/startup work. |
-| `5bee7a75`, `59e802ea`, `2fe9d43c`, `1175e82f`, `ffe93a5e`, `1d2775ac`, `cb4fe42a` | Git UI state, branch-chip command behavior, commit-message, PR diff, or watcher API fixes. | Painkiller upstream | Current paths exist, but these are outside current OpenRouter file-tool/repo data-plane priorities or need dependency review. |
-| `163380dc`, `edfd4149`, `6289aec1` | MCP nested integer coercion, OAuth token timing, and capability querying. | Painkiller upstream | MCP exists, but these touch tool exposure, OAuth/keychain timing, or startup manager behavior; require a narrow MCP spec first. |
-| `d2f26ae9`, `ee133f47` | Pane rename keybinding and tab color slash command. | Lip gloss | Local customization, not current Warper pain. |
-| `35cb40c3`, `c8d39088`, `912e4540`, `3aa6026c`, `56e8617c`, `606e1653`, `8da83b42` | Mermaid/Markdown correctness or rendering polish. | Lip gloss or Churn | Keep out until a concrete Warper bug/security reason exists. |
+| `9d9972cb`, `64a0dfbe`, `ac091058`, `cc1ee636` | Dependency advisories. | Painkiller upstream | Present package is not proof of current Warper failure. Run targeted advisory/reachability work before implementation. |
+| `2f84587a` | CoreText font descriptor leak. | Painkiller upstream | No current crash/runaway memory evidence. |
+| `88c344e2` | SSH command injection. | Painkiller upstream | Requires explicit retained-SSH product decision before remote-session work. |
+| `ae832ff6`, `0902e973`, `fb3cb0e9`, `fc1157e0`, `3ff78d29`, `ab081528`, `6d4201ba` | Terminal zsh/PATH/key/IME fixes. | Painkiller upstream | Real bugs, but not stop-ship without failing retained-platform smoke tests or user reports. |
+| `802a881e`, `89f61b63`, `48331870`, `5fa22831`, `9f459842`, `43828a6d`, `03ad9ea9`, `e8024b5a`, `0f97ef18`, `3497d184`, `21e70d56`, `5d8507e4`, `bd7202f3` | Local repo/file-tree scale and fidelity fixes. | Painkiller upstream | Useful, but not implementation work until a current OpenRouter workflow fails or corrupts state. |
+| `5146a5bf`, `b48ece2e`, `ac4225c1`, `92069590`, `51c380ce`, `65381be1` | Rule, skill, MCP, and selected-context fixes. | Painkiller upstream | Needs a failing WARPER-005 acceptance test; otherwise this is hygiene work. |
+| `e91b5a21` | Missing Linux bootstrap deps for presubmit. | Painkiller upstream | Fresh Linux convenience, not current app/build survival. |
+| `09be9c1f`, `71edcac8`, `b7dd0ef8`, `5bee7a75`, `59e802ea`, `2fe9d43c`, `1175e82f`, `ffe93a5e`, `1d2775ac`, `cb4fe42a`, `163380dc`, `edfd4149`, `6289aec1`, `d2f26ae9`, `ee133f47`, `35cb40c3`, `c8d39088`, `912e4540`, `3aa6026c`, `56e8617c`, `606e1653`, `8da83b42` | Visual compatibility, ergonomics, Git UI, MCP expansion, Markdown/Mermaid polish, or optional customization. | Lip gloss or Churn | Not XP-critical. |
 
 ## Skip Rows
 
 | Commit(s) | Upstream why | Motive | Decision reason |
 | --- | --- | --- | --- |
 | `c68b9775` | `actix-http` request-smuggling GHSA. | Painkiller upstream | Warper does not depend on `actix-http`. |
-| `e59c7a49`, `1df6ff13`, `d426c045`, `03ef4d05`, `2992d02e`, `ebedb9fd` | Windows PTY/input/process fixes. | Painkiller upstream | Windows code exists, but current Warper specs do not target Windows. |
+| `e59c7a49`, `1df6ff13`, `d426c045`, `03ef4d05`, `2992d02e`, `ebedb9fd` | Windows PTY/input/process fixes. | Painkiller upstream | Current Warper specs do not target Windows. |
 | `e566a6ce`, `a7f668ea`, `f6b28f5e`, `c2954dcb` | Firebase/auth/WASM/profile security fixes. | Painkiller upstream | Paths are absent, already amputated, or outside WARPER-001 through WARPER-005. |
-| `b5a0d89b`, `3019671e` | Global rules and startup re-indexing. | Recreational drug or Churn | Adds startup/watch/settings surface beyond current repo-rule fidelity need. |
+| `b5a0d89b`, `3019671e` | Global rules and startup re-indexing. | Recreational drug or Churn | Adds startup/watch/settings surface beyond proven repo-rule failure. |
 | `95518310`, `4dddda60`, `70c725ff`, `f85d69aa`, `fd0a9d10`, `385b2a90`, `63fe7285`, `2c38e1fd`, `967a9485`, `de1ac841`, `a806bfb2`, `148e80ce`, `69ffea41` | Hosted Codex/Claude/CLI-agent/plugin/detection/rich-input work. | Recreational drug | WARPER-005 needs OpenRouter local context and tools, not upstream child-agent/plugin expansion. |
 | `5967abf0`, `aa0a2c21` | Credentialed local control protocol and `warpctrl` command catalog. | Recreational drug | New loopback control plane and automation surface absent from Warper specs. |
-| `5a35550d`, `e367c9de`, `19018bf4`, `0aee45df` | Prompt or terminal command queueing. | Lip gloss or Recreational drug | Changes execution semantics and queue UI without solving current Warper pain. |
-| `26e81f9d`, `49857685`, `040a7819`, `d09a90ea`, `29394232`, `5fe27354`, `16933d3c`, `f004f417`, `ce73fe07`, `e4695f21`, `49bbe78e`, `30237218`, `d7ecfac5`, `90d214af` | Conversation rename, settings palette, already-present actions, editor display preferences, markdown panels, or remote UX. | Lip gloss | Not needed now; several are already present locally or depend on server/remote surfaces. |
+| `5a35550d`, `e367c9de`, `19018bf4`, `0aee45df` | Prompt or terminal command queueing. | Lip gloss or Recreational drug | Changes execution semantics without solving current Warper survival pain. |
+| `26e81f9d`, `49857685`, `040a7819`, `d09a90ea`, `29394232`, `5fe27354`, `16933d3c`, `f004f417`, `ce73fe07`, `e4695f21`, `49bbe78e`, `30237218`, `d7ecfac5`, `90d214af` | Conversation rename, settings palette, already-present actions, editor display preferences, markdown panels, or remote UX. | Lip gloss | Not needed now. |
 | `3984e67f`, `fc110333`, `f3bfb750`, `98dbf783`, `d3757291`, `662bd737`, `e0535ca2`, `b24fce3d`, `a44fbf16`, `4598f4fb`, `af532bdc`, `7076885b`, `011d9da7` | Grouped tabs, multi-select, cross-window drag, rollout flags, telemetry. | Recreational drug | New product surface and rollout churn. |
-| `467daa88`, `e7736435`, `fc1d2ff0`, `d80c0ba9`, `0510ea89`, `a30c03cb`, `3c22e421`, `57f2d4c5`, `5767910b`, `4e0b7c99`, `4ca690be`, `2113a0a3` | Process skills, visual evidence rules, Oz changelog, cloud onboarding, format wrapper, Nix, gcloud setup. | Churn or Recreational drug | Not product runtime painkillers; several conflict with WARPER-001. |
+| `467daa88`, `e7736435`, `fc1d2ff0`, `d80c0ba9`, `0510ea89`, `a30c03cb`, `3c22e421`, `57f2d4c5`, `5767910b`, `4e0b7c99`, `4ca690be`, `2113a0a3` | Process skills, visual evidence rules, Oz changelog, cloud onboarding, format wrapper, Nix, gcloud setup. | Churn or Recreational drug | Not runtime survival work; several conflict with WARPER-001. |
 
-## Specs Created
+## Spec Impact
 
-- `WARPER-006`: retained local security fixes and dependency updates, expanded by the re-audit to include DCS integrity and conversation/SSH command escaping.
-- `WARPER-007`: retained terminal/input painkillers, with Windows-only rows explicitly skipped.
-- `WARPER-009`: OpenRouter file-tool and local repo metadata painkillers, narrowed away from Git/PR/UI polish.
-- `WARPER-010`: local rule/skill/MCP hygiene and one OpenRouter context-fidelity fix. This is not a local-agent expansion spec.
-
-## Specs Not Created
-
-- No spec for `warpctrl` or local control CLI. It is a credentialed control plane absent from the current code and specs.
-- No spec for global rules or startup rule re-indexing. The retained pain is repo rule fidelity, not more startup watchers.
-- No spec for new CLI-agent detections, plugin auto-install, child orchestration, or prompt/terminal queueing.
-- No spec for grouped tabs, tab pinning, cross-window drag, or multi-select feature bundles.
-- No spec for Markdown/Mermaid polish or process-skill churn.
+- `WARPER-006` must cover only unsafe-to-run local security rows from this audit.
+- `WARPER-007` must shrink to terminal crash/corruption, currently `388f5dc1`.
+- `WARPER-009` must shrink to local file-edit corruption, currently `a1b76c28`.
+- `WARPER-010` is a deferred record, not an implementation spec, unless a failing WARPER-005 acceptance test proves rule/skill/MCP hygiene is survival work.
+- A new build/package spec is justified for `0446a507`, `6eefa4bb`, and `1244ffbe` because they block current local bundle/package paths.
