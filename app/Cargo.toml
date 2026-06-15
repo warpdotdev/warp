@@ -55,6 +55,8 @@ test = false
 
 [dependencies]
 addr = "0.15.6"
+acpx = { workspace = true, optional = true }
+agent-client-protocol = { workspace = true, optional = true }
 ai.workspace = true
 anyhow.workspace = true
 arrayvec.workspace = true
@@ -64,6 +66,7 @@ async-broadcast.workspace = true
 async-channel.workspace = true
 async-compat.workspace = true
 async-fs.workspace = true
+async-process.workspace = true
 async-recursion.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
@@ -497,6 +500,7 @@ creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
 default = [
+    "local_acp",
     "agent_mode",
     "viewing_shared_sessions",
     "render_continuous_block_selections_with_single_border",
@@ -715,6 +719,7 @@ grep_tool = []
 # For the most part, including GUI code in headless builds is fine; the main use case is
 # for things that pull in external dependencies.
 gui = ["voice_input"]
+local_acp = ["agent_harness", "dep:acpx", "dep:agent-client-protocol"]
 nld_classifier_v1 = ["input_classifier/nld_classifier_v1"]
 nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
 nld_classifier_v3 = ["input_classifier/nld_classifier_v3"]
