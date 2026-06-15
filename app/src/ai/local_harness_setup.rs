@@ -1,5 +1,7 @@
 use warp_cli::agent::Harness;
 
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+use crate::ai::acp::{path_search, registry};
 use crate::features::FeatureFlag;
 #[cfg(not(target_family = "wasm"))]
 use crate::util::path::resolve_executable;
@@ -11,6 +13,9 @@ pub(crate) const LOCAL_CODEX_HARNESS_INSTALLATION_REQUIRED_TOOLTIP: &str =
     "Install Codex to use this local harness.";
 pub(crate) const LOCAL_CODEX_HARNESS_DISABLED_MESSAGE: &str =
     "Local Codex child agents are temporarily disabled.";
+#[allow(dead_code)]
+pub(crate) const LOCAL_ACP_HARNESS_INSTALLATION_REQUIRED_TOOLTIP: &str =
+    "Install this agent's ACP command to use it in the local agent pane.";
 
 /// Client-side readiness for using a harness in local orchestration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +44,7 @@ pub(crate) fn local_harness_product_disabled_message(harness: Harness) -> Option
         Harness::Oz | Harness::Claude | Harness::OpenCode | Harness::Gemini | Harness::Unknown => {
             None
         }
+        Harness::Cursor | Harness::Devin => None,
         Harness::Codex => None,
     }
 }
@@ -55,6 +61,35 @@ pub(crate) fn local_harness_is_product_enabled(harness: Harness) -> bool {
 /// Returns the current local setup state for a harness.
 pub(crate) fn local_harness_setup_state(harness: Harness) -> LocalHarnessSetupState {
     local_harness_setup_state_with_cli_resolver(harness, local_cli_is_installed)
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+#[allow(dead_code)]
+pub(crate) fn local_acp_harness_setup_state(harness: Harness) -> LocalHarnessSetupState {
+    local_acp_harness_setup_state_with_command_resolver(harness, |command| {
+        path_search::resolve_command(command).is_some()
+    })
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+#[allow(dead_code)]
+fn local_acp_harness_setup_state_with_command_resolver(
+    harness: Harness,
+    command_is_installed: impl Fn(&str) -> bool,
+) -> LocalHarnessSetupState {
+    let Some(spec) = registry::spec_for_harness(harness) else {
+        return LocalHarnessSetupState::ProductDisabled {
+            message: "This harness does not support local ACP.",
+        };
+    };
+
+    if command_is_installed(spec.command) {
+        LocalHarnessSetupState::Ready
+    } else {
+        LocalHarnessSetupState::MissingHarness {
+            tooltip: LOCAL_ACP_HARNESS_INSTALLATION_REQUIRED_TOOLTIP,
+        }
+    }
 }
 
 fn local_harness_setup_state_with_cli_resolver(
@@ -77,6 +112,8 @@ fn local_harness_setup_state_with_cli_resolver(
         | Harness::OpenCode
         | Harness::Gemini
         | Harness::Codex
+        | Harness::Cursor
+        | Harness::Devin
         | Harness::Unknown => LocalHarnessSetupState::Ready,
     }
 }

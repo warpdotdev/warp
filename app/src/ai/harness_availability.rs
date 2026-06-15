@@ -10,7 +10,11 @@ use warp_managed_secrets::client::SecretOwner;
 use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+use crate::ai::acp::{models as acp_models, registry as acp_registry};
 use crate::ai::harness_display;
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+use crate::ai::local_harness_setup::{self, LocalHarnessSetupState};
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
@@ -143,6 +147,18 @@ impl HarnessAvailabilityModel {
         &self.harnesses
     }
 
+    #[allow(dead_code)]
+    pub fn harnesses_for_selector(&self) -> Vec<HarnessAvailability> {
+        #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+        {
+            local_acp_harnesses()
+        }
+        #[cfg(not(all(feature = "local_acp", not(target_family = "wasm"))))]
+        {
+            self.harnesses.clone()
+        }
+    }
+
     pub fn display_name_for(&self, harness: Harness) -> &str {
         self.harnesses
             .iter()
@@ -174,6 +190,27 @@ impl HarnessAvailabilityModel {
             .find(|h| h.harness == harness)
             .map(|h| h.available_models.as_slice())
             .filter(|m| !m.is_empty())
+    }
+
+    #[allow(dead_code)]
+    pub fn models_for_picker(&self, harness: Harness) -> Vec<HarnessModelInfo> {
+        let mut models = self.models_for(harness).unwrap_or_default().to_vec();
+
+        #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+        {
+            for model in acp_models::default_models_for_harness(harness) {
+                if models.iter().any(|existing| existing.id == model.id) {
+                    continue;
+                }
+                models.push(HarnessModelInfo {
+                    id: model.id,
+                    display_name: model.name,
+                    reasoning_level: None,
+                });
+            }
+        }
+
+        models
     }
 
     pub fn auth_secrets_for(&self, harness: Harness) -> &AuthSecretFetchState {
@@ -403,13 +440,43 @@ fn remove_deleted_auth_secret_entry(
 ) {
     entries.retain(|entry| entry.name.as_str() != name || &entry.owner != owner);
 }
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+#[allow(dead_code)]
+pub fn local_acp_harnesses() -> Vec<HarnessAvailability> {
+    local_acp_harnesses_with_setup(local_harness_setup::local_acp_harness_setup_state)
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+#[allow(dead_code)]
+fn local_acp_harnesses_with_setup(
+    setup_state: impl Fn(Harness) -> LocalHarnessSetupState,
+) -> Vec<HarnessAvailability> {
+    acp_registry::agent_specs()
+        .iter()
+        .map(|spec| HarnessAvailability {
+            harness: spec.harness,
+            display_name: harness_display::display_name(spec.harness).to_string(),
+            enabled: setup_state(spec.harness).is_selectable(),
+            available_models: acp_models::default_models_for_harness(spec.harness)
+                .into_iter()
+                .map(|model| HarnessModelInfo {
+                    id: model.id,
+                    display_name: model.name,
+                    reasoning_level: None,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 fn harness_to_graphql_harness(harness: Harness) -> Option<warp_graphql::ai::AgentHarness> {
     match harness {
         Harness::Oz => Some(warp_graphql::ai::AgentHarness::Oz),
         Harness::Claude => Some(warp_graphql::ai::AgentHarness::ClaudeCode),
         Harness::Gemini => Some(warp_graphql::ai::AgentHarness::Gemini),
         Harness::Codex => Some(warp_graphql::ai::AgentHarness::Codex),
-        Harness::OpenCode | Harness::Unknown => None,
+        Harness::OpenCode | Harness::Cursor | Harness::Devin | Harness::Unknown => None,
     }
 }
 
@@ -418,3 +485,45 @@ impl Entity for HarnessAvailabilityModel {
 }
 
 impl SingletonEntity for HarnessAvailabilityModel {}
+
+#[cfg(all(test, feature = "local_acp", not(target_family = "wasm")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_acp_catalog_contains_supported_agents() {
+        let harnesses = local_acp_harnesses_with_setup(|_| LocalHarnessSetupState::Ready);
+        let ids: Vec<_> = harnesses.iter().map(|harness| harness.harness).collect();
+
+        assert_eq!(
+            ids,
+            vec![
+                Harness::Claude,
+                Harness::Codex,
+                Harness::Gemini,
+                Harness::Cursor,
+                Harness::Devin,
+            ]
+        );
+        assert!(harnesses.iter().all(|harness| harness.enabled));
+    }
+
+    #[test]
+    fn local_acp_catalog_marks_missing_harnesses_disabled() {
+        let harnesses = local_acp_harnesses_with_setup(|harness| {
+            if harness == Harness::Codex {
+                LocalHarnessSetupState::MissingHarness { tooltip: "missing" }
+            } else {
+                LocalHarnessSetupState::Ready
+            }
+        });
+
+        assert!(
+            !harnesses
+                .iter()
+                .find(|harness| harness.harness == Harness::Codex)
+                .unwrap()
+                .enabled
+        );
+    }
+}

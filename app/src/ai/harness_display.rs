@@ -22,6 +22,8 @@ pub fn display_name(harness: Harness) -> &'static str {
         Harness::OpenCode => "OpenCode",
         Harness::Gemini => "Gemini CLI",
         Harness::Codex => "Codex",
+        Harness::Cursor => "Cursor",
+        Harness::Devin => "Devin",
         Harness::Unknown => "Unknown",
     }
 }
@@ -34,6 +36,7 @@ pub fn icon_for(harness: Harness) -> Icon {
         Harness::OpenCode => Icon::OpenCodeLogo,
         Harness::Gemini => Icon::GeminiLogo,
         Harness::Codex => Icon::OpenAILogo,
+        Harness::Cursor | Harness::Devin => Icon::AgentMode,
         Harness::Unknown => Icon::HelpCircle,
     }
 }
@@ -47,6 +50,7 @@ pub fn brand_color(harness: Harness) -> Option<ColorU> {
         Harness::OpenCode => None,
         Harness::Gemini => Some(GEMINI_BLUE),
         Harness::Codex => Some(OPENAI_COLOR),
+        Harness::Cursor | Harness::Devin => None,
         Harness::Unknown => None,
     }
 }
@@ -60,6 +64,7 @@ pub fn circle_background(harness: Harness, theme: &WarpTheme) -> WarpThemeFill {
         Harness::Codex => WarpThemeFill::Solid(OPENAI_COLOR),
         Harness::Gemini => WarpThemeFill::Solid(GEMINI_BLUE),
         Harness::OpenCode => WarpThemeFill::Solid(OPENCODE_COLOR),
+        Harness::Cursor | Harness::Devin => internal_colors::fg_overlay_2(theme),
         Harness::Unknown => internal_colors::fg_overlay_2(theme),
     }
 }
@@ -68,9 +73,12 @@ pub fn circle_background(harness: Harness, theme: &WarpTheme) -> WarpThemeFill {
 pub fn icon_fill_on_circle(harness: Harness, theme: &WarpTheme) -> WarpThemeFill {
     match harness {
         Harness::Oz => theme.main_text_color(theme.background()),
-        Harness::Claude | Harness::Codex | Harness::Gemini | Harness::OpenCode => {
-            WarpThemeFill::Solid(ColorU::white())
-        }
+        Harness::Claude
+        | Harness::Codex
+        | Harness::Gemini
+        | Harness::OpenCode
+        | Harness::Cursor
+        | Harness::Devin => WarpThemeFill::Solid(ColorU::white()),
         Harness::Unknown => theme.main_text_color(internal_colors::fg_overlay_2(theme)),
     }
 }

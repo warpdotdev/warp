@@ -503,6 +503,9 @@ pub mod text {
                 AIAgentOutputMessageType::EventsFromAgents { event_ids } => {
                     writeln!(w, "Received {} agent events", event_ids.len())?;
                 }
+                AIAgentOutputMessageType::LocalAcpToolCall(tool_call) => {
+                    writeln!(w, "Tool: {}", tool_call.title)?;
+                }
             }
         }
 
@@ -1144,7 +1147,8 @@ pub mod json {
                     })
                 }
                 AIAgentOutputMessageType::MessagesReceivedFromAgents { .. }
-                | AIAgentOutputMessageType::EventsFromAgents { .. } => None,
+                | AIAgentOutputMessageType::EventsFromAgents { .. }
+                | AIAgentOutputMessageType::LocalAcpToolCall(_) => None,
             }
         }
     }

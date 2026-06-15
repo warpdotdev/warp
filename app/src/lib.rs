@@ -1821,6 +1821,12 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
     );
+    #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+    {
+        ctx.add_singleton_model(ai::acp::session_store::LocalAcpSessionStore::new);
+        ctx.add_singleton_model(ai::acp::harness_picker::LocalAcpHarnessModel::new);
+        ctx.add_singleton_model(ai::acp::submit_model::LocalAcpSubmitModel::new);
+    }
     ctx.add_singleton_model(
         ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
     );

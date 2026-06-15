@@ -651,6 +651,7 @@ impl TerminalView {
             Harness::OpenCode => matches!(cli_agent, CLIAgent::OpenCode),
             Harness::Gemini => matches!(cli_agent, CLIAgent::Gemini),
             Harness::Codex => matches!(cli_agent, CLIAgent::Codex),
+            Harness::Cursor | Harness::Devin => false,
             Harness::Unknown => false,
         }
     }
@@ -661,6 +662,10 @@ impl TerminalView {
     /// 2. Already in nested cloud mode with convo started: pop to parent terminal and start a
     ///    new cloud mode session there (siblings).
     /// 3. Not in nested cloud mode: enter cloud mode from this terminal session.
+    #[cfg_attr(
+        all(feature = "local_acp", not(target_family = "wasm")),
+        allow(dead_code)
+    )]
     pub(in crate::terminal::view) fn enter_cloud_agent_view(
         &mut self,
         initial_prompt: Option<String>,
@@ -720,6 +725,10 @@ impl TerminalView {
     ///
     /// If called from fullscreen agent view, this defers the cloud mode start until after the
     /// agent view has exited so the resulting rich content is scoped to the terminal-level.
+    #[cfg_attr(
+        all(feature = "local_acp", not(target_family = "wasm")),
+        allow(dead_code)
+    )]
     pub(in crate::terminal::view) fn enter_cloud_mode_from_session(
         &mut self,
         initial_prompt: Option<String>,

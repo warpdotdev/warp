@@ -1,5 +1,7 @@
 pub(crate) mod conversation;
 pub(crate) mod conversation_yaml;
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+pub(crate) mod local_acp_tool_call;
 pub(crate) mod todos;
 
 pub(crate) mod api;
@@ -598,6 +600,11 @@ impl AIAgentOutput {
                 }
                 AIAgentOutputMessageType::EventsFromAgents { event_ids } => {
                     result.push(format!("Received {} agent events", event_ids.len()));
+                    last_was_action = false;
+                }
+                #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+                AIAgentOutputMessageType::LocalAcpToolCall(tool_call) => {
+                    result.push(tool_call.title.clone());
                     last_was_action = false;
                 }
             }
@@ -1669,6 +1676,8 @@ pub enum AIAgentOutputMessageType {
     EventsFromAgents {
         event_ids: Vec<String>,
     },
+    #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+    LocalAcpToolCall(local_acp_tool_call::LocalAcpToolCallMessage),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1863,6 +1872,10 @@ impl Display for AIAgentOutputMessage {
             }
             AIAgentOutputMessageType::EventsFromAgents { event_ids } => {
                 write!(f, "Received {} agent events", event_ids.len())?
+            }
+            #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+            AIAgentOutputMessageType::LocalAcpToolCall(tool_call) => {
+                write!(f, "Tool: {}", tool_call.title)?
             }
         }
 

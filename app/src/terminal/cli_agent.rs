@@ -192,6 +192,7 @@ impl CLIAgent {
             Harness::Gemini => Some(CLIAgent::Gemini),
             Harness::OpenCode => Some(CLIAgent::OpenCode),
             Harness::Codex => Some(CLIAgent::Codex),
+            Harness::Cursor | Harness::Devin => Some(CLIAgent::Unknown),
             Harness::Unknown => Some(CLIAgent::Unknown),
         }
     }

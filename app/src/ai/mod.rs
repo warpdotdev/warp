@@ -2,6 +2,8 @@
 //! Warp (including Agent Mode).
 //!
 //! The side panel Warp AI implementation lives in `super::ai_assistant`.
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+pub(crate) mod acp;
 pub(crate) mod active_agent_views_model;
 pub(crate) mod agent;
 pub(crate) mod agent_conversations_model;
