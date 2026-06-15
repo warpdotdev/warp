@@ -238,9 +238,7 @@ impl BundledSkill {
                     BundledSkillActivation::RequiresMcp(McpIntegration::Figma) => Icon::Figma,
                     BundledSkillActivation::Always
                     | BundledSkillActivation::RequiresFeature(_)
-                    | BundledSkillActivation::RequiresFile(_) => {
-                        icon_for_bundled_skill(&id)
-                    }
+                    | BundledSkillActivation::RequiresFile(_) => icon_for_bundled_skill(&id),
                 };
                 (
                     id,
