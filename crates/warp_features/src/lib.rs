@@ -883,6 +883,10 @@ pub enum FeatureFlag {
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
+
+    /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
+    /// route eliglible models to GEAP instead of Warp-managed inference.
+    GeminiEnterprise,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

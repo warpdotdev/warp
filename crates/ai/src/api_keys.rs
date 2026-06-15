@@ -8,7 +8,7 @@ use warpui_extras::secure_storage::{self, AppContextExt};
 
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 pub use crate::geap_credentials::{
-    GeapCredentials, GeapCredentialsState, GeapMintBinding, GeapRequestGate, GEAP_REFRESH_LEAD_TIME,
+    GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding, GEAP_REFRESH_LEAD_TIME,
 };
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
@@ -410,7 +410,7 @@ impl ApiKeyManager {
         &self,
         include_byo_keys: bool,
         include_aws_bedrock_credentials: bool,
-        geap_gate: Option<GeapRequestGate>,
+        geap_binding: Option<GeapMintBinding>,
     ) -> Option<api::request::settings::ApiKeys> {
         let anthropic = include_byo_keys
             .then(|| self.keys.anthropic.clone())
@@ -469,19 +469,19 @@ impl ApiKeyManager {
         // A re-mint in flight keeps serving the previous token.
         let google_cloud_credentials: Option<
             api::request::settings::api_keys::GoogleCloudCredentials,
-        > = geap_gate
+        > = geap_binding
             .as_ref()
-            .and_then(|gate| match self.geap_credentials_state {
+            .and_then(|binding| match self.geap_credentials_state {
                 GeapCredentialsState::Loaded {
                     ref credentials,
                     ref minted_for,
                     ..
-                } if minted_for.matches(gate) => credentials
+                } if minted_for == binding => credentials
                     .access_token_for_request()
                     .map(|_| credentials.clone().into()),
                 GeapCredentialsState::Refreshing {
                     previous: Some((ref credentials, ref minted_for)),
-                } if minted_for.matches(gate) => credentials
+                } if minted_for == binding => credentials
                     .access_token_for_request()
                     .map(|_| credentials.clone().into()),
                 _ => None,

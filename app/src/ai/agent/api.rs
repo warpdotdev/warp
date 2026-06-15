@@ -237,17 +237,14 @@ impl RequestParams {
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
         let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
-        // The expected Gemini Enterprise (GEAP) mint binding when the gate is
-        // on; `None` skips GEAP attachment entirely. Computing it here keeps
-        // `api_keys_for_request` a pure `&self` read without `AppContext`.
         #[cfg(not(target_family = "wasm"))]
-        let geap_gate = crate::ai::geap_credentials::current_geap_request_gate(app);
+        let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
         #[cfg(target_family = "wasm")]
-        let geap_gate: Option<::ai::api_keys::GeapRequestGate> = None;
+        let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
-            geap_gate,
+            geap_binding,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
         let custom_model_providers = FeatureFlag::CustomInferenceEndpoints

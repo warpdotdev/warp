@@ -2,8 +2,8 @@
 //!
 //! Local interactive agent requests authenticate against the workspace's GCP
 //! project with a short-lived access token minted through Workload Identity
-//! Federation. Every mint is a fixed 3-leg chain rooted in the user's Warp
-//! session
+//! Federation. Every mint runs up to 3 legs (leg 3 is skipped when no service
+//! account is configured), rooted in the user's Warp session
 //!
 //! 1. **Warp OIDC JWT**: `IssueTaskIdentityToken` (authenticated by the Warp
 //!    session) returns a short-lived Warp-signed JWT with `aud` =
@@ -29,11 +29,12 @@
 use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{
-    ApiKeyManager, GeapCredentials, GeapCredentialsState, GeapMintBinding, GeapRequestGate,
+    ApiKeyManager, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
     GEAP_REFRESH_LEAD_TIME,
 };
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
+use warp_core::features::FeatureFlag;
 use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warp_managed_secrets::ManagedSecretManager;
 use warpui::r#async::Timer;
@@ -58,25 +59,21 @@ const GEAP_MIN_TIMER_DELAY: Duration = Duration::from_secs(60);
 const ERROR_DETAIL_MAX_CHARS: usize = 512;
 
 const STS_TOKEN_URL: &str = "https://sts.googleapis.com/v1/token";
+const IAM_GENERATE_ACCESS_TOKEN_URL: &str =
+    "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateAccessToken";
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
 const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
-/// Requested lifetime for the impersonated SA access token (leg 3).
 const SA_ACCESS_TOKEN_LIFETIME: &str = "3600s";
 
-/// Per-leg mint failures, so error copy can pinpoint the broken leg: a Warp
-/// session problem (leg 1) vs. a pool/provider misconfiguration (leg 2) vs. a
-/// missing IAM binding (leg 3). Details are capped at
-/// [`ERROR_DETAIL_MAX_CHARS`] and never contain token material.
+/// Hard timeout for each Google mint HTTP call.
+const GEAP_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadGeapCredentialsError {
-    /// Leg 1: minting the Warp OIDC JWT failed (Warp session / network).
     MintIdentityToken(String),
-    /// Leg 2: Google STS rejected the token exchange (pool/provider config).
     ExchangeToken(String),
-    /// Leg 3: IAM `generateAccessToken` failed (missing
-    /// `roles/iam.workloadIdentityUser` binding or disabled API).
     ImpersonateServiceAccount(String),
 }
 
@@ -106,74 +103,90 @@ impl std::fmt::Display for LoadGeapCredentialsError {
 
 impl std::error::Error for LoadGeapCredentialsError {}
 
-/// The two admin-configured federation parameters the client consumes:
-/// the workload identity provider resource name (the JWT `aud` claim and STS
-/// `audience` parameter) and the optional service account to impersonate.
+/// The GEAP enablement decision for the current world, derived from auth +
+/// workspace settings + member toggle. Replaces the old
+/// `Option<GeapRequestGate>` + empty-audience encoding: the three states are
+/// explicit, and `Mintable` is guaranteed to carry a non-empty audience.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GeapWifConfig {
-    pub audience: String,
-    /// `None` means "use the federated token directly" (no leg 3).
-    pub service_account_email: Option<String>,
+pub(crate) enum GeapPolicy {
+    /// Gate off (admin off, enforced off, member opted out, or logged out):
+    /// no token is retained while disabled.
+    Disabled,
+    /// Enabled but unconfigured (empty `gcpAudience`): nothing to mint from.
+    Unconfigured,
+    /// Enabled and configured: the binding to mint and attach against.
+    Mintable(GeapMintBinding),
 }
 
-impl GeapWifConfig {
-    /// Builds the mint config from an evaluated request gate. `None` when the
-    /// workspace is enabled but unconfigured (empty audience).
-    fn from_gate(gate: &GeapRequestGate) -> Option<Self> {
-        if gate.audience.is_empty() {
-            return None;
+impl GeapPolicy {
+    /// The binding to attach against when mintable; `None` when the gate is
+    /// off or unconfigured, in which case GEAP credentials are skipped.
+    pub(crate) fn mint_binding(self) -> Option<GeapMintBinding> {
+        match self {
+            GeapPolicy::Mintable(binding) => Some(binding),
+            GeapPolicy::Disabled | GeapPolicy::Unconfigured => None,
         }
-        Some(Self {
-            audience: gate.audience.clone(),
-            service_account_email: gate.sa_email.clone(),
-        })
     }
 }
 
-/// Builds the expected mint binding from raw host-settings values, trimming
-/// whitespace and normalizing empties so the gate, the mint config, and the
-/// stored binding can never disagree on representation.
-fn geap_request_gate_from_parts(
+/// Builds the mint binding from raw host-settings values, trimming whitespace
+/// and normalizing empties. `None` when the workspace is enabled but
+/// unconfigured (empty audience). A blank `gcp_sa_email` means "no
+/// impersonation" — the federated STS token is used directly (`DirectWif`).
+fn geap_mint_binding_from_parts(
     user_uid: String,
     gcp_audience: Option<&str>,
     gcp_sa_email: Option<&str>,
-) -> GeapRequestGate {
-    GeapRequestGate {
-        user_uid,
-        audience: gcp_audience.map(str::trim).unwrap_or_default().to_string(),
-        sa_email: gcp_sa_email
-            .map(str::trim)
-            .filter(|sa_email| !sa_email.is_empty())
-            .map(str::to_string),
-    }
-}
-
-/// The expected (user, audience, SA) binding when the GEAP enablement gate is
-/// on; `None` when any part of the gate is off (admin off, enforced off,
-/// member opted out, or logged out). This is the single policy evaluation
-/// shared by the request build site, the refresh guard, and the mint
-/// completion re-check.
-pub(crate) fn current_geap_request_gate(app: &AppContext) -> Option<GeapRequestGate> {
-    let user_workspaces = UserWorkspaces::as_ref(app);
-    if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
+) -> Option<GeapMintBinding> {
+    let audience = gcp_audience.map(str::trim).unwrap_or_default();
+    if audience.is_empty() {
         return None;
     }
-    // The enablement gate guarantees a logged-in user, so a missing uid is
-    // unreachable; bail safely regardless — there is no principal to mint for.
-    let user_uid = AuthStateProvider::as_ref(app).get().user_id()?.as_string();
-    let settings = user_workspaces.gemini_enterprise_host_settings()?;
-    Some(geap_request_gate_from_parts(
+    let federation = match gcp_sa_email
+        .map(str::trim)
+        .filter(|sa_email| !sa_email.is_empty())
+    {
+        Some(email) => GeapFederation::ServiceAccount {
+            email: email.to_string(),
+        },
+        None => GeapFederation::DirectWif,
+    };
+    Some(GeapMintBinding {
         user_uid,
-        settings.gcp_audience.as_deref(),
-        settings.gcp_sa_email.as_deref(),
-    ))
+        audience: audience.to_string(),
+        federation,
+    })
 }
 
-fn binding_for_gate(gate: &GeapRequestGate) -> GeapMintBinding {
-    GeapMintBinding {
-        user_uid: gate.user_uid.clone(),
-        audience: gate.audience.clone(),
-        sa_email: gate.sa_email.clone(),
+/// The GEAP policy for the current world — the single evaluation shared by the
+/// request build site, the refresh guard, and the mint completion re-check.
+pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
+    // Client kill switch, independent of the server-side admin config. With the
+    // flag off, every GEAP consumer (event triggers, request-time safety net,
+    // attach) sees `Disabled`, so behavior is byte-identical to today.
+    if !FeatureFlag::GeminiEnterprise.is_enabled() {
+        return GeapPolicy::Disabled;
+    }
+    let user_workspaces = UserWorkspaces::as_ref(app);
+    if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
+        return GeapPolicy::Disabled;
+    }
+    // The enablement gate guarantees a logged-in user, so a missing uid is
+    // unreachable; treat it as off regardless — there is no principal to mint
+    // for.
+    let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
+        return GeapPolicy::Disabled;
+    };
+    let Some(settings) = user_workspaces.gemini_enterprise_host_settings() else {
+        return GeapPolicy::Unconfigured;
+    };
+    match geap_mint_binding_from_parts(
+        user_id.as_string(),
+        settings.gcp_audience.as_deref(),
+        settings.gcp_sa_email.as_deref(),
+    ) {
+        Some(binding) => GeapPolicy::Mintable(binding),
+        None => GeapPolicy::Unconfigured,
     }
 }
 
@@ -245,15 +258,13 @@ pub(crate) fn refresh_geap_credentials_if_needed(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let Some(gate) = current_geap_request_gate(ctx) else {
-        // Gate off: a pure no-op on the request path (the attach site already
-        // skips GEAP); state transitions are owned by the event triggers.
-        return;
+    let binding = match current_geap_policy(ctx) {
+        // Gate off or unconfigured: a pure no-op on the request path (the
+        // attach site already skips GEAP); state transitions are owned by the
+        // event triggers.
+        GeapPolicy::Disabled | GeapPolicy::Unconfigured => return,
+        GeapPolicy::Mintable(binding) => binding,
     };
-    if gate.audience.is_empty() {
-        // Enabled but unconfigured: nothing to mint from.
-        return;
-    }
     let needs_mint = match manager.geap_credentials_state() {
         // One mint at a time; the in-flight result lands in ~1-3s.
         GeapCredentialsState::Refreshing { .. } => false,
@@ -261,7 +272,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
             credentials,
             minted_for,
             ..
-        } => !minted_for.matches(&gate) || credentials.needs_refresh(),
+        } => *minted_for != binding || credentials.needs_refresh(),
         GeapCredentialsState::Missing
         | GeapCredentialsState::Disabled
         | GeapCredentialsState::Failed { .. } => true,
@@ -278,17 +289,20 @@ fn refresh_geap_credentials_with_options(
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let Some(gate) = current_geap_request_gate(ctx) else {
-        // Gate off (admin off, enforced off, member opted out, or logged
-        // out): drop any held token — tokens are never retained while
-        // disabled.
-        manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
-        return;
-    };
-    let Some(config) = GeapWifConfig::from_gate(&gate) else {
-        // Enabled but unconfigured (empty `gcpAudience`).
-        manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
-        return;
+    let minted_for = match current_geap_policy(ctx) {
+        GeapPolicy::Disabled => {
+            // Gate off (admin off, enforced off, member opted out, or logged
+            // out): drop any held token — tokens are never retained while
+            // disabled.
+            manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
+            return;
+        }
+        GeapPolicy::Unconfigured => {
+            // Enabled but unconfigured (empty `gcpAudience`).
+            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            return;
+        }
+        GeapPolicy::Mintable(binding) => binding,
     };
     // One mint at a time, force included: the in-flight result lands in ~1-3s
     // and `KeysUpdated` re-renders whoever asked.
@@ -298,7 +312,6 @@ fn refresh_geap_credentials_with_options(
     ) {
         return;
     }
-    let minted_for = binding_for_gate(&gate);
     // Skip-if-valid: don't hammer STS. A binding mismatch (current user/config
     // vs. the binding recorded at mint) falls through and re-mints under the
     // fresh principal + config.
@@ -330,7 +343,7 @@ fn refresh_geap_credentials_with_options(
     };
     log::info!(
         "GEAP: minting credentials (audience={}, force={force})",
-        config.audience
+        minted_for.audience
     );
     manager.set_geap_credentials_state(GeapCredentialsState::Refreshing { previous }, ctx);
 
@@ -340,10 +353,14 @@ fn refresh_geap_credentials_with_options(
     let token_future = ManagedSecretManager::handle(ctx)
         .as_ref(ctx)
         .issue_task_identity_token(IdentityTokenOptions {
-            audience: config.audience.clone(),
+            audience: minted_for.audience.clone(),
             requested_duration: GEAP_IDENTITY_TOKEN_DURATION,
             subject_template: vec1!["principal".to_string()],
         });
+    // The binding drives the exchange (audience + federation) and is also
+    // stamped onto the result, so clone it for the async leg — the completion
+    // closure takes ownership.
+    let binding = minted_for.clone();
     let _ = ctx.spawn(
         async move {
             let identity_token = token_future.await.map_err(|err| {
@@ -351,7 +368,7 @@ fn refresh_geap_credentials_with_options(
                     "{err:#}"
                 )))
             })?;
-            exchange_identity_token_for_geap_credentials(identity_token, &config).await
+            exchange_identity_token_for_geap_credentials(identity_token, &binding).await
         },
         move |manager, result, ctx| apply_geap_mint_result(manager, result, minted_for, force, ctx),
     );
@@ -366,19 +383,25 @@ fn apply_geap_mint_result(
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    // Gate flipped off mid-mint: discard the result; no token is retained
-    // while disabled.
-    let Some(gate) = current_geap_request_gate(ctx) else {
-        log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
-        manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
-        return;
+    // Re-evaluate the world before storing: the gate/config may have changed
+    // during the ~1-3s mint. No state transition may store credentials under a
+    // binding that does not match the world at storage time — that covers
+    // `previous` too: a carried token is only restorable while it still
+    // matches the current binding (a mismatched token is unservable, and
+    // restoring it would mask a failure behind a misleading `Loaded`).
+    let current_binding = match current_geap_policy(ctx) {
+        GeapPolicy::Disabled => {
+            log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
+            manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
+            return;
+        }
+        GeapPolicy::Unconfigured => {
+            log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
+            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            return;
+        }
+        GeapPolicy::Mintable(binding) => binding,
     };
-    // No state transition may store credentials under a binding that does not
-    // match the world at storage time. That covers `previous` too: a carried
-    // token is only restorable while it still matches the current gate — a
-    // mismatched token is unservable (the attach matrix rejects it), and
-    // restoring it would mask a failure behind a misleading `Loaded`.
-    let current_binding = binding_for_gate(&gate);
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Refreshing {
             previous: Some((credentials, binding)),
@@ -546,26 +569,23 @@ struct GenerateAccessTokenResponse {
 
 /// Legs 2 and 3 of the mint: exchanges the Warp OIDC JWT at Google STS for a
 /// federated token, then (when configured) impersonates the workspace's
-/// service account for the final ~1h access token. Runs entirely off the
-/// request path via `http_client` (the Compat-wrapped reqwest required to run
-/// off-Tokio on the warpui executor).
+/// service account for the final ~1h access token.
 async fn exchange_identity_token_for_geap_credentials(
     identity_token: TaskIdentityToken,
-    config: &GeapWifConfig,
+    binding: &GeapMintBinding,
 ) -> Result<GeapCredentials, LoadGeapCredentialsError> {
-    // Leg 2: STS token exchange (RFC 8693). Google validates the issuer
-    // signature (against the public JWKS) and the audience against the pool's
-    // allowed audiences here.
+    // Leg 2: STS token exchange (RFC 8693).
     let response = http_client::Client::new()
         .post(STS_TOKEN_URL)
         .form(&StsTokenExchangeRequest {
             grant_type: TOKEN_EXCHANGE_GRANT_TYPE,
-            audience: &config.audience,
+            audience: &binding.audience,
             scope: CLOUD_PLATFORM_SCOPE,
             requested_token_type: ACCESS_TOKEN_TYPE,
             subject_token: &identity_token.token,
             subject_token_type: ID_TOKEN_TYPE,
         })
+        .timeout(GEAP_MINT_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|err| {
@@ -588,7 +608,7 @@ async fn exchange_identity_token_for_geap_credentials(
     })?;
     log::info!(
         "GEAP: STS exchange succeeded (audience={})",
-        config.audience
+        binding.audience
     );
 
     let federated_expires_at = sts_expires_at(
@@ -597,8 +617,9 @@ async fn exchange_identity_token_for_geap_credentials(
         SystemTime::now(),
     );
 
-    let Some(sa_email) = config.service_account_email.as_deref() else {
-        // No impersonation configured: the federated token is used directly.
+    let GeapFederation::ServiceAccount { email: sa_email } = &binding.federation else {
+        // DirectWif: no impersonation — the federated STS token is used
+        // directly.
         return Ok(GeapCredentials::new(
             sts_response.access_token,
             Some(federated_expires_at),
@@ -608,9 +629,7 @@ async fn exchange_identity_token_for_geap_credentials(
     // Leg 3: SA impersonation. IAM authorizes this only if the pool identity
     // holds `roles/iam.workloadIdentityUser` on the SA — the customer's
     // control point for who may become the SA.
-    let url = format!(
-        "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateAccessToken"
-    );
+    let url = IAM_GENERATE_ACCESS_TOKEN_URL.replace("{sa_email}", sa_email);
     let response = http_client::Client::new()
         .post(&url)
         .bearer_auth(&sts_response.access_token)
@@ -618,6 +637,7 @@ async fn exchange_identity_token_for_geap_credentials(
             scope: vec![CLOUD_PLATFORM_SCOPE.to_string()],
             lifetime: SA_ACCESS_TOKEN_LIFETIME.to_string(),
         })
+        .timeout(GEAP_MINT_REQUEST_TIMEOUT)
         .send()
         .await
         .map_err(|err| {
@@ -641,7 +661,7 @@ async fn exchange_identity_token_for_geap_credentials(
         .map_err(LoadGeapCredentialsError::ImpersonateServiceAccount)?;
     log::info!(
         "GEAP: service account impersonation succeeded (audience={})",
-        config.audience
+        binding.audience
     );
     Ok(GeapCredentials::new(
         impersonation.access_token,

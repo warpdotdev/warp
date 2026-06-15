@@ -499,6 +499,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CustomInferenceEndpoints,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
+        #[cfg(feature = "gemini_enterprise")]
+        FeatureFlag::GeminiEnterprise,
     ]);
 
     flags

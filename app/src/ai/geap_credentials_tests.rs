@@ -21,38 +21,46 @@ const TEST_AUDIENCE: &str =
 const TEST_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com";
 
 #[test]
-fn gate_from_parts_trims_and_normalizes() {
-    let gate = geap_request_gate_from_parts(
+fn mint_binding_from_parts_trims_and_normalizes() {
+    let binding = geap_mint_binding_from_parts(
         "user-1".into(),
         Some(&format!("  {TEST_AUDIENCE} ")),
         Some(&format!(" {TEST_SA_EMAIL}  ")),
+    )
+    .expect("a configured audience yields a mintable binding");
+    assert_eq!(binding.audience, TEST_AUDIENCE);
+    assert_eq!(
+        binding.federation,
+        GeapFederation::ServiceAccount {
+            email: TEST_SA_EMAIL.to_string()
+        }
     );
-    assert_eq!(gate.audience, TEST_AUDIENCE);
-    assert_eq!(gate.sa_email.as_deref(), Some(TEST_SA_EMAIL));
 }
 
 #[test]
-fn gate_from_parts_treats_missing_and_blank_as_empty() {
-    let gate = geap_request_gate_from_parts("user-1".into(), None, None);
-    assert!(gate.audience.is_empty());
-    assert_eq!(gate.sa_email, None);
-
-    // A whitespace-only SA email means "no impersonation", not an SA named "".
-    let gate = geap_request_gate_from_parts("user-1".into(), Some("   "), Some("   "));
-    assert!(gate.audience.is_empty());
-    assert_eq!(gate.sa_email, None);
+fn mint_binding_from_parts_requires_an_audience() {
+    // Missing or blank audience -> not mintable (rests at Unconfigured/Missing).
+    assert_eq!(
+        geap_mint_binding_from_parts("user-1".into(), None, Some(TEST_SA_EMAIL)),
+        None
+    );
+    assert_eq!(
+        geap_mint_binding_from_parts("user-1".into(), Some("   "), Some(TEST_SA_EMAIL)),
+        None
+    );
 }
 
 #[test]
-fn wif_config_requires_an_audience() {
-    let unconfigured = geap_request_gate_from_parts("user-1".into(), None, Some(TEST_SA_EMAIL));
-    assert_eq!(GeapWifConfig::from_gate(&unconfigured), None);
+fn mint_binding_from_parts_uses_direct_wif_without_sa() {
+    // A whitespace-only or missing SA email means "no impersonation"
+    // (DirectWif), not an SA named "".
+    let binding = geap_mint_binding_from_parts("user-1".into(), Some(TEST_AUDIENCE), Some("   "))
+        .expect("audience present");
+    assert_eq!(binding.federation, GeapFederation::DirectWif);
 
-    let configured =
-        geap_request_gate_from_parts("user-1".into(), Some(TEST_AUDIENCE), Some(TEST_SA_EMAIL));
-    let config = GeapWifConfig::from_gate(&configured).unwrap();
-    assert_eq!(config.audience, TEST_AUDIENCE);
-    assert_eq!(config.service_account_email.as_deref(), Some(TEST_SA_EMAIL));
+    let binding = geap_mint_binding_from_parts("user-1".into(), Some(TEST_AUDIENCE), None)
+        .expect("audience present");
+    assert_eq!(binding.federation, GeapFederation::DirectWif);
 }
 
 #[test]
@@ -250,7 +258,18 @@ fn stale_binding() -> GeapMintBinding {
     GeapMintBinding {
         user_uid: "previous-user".into(),
         audience: TEST_AUDIENCE.into(),
-        sa_email: Some(TEST_SA_EMAIL.into()),
+        federation: GeapFederation::ServiceAccount {
+            email: TEST_SA_EMAIL.into(),
+        },
+    }
+}
+
+/// The mintable binding for the harness gate. The harness enables the GEAP
+/// host with a configured audience, so the policy is always `Mintable`.
+fn current_binding(ctx: &mut ModelContext<ApiKeyManager>) -> GeapMintBinding {
+    match current_geap_policy(ctx) {
+        GeapPolicy::Mintable(binding) => binding,
+        other => panic!("expected a mintable GEAP policy, got {other:?}"),
     }
 }
 
@@ -259,6 +278,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
     // GEAP host present but disabled by the admin.
     let workspace = workspace_with_geap_host(false);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
 
         // Even a previously loaded token is dropped: no token is retained
@@ -271,7 +291,9 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
                     minted_for: GeapMintBinding {
                         user_uid: "user".into(),
                         audience: TEST_AUDIENCE.into(),
-                        sa_email: Some(TEST_SA_EMAIL.into()),
+                        federation: GeapFederation::ServiceAccount {
+                            email: TEST_SA_EMAIL.into(),
+                        },
                     },
                 },
                 ctx,
@@ -297,6 +319,7 @@ fn refresh_rests_at_missing_when_enabled_but_unconfigured() {
         .unwrap()
         .gcp_audience = Some("   ".to_string());
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             refresh_geap_credentials(manager, ctx);
@@ -312,13 +335,13 @@ fn refresh_rests_at_missing_when_enabled_but_unconfigured() {
 fn refresh_skips_when_token_is_fresh_and_binding_matches() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
             let loaded = GeapCredentialsState::Loaded {
                 credentials: fresh_credentials(),
                 loaded_at: SystemTime::now(),
-                minted_for: binding_for_gate(&gate),
+                minted_for: current_binding(ctx),
             };
             manager.set_geap_credentials_state(loaded.clone(), ctx);
             // Skip-if-valid: a fresh token under the current binding means no
@@ -333,11 +356,11 @@ fn refresh_skips_when_token_is_fresh_and_binding_matches() {
 fn refresh_noops_while_a_mint_is_in_flight() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
             let in_flight = GeapCredentialsState::Refreshing {
-                previous: Some((fresh_credentials(), binding_for_gate(&gate))),
+                previous: Some((fresh_credentials(), current_binding(ctx))),
             };
             manager.set_geap_credentials_state(in_flight.clone(), ctx);
             // One mint at a time — force included.
@@ -353,14 +376,14 @@ fn refresh_noops_while_a_mint_is_in_flight() {
 fn refresh_remints_when_token_needs_refresh() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
             manager.set_geap_credentials_state(
                 GeapCredentialsState::Loaded {
                     credentials: expired_credentials(),
                     loaded_at: SystemTime::now(),
-                    minted_for: binding_for_gate(&gate),
+                    minted_for: current_binding(ctx),
                 },
                 ctx,
             );
@@ -379,6 +402,7 @@ fn refresh_remints_when_token_needs_refresh() {
 fn refresh_remints_on_binding_mismatch() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             // Fresh token, but minted for a different user (e.g. before an
@@ -409,6 +433,7 @@ fn refresh_remints_on_binding_mismatch() {
 fn mint_completion_discards_stale_binding_result_and_remints() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.set_geap_credentials_state(
@@ -438,10 +463,10 @@ fn mint_completion_discards_stale_binding_result_and_remints() {
 fn mint_completion_failure_restores_servable_previous() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
-            let current = binding_for_gate(&gate);
+            let current = current_binding(ctx);
             let carried = fresh_credentials();
             manager.set_geap_credentials_state(
                 GeapCredentialsState::Refreshing {
@@ -474,10 +499,10 @@ fn mint_completion_failure_restores_servable_previous() {
 fn mint_completion_failure_with_unservable_previous_fails() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
-            let current = binding_for_gate(&gate);
+            let current = current_binding(ctx);
             // The carried token was minted for someone else: restoring it
             // would mask the failure behind a misleading `Loaded`, so the
             // failure must surface instead.
@@ -506,13 +531,13 @@ fn mint_completion_failure_with_unservable_previous_fails() {
 fn safety_net_noops_on_fresh_token_and_rearms_parked_chain() {
     let workspace = workspace_with_geap_host(true);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
-            let gate = current_geap_request_gate(ctx).expect("the harness gate should be on");
             let fresh = GeapCredentialsState::Loaded {
                 credentials: fresh_credentials(),
                 loaded_at: SystemTime::now(),
-                minted_for: binding_for_gate(&gate),
+                minted_for: current_binding(ctx),
             };
             // Fresh token: the safety net must not touch anything.
             manager.set_geap_credentials_state(fresh.clone(), ctx);
@@ -540,6 +565,7 @@ fn safety_net_noops_on_fresh_token_and_rearms_parked_chain() {
 fn safety_net_is_a_pure_noop_when_gate_is_off() {
     let workspace = workspace_with_geap_host(false);
     App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
         initialize_app(&mut app, vec![workspace]);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             // The request path must not mutate state when the gate is off;

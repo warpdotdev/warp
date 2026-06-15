@@ -50,17 +50,16 @@ fn geap_binding() -> GeapMintBinding {
         audience:
             "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/q"
                 .into(),
-        sa_email: Some("sa@proj.iam.gserviceaccount.com".into()),
+        federation: GeapFederation::ServiceAccount {
+            email: "sa@proj.iam.gserviceaccount.com".into(),
+        },
     }
 }
 
-fn geap_gate() -> GeapRequestGate {
-    let binding = geap_binding();
-    GeapRequestGate {
-        user_uid: binding.user_uid,
-        audience: binding.audience,
-        sa_email: binding.sa_email,
-    }
+// The expected binding the request build site passes in is the same type as
+// the stored `minted_for`, so the attach check is a plain `==`.
+fn geap_gate() -> GeapMintBinding {
+    geap_binding()
 }
 
 fn geap_loaded(access_token: &str, expires_in: Option<u64>) -> GeapCredentialsState {
@@ -555,7 +554,9 @@ fn api_keys_for_request_omits_geap_token_on_binding_mismatch() {
 
     // A different service account (admin changed impersonation target).
     let mut gate = geap_gate();
-    gate.sa_email = Some("other@proj.iam.gserviceaccount.com".into());
+    gate.federation = GeapFederation::ServiceAccount {
+        email: "other@proj.iam.gserviceaccount.com".into(),
+    };
     assert!(mgr.api_keys_for_request(false, false, Some(gate)).is_none());
 }
 
