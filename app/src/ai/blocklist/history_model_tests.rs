@@ -835,22 +835,19 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
 }
 
 #[test]
-fn nld_prompt_history_merges_sources_dedups_and_sorts_newest_first() {
+fn nld_prompt_history_chains_session_prompts_then_persisted_snapshot() {
     App::test((), |mut app| async move {
         let now = Local::now();
         let terminal_view_id = EntityId::new();
 
-        // The queries read from sqliteDB ai_queries need to be combined with live conversations
-        // in memory.
+        // Persisted snapshot as read from `ai_queries` (newest-first, i.e. `id` DESC), including a
+        // whitespace-only row that must be dropped.
         let nld_prompts = vec![
+            ("deploy it".to_string(), now - chrono::Duration::seconds(10)),
+            ("live query".to_string(), now - chrono::Duration::seconds(20)),
             (
                 "restored query".to_string(),
                 now - chrono::Duration::seconds(30),
-            ),
-            ("deploy it".to_string(), now - chrono::Duration::seconds(10)),
-            (
-                "live query".to_string(),
-                now - chrono::Duration::seconds(20),
             ),
             ("   ".to_string(), now),
         ];
@@ -859,8 +856,8 @@ fn nld_prompt_history_merges_sources_dedups_and_sorts_newest_first() {
             BlocklistAIHistoryModel::new(vec![], &[]).with_nld_persisted_prompts(nld_prompts)
         });
 
-        // Add a live in-memory exchange that duplicates an NLD persisted prompt with a
-        // newer timestamp.
+        // A new in-memory query submitted this session duplicates a persisted prompt. It is NOT
+        // deduped; it is appended as the newest session prompt.
         let conversation_id = history_model.update(&mut app, |history_model, ctx| {
             history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
@@ -894,13 +891,17 @@ fn nld_prompt_history_merges_sources_dedups_and_sorts_newest_first() {
         });
 
         let prompts = history_model.read(&app, |model, _| model.nld_prompt_history());
-        let texts: Vec<&str> = prompts.iter().map(|(text, _)| text.as_str()).collect();
-        // Whitespace-only prompts are dropped, "live query" is deduped to its newer
-        // in-memory occurrence, and the result is sorted newest-first.
-        assert_eq!(texts, vec!["live query", "deploy it", "restored query"]);
+        let texts: Vec<&str> = prompts.iter().map(|(text, _)| &**text).collect();
+        // The session prompt (newest-first) comes first, followed by the persisted snapshot in its
+        // stored order. Whitespace-only is dropped; the duplicate "live query" is intentionally
+        // NOT deduped.
+        assert_eq!(
+            texts,
+            vec!["live query", "deploy it", "live query", "restored query"]
+        );
         assert_eq!(
             prompts[0].1, now,
-            "the duplicate prompt should keep the newer in-memory timestamp",
+            "the session prompt keeps its submission timestamp",
         );
     });
 }

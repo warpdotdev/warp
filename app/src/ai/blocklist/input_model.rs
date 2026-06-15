@@ -839,7 +839,7 @@ impl BlocklistAIInputModel {
                                 &buffer_cloned,
                                 prompt_entries
                                     .iter()
-                                    .map(|(text, start_ts)| (text.as_str(), Some(*start_ts))),
+                                    .map(|(text, start_ts)| (&**text, Some(*start_ts))),
                                 HISTORY_ENTRY_MATCH_CUTOFF,
                             )
                             .await;
