@@ -45,9 +45,9 @@ Key files:
 
 The controller passes `recovery_pending = should_resume_conversation_after_stream_finished()` into the history model; `will_attempt_resume` on `RenderableAIError` remains rendering-only.
 
-### Silent-EOF synthesis (`AIApiError::StreamTruncated`)
+### Silent-EOF synthesis (`AIApiError::UnexpectedEof`)
 
-The server always sends `StreamFinished`, but a transport cut between chunks reaches the stream layer as a clean EOF with no error event — empirically confirmed (both e2e scenarios below exercised only this path; the `Err`-event arm never fired). `ResponseStream` tracks `stream_finished_received` / `error_event_emitted` and, on completion without either, synthesizes `StreamTruncated` (retryable + transient) and runs the same `recovery_action` decision ([`response_stream.rs:388`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/blocklist/controller/response_stream.rs#L388)). This replaces the controller's hardcoded-terminal EOF fallback (now a defensive warn). HTTP send failures do not take this path — they arrive as in-stream error events; request-conversion failures (no stream ever created) are surfaced terminally with the original error instead of being synthesized as `StreamTruncated`. Non-retried failures from both paths report to Sentry via a shared helper with classification tags.
+The server always sends `StreamFinished`, but a transport cut between chunks reaches the stream layer as a clean EOF with no error event — empirically confirmed (both e2e scenarios below exercised only this path; the `Err`-event arm never fired). `ResponseStream` tracks `stream_finished_received` / `error_event_emitted` and, on completion without either, synthesizes `UnexpectedEof` (retryable + transient) and runs the same `recovery_action` decision ([`response_stream.rs:388`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/blocklist/controller/response_stream.rs#L388)). This replaces the controller's hardcoded-terminal EOF fallback (now a defensive warn). HTTP send failures do not take this path — they arrive as in-stream error events; request-conversion failures (no stream ever created) are surfaced terminally with the original error instead of being synthesized as `UnexpectedEof`. Non-retried failures from both paths report to Sentry via a shared helper with classification tags.
 
 ### Offline parking
 
@@ -62,7 +62,7 @@ The server always sends `StreamFinished`, but a transport cut between chunks rea
 Unit (all in-tree, `cargo nextest run -p warp --lib`):
 
 - `response_stream_tests.rs` — exhaustive `recovery_action` matrix: retry/park/fail pre-actions (I2, I9, I13), resume gating post-actions (I3, I9), budget exhaustion and non-retryable → fail (I10, I12).
-- `server_api_tests.rs` — `is_transient_failure` classification: 5xx/timeout/transport transient; quota/overload/4xx/JSON not (I12); `StreamTruncated` retryable + transient (I1).
+- `server_api_tests.rs` — `is_transient_failure` classification: 5xx/timeout/transport transient; quota/overload/4xx/JSON not (I12); `UnexpectedEof` retryable + transient (I1).
 - `history_model_tests.rs` — `recovery_pending` → `TransientError` and no terminal derived outcome (I5, I6 upstream); structured exchange error preserved through conversion; non-recoverable error stays terminal.
 - `local_agent_task_sync_model_tests.rs` — `TransientError` → `IN_PROGRESS` + message (I6); `will_attempt_resume` hint ignored for terminal classification (I10, I12).
 
@@ -80,7 +80,7 @@ Not covered by automated tests (manual/review only): controller cancellation-dur
 
 - **Stuck "Reconnecting"**: any path that sets `TransientError` and never delivers a recovery would hang the UI state. Mitigated by the driver's 120s deadline (cloud), the one-shot resume contract, and the cancellation flip to `Cancelled`; restore-from-disk degrades it to `Error`.
 - **Behavior change**: quota/overload failures no longer set the resume flag (master did). Intentional — a resume would fail identically — but visible to anyone who relied on the old flag.
-- **Sentry volume**: synthesized truncations now report (with `will_attempt_resume`/`is_transient_failure` tags) — expect new `StreamTruncated` events that previously appeared as the generic EOF fallback.
+- **Sentry volume**: synthesized truncations now report (with `will_attempt_resume`/`is_transient_failure` tags) — expect new `UnexpectedEof` events that previously appeared as the generic EOF fallback.
 
 ## Parallelization
 

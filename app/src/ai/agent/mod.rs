@@ -723,7 +723,7 @@ impl From<&AIApiError> for RenderableAIError {
                     }
                 }
             }
-            AIApiError::StreamTruncated => Self::transient_network_error(false, false),
+            AIApiError::UnexpectedEof => Self::transient_network_error(false, false),
             AIApiError::Deserialization(DeserializationError::Json(_))
             | AIApiError::NoContextFound
             | AIApiError::ErrorStatus(_, _)

@@ -190,7 +190,7 @@ pub enum AIApiError {
     /// event: the server always sends one, but the transport can truncate the response
     /// between chunks, surfacing as a clean EOF.
     #[error("Response stream ended unexpectedly before completion.")]
-    StreamTruncated,
+    UnexpectedEof,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -352,7 +352,7 @@ impl AIApiError {
                 e.status().is_none_or(is_transient_status)
             }
             AIApiError::ErrorStatus(status, _) => is_transient_status(*status),
-            AIApiError::StreamTruncated => true,
+            AIApiError::UnexpectedEof => true,
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::Deserialization(DeserializationError::Json(_))
@@ -371,7 +371,7 @@ impl ErrorExt for AIApiError {
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
             AIApiError::ErrorStatus(_, _) => self.is_retryable(),
-            AIApiError::StreamTruncated => true,
+            AIApiError::UnexpectedEof => true,
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::NoContextFound => false,
