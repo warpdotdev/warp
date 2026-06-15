@@ -48,8 +48,8 @@ use crate::ai::agent::icons::{
 use crate::ai::agent::linearization::compute_task_depths;
 use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
-    AIAgentOutputMessage, AIAgentOutputMessageType, AIIdentifiers, CancellationReason,
-    MessageToAIAgentOutputMessageError, SummarizationType,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIIdentifiers,
+    AgentOutputText, CancellationReason, MessageToAIAgentOutputMessageError, SummarizationType,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::artifacts::Artifact;
@@ -1964,6 +1964,11 @@ impl AIConversation {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
+        #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+        if stream_id.is_local_acp() {
+            self.finalize_local_acp_stream(stream_id, terminal_view_id, ctx)?;
+        }
+
         let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
             log::error!("No pending request info for completed request.");
             return Err(UpdateConversationError::NoPendingRequest);
@@ -2010,6 +2015,301 @@ impl AIConversation {
             self.update_status(ConversationStatus::Success, terminal_view_id, ctx);
         }
 
+        Ok(())
+    }
+
+    #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+    pub(crate) fn append_local_acp_stream_chunk(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        terminal_view_id: EntityId,
+        chunk: LocalAcpStreamChunk,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) -> Result<(), UpdateConversationError> {
+        let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
+            return Err(UpdateConversationError::NoPendingRequest);
+        };
+
+        let conversation_id = self.id;
+        for AddedExchange { exchange_id, .. } in new_exchanges.into_iter() {
+            {
+                let exchange = self.get_exchange_to_update(exchange_id)?;
+                let AIAgentOutputStatus::Streaming { output } = &mut exchange.output_status else {
+                    return Err(UpdateConversationError::OutputAlreadyFinished);
+                };
+
+                let output = output.get_or_insert_with(|| {
+                    Shared::new(AIAgentOutput {
+                        messages: vec![],
+                        citations: vec![],
+                        server_output_id: Some(ServerOutputId::new(format!(
+                            "local-acp-{stream_id:?}"
+                        ))),
+                        api_metadata_bytes: None,
+                        suggestions: None,
+                        model_info: None,
+                        telemetry_events: vec![],
+                        request_cost: None,
+                    })
+                });
+
+                let mut output = output.get_mut();
+                match &chunk {
+                    LocalAcpStreamChunk::Text(text_chunk) if !text_chunk.is_empty() => {
+                        let start_new_block = match output.messages.last() {
+                            Some(AIAgentOutputMessage {
+                                message: AIAgentOutputMessageType::Text(text),
+                                ..
+                            }) => local_acp_should_start_new_text_block(
+                                &local_acp_plain_text(text),
+                                text_chunk,
+                            ),
+                            _ => true,
+                        };
+
+                        if start_new_block {
+                            let message_index = output.messages.len();
+                            output.messages.push(AIAgentOutputMessage {
+                                id: MessageId::new(format!(
+                                    "local-acp-text-{exchange_id:?}-{message_index}"
+                                )),
+                                message: AIAgentOutputMessageType::Text(AIAgentText {
+                                    sections: vec![AIAgentTextSection::PlainText {
+                                        text: AgentOutputText::from(text_chunk.clone()),
+                                    }],
+                                }),
+                                citations: vec![],
+                            });
+                        } else if let Some(AIAgentOutputMessage {
+                            message: AIAgentOutputMessageType::Text(text),
+                            ..
+                        }) = output.messages.last_mut()
+                        {
+                            if let Some(AIAgentTextSection::PlainText { text: section_text }) =
+                                text.sections.first_mut()
+                            {
+                                local_acp_merge_text_chunk(section_text, text_chunk);
+                            }
+                        }
+
+                        if let Some(AIAgentOutputMessage {
+                            message: AIAgentOutputMessageType::Text(text),
+                            ..
+                        }) = output.messages.last_mut()
+                        {
+                            if let Some(AIAgentTextSection::PlainText { text: section_text }) =
+                                text.sections.first_mut()
+                            {
+                                section_text.reparse_markdown();
+                            }
+                        }
+                    }
+                    LocalAcpStreamChunk::Thought(thought_chunk) if !thought_chunk.is_empty() => {
+                        let append_to_existing = matches!(
+                            output.messages.last(),
+                            Some(AIAgentOutputMessage {
+                                message: AIAgentOutputMessageType::Reasoning { .. },
+                                ..
+                            })
+                        );
+                        if append_to_existing {
+                            let AIAgentOutputMessage {
+                                message: AIAgentOutputMessageType::Reasoning { text, .. },
+                                ..
+                            } = output.messages.last_mut().expect("reasoning message exists")
+                            else {
+                                unreachable!("last message must be reasoning");
+                            };
+                            if let Some(AIAgentTextSection::PlainText { text }) =
+                                text.sections.first_mut()
+                            {
+                                text.mut_text().push_str(thought_chunk);
+                                text.reparse_markdown();
+                            }
+                        } else {
+                            let message_index = output.messages.len();
+                            output.messages.push(AIAgentOutputMessage {
+                                id: MessageId::new(format!(
+                                    "local-acp-thought-{exchange_id:?}-{message_index}"
+                                )),
+                                message: AIAgentOutputMessageType::Reasoning {
+                                    text: AIAgentText {
+                                        sections: vec![AIAgentTextSection::PlainText {
+                                            text: AgentOutputText::from(thought_chunk.clone()),
+                                        }],
+                                    },
+                                    finished_duration: None,
+                                },
+                                citations: vec![],
+                            });
+                            if let Some(AIAgentOutputMessage {
+                                message: AIAgentOutputMessageType::Reasoning { text, .. },
+                                ..
+                            }) = output.messages.last_mut()
+                            {
+                                if let Some(AIAgentTextSection::PlainText { text: section_text }) =
+                                    text.sections.first_mut()
+                                {
+                                    section_text.reparse_markdown();
+                                }
+                            }
+                        }
+                    }
+                    LocalAcpStreamChunk::ToolCall(tool_call) => {
+                        let tool_call_id = tool_call.tool_call_id.clone();
+                        if let Some(existing) = output.messages.iter_mut().find_map(|message| {
+                            if let AIAgentOutputMessageType::LocalAcpToolCall(existing) =
+                                &mut message.message
+                            {
+                                (existing.tool_call_id == tool_call_id).then_some(existing)
+                            } else {
+                                None
+                            }
+                        }) {
+                            *existing = tool_call.clone();
+                        } else {
+                            let message_index = output.messages.len();
+                            output.messages.push(AIAgentOutputMessage {
+                                id: MessageId::new(format!(
+                                    "local-acp-tool-{exchange_id:?}-{message_index}"
+                                )),
+                                message: AIAgentOutputMessageType::LocalAcpToolCall(
+                                    tool_call.clone(),
+                                ),
+                                citations: vec![],
+                            });
+                        }
+                        if let Some(AIAgentOutputMessage {
+                            message: AIAgentOutputMessageType::LocalAcpToolCall(tool_call),
+                            ..
+                        }) = output.messages.iter_mut().find(|message| {
+                            matches!(
+                                &message.message,
+                                AIAgentOutputMessageType::LocalAcpToolCall(existing)
+                                    if existing.tool_call_id == tool_call_id
+                            )
+                        }) {
+                            for section in &mut tool_call.body.sections {
+                                if let AIAgentTextSection::PlainText { text } = section {
+                                    text.reparse_markdown();
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                exchange_id,
+                terminal_view_id,
+                conversation_id,
+                is_hidden: self.is_exchange_hidden(exchange_id),
+            });
+        }
+
+        self.write_updated_conversation_state(ctx);
+        Ok(())
+    }
+
+    #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+    fn finalize_local_acp_stream(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) -> Result<(), UpdateConversationError> {
+        let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
+            return Ok(());
+        };
+
+        let conversation_id = self.id;
+        for AddedExchange { exchange_id, .. } in new_exchanges {
+            let is_hidden = self.is_exchange_hidden(exchange_id);
+            let exchange = self.get_exchange_to_update(exchange_id)?;
+            let AIAgentOutputStatus::Streaming { output } = &mut exchange.output_status else {
+                continue;
+            };
+            let Some(output) = output.as_ref() else {
+                continue;
+            };
+
+            let mut output = output.get_mut();
+            let has_response_text = output.messages.iter().any(|message| {
+                matches!(
+                    &message.message,
+                    AIAgentOutputMessageType::Text(text)
+                        if !local_acp_plain_text(text).trim().is_empty()
+                )
+            });
+
+            if !has_response_text {
+                let reasoning_text = output
+                    .messages
+                    .iter()
+                    .filter_map(|message| match &message.message {
+                        AIAgentOutputMessageType::Reasoning { text, .. } => {
+                            let plain = local_acp_plain_text(text);
+                            (!plain.trim().is_empty()).then_some(plain)
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                if !reasoning_text.trim().is_empty() {
+                    let message_index = output.messages.len();
+                    output.messages.push(AIAgentOutputMessage {
+                        id: MessageId::new(format!(
+                            "local-acp-text-{exchange_id:?}-{message_index}"
+                        )),
+                        message: AIAgentOutputMessageType::Text(AIAgentText {
+                            sections: vec![AIAgentTextSection::PlainText {
+                                text: AgentOutputText::from(reasoning_text.trim().to_string()),
+                            }],
+                        }),
+                        citations: vec![],
+                    });
+                    if let Some(AIAgentOutputMessage {
+                        message: AIAgentOutputMessageType::Text(text),
+                        ..
+                    }) = output.messages.last_mut()
+                    {
+                        if let Some(AIAgentTextSection::PlainText { text: section_text }) =
+                            text.sections.first_mut()
+                        {
+                            section_text.reparse_markdown();
+                        }
+                    }
+                }
+            }
+
+            let finish_time = Local::now();
+            for message in &mut output.messages {
+                if let AIAgentOutputMessageType::Reasoning {
+                    finished_duration,
+                    ..
+                } = &mut message.message
+                {
+                    if finished_duration.is_none() {
+                        *finished_duration = Some(
+                            finish_time
+                                .signed_duration_since(exchange.start_time)
+                                .to_std()
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
+            }
+
+            ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                exchange_id,
+                terminal_view_id,
+                conversation_id,
+                is_hidden,
+            });
+        }
+
+        self.write_updated_conversation_state(ctx);
         Ok(())
     }
 
@@ -4325,6 +4625,98 @@ impl ConversationStatus {
 
     pub fn is_error(&self) -> bool {
         matches!(self, ConversationStatus::Error)
+    }
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+pub(crate) enum LocalAcpStreamChunk {
+    Text(String),
+    Thought(String),
+    ToolCall(super::local_acp_tool_call::LocalAcpToolCallMessage),
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+fn local_acp_plain_text(text: &AIAgentText) -> String {
+    text.sections
+        .iter()
+        .filter_map(|section| match section {
+            AIAgentTextSection::PlainText { text } => Some(text.text().to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether an incoming text chunk should begin a new visible block rather than
+/// extend the current one. Codex streams token-sized deltas; Cursor emits
+/// separate full segments after sentence boundaries.
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+fn local_acp_should_start_new_text_block(last_text: &str, chunk: &str) -> bool {
+    if last_text.is_empty() {
+        return false;
+    }
+
+    if chunk.starts_with(last_text) {
+        return false;
+    }
+
+    let last = last_text.trim_end();
+    let chunk_trim = chunk.trim_start();
+
+    if last.is_empty() || chunk_trim.is_empty() {
+        return false;
+    }
+
+    // Token/delta streaming within the same sentence.
+    if !last.ends_with('.') && !last.ends_with('!') && !last.ends_with('?') && !last.ends_with('\n')
+    {
+        return false;
+    }
+
+    // Separate assistant segment after a completed sentence (Cursor-style).
+    if chunk_trim.len() > 15 {
+        return true;
+    }
+
+    false
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+fn local_acp_merge_text_chunk(section_text: &mut AgentOutputText, chunk: &str) {
+    let current = section_text.text().to_string();
+    if chunk.starts_with(&current) {
+        section_text.mut_text().clear();
+        section_text.mut_text().push_str(chunk);
+    } else if current.starts_with(chunk) || current.ends_with(chunk) {
+        // Ignore stale or duplicate chunks.
+    } else {
+        section_text.mut_text().push_str(chunk);
+    }
+}
+
+#[cfg(all(test, feature = "local_acp", not(target_family = "wasm")))]
+mod local_acp_text_stream_tests {
+    use super::{local_acp_merge_text_chunk, local_acp_should_start_new_text_block};
+    use crate::ai::agent::AgentOutputText;
+
+    #[test]
+    fn appends_codex_token_deltas() {
+        assert!(!local_acp_should_start_new_text_block("Hello", " world"));
+        assert!(!local_acp_should_start_new_text_block("I", "'ll"));
+    }
+
+    #[test]
+    fn starts_new_block_after_sentence_for_cursor_style_segments() {
+        assert!(local_acp_should_start_new_text_block(
+            "Checking your Cursor config.",
+            "Now it's set to Auto (default / auto)."
+        ));
+    }
+
+    #[test]
+    fn merges_cumulative_stream_updates() {
+        let mut text = AgentOutputText::from("Hello".to_string());
+        local_acp_merge_text_chunk(&mut text, "Hello world");
+        assert_eq!(text.text(), "Hello world");
     }
 }
 

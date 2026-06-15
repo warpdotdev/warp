@@ -2188,6 +2188,15 @@ impl AIBlock {
                     .or_insert_with(CollapsibleElementState::collapsed);
             }
 
+            #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+            if let AIAgentOutputMessageType::LocalAcpToolCall(tool_call) = &message.message {
+                if tool_call.has_visible_body() {
+                    self.collapsible_block_states
+                        .entry(message.id.clone())
+                        .or_insert_with(CollapsibleElementState::collapsed);
+                }
+            }
+
             // Register collapsible state for orchestration action messages.
             let orchestration_message_display_mode =
                 AISettings::as_ref(ctx).orchestration_message_display_mode;
@@ -2435,7 +2444,8 @@ impl AIBlock {
                 | AIAgentOutputMessageType::DebugOutput { .. }
                 | AIAgentOutputMessageType::ArtifactCreated(_)
                 | AIAgentOutputMessageType::SkillInvoked(_)
-                | AIAgentOutputMessageType::EventsFromAgents { .. } => {}
+                | AIAgentOutputMessageType::EventsFromAgents { .. }
+                | AIAgentOutputMessageType::LocalAcpToolCall(_) => {}
             }
         }
     }

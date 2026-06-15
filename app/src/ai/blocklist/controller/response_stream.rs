@@ -26,6 +26,14 @@ impl ResponseStreamId {
         Self(format!("{}-{}", init_event.request_id, Uuid::new_v4()))
     }
 
+    pub fn new_local() -> Self {
+        Self(format!("local-{}", Uuid::new_v4()))
+    }
+
+    pub(crate) fn is_local_acp(&self) -> bool {
+        self.0.starts_with("local-")
+    }
+
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         Self(Uuid::new_v4().to_string())

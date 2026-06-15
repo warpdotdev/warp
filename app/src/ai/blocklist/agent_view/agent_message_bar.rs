@@ -581,6 +581,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let ai_settings = AISettings::as_ref(app);
 
         // Handoff to cloud only available for local agents.
+        #[cfg(not(all(feature = "local_acp", not(target_family = "wasm"))))]
         if !is_cloud_agent && ai_settings.is_ampersand_handoff_enabled(app) {
             items.push(
                 MessageItem::clickable(

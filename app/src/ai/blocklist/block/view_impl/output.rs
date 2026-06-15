@@ -81,7 +81,7 @@ use crate::ai::blocklist::inline_action::ask_user_question_view::AskUserQuestion
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
 use crate::ai::blocklist::inline_action::create_or_edit_document::CreateOrEditDocumentAction;
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
+    HeaderConfig, InteractionMode, ICON_MARGIN, INLINE_ACTION_HEADER_VERTICAL_PADDING,
     INLINE_ACTION_HORIZONTAL_PADDING,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
@@ -901,6 +901,21 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                     "[WebFetch] No view found for WebFetch message id={:?}, status={web_fetch_status:?}",
                                     output_message.id
                                 );
+                            }
+                        }
+                        #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+                        AIAgentOutputMessageType::LocalAcpToolCall(tool_call) => {
+                            if let Some(element) = render_local_acp_tool_call(
+                                output_message,
+                                tool_call,
+                                props,
+                                &mut has_rendered_first_text_section,
+                                &mut text_section_index,
+                                &mut code_section_index,
+                                appearance,
+                                app,
+                            ) {
+                                output_items.add_child(element);
                             }
                         }
                         AIAgentOutputMessageType::MessagesReceivedFromAgents { messages } => {
@@ -3552,6 +3567,199 @@ pub fn are_all_text_sections_empty(text_sections: &[AIAgentTextSection]) -> bool
     text_sections
         .iter()
         .all(|section: &AIAgentTextSection| section.is_empty())
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+#[allow(clippy::too_many_arguments)]
+fn render_local_acp_tool_call(
+    output_message: &AIAgentOutputMessage,
+    tool_call: &crate::ai::agent::local_acp_tool_call::LocalAcpToolCallMessage,
+    props: Props,
+    has_rendered_first_text_section: &mut bool,
+    text_section_index: &mut usize,
+    code_section_index: &mut usize,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Option<Box<dyn Element>> {
+    let theme = appearance.theme();
+    let text_color = blended_colors::text_main(theme, theme.surface_1());
+    let status_icon = local_acp_tool_status_icon(tool_call.status, appearance);
+    let status_icon_size = icon_size(app);
+    let title_font = appearance.monospace_font_family();
+    let title_size = appearance.monospace_font_size();
+
+    let status_icon_element = Container::new(
+        ConstrainedBox::new(status_icon)
+            .with_width(status_icon_size)
+            .with_height(status_icon_size)
+            .finish(),
+    )
+    .with_margin_right(ICON_MARGIN)
+    .finish();
+
+    if !tool_call.has_visible_body() {
+        *has_rendered_first_text_section = true;
+        return Some(
+            Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                    .with_child(status_icon_element)
+                    .with_child(
+                        Text::new(
+                            tool_call.title.clone(),
+                            title_font,
+                            title_size,
+                        )
+                        .with_color(text_color)
+                        .with_selectable(true)
+                        .finish(),
+                    )
+                    .finish(),
+            )
+            .with_horizontal_padding(CONTENT_HORIZONTAL_PADDING)
+            .finish()
+            .with_agent_output_item_spacing(app)
+            .finish(),
+        );
+    }
+
+    let state = props.collapsible_block_states.get(&output_message.id)?;
+    let is_expanded = matches!(
+        state.expansion_state,
+        CollapsibleExpansionState::Expanded { .. }
+    );
+    let is_streaming = props.model.status(app).is_streaming();
+    let message_id = output_message.id.clone();
+    let toggle_mouse_state = state.expansion_toggle_mouse_state.clone();
+    let header_title = tool_call.title.clone();
+    let chevron_icon = if is_expanded {
+        Icon::ChevronDown
+    } else {
+        Icon::ChevronRight
+    };
+
+    let header = Hoverable::new(toggle_mouse_state, move |_is_hovered| {
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(status_icon_element)
+            .with_child(
+                Text::new(header_title.clone(), title_font, title_size)
+                    .with_color(text_color)
+                    .with_selectable(false)
+                    .finish(),
+            )
+            .with_child(
+                Container::new(
+                    ConstrainedBox::new(chevron_icon.to_warpui_icon(text_color.into()).finish())
+                        .with_width(status_icon_size - 2.)
+                        .with_height(status_icon_size - 2.)
+                        .finish(),
+                )
+                .with_margin_left(4.)
+                .finish(),
+            )
+            .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(move |ctx, _, _| {
+        ctx.dispatch_typed_action(AIBlockAction::ToggleCollapsibleBlockExpanded(
+            message_id.clone(),
+        ));
+    });
+
+    let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    column.add_child(
+        Container::new(header.finish())
+            .with_horizontal_padding(CONTENT_HORIZONTAL_PADDING)
+            .finish(),
+    );
+    *has_rendered_first_text_section = true;
+
+    let body_indent = CONTENT_HORIZONTAL_PADDING + status_icon_size + ICON_MARGIN;
+    let mut table_section_index = 0;
+    let mut image_section_index = 0;
+
+    fn open_code_block_action(source: CodeSource) -> AIBlockAction {
+        AIBlockAction::OpenCodeInWarp { source }
+    }
+
+    fn copy_code_action(snippet: String) -> AIBlockAction {
+        AIBlockAction::CopyAIBlockCodeSnippet(snippet)
+    }
+
+    let rendered_sections = render_text_sections(
+        TextSectionsProps {
+            model: props.model,
+            starting_text_section_index: text_section_index,
+            starting_code_section_index: code_section_index,
+            starting_table_section_index: &mut table_section_index,
+            starting_image_section_index: &mut image_section_index,
+            sections: &tool_call.body.sections,
+            text_color,
+            selectable: true,
+            find_context: props.find_context,
+            current_working_directory: props.current_working_directory,
+            shell_launch_data: props.shell_launch_data,
+            embedded_code_editor_views: props.editor_views,
+            code_snippet_button_handles: &props
+                .state_handles
+                .normal_response_code_snippet_buttons,
+            table_section_handles: &props.state_handles.table_section_handles,
+            image_section_tooltip_handles: &props.state_handles.image_section_tooltip_handles,
+            is_ai_input_enabled: props.is_ai_input_enabled,
+            open_code_block_action_factory: Some(&open_code_block_action),
+            copy_code_action_factory: Some(&copy_code_action),
+            detected_links: Some(props.detected_links_state),
+            secret_redaction_state: props.secret_redaction_state,
+            is_selecting_text: props.state_handles.selection_handle.is_selecting(),
+            item_spacing: CONTENT_ITEM_VERTICAL_MARGIN,
+            #[cfg(feature = "local_fs")]
+            resolved_code_block_paths: Some(props.resolved_code_block_paths),
+            #[cfg(feature = "local_fs")]
+            resolved_blocklist_image_sources: Some(props.resolved_blocklist_image_sources),
+        },
+        app,
+    );
+
+    if let Some(scrollable) = render_scrollable_collapsible_content(
+        &output_message.id,
+        state,
+        rendered_sections,
+        is_streaming,
+        360.,
+    ) {
+        column.add_child(
+            Container::new(scrollable)
+                .with_padding_left(body_indent)
+                .with_padding_right(CONTENT_HORIZONTAL_PADDING)
+                .finish(),
+        );
+    }
+
+    Some(
+        column
+            .finish()
+            .with_agent_output_item_spacing(app)
+            .finish(),
+    )
+}
+
+#[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+fn local_acp_tool_status_icon(
+    status: crate::ai::agent::local_acp_tool_call::LocalAcpToolCallStatus,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    use crate::ai::agent::local_acp_tool_call::LocalAcpToolCallStatus;
+
+    match status {
+        LocalAcpToolCallStatus::Pending | LocalAcpToolCallStatus::InProgress => {
+            icons::yellow_running_icon(appearance).finish()
+        }
+        LocalAcpToolCallStatus::Completed => {
+            inline_action_icons::green_check_icon(appearance).finish()
+        }
+        LocalAcpToolCallStatus::Failed => inline_action_icons::red_x_icon(appearance).finish(),
+    }
 }
 
 /// Helper to render collapsible reasoning or summarization blocks.

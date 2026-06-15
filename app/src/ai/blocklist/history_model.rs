@@ -24,8 +24,8 @@ use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use super::RequestInput;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata,
-    UpdateConversationError,
+    AIConversation, AIConversationId, ConversationStatus, LocalAcpStreamChunk,
+    ServerAIConversationMetadata, UpdateConversationError,
 };
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
 use crate::ai::agent::task::TaskId;
@@ -1853,6 +1853,28 @@ impl BlocklistAIHistoryModel {
                     }
                 },
             );
+        }
+    }
+
+    #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+    pub(crate) fn append_local_acp_stream_chunk(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        conversation_id: AIConversationId,
+        terminal_view_id: EntityId,
+        chunk: LocalAcpStreamChunk,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            return;
+        };
+        if let Err(error) = conversation.append_local_acp_stream_chunk(
+            stream_id,
+            terminal_view_id,
+            chunk,
+            ctx,
+        ) {
+            log::warn!("Failed to append local ACP stream chunk: {error}");
         }
     }
 

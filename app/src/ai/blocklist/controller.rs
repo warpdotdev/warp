@@ -2263,6 +2263,71 @@ impl BlocklistAIController {
             .expect("Conversation exists- was just created.")
     }
 
+    #[cfg(all(feature = "local_acp", not(target_family = "wasm")))]
+    pub fn start_local_acp_request(
+        &mut self,
+        prompt: String,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(AIConversationId, ResponseStreamId)> {
+        let selected_conversation_id = self.context_model.as_ref(ctx).selected_conversation_id(ctx);
+
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let (conversation_id, task_id) = if let Some(conversation_id) = selected_conversation_id {
+            let Some(task_id) = history_model
+                .as_ref(ctx)
+                .conversation(&conversation_id)
+                .map(|conversation| conversation.get_root_task_id().clone())
+            else {
+                log::warn!("Local ACP selected conversation {conversation_id} was not found");
+                return None;
+            };
+            (conversation_id, task_id)
+        } else {
+            let conversation = self.start_new_conversation_for_request(ctx);
+            (conversation.id(), conversation.get_root_task_id().clone())
+        };
+
+        let stream_id = ResponseStreamId::new_local();
+        let request_input = RequestInput::for_task(
+            vec![AIAgentInput::UserQuery {
+                query: prompt,
+                context: Arc::<[AIAgentContext]>::from([]),
+                static_query_type: None,
+                referenced_attachments: HashMap::new(),
+                user_query_mode: UserQueryMode::Normal,
+                running_command: None,
+                intended_agent: None,
+            }],
+            task_id,
+            &self.active_session,
+            None,
+            conversation_id,
+            self.terminal_view_id,
+            ctx,
+        );
+
+        history_model.update(ctx, |history_model, ctx| {
+            if let Err(error) = history_model.update_conversation_for_new_request_input(
+                request_input,
+                stream_id.clone(),
+                self.terminal_view_id,
+                ctx,
+            ) {
+                log::warn!("Failed to append local ACP request: {error}");
+                return;
+            }
+            history_model.mark_active_conversation_id(conversation_id, self.terminal_view_id, ctx);
+            history_model.update_conversation_status(
+                self.terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        Some((conversation_id, stream_id))
+    }
+
     /// Attempts to send a request to the AI model API. Adds context to the input if it
     /// contains a user query. Returns `Err` if the AI input was not able to be sent due to an
     /// existing in-flight request. Emits an event containing a receiver for the AI's output.

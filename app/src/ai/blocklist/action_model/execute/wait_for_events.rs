@@ -189,8 +189,8 @@ impl WaitForEventsExecutor {
         let Some(pending) = self.pending.remove(&conversation_id) else {
             return;
         };
-        if let Some(gen) = self.conversation_generation.get_mut(&conversation_id) {
-            *gen += 1;
+        if let Some(generation) = self.conversation_generation.get_mut(&conversation_id) {
+            *generation += 1;
         }
         pending.watchdog_handle.abort();
         drop(pending.sender);
