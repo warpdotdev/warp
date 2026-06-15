@@ -249,10 +249,9 @@ pub struct BlocklistAIHistoryModel {
     /// history.
     persisted_queries: Vec<PersistedAIInput>,
 
-    /// Recent agent prompts (text and submission time) read from the `ai_queries` table at
-    ///combined with in-memory conversation queries by [`Self::nld_prompt_history`] for 
-    /// NLD input classification.
-    nld_persisted_prompts: Vec<(String, DateTime<Local>)>,
+    /// Deduplicated prompt-history candidates for NLD input classification, keyed by query
+    /// text with the latest submission timestamp per text.
+    nld_latest_by_text: HashMap<String, DateTime<Local>>,
 
     /// Metadata for both local and ambient agent conversations.
     /// Does not include the actual content of the conversations.
@@ -312,13 +311,15 @@ impl BlocklistAIHistoryModel {
         model
     }
 
-    /// Seeds the lightweight prompt set read from the `ai_queries` table at startup, used
-    /// by [`Self::nld_prompt_history`] for NLD prompt-history matching.
+    /// Seeds the NLD prompt-history index ([`Self::nld_latest_by_text`]) from the `ai_queries`
+    /// snapshot read at startup. 
     pub(crate) fn with_nld_persisted_prompts(
         mut self,
         nld_persisted_prompts: Vec<(String, DateTime<Local>)>,
     ) -> Self {
-        self.nld_persisted_prompts = nld_persisted_prompts;
+        for (text, start_ts) in nld_persisted_prompts {
+            self.index_nld_prompt(text, start_ts);
+        }
         self
     }
 
@@ -995,18 +996,20 @@ impl BlocklistAIHistoryModel {
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), UpdateHistoryError> {
+        let conversation_id = request_input.conversation_id;
         let conversation = self
             .conversations_by_id
-            .get_mut(&request_input.conversation_id)
-            .ok_or(UpdateHistoryError::ConversationNotFound(
-                request_input.conversation_id,
-            ))?;
+            .get_mut(&conversation_id)
+            .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
         conversation.update_for_new_request_input(
             request_input,
             stream_id,
             terminal_view_id,
             ctx,
         )?;
+        // Index the new user query into the NLD prompt-history map so input
+        // classification can match it without rebuilding the map per keystroke.
+        self.index_conversation_nld_prompts(conversation_id, terminal_view_id);
         Ok(())
     }
 
@@ -1051,6 +1054,10 @@ impl BlocklistAIHistoryModel {
             let new_status = conversation.status().clone();
             self.conversations_by_id
                 .insert(conversation_id, conversation);
+
+            // Index restored conversation queries into the NLD prompt-history
+            // map now that the conversation is live in this terminal view.
+            self.index_conversation_nld_prompts(conversation_id, terminal_view_id);
 
             // Emit UpdatedConversationStatus for restored conversations so that
             // the workspace can set tab indicators appropriately
@@ -2230,31 +2237,69 @@ impl BlocklistAIHistoryModel {
             .chain(live_queries_vec)
     }
 
-    /// Returns the prompt-history candidates for NLD input classification: 
-    ///
-    /// Combines the queries from [`Self::all_ai_queries`] (live and cleared in-memory
-    /// conversations plus the small persisted up-arrow set) with the larger lightweight
-    /// set read from the `ai_queries` table at startup. Dedup keeps the latest timestamp per text
-    pub(crate) fn nld_prompt_history(&self) -> Vec<(String, DateTime<Local>)> {
-        let mut latest_by_text: HashMap<String, DateTime<Local>> = HashMap::new();
-        let candidates = self
-            .all_ai_queries(None)
-            .map(|query| (query.query_text, query.start_time))
-            .chain(self.nld_persisted_prompts.iter().cloned());
-        for (text, start_ts) in candidates {
-            if text.trim().is_empty() {
-                continue;
-            }
-            latest_by_text
-                .entry(text)
-                .and_modify(|latest| {
-                    if *latest < start_ts {
-                        *latest = start_ts;
-                    }
-                })
-                .or_insert(start_ts);
+    /// Inserts a single prompt into the NLD prompt-history index ([`Self::nld_latest_by_text`]),
+    /// keeping the latest timestamp per text and dropping whitespace-only prompts.
+    fn index_nld_prompt(&mut self, text: String, start_ts: DateTime<Local>) {
+        if text.trim().is_empty() {
+            return;
         }
-        let mut prompts = latest_by_text.into_iter().collect_vec();
+        self.nld_latest_by_text
+            .entry(text)
+            .and_modify(|latest| {
+                if *latest < start_ts {
+                    *latest = start_ts;
+                }
+            })
+            .or_insert(start_ts);
+    }
+
+    /// Indexes a conversation's user-query prompts into the NLD prompt-history index,
+    /// Called when a conversation is restored into a terminal view or receives a new request input. 
+    /// Entries are never removed, so this only ever adds candidates.
+    fn index_conversation_nld_prompts(
+        &mut self,
+        conversation_id: AIConversationId,
+        terminal_view_id: EntityId,
+    ) {
+        // Don't include it to user personal history if it's from a shared session
+        if self
+            .ambient_agent_terminal_view_ids
+            .contains(&terminal_view_id)
+        {
+            return;
+        }
+        // Confirm if the conversaion is in memory
+        let Some(conversation) = self.conversations_by_id.get(&conversation_id) else {
+            return;
+        };
+        // Don't include it if it's orchestrator prompt
+        let skip_count = if conversation.is_child_agent_conversation() {
+            1
+        } else {
+            0
+        };
+        let prompts: Vec<(String, DateTime<Local>)> = conversation
+            .root_task_exchanges()
+            .skip(skip_count)
+            .filter_map(|exchange| {
+                ai_exchange_to_query_history(exchange, HistoryOrder::DifferentSession)
+                    .map(|query| (query.query_text, query.start_time))
+            })
+            .collect();
+        for (text, start_ts) in prompts {
+            self.index_nld_prompt(text, start_ts);
+        }
+    }
+
+    /// Returns the prompt-history candidates for NLD input classification, sorted
+    /// newest-first.
+    ///
+    pub(crate) fn nld_prompt_history(&self) -> Vec<(String, DateTime<Local>)> {
+        let mut prompts = self
+            .nld_latest_by_text
+            .iter()
+            .map(|(text, start_ts)| (text.clone(), *start_ts))
+            .collect_vec();
         prompts.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
         prompts
     }
@@ -2666,7 +2711,7 @@ impl BlocklistAIHistoryModel {
         self.conversation_transcript_viewer_terminal_view_ids
             .clear();
         self.persisted_queries.clear();
-        self.nld_persisted_prompts.clear();
+        self.nld_latest_by_text.clear();
         self.all_conversations_metadata.clear();
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();

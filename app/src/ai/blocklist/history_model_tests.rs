@@ -840,16 +840,13 @@ fn nld_prompt_history_merges_sources_dedups_and_sorts_newest_first() {
         let now = Local::now();
         let terminal_view_id = EntityId::new();
 
-        // Up-arrow persisted set (small, full rows) for a conversation that is not loaded
-        // in memory, so it flows in via `all_ai_queries`.
-        let persisted_queries = vec![create_persisted_query(
-            "restored query",
-            AIConversationId::new(),
-            now - chrono::Duration::seconds(30),
-        )];
-        // Lightweight NLD set, including a stale duplicate of the live prompt below and a
-        // whitespace-only prompt that must be dropped.
+        // The queries read from sqliteDB ai_queries need to be combined with live conversations
+        // in memory.
         let nld_prompts = vec![
+            (
+                "restored query".to_string(),
+                now - chrono::Duration::seconds(30),
+            ),
             ("deploy it".to_string(), now - chrono::Duration::seconds(10)),
             (
                 "live query".to_string(),
@@ -859,8 +856,7 @@ fn nld_prompt_history_merges_sources_dedups_and_sorts_newest_first() {
         ];
 
         let history_model = app.add_singleton_model(|_| {
-            BlocklistAIHistoryModel::new(persisted_queries, &[])
-                .with_nld_persisted_prompts(nld_prompts)
+            BlocklistAIHistoryModel::new(vec![], &[]).with_nld_persisted_prompts(nld_prompts)
         });
 
         // Add a live in-memory exchange that duplicates an NLD persisted prompt with a
