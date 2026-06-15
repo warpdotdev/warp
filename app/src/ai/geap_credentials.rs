@@ -30,7 +30,7 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{
     ApiKeyManager, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
-    GEAP_REFRESH_LEAD_TIME,
+    LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
 };
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
@@ -54,10 +54,6 @@ const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 /// loop; the floor rate-limits timer-driven re-mints to once per minute.
 const GEAP_MIN_TIMER_DELAY: Duration = Duration::from_secs(60);
 
-/// Cap on provider error detail captured into states/logs. Bodies are
-/// sanitized to this length and never contain token material.
-const ERROR_DETAIL_MAX_CHARS: usize = 512;
-
 const STS_TOKEN_URL: &str = "https://sts.googleapis.com/v1/token";
 const IAM_GENERATE_ACCESS_TOKEN_URL: &str =
     "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateAccessToken";
@@ -69,39 +65,6 @@ const SA_ACCESS_TOKEN_LIFETIME: &str = "3600s";
 
 /// Hard timeout for each Google mint HTTP call.
 const GEAP_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LoadGeapCredentialsError {
-    MintIdentityToken(String),
-    ExchangeToken(String),
-    ImpersonateServiceAccount(String),
-}
-
-impl std::fmt::Display for LoadGeapCredentialsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MintIdentityToken(detail) => write!(
-                f,
-                "Failed to authenticate with Warp while minting Gemini Enterprise credentials \
-                 (check your Warp session and network): {detail}"
-            ),
-            Self::ExchangeToken(detail) => write!(
-                f,
-                "Google rejected the Gemini Enterprise token exchange — ask your workspace admin \
-                 to verify the workload identity pool/provider configuration (`gcpAudience`): \
-                 {detail}"
-            ),
-            Self::ImpersonateServiceAccount(detail) => write!(
-                f,
-                "Service account impersonation failed — ask your workspace admin to verify the \
-                 `roles/iam.workloadIdentityUser` binding on the workspace's service account: \
-                 {detail}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for LoadGeapCredentialsError {}
 
 /// The GEAP enablement decision for the current world, derived from auth +
 /// workspace settings + member toggle. Replaces the old
@@ -363,11 +326,12 @@ fn refresh_geap_credentials_with_options(
     let binding = minted_for.clone();
     let _ = ctx.spawn(
         async move {
-            let identity_token = token_future.await.map_err(|err| {
-                LoadGeapCredentialsError::MintIdentityToken(truncate_error_detail(&format!(
-                    "{err:#}"
-                )))
-            })?;
+            let identity_token =
+                token_future
+                    .await
+                    .map_err(|err| LoadGeapCredentialsError::MintIdentityToken {
+                        detail: format!("{err:#}"),
+                    })?;
             exchange_identity_token_for_geap_credentials(identity_token, &binding).await
         },
         move |manager, result, ctx| apply_geap_mint_result(manager, result, minted_for, force, ctx),
@@ -459,7 +423,7 @@ fn apply_geap_mint_result(
             schedule_geap_token_refresh(manager, ctx);
         }
         Err(err) => {
-            log::error!("GEAP: credential mint failed: {err}");
+            log::error!("GEAP: credential mint failed: {err:?}");
             match previous {
                 // A failed background re-mint keeps the previous token — even
                 // near/past expiry (Google remains the authority on validity;
@@ -481,9 +445,7 @@ fn apply_geap_mint_result(
                 // where the user explicitly asked and needs visible feedback.
                 _ => {
                     manager.set_geap_credentials_state(
-                        GeapCredentialsState::Failed {
-                            message: err.to_string(),
-                        },
+                        GeapCredentialsState::Failed { error: err },
                         ctx,
                     );
                 }
@@ -588,24 +550,26 @@ async fn exchange_identity_token_for_geap_credentials(
         .timeout(GEAP_MINT_REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|err| {
-            LoadGeapCredentialsError::ExchangeToken(truncate_error_detail(&format!(
-                "request failed: {err:#}"
-            )))
+        .map_err(|err| LoadGeapCredentialsError::ExchangeToken {
+            status: None,
+            detail: format!("request failed: {err:#}"),
         })?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(LoadGeapCredentialsError::ExchangeToken(format!(
-            "HTTP {status}: {}",
-            truncate_error_detail(&body)
-        )));
+        return Err(LoadGeapCredentialsError::ExchangeToken {
+            status: Some(status.as_u16()),
+            detail: body,
+        });
     }
-    let sts_response: StsTokenExchangeResponse = response.json().await.map_err(|err| {
-        LoadGeapCredentialsError::ExchangeToken(truncate_error_detail(&format!(
-            "failed to parse the STS response: {err:#}"
-        )))
-    })?;
+    let sts_response: StsTokenExchangeResponse =
+        response
+            .json()
+            .await
+            .map_err(|err| LoadGeapCredentialsError::ExchangeToken {
+                status: None,
+                detail: format!("failed to parse the STS response: {err:#}"),
+            })?;
     log::info!(
         "GEAP: STS exchange succeeded (audience={})",
         binding.audience
@@ -640,25 +604,31 @@ async fn exchange_identity_token_for_geap_credentials(
         .timeout(GEAP_MINT_REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|err| {
-            LoadGeapCredentialsError::ImpersonateServiceAccount(truncate_error_detail(&format!(
-                "request failed: {err:#}"
-            )))
+        .map_err(|err| LoadGeapCredentialsError::ImpersonateServiceAccount {
+            status: None,
+            detail: format!("request failed: {err:#}"),
         })?;
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(LoadGeapCredentialsError::ImpersonateServiceAccount(
-            format!("HTTP {status}: {}", truncate_error_detail(&body)),
-        ));
+        return Err(LoadGeapCredentialsError::ImpersonateServiceAccount {
+            status: Some(status.as_u16()),
+            detail: body,
+        });
     }
     let impersonation: GenerateAccessTokenResponse = response.json().await.map_err(|err| {
-        LoadGeapCredentialsError::ImpersonateServiceAccount(truncate_error_detail(&format!(
-            "failed to parse the impersonation response: {err:#}"
-        )))
+        LoadGeapCredentialsError::ImpersonateServiceAccount {
+            status: None,
+            detail: format!("failed to parse the impersonation response: {err:#}"),
+        }
     })?;
-    let expires_at = parse_generate_access_token_expiry(&impersonation.expire_time)
-        .map_err(LoadGeapCredentialsError::ImpersonateServiceAccount)?;
+    let expires_at =
+        parse_generate_access_token_expiry(&impersonation.expire_time).map_err(|detail| {
+            LoadGeapCredentialsError::ImpersonateServiceAccount {
+                status: None,
+                detail,
+            }
+        })?;
     log::info!(
         "GEAP: service account impersonation succeeded (audience={})",
         binding.audience
@@ -690,12 +660,6 @@ fn parse_generate_access_token_expiry(expire_time: &str) -> Result<SystemTime, S
         .map_err(|err| {
             format!("invalid expireTime `{expire_time}` in the impersonation response: {err}")
         })
-}
-
-/// Caps provider error detail at [`ERROR_DETAIL_MAX_CHARS`] characters
-/// (char-aligned so multi-byte UTF-8 is never split).
-fn truncate_error_detail(detail: &str) -> String {
-    detail.chars().take(ERROR_DETAIL_MAX_CHARS).collect()
 }
 
 #[cfg(test)]

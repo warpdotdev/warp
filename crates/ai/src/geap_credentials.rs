@@ -65,6 +65,27 @@ pub struct GeapMintBinding {
     pub federation: GeapFederation,
 }
 
+/// A GEAP mint failure, tagged by which of the (up to) three mint legs failed
+/// and carrying the raw, untruncated provider detail. This is deliberately NOT
+/// a user-facing message: turning a leg + HTTP status + detail into actionable
+/// copy (401 -> reauth, 403 -> IAM, 404 -> admin config, 429 -> quota) is the
+/// UI layer's job. The HTTP status is a bare `u16` so this type stays
+/// dependency- and target-free (it compiles on wasm, where `http_client` is
+/// unavailable); `u16` carries exactly the numeric status the UI branches on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadGeapCredentialsError {
+    /// Leg 1 - minting the Warp OIDC identity token failed. No HTTP status:
+    /// this is the Warp managed-secrets call, not a Google HTTP response.
+    MintIdentityToken { detail: String },
+    /// Leg 2 - the STS token exchange failed. `status` is the Google HTTP
+    /// status when a response came back; `None` for transport/parse failures
+    /// where no status exists.
+    ExchangeToken { status: Option<u16>, detail: String },
+    /// Leg 3 - service-account impersonation failed. Same status semantics as
+    /// [`Self::ExchangeToken`].
+    ImpersonateServiceAccount { status: Option<u16>, detail: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum GeapCredentialsState {
     #[default]
@@ -81,6 +102,6 @@ pub enum GeapCredentialsState {
         minted_for: GeapMintBinding,
     },
     Failed {
-        message: String,
+        error: LoadGeapCredentialsError,
     },
 }

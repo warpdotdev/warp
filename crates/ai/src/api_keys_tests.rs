@@ -591,7 +591,10 @@ fn api_keys_for_request_omits_geap_token_for_non_loaded_states() {
         GeapCredentialsState::Missing,
         GeapCredentialsState::Disabled,
         GeapCredentialsState::Failed {
-            message: "boom".into(),
+            error: LoadGeapCredentialsError::ExchangeToken {
+                status: None,
+                detail: "boom".into(),
+            },
         },
     ] {
         let mgr = make_manager_with_geap(state);

@@ -134,24 +134,11 @@ fn timer_delay_clamps_to_floor_when_near_or_past_expiry() {
     );
 }
 
-#[test]
-fn error_detail_is_truncated() {
-    let long = "x".repeat(10_000);
-    assert_eq!(truncate_error_detail(&long).len(), ERROR_DETAIL_MAX_CHARS);
-    assert_eq!(truncate_error_detail("short"), "short");
-}
-
-#[test]
-fn error_display_pinpoints_the_failing_leg() {
-    let leg1 = LoadGeapCredentialsError::MintIdentityToken("net down".into()).to_string();
-    assert!(leg1.contains("authenticate with Warp"));
-
-    let leg2 = LoadGeapCredentialsError::ExchangeToken("HTTP 400".into()).to_string();
-    assert!(leg2.contains("gcpAudience"));
-
-    let leg3 = LoadGeapCredentialsError::ImpersonateServiceAccount("HTTP 403".into()).to_string();
-    assert!(leg3.contains("workloadIdentityUser"));
-}
+// The structured `LoadGeapCredentialsError` is intentionally not user-facing
+// (no `Display` prose, no truncation) — the UI layer owns turning a leg + HTTP
+// `status` + raw `detail` into actionable copy. Coverage that the structured
+// error round-trips into `Failed { error }` lives in the mint-completion tests
+// below.
 
 // ── refresh guard / safety net (app harness) ───────────────────
 
@@ -478,7 +465,10 @@ fn mint_completion_failure_restores_servable_previous() {
             // previous token and parks the chain.
             apply_geap_mint_result(
                 manager,
-                Err(LoadGeapCredentialsError::ExchangeToken("boom".into())),
+                Err(LoadGeapCredentialsError::ExchangeToken {
+                    status: None,
+                    detail: "boom".into(),
+                }),
                 current.clone(),
                 false,
                 ctx,
@@ -514,14 +504,21 @@ fn mint_completion_failure_with_unservable_previous_fails() {
             );
             apply_geap_mint_result(
                 manager,
-                Err(LoadGeapCredentialsError::ExchangeToken("boom".into())),
+                Err(LoadGeapCredentialsError::ExchangeToken {
+                    status: None,
+                    detail: "boom".into(),
+                }),
                 current,
                 false,
                 ctx,
             );
             match manager.geap_credentials_state() {
-                GeapCredentialsState::Failed { message } if message.contains("gcpAudience") => {}
-                other => panic!("expected Failed with per-leg copy, got {other:?}"),
+                GeapCredentialsState::Failed {
+                    error: LoadGeapCredentialsError::ExchangeToken { .. },
+                } => {}
+                other => {
+                    panic!("expected Failed carrying the structured leg-2 error, got {other:?}")
+                }
             }
         });
     })
@@ -548,7 +545,10 @@ fn safety_net_noops_on_fresh_token_and_rearms_parked_chain() {
             // the next request re-arms it.
             manager.set_geap_credentials_state(
                 GeapCredentialsState::Failed {
-                    message: "boom".into(),
+                    error: LoadGeapCredentialsError::ExchangeToken {
+                        status: None,
+                        detail: "boom".into(),
+                    },
                 },
                 ctx,
             );
