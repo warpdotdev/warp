@@ -40,19 +40,18 @@ enum RecoveryAction {
 /// re-sending is unsafe, so recovery uses a fresh `ResumeConversation` request.
 fn recovery_action(
     has_received_client_actions: bool,
-    is_retryable: bool,
-    is_transient_failure: bool,
+    is_recoverable: bool,
     has_retry_budget: bool,
     can_attempt_resume_on_error: bool,
     is_online: bool,
 ) -> RecoveryAction {
-    if !has_received_client_actions && is_retryable && has_retry_budget {
+    if !has_received_client_actions && is_recoverable && has_retry_budget {
         if is_online {
             RecoveryAction::RetryNow
         } else {
             RecoveryAction::RetryWhenOnline
         }
-    } else if has_received_client_actions && is_transient_failure && can_attempt_resume_on_error {
+    } else if has_received_client_actions && is_recoverable && can_attempt_resume_on_error {
         RecoveryAction::Resume
     } else {
         RecoveryAction::Fail
@@ -346,8 +345,7 @@ impl ResponseStream {
                 let is_online = NetworkStatus::as_ref(ctx).is_online();
                 match recovery_action(
                     self.has_received_client_actions,
-                    e.is_retryable(),
-                    e.is_transient_failure(),
+                    e.is_recoverable(),
                     self.retry_count < MAX_RETRIES,
                     self.can_attempt_resume_on_error,
                     is_online,
@@ -411,8 +409,7 @@ impl ResponseStream {
             let is_online = NetworkStatus::as_ref(ctx).is_online();
             match recovery_action(
                 self.has_received_client_actions,
-                unexpected_eof.is_retryable(),
-                unexpected_eof.is_transient_failure(),
+                unexpected_eof.is_recoverable(),
                 self.retry_count < MAX_RETRIES,
                 self.can_attempt_resume_on_error,
                 is_online,
@@ -477,8 +474,7 @@ impl ResponseStream {
                     self.has_received_client_actions,
                 );
                 scope.set_tag("error", format!("{error:?}"));
-                scope.set_tag("is_retryable", error.is_retryable());
-                scope.set_tag("is_transient_failure", error.is_transient_failure());
+                scope.set_tag("is_recoverable", error.is_recoverable());
                 scope.set_tag(
                     "will_attempt_resume",
                     self.should_resume_conversation_after_stream_finished,

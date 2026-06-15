@@ -4,63 +4,45 @@ use super::{AIApiError, DeserializationError};
 
 /// Transient server-side statuses are resume-eligible; client errors are not.
 #[test]
-fn error_status_transience_follows_status_class() {
+fn error_status_recoverability_follows_status_class() {
     assert!(
         AIApiError::ErrorStatus(http::StatusCode::INTERNAL_SERVER_ERROR, "boom".into())
-            .is_transient_failure()
+            .is_recoverable()
     );
+    assert!(AIApiError::ErrorStatus(http::StatusCode::BAD_GATEWAY, "boom".into()).is_recoverable());
     assert!(
-        AIApiError::ErrorStatus(http::StatusCode::BAD_GATEWAY, "boom".into())
-            .is_transient_failure()
+        AIApiError::ErrorStatus(http::StatusCode::REQUEST_TIMEOUT, "slow".into()).is_recoverable()
     );
-    assert!(
-        AIApiError::ErrorStatus(http::StatusCode::REQUEST_TIMEOUT, "slow".into())
-            .is_transient_failure()
-    );
-    assert!(
-        !AIApiError::ErrorStatus(http::StatusCode::NOT_FOUND, "nope".into()).is_transient_failure()
-    );
+    assert!(!AIApiError::ErrorStatus(http::StatusCode::NOT_FOUND, "nope".into()).is_recoverable());
     assert!(
         !AIApiError::ErrorStatus(http::StatusCode::UNPROCESSABLE_ENTITY, "bad".into())
-            .is_transient_failure()
+            .is_recoverable()
     );
 }
 
-/// Application-level failures must not trigger an automatic conversation resume, even
-/// though the in-request retry path treats them as retryable: a resume would fail
-/// identically (quota) or add load the server asked us to shed (overloaded).
+/// Application-level and misc failures are all recoverable — a fresh request may
+/// still succeed.
 #[test]
-fn application_level_failures_are_not_transient() {
-    let quota = AIApiError::QuotaLimit {
+fn application_level_and_misc_failures_are_recoverable() {
+    assert!(AIApiError::QuotaLimit {
         user_display_message: None,
-    };
-    assert!(
-        quota.is_retryable(),
-        "precondition: quota is retryable in-request"
-    );
-    assert!(!quota.is_transient_failure());
-
-    assert!(AIApiError::ServerOverloaded.is_retryable());
-    assert!(!AIApiError::ServerOverloaded.is_transient_failure());
-
-    assert!(!AIApiError::NoContextFound.is_transient_failure());
-    assert!(!AIApiError::Other(anyhow!("misc")).is_transient_failure());
-    assert!(!AIApiError::Stream {
+    }
+    .is_recoverable());
+    assert!(AIApiError::ServerOverloaded.is_recoverable());
+    assert!(AIApiError::NoContextFound.is_recoverable());
+    assert!(AIApiError::Other(anyhow!("misc")).is_recoverable());
+    assert!(AIApiError::Stream {
         stream_type: "test",
         source: anyhow!("protocol error"),
     }
-    .is_transient_failure());
+    .is_recoverable());
 
     let json_err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
-    assert!(
-        !AIApiError::Deserialization(DeserializationError::Json(json_err)).is_transient_failure()
-    );
+    assert!(AIApiError::Deserialization(DeserializationError::Json(json_err)).is_recoverable());
 }
 
-/// An unexpected EOF is a transport-level failure: the request can be retried and the
-/// conversation is resume-eligible.
+/// An unexpected EOF (clean transport cut before the finished event) is recoverable.
 #[test]
-fn unexpected_eof_is_retryable_and_transient() {
-    assert!(AIApiError::UnexpectedEof.is_retryable());
-    assert!(AIApiError::UnexpectedEof.is_transient_failure());
+fn unexpected_eof_is_recoverable() {
+    assert!(AIApiError::UnexpectedEof.is_recoverable());
 }

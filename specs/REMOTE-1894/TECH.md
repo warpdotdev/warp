@@ -37,11 +37,11 @@ Key files:
 
 ### Strict retry/resume split
 
-[`response_stream.rs:41`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/blocklist/controller/response_stream.rs#L41): pure `recovery_action(has_received_client_actions, is_retryable, is_transient_failure, has_retry_budget, can_attempt_resume_on_error, is_online) -> {RetryNow, RetryWhenOnline, Resume, Fail}`:
+[`response_stream.rs:41`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/ai/blocklist/controller/response_stream.rs#L41): pure `recovery_action(has_received_client_actions, is_recoverable, has_retry_budget, can_attempt_resume_on_error, is_online) -> {RetryNow, RetryWhenOnline, Resume, Fail}`:
 
 - No actions yet + retryable + budget (3) → retry, verbatim re-send (I2). Offline parks the retry (`RetryWhenOnline`).
 - Actions received + transient + resume-eligible → one-shot `ResumeConversation` (I3); resumes run with `can_attempt_resume_on_error = false`, bounding recovery (I9).
-- Everything else → `Fail` (terminal). Resume eligibility uses `AIApiError::is_transient_failure()` ([`server_api.rs:341`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/server/server_api.rs#L341)) — narrower than `is_retryable()`, excluding quota/overload (I12).
+- Everything else → `Fail` (terminal). Recovery eligibility (retry and resume) uses `AIApiError::is_recoverable()` ([`server_api.rs:341`](https://github.com/warpdotdev/warp/blob/84276e0732860798fa49eb7372e6ee90cdf1728b/app/src/server/server_api.rs#L341)) (I12).
 
 The controller passes `recovery_pending = should_resume_conversation_after_stream_finished()` into the history model; `will_attempt_resume` on `RenderableAIError` remains rendering-only.
 
@@ -62,7 +62,7 @@ The server always sends `StreamFinished`, but a transport cut between chunks rea
 Unit (all in-tree, `cargo nextest run -p warp --lib`):
 
 - `response_stream_tests.rs` — exhaustive `recovery_action` matrix: retry/park/fail pre-actions (I2, I9, I13), resume gating post-actions (I3, I9), budget exhaustion and non-retryable → fail (I10, I12).
-- `server_api_tests.rs` — `is_transient_failure` classification: 5xx/timeout/transport transient; quota/overload/4xx/JSON not (I12); `UnexpectedEof` retryable + transient (I1).
+- `server_api_tests.rs` — `is_recoverable` classification: 5xx/timeout/transport and app-level (quota/overload/misc/JSON) recoverable, other 4xx not (I12); `UnexpectedEof` recoverable (I1).
 - `history_model_tests.rs` — `recovery_pending` → `TransientError` and no terminal derived outcome (I5, I6 upstream); structured exchange error preserved through conversion; non-recoverable error stays terminal.
 - `local_agent_task_sync_model_tests.rs` — `TransientError` → `IN_PROGRESS` with no status message (I6); `will_attempt_resume` hint ignored for terminal classification (I10, I12).
 
@@ -80,7 +80,7 @@ Not covered by automated tests (manual/review only): controller cancellation-dur
 
 - **Stuck "Reconnecting"**: any path that sets `TransientError` and never delivers a recovery would hang the UI state. Mitigated by the driver's 120s deadline (cloud), the one-shot resume contract, and the cancellation flip to `Cancelled`; restore-from-disk degrades it to `Error`.
 - **Behavior change**: quota/overload failures no longer set the resume flag (master did). Intentional — a resume would fail identically — but visible to anyone who relied on the old flag.
-- **Sentry volume**: synthesized truncations now report (with `will_attempt_resume`/`is_transient_failure` tags) — expect new `UnexpectedEof` events that previously appeared as the generic EOF fallback.
+- **Sentry volume**: synthesized truncations now report (with `will_attempt_resume`/`is_recoverable` tags) — expect new `UnexpectedEof` events that previously appeared as the generic EOF fallback.
 
 ## Parallelization
 
