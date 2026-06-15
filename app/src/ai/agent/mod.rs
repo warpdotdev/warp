@@ -702,14 +702,6 @@ impl RenderableAIError {
 
 impl From<&AIApiError> for RenderableAIError {
     fn from(value: &AIApiError) -> Self {
-        // Generic fallback rendering for errors without a more specific user-facing variant.
-        let generic = || Self::Other {
-            error_message: format!("Request failed with error: {value:?}"),
-            will_attempt_resume: false,
-            waiting_for_network: false,
-        };
-        // Exhaustive over `AIApiError` (no wildcard) so a new variant forces a deliberate
-        // decision about how it should render.
         match value {
             AIApiError::QuotaLimit {
                 user_display_message,
@@ -724,7 +716,11 @@ impl From<&AIApiError> for RenderableAIError {
                 if Self::is_transient_network_transport_error(error) {
                     Self::transient_network_error(false, false)
                 } else {
-                    generic()
+                    Self::Other {
+                        error_message: format!("Request failed with error: {value:?}"),
+                        will_attempt_resume: false,
+                        waiting_for_network: false,
+                    }
                 }
             }
             AIApiError::StreamTruncated => Self::transient_network_error(false, false),
@@ -732,7 +728,11 @@ impl From<&AIApiError> for RenderableAIError {
             | AIApiError::NoContextFound
             | AIApiError::ErrorStatus(_, _)
             | AIApiError::Other(_)
-            | AIApiError::Stream { .. } => generic(),
+            | AIApiError::Stream { .. } => Self::Other {
+                error_message: format!("Request failed with error: {value:?}"),
+                will_attempt_resume: false,
+                waiting_for_network: false,
+            },
         }
     }
 }

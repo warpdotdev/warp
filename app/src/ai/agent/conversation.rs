@@ -877,6 +877,7 @@ impl AIConversation {
     pub(crate) fn set_status_for_test(&mut self, status: ConversationStatus) {
         self.status = status;
     }
+
     pub fn status_error_message(&self) -> Option<&str> {
         self.status_error_message.as_deref()
     }
