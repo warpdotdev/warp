@@ -5,6 +5,9 @@ use {
     crate::report_error,
     crate::terminal::local_tty::server::TerminalServer,
     anyhow::{bail, Context},
+    std::cmp::Reverse,
+    std::collections::HashMap,
+    std::ffi::OsString,
     std::process::Child,
 };
 
@@ -189,6 +192,19 @@ impl PtySpawner {
                 "Failed to spawn pty via terminal server; falling back to spawning locally...",
             );
             if let Err(err) = result {
+                // E2BIG means the combined environment + argument block passed to execve
+                // exceeds the kernel's ARG_MAX limit. This is deterministic — retrying from
+                // the main process with the same PtyOptions would hit the same limit — so
+                // fail immediately with a diagnostic message instead of silently falling back
+                // and then waiting for the bootstrap timeout.
+                if is_e2big(&err) {
+                    log_e2big_env_diagnostics(&options.env_vars);
+                    return Err(err.context(
+                        "Shell spawn failed: the combined environment is too large (E2BIG / \"Argument list too long\"). \
+                         Check the Warp logs for a breakdown of env var sizes. \
+                         Reduce or remove large environment variables from the run configuration.",
+                    ));
+                }
                 report_error!(err);
                 is_fallback = true;
             } else {
@@ -260,3 +276,65 @@ impl Entity for PtySpawner {
 }
 
 impl SingletonEntity for PtySpawner {}
+
+/// Returns `true` if the error (or any cause in its chain) indicates that
+/// `execve` failed with `ENAMETOOLONG` / E2BIG ("Argument list too long").
+///
+/// The terminal-server IPC path stringifies the raw `io::Error`, so we cannot
+/// reliably downcast; instead we check the formatted error message as a
+/// fallback.
+#[cfg(unix)]
+fn is_e2big(err: &anyhow::Error) -> bool {
+    // Try the "real" io::Error in the chain first (direct-spawn path).
+    if err.chain().any(|e| {
+        e.downcast_ref::<std::io::Error>()
+            .and_then(|e| e.raw_os_error())
+            .is_some_and(|code| code == libc::E2BIG)
+    }) {
+        return true;
+    }
+    // Fall back to string matching for the IPC path where the io::Error
+    // was serialised to a String before being sent back to the client.
+    let msg = format!("{err:#}");
+    msg.contains("os error 7") || msg.contains("Argument list too long")
+}
+
+/// Logs the names and byte-lengths (not values) of the env vars that are
+/// likely contributing to an E2BIG failure, to help diagnose oversized
+/// environment configurations in cloud runs.
+#[cfg(unix)]
+fn log_e2big_env_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
+    log::error!(
+        "E2BIG env diagnostics: shell spawn failed because the combined \
+         environment block exceeds the kernel ARG_MAX limit."
+    );
+
+    // Log the additional env vars supplied via PtyOptions.
+    let mut extra: Vec<(&OsString, usize)> = extra_env_vars
+        .iter()
+        .map(|(k, v)| (k, k.len() + v.len() + 2))
+        .collect();
+    extra.sort_by_key(|(_, size)| Reverse(*size));
+    log::error!("  PtyOptions env_vars ({} entries):", extra_env_vars.len());
+    for (key, size) in extra.iter().take(20) {
+        log::error!("    {:?} — {} bytes", key, size);
+    }
+
+    // Log the largest vars from the inherited process environment.
+    let mut inherited: Vec<(OsString, usize)> = std::env::vars_os()
+        .map(|(k, v)| {
+            let size = k.len() + v.len() + 2;
+            (k, size)
+        })
+        .collect();
+    inherited.sort_by_key(|(_, size)| Reverse(*size));
+    let total: usize = inherited.iter().map(|(_, s)| s).sum();
+    log::error!(
+        "  Inherited process env ({} vars, ~{} bytes total):",
+        inherited.len(),
+        total
+    );
+    for (key, size) in inherited.iter().take(20) {
+        log::error!("    {:?} — {} bytes", key, size);
+    }
+}

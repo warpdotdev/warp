@@ -21,10 +21,15 @@ fn assert_state_and_code(
 
 #[test]
 fn bootstrap_failed_is_error_with_internal() {
-    assert_state_and_code(
-        AgentDriverError::BootstrapFailed,
-        AgentTaskState::Error,
-        Some(PlatformErrorCode::InternalError),
+    let (state, update) = classify_driver_error(&AgentDriverError::BootstrapFailed {
+        reason: "Argument list too long (os error 7)".to_string(),
+    });
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(
+        update.message.contains("Argument list too long"),
+        "message should include the specific failure reason: {:?}",
+        update.message
     );
 }
 

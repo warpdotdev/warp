@@ -436,8 +436,8 @@ pub enum AgentDriverError {
     NotLoggedIn,
     #[error("Saved prompt not found for id {0}")]
     AIWorkflowNotFound(String),
-    #[error("Terminal bootstrap failed")]
-    BootstrapFailed,
+    #[error("Terminal bootstrap failed: {reason}")]
+    BootstrapFailed { reason: String },
     #[error("Unable to share agent session")]
     ShareSessionFailed {
         #[source]
@@ -1831,8 +1831,7 @@ impl AgentDriver {
                 foreground
                     .spawn(|me, ctx| {
                         me.terminal_driver
-                            .as_ref(ctx)
-                            .wait_for_session_bootstrapped()
+                            .update(ctx, |driver, _| driver.wait_for_session_bootstrapped())
                     })
                     .await?
                     .await

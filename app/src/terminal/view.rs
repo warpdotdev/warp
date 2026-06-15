@@ -1856,6 +1856,12 @@ pub enum Event {
     SessionBootstrapped,
     AnonymousUserSignup,
     ShellSpawned(ShellType),
+    /// Emitted when the PTY failed to spawn. Carries a human-readable reason
+    /// string (not secret values) so the terminal driver can surface a
+    /// specific error without waiting for the full bootstrap timeout.
+    PtySpawnFailed {
+        reason: String,
+    },
 
     /// This terminal pane has initiated a file upload to a remote host.
     CopyFileToRemote {
@@ -15804,6 +15810,10 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.pty_spawn_failed = true;
+        // Emit before the banner so the terminal driver can cancel its
+        // bootstrap wait immediately, without waiting for the 60 s timeout.
+        let reason = format!("{pty_spawn_error:#}");
+        ctx.emit(Event::PtySpawnFailed { reason });
         self.insert_shell_process_terminated_banner(
             shell_terminated_banner::TerminationType::PtySpawnFailure { pty_spawn_error },
             ctx,

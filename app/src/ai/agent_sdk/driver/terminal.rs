@@ -8,10 +8,8 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::channel::oneshot;
-use futures::TryFutureExt as _;
 use session_sharing_protocol::common::{Role, SessionId};
 use session_sharing_protocol::sharer::SessionRetentionReason;
-use tracing::Instrument as _;
 use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
@@ -100,6 +98,13 @@ pub(crate) struct TerminalDriver {
     /// Receiver for the session sharing result. Present when sharing is expected
     /// and `wait_for_session_shared` has not yet been called.
     session_share_rx: Option<oneshot::Receiver<Result<(), ShareSessionError>>>,
+    /// Sender half of the PTY-spawn-failure channel. When `PtySpawnFailed` fires
+    /// before bootstrap completes, the reason is sent here so that
+    /// `wait_for_session_bootstrapped` can race against it and fail immediately
+    /// instead of waiting for the full 60 s timeout.
+    spawn_failure_tx: Option<oneshot::Sender<String>>,
+    /// Receiver half consumed by `wait_for_session_bootstrapped`.
+    spawn_failure_rx: Option<oneshot::Receiver<String>>,
     pending_share_requests: Vec<ShareRequest>,
     waiting_command: Option<oneshot::Sender<ExitCode>>,
 
@@ -248,11 +253,15 @@ impl TerminalDriver {
             session_bootstrapped.set();
         }
 
+        let (spawn_failure_tx, spawn_failure_rx) = oneshot::channel();
+
         Self {
             terminal_view,
             session_bootstrapped,
             shared_session_id: None,
             session_share_rx,
+            spawn_failure_tx: Some(spawn_failure_tx),
+            spawn_failure_rx: Some(spawn_failure_rx),
             pending_share_requests: Vec::new(),
             waiting_command: None,
             pending_command_start: None,
@@ -539,27 +548,54 @@ impl TerminalDriver {
 
     /// Returns a future that resolves when the session has bootstrapped.
     ///
-    /// This only waits for the `SessionBootstrapped` terminal view event.
+    /// Races the 60 s bootstrap timeout against a `PtySpawnFailed` signal:
+    /// if the PTY failed to spawn before bootstrap completes, the failure
+    /// reason is delivered immediately via the `spawn_failure_rx` channel
+    /// and we return `BootstrapFailed` without waiting for the timeout.
     pub fn wait_for_session_bootstrapped(
-        &self,
+        &mut self,
     ) -> impl Future<Output = Result<(), AgentDriverError>> {
         let session_bootstrapped = self.session_bootstrapped.clone();
+        let spawn_failure_rx = self.spawn_failure_rx.take();
 
         async move {
-            session_bootstrapped
-                .wait()
-                .with_timeout(TERMINAL_SESSION_BOOTSTRAP_TIMEOUT)
-                .map_err(|err| {
-                    log::error!("Timed out waiting for session bootstrap");
-                    tracing::error!(error = %err);
+            let reason = if let Some(failure_rx) = spawn_failure_rx {
+                // Race: bootstrap success vs. early PTY-spawn failure.
+                let success_future = session_bootstrapped
+                    .wait()
+                    .with_timeout(TERMINAL_SESSION_BOOTSTRAP_TIMEOUT);
+                futures::pin_mut!(success_future);
+                futures::pin_mut!(failure_rx);
+                match futures::future::select(success_future, failure_rx).await {
+                    // Bootstrap completed successfully.
+                    futures::future::Either::Left((Ok(()), _)) => return Ok(()),
+                    // Timed out before bootstrap or spawn-failure signal.
+                    futures::future::Either::Left((Err(_), _)) => {
+                        "Terminal session did not start within the expected time. \
+                         Check the Warp logs for details."
+                            .to_string()
+                    }
+                    // PTY spawn failed — use the specific reason from the view.
+                    futures::future::Either::Right((Ok(reason), _)) => reason,
+                    // Sender dropped without sending (shouldn't happen in practice).
+                    futures::future::Either::Right((Err(_), _)) => return Ok(()),
+                }
+            } else {
+                // No failure channel — wait for bootstrap with the standard timeout.
+                match session_bootstrapped
+                    .wait()
+                    .with_timeout(TERMINAL_SESSION_BOOTSTRAP_TIMEOUT)
+                    .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(_) => "Terminal session did not start within the expected time. \
+                               Check the Warp logs for details."
+                        .to_string(),
+                }
+            };
 
-                    AgentDriverError::BootstrapFailed
-                })
-                .instrument(tracing::info_span!(
-                    "wait_for_session_bootstrapped",
-                    tags.cloud_agent = true
-                ))
-                .await
+            log::error!("Terminal bootstrap failed: {reason}");
+            Err(AgentDriverError::BootstrapFailed { reason })
         }
     }
 
@@ -679,6 +715,14 @@ impl TerminalDriver {
         match event {
             crate::terminal::view::Event::SessionBootstrapped => {
                 self.session_bootstrapped.set();
+            }
+            crate::terminal::view::Event::PtySpawnFailed { reason } => {
+                // Signal the bootstrap waiter immediately so it doesn't wait
+                // for the full 60 s timeout when a spawn failure has already
+                // been confirmed.
+                if let Some(tx) = self.spawn_failure_tx.take() {
+                    let _ = tx.send(reason.clone());
+                }
             }
             crate::terminal::view::Event::SlowBootstrap => {
                 ctx.emit(TerminalDriverEvent::SlowBootstrap);
