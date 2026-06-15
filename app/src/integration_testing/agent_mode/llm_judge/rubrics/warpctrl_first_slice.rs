@@ -25,12 +25,12 @@ pub static WARPCTRL_FIRST_SLICE: RubricSpec = RubricSpec {
         },
         RubricSpecItem {
             id: "B-tab-create",
-            description: "`warpctrl tab create` end-to-end mutates the running app and returns success envelope with `instance_id` and `tab_id`.",
+            description: "`warpctrl tab create` end-to-end mutates the running app and returns a success envelope with instance identity and created-tab metadata sufficient to identify the visible result (for example `tab.count` and `tab.active_index`). A stable `tab_id` is acceptable but not required.",
             spec_section: "PRODUCT.md §27, TECH.md §1 response shape",
         },
         RubricSpecItem {
             id: "B-allowlist",
-            description: "Unknown actions return `unsupported_action` or `not_allowlisted`; not silently forwarded to arbitrary internal dispatch.",
+            description: "Unknown or unimplemented actions are not executed or forwarded to arbitrary internal dispatch, and direct protocol requests receive a structured control error envelope with `unsupported_action`, `not_allowlisted`, or an equivalent stable action-unsupported code rather than a generic HTTP deserialization error.",
             spec_section: "PRODUCT.md §2",
         },
         RubricSpecItem {
@@ -50,7 +50,7 @@ pub static WARPCTRL_FIRST_SLICE: RubricSpec = RubricSpec {
         },
         RubricSpecItem {
             id: "S-inside-warp-reject",
-            description: "`InvocationContext::InsideWarp` and `ExecutionContextProof::VerifiedWarpTerminal` are rejected by the credential broker with a structured error (proof broker is reserved).",
+            description: "The credential broker rejects both `InvocationContext::InsideWarp` (with any proof) and `InvocationContext::OutsideWarp` paired with `ExecutionContextProof::VerifiedWarpTerminal`, returning a structured error because the proof broker is reserved.",
             spec_section: "TECH.md §0, §4",
         },
         RubricSpecItem {
