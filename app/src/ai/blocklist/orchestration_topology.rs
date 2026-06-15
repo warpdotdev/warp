@@ -264,21 +264,16 @@ pub(crate) enum SubtreeRoot {
     Task(AmbientAgentTaskId),
 }
 
-/// Returns the artifacts for the orchestration tree rooted at `root`, in
-/// pre-order and deduped by artifact identity (first occurrence wins).
+/// Returns the subtree's artifacts in pre-order, deduped by identity (first
+/// occurrence wins). Reads only in-memory state; never fetches.
 ///
-/// The same tree is stored from two sides — run records link children via
-/// [`AmbientAgentTask::children`], conversations via the parent → children
-/// index — and either side may be missing nodes (remote children often have
-/// no local conversation; local children may have no loaded run record), so
-/// the walk follows both edge types. Each node contributes its conversation
-/// artifacts (falling back to cached historical metadata when not loaded)
-/// followed by the artifacts on its run record in `tasks`. The run record
-/// matters for remote children: their artifact events are never applied to
-/// the local placeholder conversation, so the run is the only local source.
-/// Reads only in-memory state — never fetches; a `Task` root not present
-/// in `tasks` contributes nothing. For non-orchestration roots this degrades
-/// to the root's own artifacts.
+/// Walks both the run-record child links ([`AmbientAgentTask::children`]) and
+/// the conversation parent → children index, since either side may be missing
+/// nodes (remote children often lack a local conversation; local children may
+/// have no loaded run record). Each node contributes its conversation artifacts
+/// (or cached metadata when unloaded) plus its run record's artifacts — the
+/// only local source for a remote child's artifacts. A `Task` root absent from
+/// `tasks` contributes nothing.
 pub(crate) fn aggregated_subtree_artifacts<'a>(
     history: &'a BlocklistAIHistoryModel,
     tasks: &'a HashMap<AmbientAgentTaskId, AmbientAgentTask>,

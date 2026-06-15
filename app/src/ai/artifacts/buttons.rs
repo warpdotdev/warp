@@ -2,12 +2,17 @@ use std::sync::Arc;
 
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::elements::{ChildView, Element, Empty, ParentElement, Wrap};
-use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use warpui::elements::{
+    ChildView, Container, CrossAxisAlignment, Element, Empty, Flex, MainAxisSize, ParentElement,
+    Text, Wrap,
+};
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::{file_button_label, Artifact};
+use crate::appearance::Appearance;
 use crate::notebooks::NotebookId;
 use crate::terminal::input::MenuPositioning;
+use crate::ui_components::blended_colors;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, SecondaryTheme, TooltipAlignment,
 };
@@ -92,18 +97,51 @@ impl View for ArtifactButtonsRow {
         "ArtifactButtonsRow"
     }
 
-    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
         if self.buttons.is_empty() {
             return Empty::new().finish();
         }
 
-        Wrap::row()
+        let pills = Wrap::row()
             .with_spacing(BUTTON_SPACING)
             .with_run_spacing(BUTTON_SPACING)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_children(
                 self.buttons
                     .iter()
+                    .take(MAX_VISIBLE_ARTIFACT_BUTTONS)
                     .map(|button| ChildView::new(button).finish()),
+            )
+            .finish();
+
+        let hidden_count = self
+            .buttons
+            .len()
+            .saturating_sub(MAX_VISIBLE_ARTIFACT_BUTTONS);
+        if hidden_count == 0 {
+            return pills;
+        }
+
+        // Plain, muted text on its own line below the pills — deliberately not a
+        // button/chip, so it has no hover or click affordance.
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let more_label = Text::new(
+            format!("+{hidden_count} more"),
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .finish();
+
+        Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(pills)
+            .with_child(
+                Container::new(more_label)
+                    .with_margin_top(BUTTON_SPACING)
+                    .finish(),
             )
             .finish()
     }
@@ -214,26 +252,7 @@ fn collect_buttons(
         }));
     }
 
-    if buttons.len() > MAX_VISIBLE_ARTIFACT_BUTTONS {
-        let hidden_count = buttons.len() - MAX_VISIBLE_ARTIFACT_BUTTONS;
-        buttons.truncate(MAX_VISIBLE_ARTIFACT_BUTTONS);
-        let theme = theme.clone();
-        buttons.push(ctx.add_typed_action_view(move |_| make_overflow_button(hidden_count, theme)));
-    }
-
     buttons
-}
-
-/// Builds the non-interactive "+N more" pill shown when the artifact count
-/// exceeds [`MAX_VISIBLE_ARTIFACT_BUTTONS`]. Has no click handler; users open
-/// the run itself to see the full artifact set.
-fn make_overflow_button(hidden_count: usize, theme: Arc<dyn ActionButtonTheme>) -> ActionButton {
-    ActionButton::new_with_boxed_theme(format!("+{hidden_count} more"), theme)
-        .with_size(ButtonSize::Small)
-        .with_tooltip("Open this run to see all artifacts")
-        .with_tooltip_alignment(TooltipAlignment::Center)
-        .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
-        .with_max_label_width(BUTTON_MAX_TEXT_WIDTH)
 }
 
 fn make_plan_button(

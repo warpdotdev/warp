@@ -82,7 +82,7 @@ const CHILD_RUNS_FETCH_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// Upper bound on the number of child runs fetched for a single parent across
 /// pagination, so a pathological topology can't drive unbounded paging.
-const MAX_CHILD_RUNS_PER_PARENT: usize = 1_000;
+const MAX_CHILD_RUNS_PER_PARENT: usize = 500;
 
 /// Dedup + backoff state for the one-shot child-run fetch, keyed per parent run.
 enum ChildRunsFetchState {
