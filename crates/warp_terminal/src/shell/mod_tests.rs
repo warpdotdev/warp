@@ -165,6 +165,29 @@ fn test_from_markdown_language_spec() {
 }
 
 #[test]
+fn test_shell_command_to_get_executables_avoids_bash_bulk_type_expansion() {
+    let bash_command = ShellType::Bash.shell_command_to_get_executables();
+
+    assert!(!bash_command.contains("type -t ${COMMANDS[@]}"));
+    assert!(bash_command.contains(r#"type -t "$cmd""#));
+    assert!(bash_command.contains("compgen -c | while IFS= read -r cmd"));
+    assert!(bash_command.contains("seen+="));
+
+    assert_eq!(
+        ShellType::Zsh.shell_command_to_get_executables(),
+        "builtin print -l -- ${(ok)commands}",
+    );
+    assert_eq!(
+        ShellType::Fish.shell_command_to_get_executables(),
+        "complete -C --escape '' || complete -C ''",
+    );
+    assert_eq!(
+        ShellType::PowerShell.shell_command_to_get_executables(),
+        r#"$names = Get-Command -CommandType Application | Select-Object -ExpandProperty Name; $text = [string]::Join([Environment]::NewLine, $names); $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)"#,
+    );
+}
+
+#[test]
 fn test_fish_parse_abbrs() {
     let raw_abbrs = "abbr -a -U -- gco 'git checkout'
 abbr -a -g -- gq 'git commit'

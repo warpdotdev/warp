@@ -608,10 +608,10 @@ impl ShellType {
                 // doesn't include any info about what the type of the word is), we filter down to
                 // executable "file"s. Note that we do this at the shell level since if we did this
                 // as a post-process step, it would require N filesystem calls, which would not scale
-                // well for remote sessions. Additionally, we invoke `type` once, passing it the full
-                // list of commands, to avoid a lot of overhead invoking it thousands of times for
-                // systems with a lot of installed commands.
-                r#"COMMANDS=($(compgen -c)); TYPES=($(type -t ${COMMANDS[@]})); for i in "${!COMMANDS[@]}"; do if [[ ${TYPES[$i]} == "file" ]]; then echo ${COMMANDS[$i]}; fi; done"#
+                // well for remote sessions. We stream the commands through a dedupe step and check
+                // each command individually so Bash 5.3 does not need to expand a large PATH into a
+                // single bulk `type -t ${COMMANDS[@]}` call, which can segfault.
+                r#"seen=$'\n'; compgen -c | while IFS= read -r cmd; do if [[ $seen != *$'\n'"$cmd"$'\n'* ]]; then seen+="$cmd"$'\n'; if [[ $(type -t "$cmd") == "file" ]]; then printf '%s\n' "$cmd"; fi; fi; done"#
             }
             ShellType::Fish => {
                 // Although `complete -C` returns more than just executables, we don't check the type here
