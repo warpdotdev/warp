@@ -208,7 +208,7 @@ fn subscribe_to_start_agent_requests(
     captured.update(app, |_, ctx| {
         ctx.subscribe_to_model(start_agent_executor, |captured, event, _ctx| {
             if let StartAgentExecutorEvent::CreateAgent(request) = event {
-                captured.0.push(request.clone());
+                captured.0.push(request.as_ref().clone());
             }
         });
     });

@@ -7456,7 +7456,7 @@ impl TerminalView {
     ) {
         match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
-                ctx.emit(Event::StartAgentConversation(request.clone()));
+                ctx.emit(Event::StartAgentConversation(request.as_ref().clone()));
             }
             StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
                 // The child failed at launch and never started a server-side

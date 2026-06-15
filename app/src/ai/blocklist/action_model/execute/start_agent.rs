@@ -493,15 +493,17 @@ impl StartAgentExecutor {
             },
         );
 
-        ctx.emit(StartAgentExecutorEvent::CreateAgent(StartAgentRequest {
-            id: request_id,
-            name: name.clone(),
-            prompt,
-            execution_mode,
-            lifecycle_subscription: lifecycle_subscription.clone(),
-            parent_conversation_id,
-            parent_run_id,
-        }));
+        ctx.emit(StartAgentExecutorEvent::CreateAgent(Box::new(
+            StartAgentRequest {
+                id: request_id,
+                name: name.clone(),
+                prompt,
+                execution_mode,
+                lifecycle_subscription: lifecycle_subscription.clone(),
+                parent_conversation_id,
+                parent_run_id,
+            },
+        )));
 
         ActionExecution::new_async(async move { receiver.recv().await }, move |result, _ctx| {
             match result {
@@ -546,15 +548,17 @@ impl StartAgentExecutor {
                 sender,
             },
         );
-        ctx.emit(StartAgentExecutorEvent::CreateAgent(StartAgentRequest {
-            id: request_id,
-            name,
-            prompt,
-            execution_mode,
-            lifecycle_subscription,
-            parent_conversation_id,
-            parent_run_id,
-        }));
+        ctx.emit(StartAgentExecutorEvent::CreateAgent(Box::new(
+            StartAgentRequest {
+                id: request_id,
+                name,
+                prompt,
+                execution_mode,
+                lifecycle_subscription,
+                parent_conversation_id,
+                parent_run_id,
+            },
+        )));
         receiver
     }
 
@@ -619,7 +623,7 @@ impl Entity for StartAgentExecutor {
 }
 
 pub enum StartAgentExecutorEvent {
-    CreateAgent(StartAgentRequest),
+    CreateAgent(Box<StartAgentRequest>),
     /// A child agent failed at the launch stage (never started a server-side
     /// run). The owning terminal view removes its hidden pane and conversation
     /// so the orchestration pill bar does not retain a dead chip.
