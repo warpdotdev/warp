@@ -167,7 +167,25 @@ pub struct ConversationUsage {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
+    pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
     pub summarized: bool,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ContextWindowSegment {
+    pub name: String,
+    pub token_count: i32,
+    pub fraction: f64,
+}
+
+impl From<&ContextWindowSegment> for persistence::model::ContextWindowSegment {
+    fn from(gql: &ContextWindowSegment) -> Self {
+        Self {
+            name: gql.name.clone(),
+            token_count: u32::try_from(gql.token_count).unwrap_or_default(),
+            fraction: gql.fraction as f32,
+        }
+    }
 }

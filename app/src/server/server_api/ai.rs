@@ -3015,6 +3015,7 @@ fn convert_usage_metadata(
     context_window_usage: f64,
     credits_spent: f64,
     platform_credits_spent: f64,
+    context_window_segments: &[warp_graphql::ai::ContextWindowSegment],
 ) -> ConversationUsageMetadata {
     ConversationUsageMetadata {
         was_summarized: summarized,
@@ -3024,9 +3025,7 @@ fn convert_usage_metadata(
         credits_spent_for_last_block: None,
         token_usage: vec![],
         tool_usage_metadata: Default::default(),
-        // The per-segment context window breakdown is live-stream only;
-        // it is not part of the historical GraphQL conversation metadata.
-        context_window_segments: vec![],
+        context_window_segments: context_window_segments.iter().map(Into::into).collect(),
     }
 }
 
@@ -3039,6 +3038,7 @@ impl TryFrom<warp_graphql::ai::AIConversation> for ServerAIConversationMetadata 
             value.usage.usage_metadata.context_window_usage,
             value.usage.usage_metadata.credits_spent,
             value.usage.usage_metadata.platform_credits_spent,
+            &value.usage.usage_metadata.context_window_segments,
         );
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;
@@ -3085,6 +3085,7 @@ impl TryFrom<warp_graphql::queries::list_ai_conversations::AIConversationMetadat
             value.usage.usage_metadata.context_window_usage,
             value.usage.usage_metadata.credits_spent,
             value.usage.usage_metadata.platform_credits_spent,
+            &value.usage.usage_metadata.context_window_segments,
         );
         let metadata = value.metadata.try_into()?;
         let permissions = value.permissions.try_into()?;

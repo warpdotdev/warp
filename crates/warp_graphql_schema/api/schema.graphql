@@ -780,6 +780,18 @@ type ContentDataFieldValue {
 
 scalar ContentHash
 
+"""A single named portion of the context window (e.g. "system_prompt")."""
+type ContextWindowSegment {
+  """The fraction of the model's context window this segment occupies."""
+  fraction: Float!
+
+  """The server-defined segment name (e.g. system_prompt, tool_definitions)."""
+  name: String!
+
+  """The estimated number of tokens this segment occupies."""
+  tokenCount: Int!
+}
+
 """Represents usage data for a single multi-agent conversation."""
 type ConversationUsage {
   conversationId: String!
@@ -792,6 +804,12 @@ type ConversationUsage {
 type ConversationUsageMetadata {
   """Token usage using a user's API key, keyed by model."""
   byokTokenUsage: [TokenUsage!]!
+
+  """
+  A breakdown of the context window usage into named segments, scaled so
+  they sum to contextWindowUsage.
+  """
+  contextWindowSegments: [ContextWindowSegment!]!
   contextWindowUsage: Float!
 
   """The total number of inference credits spent so far in the conversation"""

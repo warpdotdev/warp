@@ -114,6 +114,7 @@ pub struct ConversationUsage {
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ConversationUsageMetadata {
     pub context_window_usage: f64,
+    pub context_window_segments: Vec<ContextWindowSegment>,
     pub credits_spent: f64,
     pub platform_credits_spent: f64,
     pub summarized: bool,
@@ -121,6 +122,13 @@ pub struct ConversationUsageMetadata {
     pub warp_token_usage: Vec<TokenUsage>,
     pub byok_token_usage: Vec<TokenUsage>,
     pub tool_usage_metadata: ToolUsageMetadata,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone)]
+pub struct ContextWindowSegment {
+    pub name: String,
+    pub token_count: i32,
+    pub fraction: f64,
 }
 
 fn convert_token_usage(
@@ -176,9 +184,17 @@ impl From<&ConversationUsageMetadata> for persistence::model::ConversationUsageM
             credits_spent_for_last_block: None,
             token_usage: convert_token_usage(&gql.warp_token_usage, &gql.byok_token_usage),
             tool_usage_metadata: (&gql.tool_usage_metadata).into(),
-            // The per-segment context window breakdown is live-stream only;
-            // it is not part of the historical GraphQL usage payload.
-            context_window_segments: Vec::new(),
+            context_window_segments: gql.context_window_segments.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&ContextWindowSegment> for persistence::model::ContextWindowSegment {
+    fn from(gql: &ContextWindowSegment) -> Self {
+        Self {
+            name: gql.name.clone(),
+            token_count: u32::try_from(gql.token_count).unwrap_or_default(),
+            fraction: gql.fraction as f32,
         }
     }
 }
