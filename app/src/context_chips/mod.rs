@@ -559,20 +559,18 @@ impl ContextChipKind {
             }
 
             Self::AwsProfile => {
-                const AWS_COMMANDS: [&str; 13] = [
+                // Only AWS-specific CLIs trigger the chip. Cloud-agnostic
+                // tools like `terraform` / `tofu` / `cdk` / `serverless` /
+                // `pulumi` are intentionally excluded — including them would
+                // surface the AWS profile when the user is actually working
+                // against GCP or Azure.
+                const AWS_COMMANDS: [&str; 6] = [
                     "aws",
                     "aws-vault",
                     "awslocal",
-                    "sam",
-                    "eksctl",
-                    "terraform",
-                    "tofu",
-                    "cdk",
-                    "serverless",
-                    "sls",
-                    "chalice",
-                    "copilot",
-                    "amplify",
+                    "sam",     // AWS SAM CLI
+                    "eksctl",  // AWS EKS
+                    "copilot", // AWS Copilot (ECS/App Runner)
                 ];
 
                 command.split_whitespace().next().is_some_and(|first_word| {
