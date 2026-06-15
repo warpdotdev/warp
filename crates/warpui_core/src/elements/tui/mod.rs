@@ -21,12 +21,22 @@ use std::collections::HashMap;
 use crate::{AppContext, EntityId, Event};
 
 mod buffer;
+mod child_view;
+mod column;
+mod container;
 mod event;
+mod event_handler;
 mod geometry;
+mod text;
 
 pub use buffer::{Cell, TuiBuffer, TuiStyle};
+pub use child_view::TuiChildView;
+pub use column::TuiColumn;
+pub use container::TuiContainer;
 pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult};
+pub use event_handler::TuiEventHandler;
 pub use geometry::{TuiConstraint, TuiRect, TuiSize};
+pub use text::TuiText;
 
 /// A node in the renderable tree: it measures itself against a constraint,
 /// then paints into a sub-rectangle of the buffer.
