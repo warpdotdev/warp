@@ -84,8 +84,8 @@ fn user_facing_aws_credentials_error_message(err: &CredentialsError, profile: &s
 
 impl std::error::Error for LoadAwsCredentialsError {}
 
-const AWS_BEDROCK_STS_AUDIENCE: &str = "sts.amazonaws.com";
-const BEDROCK_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
+pub(crate) const AWS_BEDROCK_STS_AUDIENCE: &str = "sts.amazonaws.com";
+pub(crate) const BEDROCK_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 
 pub(crate) fn aws_role_session_name(run_id: &str) -> String {
     format!("Oz_Run_{run_id}")
@@ -99,7 +99,7 @@ pub(crate) fn aws_role_session_name(run_id: &str) -> String {
 /// and reuse a single client across refreshes.
 static STS_CLIENT_CACHE: Mutex<Option<(String, aws_sdk_sts::Client)>> = Mutex::const_new(None);
 
-async fn sts_client(region: &str) -> aws_sdk_sts::Client {
+pub(crate) async fn sts_client(region: &str) -> aws_sdk_sts::Client {
     let mut cache = STS_CLIENT_CACHE.lock().await;
     if let Some((cached_region, client)) = cache.as_ref() {
         if cached_region == region {
