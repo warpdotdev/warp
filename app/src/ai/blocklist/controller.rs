@@ -2591,6 +2591,7 @@ impl BlocklistAIController {
             .in_flight_response_streams
             .try_cancel_streams_for_conversation(conversation_id, reason, ctx)
         {
+            // No active stream whose cancellation would mark the conversation `Cancelled`.
             // A parked auto-resume was aborted above; nothing else will move the
             // conversation out of TransientError, so surface the cancellation directly.
             if !reason.should_preserve_in_progress_status() {
