@@ -578,7 +578,7 @@ impl TerminalDriver {
                     // PTY spawn failed — use the specific reason from the view.
                     futures::future::Either::Right((Ok(reason), _)) => reason,
                     // Sender dropped without sending (shouldn't happen in practice).
-                    futures::future::Either::Right((Err(_), _)) => return Ok(()),
+                    futures::future::Either::Right((Err(_), _)) => "Internal error".to_string(),
                 }
             } else {
                 // No failure channel — wait for bootstrap with the standard timeout.
@@ -731,10 +731,7 @@ impl TerminalDriver {
                 if !self.session_bootstrapped.is_set() {
                     if let Some(tx) = self.spawn_failure_tx.take() {
                         let _ = tx.send(
-                            "Shell spawn failed. This can happen when env vars or secrets \
-                             are too long — check your image for excessively long \
-                             environment variables or Oz for excessively long secrets."
-                                .to_string(),
+                            "Shell spawn failed. Check the Warp logs for details.".to_string(),
                         );
                     }
                 }

@@ -188,9 +188,7 @@ impl PtySpawner {
 
         #[cfg(unix)]
         if let Some(server) = &self.server {
-            let result = Self::spawn_pty_via_server(server, options.clone()).context(
-                "Failed to spawn pty via terminal server; falling back to spawning locally...",
-            );
+            let result = Self::spawn_pty_via_server(server, options.clone());
             if let Err(err) = result {
                 // Log env var names + sizes for any terminal server failure.
                 // Large env vars are the most common cause (E2BIG on Linux,
@@ -200,16 +198,16 @@ impl PtySpawner {
 
                 // E2BIG is deterministic — retrying from the main process with
                 // the same PtyOptions would hit the same limit — so fail
-                // immediately rather than silently falling back and waiting for
-                // the bootstrap timeout.
+                // immediately rather than falling back.
                 if is_e2big(&err) {
                     return Err(err.context(
-                        "Shell spawn failed. This can happen when env vars or secrets are \
-                         too long — check your image for excessively long environment \
-                         variables or Oz for excessively long secrets.",
+                        "Shell spawn failed. This can happen when env vars in the image or Oz secrets are \
+                         too long. Check the Warp logs for details.",
                     ));
                 }
-                report_error!(err);
+                report_error!(err.context(
+                    "Failed to spawn pty via terminal server; falling back to spawning locally...",
+                ));
                 is_fallback = true;
             } else {
                 send_telemetry_from_app_ctx!(
