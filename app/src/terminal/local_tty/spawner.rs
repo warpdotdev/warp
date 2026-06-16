@@ -2,13 +2,8 @@ use anyhow::Result;
 use warpui::{AppContext, Entity, SingletonEntity};
 #[cfg(unix)]
 use {
-    crate::report_error,
-    crate::terminal::local_tty::server::TerminalServer,
-    anyhow::{bail, Context},
-    std::cmp::Reverse,
-    std::collections::HashMap,
-    std::ffi::OsString,
-    std::process::Child,
+    crate::report_error, crate::terminal::local_tty::server::TerminalServer, anyhow::bail,
+    std::cmp::Reverse, std::collections::HashMap, std::ffi::OsString, std::process::Child,
 };
 
 #[cfg(target_os = "windows")]
