@@ -1184,6 +1184,47 @@ pub fn assert_conversation_was_summarized() -> AssertionCallback {
     })
 }
 
+/// Assert that the active conversation did not use prior-conversation
+/// context. From the LLM's perspective this is the `search_conversation_history`
+/// tool; on the client it materializes as a `FetchConversation` action followed
+/// by regular file tools pointed at `/tmp/warp_conversation_search`.
+pub fn assert_no_prior_conversation_context_usage() -> AssertionCallback {
+    Box::new(|app, window_id| {
+        let terminal_view = terminal_view(app, window_id, 0, 0);
+        BlocklistAIHistoryModel::handle(app).update(app, |history_model, _| {
+            let Some(conversation) = history_model.active_conversation(terminal_view.id()) else {
+                return AssertionOutcome::failure("No active conversation".to_owned());
+            };
+
+            for (exchange_index, exchange) in conversation.all_exchanges().into_iter().enumerate() {
+                let AIAgentOutputStatus::Finished {
+                    finished_output: FinishedAIAgentOutput::Success { output },
+                } = &exchange.output_status
+                else {
+                    continue;
+                };
+
+                for action in output.get().actions() {
+                    if matches!(action.action, AIAgentActionType::FetchConversation { .. }) {
+                        return AssertionOutcome::immediate_failure(format!(
+                            "Implementation conversation used prior-conversation context via search_conversation_history in exchange {exchange_index}: {action}"
+                        ));
+                    }
+
+                    let action_text = action.to_string();
+                    if action_text.contains("/tmp/warp_conversation_search") {
+                        return AssertionOutcome::immediate_failure(format!(
+                            "Implementation conversation read materialized prior-conversation context in exchange {exchange_index}: {action_text}"
+                        ));
+                    }
+                }
+            }
+
+            AssertionOutcome::Success
+        })
+    })
+}
+
 /// Asserts that no exchanges exist in the history model (which also means no conversations).
 pub fn assert_no_exchanges() -> AssertionCallback {
     Box::new(|app, window_id| {
