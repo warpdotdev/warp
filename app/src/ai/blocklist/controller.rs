@@ -2595,11 +2595,8 @@ impl BlocklistAIController {
             // A parked auto-resume was aborted above; nothing else will move the
             // conversation out of TransientError, so surface the cancellation directly.
             //
-            // TODO(REMOTE-1950): Make the parked auto-resume a first-class cancelable (tracked alongside
-            // streams in `in_flight_response_streams`, or in a unified in-flight-work registry)
-            // so that cancelling it emits the same `AfterStreamFinished` completion event a
-            // stream does. Cancellation would then always finalize status through the single
-            // completion path, removing this no-stream special case.
+            // TODO(REMOTE-1950): Track the parked auto-resume as a first-class cancelable so its
+            // cancellation flows through the same `AfterStreamFinished` path, dropping this special case.
             if !reason.should_preserve_in_progress_status() {
                 let history_model = BlocklistAIHistoryModel::handle(ctx);
                 let is_recovering = history_model
