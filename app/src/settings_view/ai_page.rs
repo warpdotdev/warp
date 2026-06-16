@@ -1,6 +1,6 @@
 use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
 #[cfg(not(target_family = "wasm"))]
-use ::ai::grok_subscription::oauth::ManualCodeExchange;
+use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
 use enum_iterator::all;
 use itertools::Itertools;
@@ -692,6 +692,8 @@ pub struct AISettingsPageView {
     custom_endpoint_edit_buttons: Vec<ViewHandle<ActionButton>>,
 
     // In-flight fallback exchange for a pasted SuperGrok authorization code.
+    // This stores only the PKCE verifier clone needed by the manual path while
+    // `OauthAttempt::finish` owns the full loopback attempt.
     #[cfg(not(target_family = "wasm"))]
     grok_oauth_attempt: Option<ManualCodeExchange>,
     #[cfg(not(target_family = "wasm"))]
@@ -1756,28 +1758,13 @@ impl AISettingsPageView {
             dropdown
         });
 
-        // Input for the authorization code xAI shows when the browser can't
-        // reach the loopback callback.
         #[cfg(not(target_family = "wasm"))]
-        let grok_code_editor = ctx.add_typed_action_view(|ctx| {
-            let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = SingleLineEditorOptions {
-                text: TextOptions {
-                    font_size_override: Some(appearance.ui_font_size()),
-                    font_family_override: Some(appearance.monospace_font_family()),
-                    text_colors_override: Some(editor_text_colors(appearance)),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Paste sign-in code", ctx);
-            editor
-        });
+        let grok_code_editor = Self::create_grok_code_editor(ctx);
         #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_view(&grok_code_editor, |me, _, event, ctx| {
             if matches!(event, EditorEvent::Enter | EditorEvent::Paste) {
-                me.submit_grok_code(ctx);
+                let code = me.grok_code_editor.as_ref(ctx).buffer_text(ctx);
+                me.submit_grok_code(code, ctx);
             }
         });
         // Keep the snapshotted editor text colors in sync with theme changes,
@@ -2155,6 +2142,25 @@ impl AISettingsPageView {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn create_grok_code_editor(ctx: &mut ViewContext<Self>) -> ViewHandle<EditorView> {
+        ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::handle(ctx).as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                text: TextOptions {
+                    font_size_override: Some(appearance.ui_font_size()),
+                    font_family_override: Some(appearance.monospace_font_family()),
+                    text_colors_override: Some(editor_text_colors(appearance)),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("Paste sign-in code", ctx);
+            editor
+        })
+    }
+
     /// Kicks off the xAI (Grok) subscription OAuth flow: opens the consent
     /// screen in the browser, runs a loopback PKCE callback server, exchanges
     /// the resulting authorization code for OAuth tokens, and persists them via
@@ -2166,7 +2172,6 @@ impl AISettingsPageView {
     /// other completion is ignored once the view-owned attempt state is cleared.
     #[cfg(not(target_family = "wasm"))]
     fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
-        use ::ai::grok_subscription::oauth;
         use warp_core::safe_error;
 
         use crate::view_components::{DismissibleToast, ToastLink};
@@ -2211,7 +2216,7 @@ impl AISettingsPageView {
         // code instead of redirecting.
         self.grok_oauth_attempt = Some(attempt.manual_code_exchange());
         self.grok_code_editor.update(ctx, |editor, ctx| {
-            editor.set_buffer_text("", ctx);
+            editor.clear_buffer(ctx);
         });
         ctx.notify();
         // Open xAI's consent screen in the user's default browser.
@@ -2247,7 +2252,7 @@ impl AISettingsPageView {
                 Ok(tokens) => {
                     me.grok_oauth_attempt = None;
                     me.grok_code_editor.update(ctx, |editor, ctx| {
-                        editor.set_buffer_text("", ctx);
+                        editor.clear_buffer(ctx);
                     });
                     send_telemetry_from_ctx!(
                         TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
@@ -2264,7 +2269,7 @@ impl AISettingsPageView {
                 Err(err) => {
                     me.grok_oauth_attempt = None;
                     me.grok_code_editor.update(ctx, |editor, ctx| {
-                        editor.set_buffer_text("", ctx);
+                        editor.clear_buffer(ctx);
                     });
                     safe_error!(
                         safe: ("Grok OAuth loopback callback failed"),
@@ -2293,7 +2298,7 @@ impl AISettingsPageView {
     /// Exchanges a pasted SuperGrok authorization code using the current
     /// attempt's PKCE verifier.
     #[cfg(not(target_family = "wasm"))]
-    fn submit_grok_code(&mut self, ctx: &mut ViewContext<Self>) {
+    fn submit_grok_code(&mut self, code: String, ctx: &mut ViewContext<Self>) {
         use warp_core::safe_error;
 
         use crate::view_components::DismissibleToast;
@@ -2304,7 +2309,6 @@ impl AISettingsPageView {
         let Some(exchange) = self.grok_oauth_attempt.clone() else {
             return;
         };
-        let code = self.grok_code_editor.as_ref(ctx).buffer_text(ctx);
         if code.trim().is_empty() {
             return;
         }
@@ -2320,7 +2324,7 @@ impl AISettingsPageView {
                     Ok(tokens) => {
                         me.grok_oauth_attempt = None;
                         me.grok_code_editor.update(ctx, |editor, ctx| {
-                            editor.set_buffer_text("", ctx);
+                            editor.clear_buffer(ctx);
                         });
                         send_telemetry_from_ctx!(
                             TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
@@ -4018,7 +4022,7 @@ impl TypedActionView for AISettingsPageView {
                 {
                     self.grok_oauth_attempt = None;
                     self.grok_code_editor.update(ctx, |editor, ctx| {
-                        editor.set_buffer_text("", ctx);
+                        editor.clear_buffer(ctx);
                     });
                 }
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
