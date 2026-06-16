@@ -6711,34 +6711,27 @@ impl TerminalView {
         });
     }
 
-    /// Returns the slash command name for the fork button action.
-    /// Uses `/continue-locally` for cloud Oz conversations where `/fork` is unavailable.
+    /// Returns the slash command name for the fork button.
+    /// Delegates to `fork_button_action` to keep the command in sync with the tooltip.
     fn fork_or_continue_locally_command_name(&self, ctx: &AppContext) -> &'static str {
-        #[cfg(not(target_family = "wasm"))]
-        if self.active_conversation_is_cloud_oz(ctx) {
-            return commands::CONTINUE_LOCALLY.name;
-        }
-        commands::FORK.name
-    }
+        #[cfg(target_family = "wasm")]
+        return commands::FORK.name;
 
-    /// Returns `true` when the active conversation is a cloud Oz run.
-    /// Mirrors `SlashCommandDataSource::active_conversation_is_cloud_oz`.
-    #[cfg(not(target_family = "wasm"))]
-    fn active_conversation_is_cloud_oz(&self, ctx: &AppContext) -> bool {
-        use crate::terminal::input::slash_commands::conversation_is_cloud_oz_for_slash_command;
-        let conversation_id = match self
-            .agent_view_controller
-            .as_ref(ctx)
-            .agent_view_state()
-            .active_conversation_id()
+        #[cfg(not(target_family = "wasm"))]
         {
-            Some(id) => id,
-            None => match BlocklistAIHistoryModel::as_ref(ctx).active_conversation(self.view_id) {
-                Some(conv) => conv.id(),
-                None => return false,
-            },
-        };
-        conversation_is_cloud_oz_for_slash_command(conversation_id, ctx)
+            use crate::terminal::input::slash_commands::fork_button_action;
+            let conversation_id = self
+                .agent_view_controller
+                .as_ref(ctx)
+                .agent_view_state()
+                .active_conversation_id()
+                .or_else(|| {
+                    BlocklistAIHistoryModel::as_ref(ctx)
+                        .active_conversation(self.view_id)
+                        .map(|conv| conv.id())
+                });
+            fork_button_action(conversation_id, ctx).command_name
+        }
     }
 
     fn handle_resume_conversation(

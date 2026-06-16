@@ -1429,6 +1429,35 @@ pub(crate) fn conversation_is_cloud_oz_for_slash_command(
     }
 }
 
+/// Tooltip and slash command name for the fork button, returned as a unit so
+/// callers rendering the button and callers inserting the command always agree.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) struct ForkButtonAction {
+    pub tooltip: &'static str,
+    pub command_name: &'static str,
+}
+
+/// Returns the tooltip and slash command for the fork button given an optional
+/// conversation ID. Uses `/continue-locally` for cloud Oz conversations where
+/// `/fork` is unavailable, and `/fork` otherwise.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn fork_button_action(
+    conversation_id: Option<AIConversationId>,
+    ctx: &AppContext,
+) -> ForkButtonAction {
+    if conversation_id.is_some_and(|id| conversation_is_cloud_oz_for_slash_command(id, ctx)) {
+        ForkButtonAction {
+            tooltip: "Continue locally",
+            command_name: commands::CONTINUE_LOCALLY.name,
+        }
+    } else {
+        ForkButtonAction {
+            tooltip: "Fork conversation",
+            command_name: commands::FORK.name,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
