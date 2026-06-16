@@ -118,10 +118,26 @@ fn other_error_is_error_with_internal() {
             error_message: "something broke".into(),
             will_attempt_resume: false,
             waiting_for_network: false,
+            is_user_error: false,
         }),
         AgentTaskState::Error,
         Some(PlatformErrorCode::InternalError),
         Some("something broke"),
+    );
+}
+
+#[test]
+fn other_user_error_is_failed_with_feature_not_available() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::Other {
+            error_message: "Model not allowed for your current plan.".into(),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+            is_user_error: true,
+        }),
+        AgentTaskState::Failed,
+        Some(PlatformErrorCode::FeatureNotAvailable),
+        Some("Model not allowed"),
     );
 }
 

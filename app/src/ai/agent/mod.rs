@@ -49,7 +49,7 @@ use crate::code_review::comments::{
     AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
 };
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::server::server_api::{AIApiError, DeserializationError};
+use crate::server::server_api::{AIApiError, ClientError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
@@ -660,6 +660,11 @@ pub enum RenderableAIError {
         /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
+        /// True when the error originates from a user-side issue (e.g., model not allowed,
+        /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
+        /// Defaults to false for backward compatibility with persisted data that predates this field.
+        #[serde(default)]
+        is_user_error: bool,
     },
 }
 
@@ -671,6 +676,7 @@ impl RenderableAIError {
             error_message: Self::TRANSIENT_NETWORK_ERROR_MESSAGE.to_string(),
             will_attempt_resume,
             waiting_for_network,
+            is_user_error: false,
         }
     }
 
@@ -715,10 +721,25 @@ impl From<&AIApiError> for RenderableAIError {
             {
                 Self::transient_network_error(false, false)
             }
+            // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
+            // are user-originating — map them to a user error so the task reaches FAILED
+            // state rather than ERROR state.
+            AIApiError::ErrorStatus(status, body) if !value.is_retryable() => {
+                let message = serde_json::from_str::<ClientError>(body)
+                    .map(|e| e.error)
+                    .unwrap_or_else(|_| format!("Request rejected (HTTP {status})."));
+                Self::Other {
+                    error_message: message,
+                    will_attempt_resume: false,
+                    waiting_for_network: false,
+                    is_user_error: true,
+                }
+            }
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
                 waiting_for_network: false,
+                is_user_error: false,
             },
         }
     }

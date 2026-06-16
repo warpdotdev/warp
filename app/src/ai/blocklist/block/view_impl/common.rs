@@ -3064,6 +3064,7 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             error_message,
             will_attempt_resume,
             waiting_for_network,
+            ..
         } => {
             if *will_attempt_resume {
                 if *waiting_for_network {

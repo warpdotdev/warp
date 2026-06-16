@@ -104,6 +104,7 @@ fn transient_network_error_uses_user_facing_message() {
                     .to_string(),
             will_attempt_resume: false,
             waiting_for_network: false,
+            is_user_error: false,
         }
     );
 }
