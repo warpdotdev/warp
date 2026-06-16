@@ -293,6 +293,10 @@ impl Network {
             }
             HeartbeatEvent::Idle => {
                 log::info!("Viewer reconnecting: heartbeat idle timeout");
+                // Close the old connection before reconnecting so the server
+                // sees WebsocketClosed immediately rather than waiting for its
+                // own 30 s idle timer to fire on the now-silent connection.
+                self.close();
                 self.reconnect_websocket(ctx);
             }
         }
