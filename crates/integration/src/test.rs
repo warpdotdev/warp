@@ -3,6 +3,7 @@
 //! to be run.
 
 mod agent_mode;
+mod antigravity;
 mod ai_assistant;
 mod block_filtering;
 mod bootstrapping;
@@ -43,6 +44,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 pub use agent_mode::*;
+pub use antigravity::*;
 pub use ai_assistant::*;
 use anyhow::{anyhow, Result};
 pub use block_filtering::*;

@@ -55,6 +55,14 @@ const AMP_COLOR: ColorU = ColorU {
     a: 255,
 };
 
+/// Antigravity brand color (white)
+const ANTIGRAVITY_WHITE: ColorU = ColorU {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 255,
+};
+
 /// Droid brand color (white)
 const DROID_COLOR: ColorU = ColorU {
     r: 255,
@@ -127,13 +135,6 @@ const MISTRAL_ORANGE: ColorU = ColorU {
     a: 255,
 };
 
-/// Antigravity brand color (Indigo #6366F1)
-const ANTIGRAVITY_INDIGO: ColorU = ColorU {
-    r: 99,
-    g: 102,
-    b: 241,
-    a: 255,
-};
 
 /// Represents a CLI agent (e.g., Claude Code, Gemini CLI, Codex, Amp, Droid, OpenCode, Copilot, Pi, Auggie, Cursor, Goose, Hermes, Mistral Vibe)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Sequence, Serialize, Deserialize)]
@@ -319,7 +320,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
-            CLIAgent::Antigravity => Some(ANTIGRAVITY_INDIGO),
+            CLIAgent::Antigravity => Some(ANTIGRAVITY_WHITE),
             CLIAgent::Unknown => None,
         }
     }
@@ -328,7 +329,7 @@ impl CLIAgent {
     /// Agents with light brand colors use a dark icon for contrast.
     pub fn brand_icon_color(&self) -> ColorU {
         match self {
-            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid => ColorU::new(0, 0, 0, 255),
+            CLIAgent::Pi | CLIAgent::Auggie | CLIAgent::Droid | CLIAgent::Antigravity => ColorU::new(0, 0, 0, 255),
             _ => ColorU::white(),
         }
     }
