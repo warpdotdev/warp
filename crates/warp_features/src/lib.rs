@@ -883,6 +883,11 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+
+    /// Gates the Codex/ChatGPT OAuth subscription, which lets users
+    /// connect their ChatGPT Plus or Pro account via OAuth instead of
+    /// pasting a pay-as-you-go OpenAI API key.
+    ChatGptAuth,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

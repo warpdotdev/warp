@@ -497,6 +497,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CustomInferenceEndpoints,
         #[cfg(feature = "supergrok")]
         FeatureFlag::SuperGrok,
+        #[cfg(feature = "chatgpt_auth")]
+        FeatureFlag::ChatGptAuth,
         #[cfg(feature = "gemini_enterprise")]
         FeatureFlag::GeminiEnterprise,
     ]);

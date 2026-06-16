@@ -29,7 +29,12 @@ pub fn is_using_api_key_for_provider(provider: &LLMProvider, app: &AppContext) -
     let manager = ApiKeyManager::as_ref(app);
 
     match provider {
-        LLMProvider::OpenAI => manager.keys().openai.is_some(),
+        LLMProvider::OpenAI => {
+            // A pasted OpenAI BYO API key, or a connected ChatGPT / Codex
+            // subscription's OAuth token — either counts as having auth for
+            // OpenAI models (same as SuperGrok counting for xAI below).
+            manager.keys().openai.is_some() || manager.codex_tokens().is_some()
+        }
         LLMProvider::Anthropic => manager.keys().anthropic.is_some(),
         LLMProvider::Google => manager.keys().google.is_some(),
         LLMProvider::Xai => manager.grok_tokens().is_some(),

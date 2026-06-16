@@ -10,15 +10,43 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
     ApiKeyManager {
         keys,
         grok_tokens,
+        codex_tokens: None,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
+        codex_refresh_allowed: false,
+        #[cfg(not(target_family = "wasm"))]
         grok_refresh_in_flight: false,
+        #[cfg(not(target_family = "wasm"))]
+        codex_refresh_in_flight: false,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         geap_credentials_state: GeapCredentialsState::Missing,
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
+        codex_secure_storage_write_version: 0,
+    }
+}
+
+fn make_manager_with_codex(keys: ApiKeys, codex_tokens: Option<CodexTokens>) -> ApiKeyManager {
+    ApiKeyManager {
+        keys,
+        grok_tokens: None,
+        codex_tokens,
+        #[cfg(not(target_family = "wasm"))]
+        grok_refresh_allowed: false,
+        #[cfg(not(target_family = "wasm"))]
+        codex_refresh_allowed: false,
+        #[cfg(not(target_family = "wasm"))]
+        grok_refresh_in_flight: false,
+        #[cfg(not(target_family = "wasm"))]
+        codex_refresh_in_flight: false,
+        aws_credentials_state: AwsCredentialsState::Missing,
+        aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
+        geap_credentials_state: GeapCredentialsState::Missing,
+        secure_storage_write_version: 0,
+        grok_secure_storage_write_version: 0,
+        codex_secure_storage_write_version: 0,
     }
 }
 
@@ -26,6 +54,15 @@ fn make_manager_with_geap(geap_credentials_state: GeapCredentialsState) -> ApiKe
     let mut manager = make_manager(ApiKeys::default());
     manager.geap_credentials_state = geap_credentials_state;
     manager
+}
+
+fn codex_tokens(access_token: &str, expires_in: Option<u64>) -> CodexTokens {
+    CodexTokens {
+        access_token: access_token.into(),
+        refresh_token: Some("refresh".into()),
+        expires_at: expires_in.map(|secs| SystemTime::now() + Duration::from_secs(secs)),
+        connected_at: None,
+    }
 }
 
 fn grok_tokens(access_token: &str, expires_in: Option<u64>) -> GrokTokens {
@@ -461,6 +498,81 @@ fn api_keys_for_request_omits_grok_token_when_byo_disabled() {
     assert!(mgr.api_keys_for_request(false, false, None).is_none());
 }
 
+// ── codex oauth token ────────────────────────────────────────────
+
+#[test]
+fn codex_tokens_serde_round_trip() {
+    let tokens = CodexTokens {
+        access_token: "tok".into(),
+        refresh_token: Some("refresh".into()),
+        expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+        connected_at: Some(SystemTime::now()),
+    };
+    let json = serde_json::to_string(&tokens).unwrap();
+    let deser: CodexTokens = serde_json::from_str(&json).unwrap();
+    assert_eq!(tokens, deser);
+}
+
+#[test]
+fn codex_tokens_serde_round_trip_default() {
+    let tokens = CodexTokens::default();
+    let json = serde_json::to_string(&tokens).unwrap();
+    let deser: CodexTokens = serde_json::from_str(&json).unwrap();
+    assert_eq!(tokens, deser);
+}
+
+#[test]
+fn codex_access_token_present_without_expiry() {
+    let t = CodexTokens {
+        access_token: "tok".into(),
+        ..Default::default()
+    };
+    assert_eq!(t.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn codex_access_token_blank_is_none() {
+    let t = CodexTokens {
+        access_token: "   ".into(),
+        ..Default::default()
+    };
+    assert_eq!(t.access_token_for_request(), None);
+}
+
+#[test]
+fn codex_access_token_near_expiry_still_sent() {
+    let t = codex_tokens("tok", Some(0));
+    assert_eq!(t.access_token_for_request(), Some("tok"));
+}
+
+#[test]
+fn codex_needs_refresh_within_lead_time() {
+    assert!(codex_tokens("tok", Some(30)).needs_refresh(Duration::from_secs(300)));
+    assert!(!codex_tokens("tok", Some(3600)).needs_refresh(Duration::from_secs(300)));
+    assert!(codex_tokens("tok", Some(0)).needs_refresh(Duration::from_secs(300)));
+    assert!(!codex_tokens("tok", None).needs_refresh(Duration::from_secs(300)));
+}
+
+#[test]
+fn codex_tokens_carries_connected_at_from_previous() {
+    let previous = CodexTokens {
+        access_token: "old".into(),
+        refresh_token: Some("old-refresh".into()),
+        expires_at: None,
+        connected_at: Some(SystemTime::now()),
+    };
+    // Simulate `codex_tokens_from_response` with `previous`:
+    // the `connected_at` from `previous` is kept, the new token is used.
+    let new = CodexTokens {
+        access_token: "new".into(),
+        refresh_token: Some("new-refresh".into()),
+        expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+        connected_at: previous.connected_at.or_else(|| Some(SystemTime::now())),
+    };
+    assert_eq!(new.connected_at, previous.connected_at);
+    assert_eq!(new.access_token, "new");
+}
+
 #[test]
 fn api_keys_for_request_includes_expired_grok_token() {
     // Expired tokens are still sent in requests; the server rejects truly
@@ -468,6 +580,26 @@ fn api_keys_for_request_includes_expired_grok_token() {
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("grok-abc", Some(0))));
     let result = mgr.api_keys_for_request(true, false, None).unwrap();
     assert_eq!(result.grok_oauth_access_token, "grok-abc");
+}
+
+#[test]
+fn codex_tokens_are_not_yet_included_on_wire_phase_a() {
+    // Phase A: Codex tokens are stored and refreshed client-side, but not yet
+    // sent on the wire. This test validates the storage is functional; when
+    // `codex_oauth_access_token` is added to the proto in Phase B, this test
+    // will need updating.
+    let mgr = make_manager_with_codex(
+        ApiKeys::default(),
+        Some(codex_tokens("codex-abc", Some(3600))),
+    );
+    // Currently the token doesn't appear on the wire (_it won't compile_).
+    // The helper exists so the Phase B PR has a test to fill in.
+    let tokens = mgr.codex_tokens();
+    assert!(tokens.is_some());
+    assert_eq!(
+        tokens.and_then(|t| t.access_token_for_request()),
+        Some("codex-abc")
+    );
 }
 
 // ── geap credentials ────────────────────────────────────────────

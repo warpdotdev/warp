@@ -1390,6 +1390,18 @@ pub(crate) fn initialize_app(
             let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
             manager.set_grok_refresh_allowed(allowed, ctx);
         }
+        #[cfg(not(target_family = "wasm"))]
+        if FeatureFlag::ChatGptAuth.is_enabled() {
+            use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |manager, event, ctx| {
+                if matches!(event, UserWorkspacesEvent::TeamsChanged) {
+                    let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+                    manager.set_codex_refresh_allowed(allowed, ctx);
+                }
+            });
+            let allowed = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+            manager.set_codex_refresh_allowed(allowed, ctx);
+        }
         manager
     });
 

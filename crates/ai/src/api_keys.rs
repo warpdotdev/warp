@@ -19,6 +19,10 @@ const SECURE_STORAGE_KEY: &str = "AiApiKeys";
 /// a refresh lifecycle, not a user-pasted static key.
 const GROK_SECURE_STORAGE_KEY: &str = "GrokOAuthTokens";
 
+/// Secure-storage key for the connected ChatGPT / Codex subscription's OAuth
+/// tokens. Same rationale as [`GROK_SECURE_STORAGE_KEY`].
+const CODEX_SECURE_STORAGE_KEY: &str = "CodexOAuthTokens";
+
 /// Emitted when user-provided API keys are updated in-memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiKeyManagerEvent {
@@ -133,6 +137,59 @@ impl GrokTokens {
     }
 }
 
+/// OAuth tokens for a connected ChatGPT / Codex subscription.
+///
+/// Persisted to secure storage under [`CODEX_SECURE_STORAGE_KEY`], separate
+/// from the BYO [`ApiKeys`] blob. `crate::codex_subscription` owns refreshing
+/// them; this module is the storage and request-injection source of truth that
+/// [`ApiKeyManager::api_keys_for_request`] reads from.
+///
+/// ## OpenAI-specific: millisecond `expires_in`
+///
+/// OpenAI's token endpoint returns `expires_in` in **milliseconds**, unlike the
+/// standard OAuth 2.0 convention of seconds. The conversion from
+/// [`crate::codex_subscription::oauth::TokenResponse`] to this struct happens
+/// in `crate::codex_subscription::codex_tokens_from_response`, which divides
+/// the millisecond value down to seconds for storage as an absolute
+/// [`SystemTime`].
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CodexTokens {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// Absolute time at which `access_token` expires, if the provider told us.
+    #[serde(default)]
+    pub expires_at: Option<SystemTime>,
+    /// When the user originally connected the subscription (i.e. when the
+    /// browser OAuth flow completed). Carried over across token refreshes so
+    /// it keeps reflecting the initial connection, not the latest refresh;
+    /// surfaced in the settings UI as "Connected on ...". `None` for tokens
+    /// stored before this field existed.
+    #[serde(default)]
+    pub connected_at: Option<SystemTime>,
+}
+
+impl CodexTokens {
+    /// Returns the access token whenever it is non-empty, regardless of
+    /// expiry. Possibly-expired tokens are still sent so the server stays the
+    /// final authority on token validity (it rejects truly invalid tokens);
+    /// `crate::codex_subscription` refreshes (nearly) expired tokens in the
+    /// background.
+    pub fn access_token_for_request(&self) -> Option<&str> {
+        (!self.access_token.trim().is_empty()).then_some(self.access_token.as_str())
+    }
+
+    /// Returns `true` when the token is known to expire within `lead_time` and
+    /// should be proactively refreshed. Tokens with an unknown expiry never
+    /// report as needing a refresh (there's no expiry signal to act on).
+    pub fn needs_refresh(&self, lead_time: Duration) -> bool {
+        match self.expires_at {
+            Some(expires_at) => expires_at <= SystemTime::now() + lead_time,
+            None => false,
+        }
+    }
+}
+
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AwsCredentialsRefreshStrategy {
@@ -156,40 +213,62 @@ pub struct ApiKeyManager {
     /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`];
     /// `crate::grok_subscription` keeps these fresh.
     grok_tokens: Option<GrokTokens>,
+    /// OAuth tokens for a connected ChatGPT/Codex subscription, if any.
+    /// Persisted separately under [`CODEX_SECURE_STORAGE_KEY`];
+    /// `crate::codex_subscription` keeps these fresh.
+    codex_tokens: Option<CodexTokens>,
     /// Whether background refresh of `grok_tokens` is currently allowed.
     /// Mirrors the BYO API key policy, which lives in the app layer; wired in
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
+    /// Whether background refresh of `codex_tokens` is currently allowed.
+    /// Mirrors the BYO API key policy; wired in via
+    /// `ApiKeyManager::set_codex_refresh_allowed`
+    /// (`crate::codex_subscription`).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) codex_refresh_allowed: bool,
     /// Guards against overlapping Grok token refreshes: the proactive refresh
     /// timer and the request-time safety net
     /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_in_flight: bool,
+    /// Guards against overlapping Codex token refreshes (same rationale as
+    /// `grok_refresh_in_flight`).
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) codex_refresh_in_flight: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
     /// In-memory Gemini Enterprise (GEAP) credential state.
     pub(crate) geap_credentials_state: GeapCredentialsState,
     secure_storage_write_version: u64,
     grok_secure_storage_write_version: u64,
+    codex_secure_storage_write_version: u64,
 }
 
 impl ApiKeyManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let keys = Self::load_keys_from_secure_storage(ctx);
         let grok_tokens = Self::load_grok_tokens_from_secure_storage(ctx);
+        let codex_tokens = Self::load_codex_tokens_from_secure_storage(ctx);
         Self {
             keys,
             grok_tokens,
+            codex_tokens,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
+            codex_refresh_allowed: false,
+            #[cfg(not(target_family = "wasm"))]
             grok_refresh_in_flight: false,
+            #[cfg(not(target_family = "wasm"))]
+            codex_refresh_in_flight: false,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
             geap_credentials_state: GeapCredentialsState::Missing,
             secure_storage_write_version: 0,
             grok_secure_storage_write_version: 0,
+            codex_secure_storage_write_version: 0,
         }
     }
 
@@ -206,6 +285,23 @@ impl ApiKeyManager {
     /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
     /// them to secure storage. No-op when the value is unchanged so we don't
     /// emit spurious events or schedule redundant keychain writes.
+    /// The currently stored ChatGPT/Codex OAuth tokens, if the user has
+    /// connected a Codex subscription.
+    pub fn codex_tokens(&self) -> Option<&CodexTokens> {
+        self.codex_tokens.as_ref()
+    }
+
+    /// Stores (or clears, with `None`) the ChatGPT/Codex OAuth tokens and
+    /// persists them to secure storage. No-op when the value is unchanged.
+    pub fn set_codex_tokens(&mut self, tokens: Option<CodexTokens>, ctx: &mut ModelContext<Self>) {
+        if self.codex_tokens == tokens {
+            return;
+        }
+        self.codex_tokens = tokens;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_codex_tokens_to_secure_storage(ctx);
+    }
+
     pub fn set_grok_tokens(&mut self, tokens: Option<GrokTokens>, ctx: &mut ModelContext<Self>) {
         if self.grok_tokens == tokens {
             return;
@@ -432,6 +528,9 @@ impl ApiKeyManager {
         // policy gate: when BYO keys are disabled (e.g. by workspace policy),
         // the token must not be sent. Possibly-expired tokens ARE sent — the
         // server is the authority on validity.
+        // Phase A: Codex tokens are stored and refreshed client-side, but not
+        // yet sent on the wire — blocked on a `warp-proto-apis` fork that adds
+        // `codex_oauth_access_token` to the `ApiKeys` proto message.
         let grok_oauth_access_token = include_byo_keys
             .then(|| {
                 self.grok_tokens
@@ -569,6 +668,56 @@ impl ApiKeyManager {
                 None
             }
         }
+    }
+
+    fn load_codex_tokens_from_secure_storage(ctx: &mut ModelContext<Self>) -> Option<CodexTokens> {
+        let json = match ctx.secure_storage().read_value(CODEX_SECURE_STORAGE_KEY) {
+            Ok(json) => json,
+            Err(e) => {
+                if !matches!(e, secure_storage::Error::NotFound) {
+                    log::error!("Failed to read Codex tokens from secure storage: {e:#}");
+                }
+                return None;
+            }
+        };
+
+        match serde_json::from_str(&json) {
+            Ok(tokens) => Some(tokens),
+            Err(e) => {
+                log::error!("Failed to deserialize Codex tokens: {e:#}");
+                None
+            }
+        }
+    }
+
+    fn write_codex_tokens_to_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
+        let payload = match self.codex_tokens.as_ref().map(serde_json::to_string) {
+            Some(Ok(json)) => Some(json),
+            Some(Err(e)) => {
+                log::error!("Failed to serialize Codex tokens: {e:#}");
+                return;
+            }
+            None => None,
+        };
+        self.codex_secure_storage_write_version += 1;
+        let write_version = self.codex_secure_storage_write_version;
+
+        ctx.spawn(async move { payload }, move |me, payload, ctx| {
+            if write_version != me.codex_secure_storage_write_version {
+                return;
+            }
+            let result = match payload {
+                Some(ref json) => ctx
+                    .secure_storage()
+                    .write_value(CODEX_SECURE_STORAGE_KEY, json),
+                None => ctx.secure_storage().remove_value(CODEX_SECURE_STORAGE_KEY),
+            };
+            if let Err(e) = result {
+                if !matches!(e, secure_storage::Error::NotFound) {
+                    log::error!("Failed to persist Codex tokens to secure storage: {e:#}");
+                }
+            }
+        });
     }
 
     fn write_grok_tokens_to_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
