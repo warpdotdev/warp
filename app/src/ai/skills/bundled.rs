@@ -9,6 +9,7 @@ use warp_core::ui::icons::Icon;
 use warp_core::{report_error, safe_warn};
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warp_util::remote_path::RemotePath;
 use warpui::{AppContext, SingletonEntity};
 
 use super::SkillDescriptor;
@@ -79,28 +80,22 @@ impl BundledSkills {
     /// addressed by path (their paths are real files on the remote host),
     /// unlike local bundled skills which are addressed by
     /// [`SkillReference::BundledSkillId`].
-    pub fn remote_skill_by_path(&self, path: &LocalOrRemotePath) -> Option<&ParsedSkill> {
-        let LocalOrRemotePath::Remote(remote_path) = path else {
-            return None;
-        };
+    pub fn remote_skill_by_path(&self, path: &RemotePath) -> Option<&ParsedSkill> {
         self.remote_by_host
-            .get(&remote_path.host_id)?
-            .skill_by_path(path)
+            .get(&path.host_id)?
+            .skill_by_path(&LocalOrRemotePath::Remote(path.clone()))
     }
 
     /// Like [`Self::remote_skill_by_path`], but only returns the skill when
     /// its activation condition is met.
     pub fn remote_active_skill_by_path(
         &self,
-        path: &LocalOrRemotePath,
+        path: &RemotePath,
         ctx: &AppContext,
     ) -> Option<&ParsedSkill> {
-        let LocalOrRemotePath::Remote(remote_path) = path else {
-            return None;
-        };
         self.remote_by_host
-            .get(&remote_path.host_id)?
-            .active_skill_by_path(path, ctx)
+            .get(&path.host_id)?
+            .active_skill_by_path(&LocalOrRemotePath::Remote(path.clone()), ctx)
     }
 
     #[cfg(test)]
@@ -163,6 +158,27 @@ impl BundledSkill {
             .collect()
     }
 
+    /// Returns descriptors for bundled skills whose activation conditions are
+    /// met, referenced by their `SKILL.md` paths instead of
+    /// [`SkillReference::BundledSkillId`].
+    ///
+    /// Used for remote-host catalogs: a `BundledSkillId` reference resolves
+    /// against the local catalog, so descriptors listed from a remote catalog
+    /// must carry the skill's real remote path — which resolves back to this
+    /// catalog through the path lookups — or invoking a listed skill would
+    /// serve the local client's content.
+    pub fn active_path_referenced_descriptors(&self, ctx: &AppContext) -> Vec<SkillDescriptor> {
+        self.definitions
+            .values()
+            .filter(|definition| definition.activation.is_enabled(ctx))
+            .map(|definition| {
+                let mut descriptor = SkillDescriptor::from(definition.skill.clone());
+                descriptor.icon_override = Some(definition.icon);
+                descriptor
+            })
+            .collect()
+    }
+
     /// Returns a bundled skill reference when the path belongs to a bundled skill.
     pub fn reference_for_path(&self, path: &LocalOrRemotePath) -> Option<SkillReference> {
         self.definitions
@@ -216,7 +232,14 @@ impl BundledSkill {
         let definitions = definitions
             .into_iter()
             .map(|(id, skill, activation)| {
-                let icon = icon_for_bundled_skill(&id);
+                // MCP-gated skills carry their integration's brand icon, like
+                // the local figma catalog loaded from `mcp_skills/figma`.
+                let icon = match &activation {
+                    BundledSkillActivation::RequiresMcp(McpIntegration::Figma) => Icon::Figma,
+                    BundledSkillActivation::Always
+                    | BundledSkillActivation::RequiresFeature(_)
+                    | BundledSkillActivation::RequiresFile(_) => icon_for_bundled_skill(&id),
+                };
                 (
                     id,
                     BundledSkillDefinition {
@@ -306,6 +329,12 @@ async fn load_figma_skill_definitions(
 /// Read bundled skill definitions from the specified directory, rendering
 /// handlebars variables against this host's filesystem (`resources_dir` is
 /// the resources root the skills belong to).
+///
+/// Only ever runs against the calling process's own filesystem: the local
+/// app reads its bundled resources, and the remote daemon reads its global
+/// install location before pushing the rendered content over the wire.
+/// Clients never call this for files on another host, so local `Path`
+/// semantics (this OS's encoding) are correct here.
 pub(crate) async fn read_bundled_skills(
     skills_dir: &Path,
     resources_dir: &Path,

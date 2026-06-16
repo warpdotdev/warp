@@ -641,6 +641,8 @@ fn get_skills_for_working_directory_respects_location() {
         scope: SkillScope::Bundled,
     };
 
+    let remote_bundled_path = remote_bundled_skill.path.clone();
+
     let mut directory_skills = HashMap::new();
     let mut skills_by_path = HashMap::new();
     for (dir, skill) in [
@@ -700,6 +702,29 @@ fn get_skills_for_working_directory_respects_location() {
         assert!(!remote_names.contains("local-project"));
         assert!(!remote_names.contains("other-host-project"));
 
+        // Remote catalog descriptors are path-referenced, and that reference
+        // resolves back to the remote host's catalog entry. A
+        // `BundledSkillId` reference would resolve against the local catalog
+        // and serve the wrong content.
+        let remote_bundled_descriptor = remote_skills
+            .iter()
+            .find(|skill| skill.name == "remote-bundled")
+            .unwrap();
+        assert_eq!(
+            remote_bundled_descriptor.reference,
+            SkillReference::Path(remote_bundled_path.clone())
+        );
+        // Path-referenced remote bundled descriptors keep their bundled scope:
+        // filters that hide non-invokable bundled skills (e.g. the `/open-skill`
+        // selector) key off the scope, not the reference variant.
+        assert_eq!(remote_bundled_descriptor.scope, SkillScope::Bundled);
+        let resolved_content = handle.read(&app, |manager, ctx| {
+            manager
+                .active_skill_by_reference(&remote_bundled_descriptor.reference, ctx)
+                .map(|skill| skill.content.clone())
+        });
+        assert_eq!(resolved_content, Some("# remote-bundled".to_string()));
+
         let disconnected_remote_skills = handle.read(&app, |manager, ctx| {
             manager.get_skills_for_working_directory(None, ctx)
         });
@@ -722,6 +747,16 @@ fn get_skills_for_working_directory_respects_location() {
         assert!(!local_names.contains("remote-bundled"));
         assert!(!local_names.contains("same-host-project"));
         assert!(!local_names.contains("other-host-project"));
+
+        // Local catalog descriptors keep their ID-based references.
+        let local_bundled_descriptor = local_skills
+            .iter()
+            .find(|skill| skill.name == "bundled")
+            .unwrap();
+        assert_eq!(
+            local_bundled_descriptor.reference,
+            SkillReference::BundledSkillId("bundled".to_string())
+        );
 
         handle.update(&mut app, |manager, _| {
             manager.is_cloud_environment = true;

@@ -857,6 +857,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
         diesel::delete(schema::mcp_server_panes::dsl::mcp_server_panes).execute(conn)?;
         diesel::delete(schema::code_review_panes::dsl::code_review_panes).execute(conn)?;
         diesel::delete(schema::ambient_agent_panes::dsl::ambient_agent_panes).execute(conn)?;
+        diesel::delete(schema::pane_leaves::dsl::pane_leaves).execute(conn)?;
         diesel::delete(schema::pane_branches::dsl::pane_branches).execute(conn)?;
         diesel::delete(schema::pane_nodes::dsl::pane_nodes).execute(conn)?;
         diesel::delete(schema::tabs::dsl::tabs).execute(conn)?;
@@ -945,6 +946,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                             _ => serde_yaml::to_string(&group.color).ok(),
                         },
                         collapsed: group.collapsed,
+                        pinned: group.pinned,
                     })
                     .collect();
                 diesel::insert_into(schema::tab_groups::dsl::tab_groups)
@@ -979,6 +981,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                     tab_group_id: tab
                         .group_id
                         .and_then(|group_id| tab_group_row_ids.get(&group_id).copied()),
+                    pinned: tab.pinned,
                 })
                 .collect();
 
@@ -2458,6 +2461,7 @@ fn read_sqlite_data(
                         name: group.name,
                         color,
                         collapsed: group.collapsed,
+                        pinned: group.pinned,
                     });
                 }
                 let saved_tabs: Vec<_> = tabs_for_window
@@ -2498,6 +2502,7 @@ fn read_sqlite_data(
                             left_panel,
                             right_panel,
                             group_id,
+                            pinned: tab.pinned,
                         })
                     })
                     .collect();

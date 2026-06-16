@@ -13,7 +13,7 @@ use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
 use ai::agent::file_locations::group_file_contexts_for_display;
-use ai::skills::SkillReference;
+use ai::skills::{ParsedSkill, SkillReference};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -1723,6 +1723,21 @@ pub fn render_read_files_text<A: Action>(
     formatted_files
 }
 
+/// Returns the display text for a `read_skill` action.
+///
+/// When the skill is found in the manager, formats it as a slash command
+/// (e.g. `/hello-world`). When the skill is unknown, falls back to the
+/// raw reference string (e.g. the path) **without** prepending an extra
+/// `/`, which would otherwise produce paths like `//home/user/…`.
+fn read_skill_display_text(
+    skill: Option<&ParsedSkill>,
+    skill_reference: &SkillReference,
+) -> String {
+    skill
+        .map(|s| format!("/{}", s.name))
+        .unwrap_or_else(|| skill_reference.to_string())
+}
+
 fn render_read_skill(
     props: Props,
     id: &AIAgentActionId,
@@ -1732,12 +1747,8 @@ fn render_read_skill(
     let appearance = Appearance::as_ref(app);
     let skill = SkillManager::as_ref(app).skill_by_reference(skill_reference);
 
-    let display_name = skill
-        .map(|skill| skill.name.clone())
-        .unwrap_or_else(|| skill_reference.to_string());
-
     let formatted_text = render_requested_action_body_text(
-        format!("/{display_name}").into(),
+        read_skill_display_text(skill, skill_reference).into(),
         appearance.monospace_font_family(),
         app,
     );

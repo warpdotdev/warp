@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use warp_util::standardized_path::StandardizedPath;
@@ -24,6 +24,7 @@ fn test_model(app: &mut App) -> ServerModel {
         in_progress: HashMap::new(),
         host_id: "test-host-id".to_string(),
         bundled_skills: None,
+        bundled_skills_sent: HashSet::new(),
         executors: HashMap::new(),
         pending_file_ops: PendingFileOps::new(),
         auth_state: Arc::new(AuthState::new_logged_out_for_test()),
@@ -91,6 +92,52 @@ fn bundled_skills_broadcast_reaches_all_connections() {
                 other => panic!("expected BundledSkillsSnapshot, got {other:?}"),
             }
         }
+    });
+}
+
+/// A connection can register its sender before its `Initialize` is handled.
+/// When parsing completes in that window, the parse-completion broadcast
+/// delivers the catalog; the `Initialize` push must not deliver it again.
+#[test]
+fn initialize_after_broadcast_does_not_resend_bundled_skills() {
+    App::test((), |mut app| async move {
+        let mut model = test_model(&mut app);
+        let conn = uuid::Uuid::new_v4();
+        let (tx, rx) = async_channel::unbounded();
+        model.connection_senders.insert(conn, tx);
+
+        // Initialize handled before parsing completes: nothing to send.
+        model.send_bundled_skills_snapshot_to_connection(conn);
+        assert!(rx.try_recv().is_err());
+
+        // Parsing completes and the broadcast reaches the registered connection.
+        model.bundled_skills = Some(vec![test_bundled_skill_proto("test-skill")]);
+        model.broadcast_bundled_skills_snapshot();
+        assert!(matches!(
+            rx.try_recv().map(|msg| msg.message),
+            Ok(Some(server_message::Message::BundledSkillsSnapshot(_)))
+        ));
+
+        // The connection's Initialize is handled after the broadcast: the
+        // catalog must not be delivered a second time.
+        model.send_bundled_skills_snapshot_to_connection(conn);
+        assert!(
+            rx.try_recv().is_err(),
+            "snapshot must not be re-sent to a connection that already received the broadcast"
+        );
+
+        // A connection that initializes after the broadcast still receives
+        // the catalog exactly once.
+        let late_conn = uuid::Uuid::new_v4();
+        let (late_tx, late_rx) = async_channel::unbounded();
+        model.connection_senders.insert(late_conn, late_tx);
+        model.send_bundled_skills_snapshot_to_connection(late_conn);
+        assert!(matches!(
+            late_rx.try_recv().map(|msg| msg.message),
+            Ok(Some(server_message::Message::BundledSkillsSnapshot(_)))
+        ));
+        model.send_bundled_skills_snapshot_to_connection(late_conn);
+        assert!(late_rx.try_recv().is_err());
     });
 }
 

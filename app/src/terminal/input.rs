@@ -6358,9 +6358,6 @@ impl Input {
             PromptAlertEvent::OpenBillingAndUsagePage => {
                 ctx.emit(Event::OpenSettings(SettingsSection::BillingAndUsage));
             }
-            PromptAlertEvent::OpenPrivacyPage => {
-                ctx.emit(Event::OpenSettings(SettingsSection::Privacy));
-            }
             PromptAlertEvent::OpenBillingPortal { team_uid } => {
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.generate_stripe_billing_portal_link(*team_uid, ctx);
@@ -15193,12 +15190,16 @@ impl Input {
         banner: Box<dyn Element>,
         is_compact_mode: bool,
         input_mode: InputMode,
+        appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        let constrained_banner = ConstrainedBox::new(banner)
+            .with_height(2. * appearance.line_height_ratio() * appearance.monospace_font_size())
+            .finish();
         let should_use_udi_spacing = self.should_show_universal_developer_input(app)
             || (FeatureFlag::AgentView.is_enabled()
                 && self.agent_view_controller.as_ref(app).is_active());
-        let mut container: Container = Container::new(banner);
+        let mut container: Container = Container::new(constrained_banner);
         let (suggestion_to_prompt_padding, suggestion_to_input_border_padding) =
             if should_use_udi_spacing {
                 (0., 0.)
@@ -15223,6 +15224,7 @@ impl Input {
     /// Renders a banner that should stay next to the input box.
     fn render_input_banner(
         &self,
+        appearance: &Appearance,
         app: &AppContext,
         input_mode: InputMode,
         is_compact_mode: bool,
@@ -15238,6 +15240,7 @@ impl Input {
                 prompt_suggestions_banner,
                 is_compact_mode,
                 input_mode,
+                appearance,
                 app,
             ))
         } else {
@@ -15547,9 +15550,6 @@ impl Input {
             }),
             PromptSuggestionsEvent::OpenBillingAndUsagePage => {
                 ctx.emit(Event::OpenSettings(SettingsSection::BillingAndUsage))
-            }
-            PromptSuggestionsEvent::OpenPrivacyPage => {
-                ctx.emit(Event::OpenSettings(SettingsSection::Privacy))
             }
             PromptSuggestionsEvent::OpenBillingPortal { team_uid } => {
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {

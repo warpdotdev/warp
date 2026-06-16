@@ -68,6 +68,7 @@ pub struct TabGroupSnapshot {
     pub name: Option<String>,
     pub color: SelectedTabColor,
     pub collapsed: bool,
+    pub pinned: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,6 +81,8 @@ pub struct TabSnapshot {
     pub right_panel: Option<RightPanelSnapshot>,
     /// Tab group this tab belongs to, if any.
     pub group_id: Option<TabGroupId>,
+    /// True when this tab is pinned to the front of the tab list.
+    pub pinned: bool,
 }
 
 impl TabSnapshot {

@@ -406,7 +406,7 @@ impl RemoteDiffStateModel {
                     .take()
                     .map(|start| start.elapsed());
                 let err = DiffStateError::from_message(&msg);
-                warp_core::report_error!(&err);
+                err.report_and_log();
                 send_telemetry_from_ctx!(
                     CodeReviewTelemetryEvent::LoadDiffFailed {
                         backend_origin: BackendOrigin::ClientRemote,
@@ -430,7 +430,7 @@ impl RemoteDiffStateModel {
                         .take()
                         .map(|start| start.elapsed());
                     let err = DiffStateError::empty_diff_data();
-                    warp_core::report_error!(&err);
+                    err.report_and_log();
                     send_telemetry_from_ctx!(
                         CodeReviewTelemetryEvent::LoadDiffFailed {
                             backend_origin: BackendOrigin::ClientRemote,
