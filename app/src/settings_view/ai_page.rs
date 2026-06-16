@@ -1,4 +1,4 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys, GeapRecoveryAction};
 use chrono::{DateTime, Local};
 use enum_iterator::all;
 use itertools::Itertools;
@@ -81,13 +81,14 @@ use crate::settings::{
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsForFallback, CodeSettings,
-    CodebaseContextEnabled, FileBasedMcpEnabled, GitOperationsAutogenEnabled,
-    IncludeAgentCommandsInHistory, InputSettings, IntelligentAutosuggestionsEnabled, MemoryEnabled,
-    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
-    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
-    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
-    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
-    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
+    CodebaseContextEnabled, FileBasedMcpEnabled, GeminiEnterpriseCredentialsEnabled,
+    GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
+    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
+    NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
+    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
+    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
+    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
+    WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -2280,6 +2281,7 @@ impl AISettingsPageView {
                 widgets.push(Box::new(CLIAgentWidget::default()));
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
+                widgets.push(Box::new(GeminiEnterpriseWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
@@ -2321,6 +2323,7 @@ impl AISettingsPageView {
                 widgets.push(Box::new(CloudHandoffWidget::default()));
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
+                widgets.push(Box::new(GeminiEnterpriseWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
@@ -3046,6 +3049,8 @@ pub enum AISettingsPageAction {
     ToggleAwsBedrockAutoLogin,
     ToggleAwsBedrockCredentialsEnabled,
     RefreshAwsBedrockCredentials,
+    RefreshGeminiEnterpriseCredentials,
+    ToggleGeminiEnterpriseCredentialsEnabled,
     ToggleCloudAgentComputerUse,
     ToggleFileBasedMcp,
     ToggleIncludeAgentCommandsInHistory,
@@ -3775,6 +3780,25 @@ impl TypedActionView for AISettingsPageView {
                 #[cfg(not(target_family = "wasm"))]
                 ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
                     drop(refresh_aws_credentials(manager, ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::RefreshGeminiEnterpriseCredentials => {
+                #[cfg(not(target_family = "wasm"))]
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    crate::ai::geap_credentials::force_refresh_geap_credentials(manager, ctx);
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleGeminiEnterpriseCredentialsEnabled => {
+                // Toggling the setting emits `GeminiEnterpriseCredentialsEnabled`,
+                // which the GEAP credential engine subscribes to and uses to
+                // kick off (or tear down) a mint — so enabling here triggers the
+                // refresh automatically.
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .gemini_enterprise_credentials_enabled
+                        .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -8610,6 +8634,244 @@ impl SettingsWidget for AwsBedrockWidget {
                 .finish(),
             )
             .with_child(self.render_aws_bedrock_section(appearance, app, is_bedrock_available));
+
+        Container::new(column.finish())
+            .with_margin_bottom(HEADER_PADDING)
+            .finish()
+    }
+}
+
+/// Surfaces the Gemini Enterprise (GEAP) enablement toggle and credential
+/// state with recovery copy. Unlike Bedrock there is no login command or
+/// profile to configure — the short-lived token is minted from the live Warp
+/// session via Workload Identity Federation — so this section is just the
+/// enablement toggle plus a status card with a Retry affordance for
+/// user-recoverable failures.
+struct GeminiEnterpriseWidget {
+    credentials_enabled_toggle: SwitchStateHandle,
+    refresh_credentials_button: ViewHandle<ActionButton>,
+}
+
+impl GeminiEnterpriseWidget {
+    fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
+        let refresh_credentials_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Retry", SecondaryTheme)
+                .with_icon(Icon::RefreshCw04)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(
+                        AISettingsPageAction::RefreshGeminiEnterpriseCredentials,
+                    );
+                })
+        });
+
+        // Re-render as the credential state transitions (mint started / loaded
+        // / failed) so the status row, icon, and Retry affordance stay in sync.
+        // `set_geap_credentials_state` emits `KeysUpdated` on every transition.
+        ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, ApiKeyManagerEvent::KeysUpdated) {
+                ctx.notify();
+            }
+        });
+        // Keep the enablement toggle (value + whether it's editable) in sync as
+        // the admin changes workspace policy or the member flips their own
+        // setting elsewhere.
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::TeamsChanged
+                    | UserWorkspacesEvent::UpdateWorkspaceSettingsSuccess
+            ) {
+                ctx.notify();
+            }
+        });
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
+                AISettingsChangedEvent::GeminiEnterpriseCredentialsEnabled { .. }
+                    | AISettingsChangedEvent::IsAnyAIEnabled { .. }
+            ) {
+                ctx.notify();
+            }
+        });
+
+        Self {
+            credentials_enabled_toggle: SwitchStateHandle::default(),
+            refresh_credentials_button,
+        }
+    }
+
+    fn render_gemini_enterprise_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let is_any_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+        let is_section_enabled =
+            is_any_ai_enabled && user_workspaces.is_gemini_enterprise_available_from_workspace();
+        let is_admin_enforced = matches!(
+            user_workspaces.gemini_enterprise_host_enablement_setting(),
+            crate::workspaces::workspace::HostEnablementSetting::Enforce
+        );
+        // Under ENFORCE the member can't flip the toggle (it stays on, grayed
+        // out); under RESPECT_USER_SETTING they can.
+        let is_toggleable =
+            is_section_enabled && user_workspaces.is_gemini_enterprise_credentials_toggleable();
+        let are_credentials_enabled = user_workspaces.is_gemini_enterprise_credentials_enabled(app);
+        let toggle_description = if is_admin_enforced {
+            "Warp routes eligible requests through your workspace's Gemini Enterprise Google Cloud \
+             project. This setting is managed by your organization."
+                .to_string()
+        } else {
+            "Warp routes eligible requests through your workspace's Gemini Enterprise Google Cloud \
+             project."
+                .to_string()
+        };
+
+        let mut column = Flex::column().with_spacing(16.).with_child(
+            Flex::column()
+                .with_child(
+                    render_ai_setting_toggle::<GeminiEnterpriseCredentialsEnabled>(
+                        "Use Gemini Enterprise credentials",
+                        AISettingsPageAction::ToggleGeminiEnterpriseCredentialsEnabled,
+                        are_credentials_enabled,
+                        is_toggleable,
+                        self.credentials_enabled_toggle.clone(),
+                        &RefCell::new(HashMap::new()),
+                        app,
+                    ),
+                )
+                .with_child(render_ai_setting_description(
+                    toggle_description,
+                    is_section_enabled,
+                    app,
+                ))
+                .finish(),
+        );
+
+        column.add_child(
+            Container::new(self.render_credential_status_card(
+                appearance,
+                are_credentials_enabled,
+                app,
+            ))
+            .with_margin_top(-styles::DESCRIPTION_MARGIN_BOTTOM)
+            .finish(),
+        );
+
+        column.finish()
+    }
+
+    fn render_credential_status_card(
+        &self,
+        appearance: &Appearance,
+        are_credentials_enabled: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let manager = ApiKeyManager::as_ref(app);
+        let state = manager.geap_credentials_state();
+        let (title_text, detail_text, icon) = state.user_facing_components();
+        // A retry only helps for transient / session-level failures. Hide it
+        // when GEAP is disabled (nothing to mint) or when the failure is an
+        // admin-config problem (bad WIF pool/provider or IAM binding) a client
+        // retry can't fix.
+        let show_retry = are_credentials_enabled
+            && state.recovery_action() != Some(GeapRecoveryAction::ContactAdmin);
+
+        let (title_color, detail_color) = (
+            styles::header_font_color(are_credentials_enabled, app),
+            styles::description_font_color(are_credentials_enabled, app),
+        );
+
+        let icon = Container::new(
+            ConstrainedBox::new(icon.to_warpui_icon(title_color).finish())
+                .with_width(16.)
+                .with_height(16.)
+                .finish(),
+        )
+        .with_horizontal_padding(4.)
+        .finish();
+
+        let text_column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(4.)
+            .with_child(
+                Text::new_inline(title_text, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .with_color(title_color.into())
+                    .finish(),
+            )
+            .with_child(
+                Text::new(detail_text, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_color(detail_color.into())
+                    .soft_wrap(true)
+                    .finish(),
+            );
+
+        let mut row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(12.)
+            .with_child(
+                Expanded::new(
+                    1.,
+                    Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(12.)
+                        .with_child(icon)
+                        .with_child(Expanded::new(1., text_column.finish()).finish())
+                        .finish(),
+                )
+                .finish(),
+            );
+        if show_retry {
+            row = row.with_child(ChildView::new(&self.refresh_credentials_button).finish());
+        }
+
+        Container::new(row.finish())
+            .with_uniform_padding(12.)
+            .with_background(appearance.theme().surface_2())
+            .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .finish()
+    }
+}
+
+impl SettingsWidget for GeminiEnterpriseWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "gemini enterprise geap google vertex credentials"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        // Show whenever the admin has made GEAP available for the workspace
+        // (and the feature flag is on) — independent of the member's own
+        // enablement toggle, so a member who turned it off can still see the
+        // section to turn it back on, mirroring AWS Bedrock.
+        FeatureFlag::GeminiEnterprise.is_enabled()
+            && UserWorkspaces::as_ref(app).is_gemini_enterprise_available_from_workspace()
+    }
+
+    fn render(
+        &self,
+        _view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let column = Flex::column()
+            .with_child(render_separator(appearance))
+            .with_child(
+                build_sub_header(
+                    appearance,
+                    "Gemini Enterprise",
+                    Some(styles::header_font_color(true, app)),
+                )
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+            )
+            .with_child(self.render_gemini_enterprise_section(appearance, app));
 
         Container::new(column.finish())
             .with_margin_bottom(HEADER_PADDING)

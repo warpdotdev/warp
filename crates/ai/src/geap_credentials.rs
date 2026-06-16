@@ -1,5 +1,7 @@
 use std::time::{Duration, SystemTime};
 
+use chrono::{DateTime, Local};
+use warp_core::ui::Icon;
 use warp_multi_agent_api as api;
 
 /// Refresh the access token this long before its hard expiry
@@ -77,6 +79,11 @@ pub enum GeapCredentialsState {
     #[default]
     Missing,
     Disabled,
+    /// Enabled for this user, but the workspace admin hasn't finished
+    /// configuring Gemini Enterprise (no audience yet), so there is nothing to
+    /// mint from. Distinct from `Missing` (a cold start before the first mint)
+    /// so the UI can tell the user their admin still needs to act.
+    Unconfigured,
     Refreshing {
         previous: Option<(GeapCredentials, GeapMintBinding)>,
     },
@@ -89,3 +96,142 @@ pub enum GeapCredentialsState {
         error: LoadGeapCredentialsError,
     },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeapRecoveryAction {
+    Retry,
+    ContactAdmin,
+}
+
+/// A 4xx status (other than 429 Too Many Requests) from a Google auth leg means
+/// a configuration/permission problem an admin must fix. A network failure (no
+/// status), 429, or any 5xx is transient and user-retryable.
+fn is_admin_config_status(status: Option<u16>) -> bool {
+    match status {
+        Some(code) => (400..500).contains(&code) && code != 429,
+        None => false,
+    }
+}
+
+impl LoadGeapCredentialsError {
+    pub fn user_facing(&self) -> (String, String, GeapRecoveryAction) {
+        match self {
+            Self::MintIdentityToken { .. } => (
+                "Couldn't authenticate with Warp".to_string(),
+                "Warp couldn't create Gemini Enterprise credentials. Check your network \
+                 connection and that you're signed in to Warp, then try again."
+                    .to_string(),
+                GeapRecoveryAction::Retry,
+            ),
+            Self::ExchangeToken { status, .. } if is_admin_config_status(*status) => (
+                "Gemini Enterprise isn't configured correctly".to_string(),
+                "Google rejected Warp's identity token. Ask your workspace admin to verify the \
+                 Workload Identity Federation pool and provider (audience) configured for \
+                 Gemini Enterprise."
+                    .to_string(),
+                GeapRecoveryAction::ContactAdmin,
+            ),
+            Self::ExchangeToken { .. } => (
+                "Couldn't reach Google to authorize Gemini Enterprise".to_string(),
+                "Google's token service was unavailable. This is usually temporary — try again \
+                 in a moment."
+                    .to_string(),
+                GeapRecoveryAction::Retry,
+            ),
+            Self::ImpersonateServiceAccount { status, .. } if is_admin_config_status(*status) => (
+                "Gemini Enterprise service account access is misconfigured".to_string(),
+                "Warp's identity isn't allowed to impersonate the configured service account. \
+                 Ask your workspace admin to grant the Workload Identity User role \
+                 (roles/iam.workloadIdentityUser) and confirm the IAM Service Account \
+                 Credentials API is enabled."
+                    .to_string(),
+                GeapRecoveryAction::ContactAdmin,
+            ),
+            Self::ImpersonateServiceAccount { .. } => (
+                "Couldn't reach Google to authorize Gemini Enterprise".to_string(),
+                "Google's IAM service was unavailable while authorizing the service account. \
+                 This is usually temporary — try again in a moment."
+                    .to_string(),
+                GeapRecoveryAction::Retry,
+            ),
+        }
+    }
+
+    pub fn recovery_action(&self) -> GeapRecoveryAction {
+        self.user_facing().2
+    }
+}
+
+fn format_status_timestamp(time: SystemTime) -> String {
+    let datetime: DateTime<Local> = time.into();
+    if datetime.date_naive() == Local::now().date_naive() {
+        datetime.format("%-I:%M %p").to_string()
+    } else {
+        datetime.format("%b %-d at %-I:%M %p").to_string()
+    }
+}
+
+impl GeapCredentialsState {
+    pub fn user_facing_components(&self) -> (String, String, Icon) {
+        match self {
+            Self::Missing => (
+                "Gemini Enterprise credentials not loaded".to_string(),
+                "Warp hasn't loaded your Gemini Enterprise credentials yet.".to_string(),
+                Icon::Key,
+            ),
+            Self::Disabled => (
+                "Gemini Enterprise disabled".to_string(),
+                "Warp will not load Gemini Enterprise credentials until it's enabled by you or \
+                 your workspace admin."
+                    .to_string(),
+                Icon::Key,
+            ),
+            Self::Unconfigured => (
+                "Gemini Enterprise setup incomplete".to_string(),
+                "Your workspace admin still needs to finish configuring Gemini Enterprise before \
+                 Warp can load credentials."
+                    .to_string(),
+                Icon::AlertTriangle,
+            ),
+            Self::Refreshing { .. } => (
+                "Refreshing credentials...".to_string(),
+                "Loading your Gemini Enterprise credentials into Warp".to_string(),
+                Icon::RefreshCw04,
+            ),
+            Self::Loaded {
+                credentials,
+                loaded_at,
+                ..
+            } => (
+                "Credentials loaded".to_string(),
+                match credentials.expires_at() {
+                    Some(expires_at) => format!(
+                        "Loaded at {}, expires {}",
+                        format_status_timestamp(*loaded_at),
+                        format_status_timestamp(expires_at)
+                    ),
+                    None => format!("Loaded at {}", format_status_timestamp(*loaded_at)),
+                },
+                Icon::CheckCircleBroken,
+            ),
+            Self::Failed { error } => {
+                let (title, description, _) = error.user_facing();
+                (title, description, Icon::AlertTriangle)
+            }
+        }
+    }
+
+    pub fn recovery_action(&self) -> Option<GeapRecoveryAction> {
+        match self {
+            Self::Failed { error } => Some(error.recovery_action()),
+            // An incomplete admin setup can't be retried from the client, so it
+            // routes to the same admin-guidance affordance as a config failure.
+            Self::Unconfigured => Some(GeapRecoveryAction::ContactAdmin),
+            Self::Missing | Self::Disabled | Self::Refreshing { .. } | Self::Loaded { .. } => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "geap_credentials_tests.rs"]
+mod tests;

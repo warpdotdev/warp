@@ -136,7 +136,6 @@ pub(crate) fn refresh_geap_credentials(
     refresh_geap_credentials_with_options(manager, false, ctx);
 }
 
-#[allow(dead_code)]
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
@@ -162,6 +161,7 @@ pub(crate) fn refresh_geap_credentials_if_needed(
             ..
         } => *minted_for != binding || credentials.needs_refresh(),
         GeapCredentialsState::Missing
+        | GeapCredentialsState::Unconfigured
         | GeapCredentialsState::Disabled
         | GeapCredentialsState::Failed { .. } => true,
     };
@@ -183,7 +183,7 @@ fn refresh_geap_credentials_with_options(
             return;
         }
         GeapPolicy::Unconfigured => {
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -260,7 +260,7 @@ fn apply_geap_mint_result(
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
