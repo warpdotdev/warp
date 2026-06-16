@@ -573,13 +573,15 @@ impl StartAgentExecutor {
 
 /// Whether a child that failed before launch should have its hidden pane and
 /// conversation cleaned up. Only terminal launch failures qualify; recoverable
-/// `Blocked` startup states (e.g. awaiting GitHub auth) keep their chip so the
-/// user can resolve them.
+/// `Blocked` startup states (e.g. awaiting GitHub auth) and non-terminal
+/// `TransientError` (a recovery is in flight) keep their chip so the user can
+/// resolve them or let the retry complete.
 fn should_cleanup_failed_child_launch(status: &ConversationStatus) -> bool {
     match status {
         ConversationStatus::Error | ConversationStatus::Cancelled => true,
         ConversationStatus::Blocked { .. }
         | ConversationStatus::InProgress
+        | ConversationStatus::TransientError
         | ConversationStatus::Success
         | ConversationStatus::WaitingForEvents => false,
     }
