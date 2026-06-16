@@ -8,7 +8,7 @@ use crate::terminal::model_events::ModelEventDispatcher;
 use crate::{
     ai::blocklist::{BlocklistAIContextModel, BlocklistAIInputEvent, BlocklistAIInputModel},
     completer::SessionContext,
-    context_chips::display_chip::DisplayChipAction,
+    context_chips::display_chip::{DisplayChipAction, PromptChipShellCommand},
     terminal::input::MenuPositioningProvider,
 };
 use std::path::PathBuf;

@@ -124,7 +124,6 @@ impl DProtoHook {
             DProtoHook::Bootstrapped { value } => value.session_id.map(SessionId::from),
             DProtoHook::InputBuffer { value } => value.session_id.map(SessionId::from),
             DProtoHook::Clear { value } => value.session_id.map(SessionId::from),
-            DProtoHook::FinishUpdate { value } => value.session_id.map(SessionId::from),
             DProtoHook::PreInteractiveSSHSession { value } => value.session_id.map(SessionId::from),
             DProtoHook::SSH { value } => value.session_id.map(SessionId::from),
             DProtoHook::InitSubshell { value } => value.session_id.map(SessionId::from),
@@ -151,7 +150,6 @@ impl DProtoHook {
             | DProtoHook::Clear { .. }
             | DProtoHook::InitSubshell { .. }
             | DProtoHook::InitSsh { .. }
-            | DProtoHook::FinishUpdate { .. }
             | DProtoHook::ExitShell { .. } => true,
             DProtoHook::SourcedRcFileForWarp { .. }
             | DProtoHook::RemoteWarpificationIsUnavailable { .. }
@@ -385,15 +383,6 @@ impl DProtoHook {
                 "session_id" => value.session_id = v.parse::<u64>().ok(),
                 _ => {
                     log::warn!("Tried to add unknown field {key} to Clear hook");
-                }
-            },
-            DProtoHook::FinishUpdate { value } => match key.as_ref() {
-                "update_id" => {
-                    value.update_id = v;
-                }
-                "session_id" => value.session_id = v.parse::<u64>().ok(),
-                _ => {
-                    log::warn!("Tried to add unknown field {key} to FinishUpdate hook");
                 }
             },
             DProtoHook::InputBuffer { value } => match key.as_ref() {

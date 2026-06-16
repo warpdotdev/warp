@@ -264,8 +264,17 @@ impl NotebookLinks {
                 path,
                 session,
                 is_markdown: true,
-                ..
+                line_and_column,
             } => {
+                #[cfg(feature = "local_fs")]
+                {
+                    if *EditorSettings::as_ref(ctx).prefer_markdown_viewer {
+                        ctx.emit(LinkEvent::OpenFileNotebook { path, session });
+                    } else {
+                        open_file(path, line_and_column, ctx);
+                    }
+                }
+                #[cfg(not(feature = "local_fs"))]
                 ctx.emit(LinkEvent::OpenFileNotebook { path, session });
             }
             LinkTarget::LocalFile {

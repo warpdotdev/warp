@@ -19,7 +19,6 @@ struct MockHandler {
     identity_reported: bool,
     d_proto_hooks: Vec<DProtoHook>,
     pluggable_notifications: Vec<(Option<String>, String)>,
-    cwd_updates: Vec<String>,
     registered_session_ids: HashSet<SessionId>,
 }
 
@@ -253,7 +252,6 @@ impl Default for MockHandler {
             identity_reported: false,
             d_proto_hooks: Vec::new(),
             pluggable_notifications: Vec::new(),
-            cwd_updates: Vec::new(),
             registered_session_ids: HashSet::new(),
         }
     }

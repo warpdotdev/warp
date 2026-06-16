@@ -57,8 +57,6 @@ use crate::terminal::model::session::SessionInfo;
 use crate::terminal::shell::ShellType;
 
 use crate::terminal::model::secrets::ObfuscateSecrets;
-#[cfg(not(target_family = "wasm"))]
-use warpui::util::save_as_file;
 
 use base64::Engine;
 use hex::FromHexError;

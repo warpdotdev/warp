@@ -38,28 +38,14 @@ use crate::ai::predict::prompt_suggestions::{
     has_pending_code_or_unit_test_prompt_suggestion,
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
-use crate::ai::skills::{SkillManager, SkillOpenOrigin, SkillTelemetryEvent};
-use crate::ai::AIRequestUsageModel;
-use crate::ai_assistant::execution_context::WarpAiExecutionContext;
-use crate::appearance::{Appearance, AppearanceEvent};
-use crate::channel::{Channel, ChannelState};
-use crate::cloud_object::model::actions::ObjectActionType;
-use crate::cloud_object::model::generic_string_model::StringModel;
-use crate::cloud_object::model::persistence::CloudModel;
-use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Space};
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeSource;
-use crate::code_review::diff_state::DiffMode;
-use crate::completer::SessionContext;
-use crate::context_chips::display::{PromptDisplay, PromptDisplayEvent};
-use crate::context_chips::display_chip::{DisplayChipConfig, PromptChipShellCommand};
-use crate::context_chips::prompt_type::PromptType;
+use crate::ai::skills::SkillManager;
 use crate::context_chips::spacing;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search::slash_command_menu::static_commands::commands::{self, COMMAND_REGISTRY};
 
+#[cfg(feature = "local_fs")]
+use crate::code::editor_management::CodeSource;
 use crate::suggestions::ignored_suggestions_model::{
     IgnoredSuggestionsModel, IgnoredSuggestionsModelEvent, SuggestionType,
 };
@@ -104,11 +90,6 @@ use crate::util::bindings::keybinding_name_to_normalized_string;
 use crate::util::file::external_editor;
 use crate::util::truncation::truncate_from_end;
 use crate::workspace::metadata::PaletteSource;
-#[allow(unused_imports)]
-use crate::ASSETS;
-
-#[cfg(feature = "local_fs")]
-use crate::code::editor_management::CodeSource;
 
 use crate::ai::blocklist::AttachmentType;
 use crate::ai::mcp::TemplatableMCPServerManager;
@@ -133,7 +114,7 @@ use crate::{
     completer::SessionContext,
     context_chips::{
         display::{PromptDisplay, PromptDisplayEvent},
-        display_chip::DisplayChipConfig,
+        display_chip::{DisplayChipConfig, PromptChipShellCommand},
         prompt_type::PromptType,
     },
     debounce::debounce,
@@ -172,8 +153,8 @@ use crate::{
         MAX_TIMES_TO_SHOW_AUTOSUGGESTION_HINT,
     },
     settings_view::{flags, SettingsSection},
-    terminal::metadata::CommandXRayTrigger,
     terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView},
+    terminal::{metadata::CommandXRayTrigger, shell::ShellType},
     ui_components::{blended_colors, icons::Icon},
     user_config::WarpConfig,
     util::bindings::{self, CustomAction},
