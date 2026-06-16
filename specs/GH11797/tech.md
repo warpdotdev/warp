@@ -21,13 +21,15 @@ The SVN chips (`SvnBranch`, `SvnDirtyItems`) are the closest analogue: shell-bas
 
 ### `jj_bookmark()`
 
-Produces the chip value text using `jj log` with output templates. `change_id.shortest(8)`
-returns the shortest unique prefix of the change ID, up to 8 characters (e.g., `qquqvwzk`).
-All `jj log` and `jj diff` invocations include `--ignore-working-copy` to prevent
-unintentional auto-snapshots during prompt rendering. Logic:
+Produces the chip value text using `jj log` with output templates. `change_id.short(8)`
+returns the change ID truncated to exactly 8 characters (e.g., `qquqvwzk`) — chosen over
+`shortest(8)` so the chip has a fixed visual width independent of repo size.
+`jj log` invocations include `--ignore-working-copy` to prevent unintentional auto-snapshots
+during prompt rendering (this command is read-only — see the `jj_dirty_items` section for
+the asymmetric case). Logic:
 
 1. Query bookmarks on `@` — if found, output them directly.
-2. Otherwise, get the change ID via `change_id.shortest(8)`.
+2. Otherwise, get the change ID via `change_id.short(8)`.
 3. Query the nearest bookmarked ancestor via `latest(ancestors(@) & bookmarks() ~ @)`.
 4. If an ancestor bookmark exists, output `"<change_id> on <bookmarks>"`; otherwise output just `<change_id>`.
 
@@ -37,7 +39,7 @@ const SH_BOOKMARK_CMD: &str = "bookmarks=$(jj log -r '@' --no-graph --ignore-wor
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
     && if [ -n \"$bookmarks\" ]; then echo \"$bookmarks\"; \
     else cid=$(jj log -r '@' --no-graph --ignore-working-copy \
-    -T 'change_id.shortest(8)' 2>/dev/null); \
+    -T 'change_id.short(8)' 2>/dev/null); \
     ancestor_bookmarks=$(jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
     --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
@@ -51,7 +53,7 @@ const FISH_BOOKMARK_CMD: &str = "set bookmarks (jj log -r '@' --no-graph --ignor
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1) \
     && if test -n \"$bookmarks\"; echo $bookmarks; \
     else; set cid (jj log -r '@' --no-graph --ignore-working-copy \
-    -T 'change_id.shortest(8)' 2>/dev/null); \
+    -T 'change_id.short(8)' 2>/dev/null); \
     set ancestor_bookmarks (jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
     --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>/dev/null | head -1); \
@@ -65,7 +67,7 @@ const PWSH_BOOKMARK_CMD: &str = "$bookmarks = jj log -r '@' --no-graph --ignore-
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
     if ($bookmarks) { $bookmarks } \
     else { $cid = jj log -r '@' --no-graph --ignore-working-copy \
-    -T 'change_id.shortest(8)' 2>$null; \
+    -T 'change_id.short(8)' 2>$null; \
     $ancestorBookmarks = jj log -r 'latest(ancestors(@) & bookmarks() ~ @)' --no-graph \
     --ignore-working-copy \
     -T 'separate(\" \", bookmarks.map(|x| x.name()))' 2>$null; \
