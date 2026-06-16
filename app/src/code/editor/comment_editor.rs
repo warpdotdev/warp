@@ -5,6 +5,7 @@ use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_editor::render::model::RenderState;
 use warpui::elements::{
     Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
     MainAxisAlignment, MainAxisSize, ParentElement, Radius, Shrinkable, Text,
@@ -21,6 +22,7 @@ use crate::code::editor::comments::{EditorCommentsModel, PendingCommentEvent};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code_review::comments::{CommentId, CommentOrigin};
 use crate::editor::InteractionState;
+use crate::features::FeatureFlag;
 use crate::notebooks::editor::model::NotebooksEditorModel;
 use crate::notebooks::editor::rich_text_styles;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorConfig, RichTextEditorView};
@@ -34,6 +36,97 @@ use crate::view_components::action_button::{
 
 /// Default width of the comment editor, in pixels.
 pub(crate) const DEFAULT_COMMENT_MAX_WIDTH: f32 = 750.0;
+
+/// Maximum height of the comment editor, in pixels. Past this height the editor scrolls its content
+/// internally instead of growing further.
+pub(crate) const MAX_COMMENT_HEIGHT: f32 = 200.0;
+
+/// Chrome dimensions for the inline comment shell. These values mirror the padding/border used
+/// in [`render_inline_comment_shell`] and are kept as named constants so [`comment_chrome_height`]
+/// stays in sync with the shell's visual layout automatically.
+mod chrome {
+    /// Top padding of the body area inside the comment shell.
+    pub(super) const BODY_TOP_PADDING: f32 = 8.0;
+    /// Bottom padding of the body area inside the comment shell.
+    pub(super) const BODY_BOTTOM_PADDING: f32 = 4.0;
+    /// Vertical padding of the footer row (top + bottom).
+    pub(super) const FOOTER_VERTICAL_PADDING: f32 = 4.0 * 2.0;
+    /// Top border separating body from footer.
+    pub(super) const FOOTER_BORDER: f32 = 1.0;
+    /// Outer container border (top + bottom).
+    pub(super) const OUTER_BORDER: f32 = 1.0 * 2.0;
+
+    /// Fixed vertical chrome excluding the footer button row (which scales with appearance).
+    /// Slightly generous so the reserved inline block is never shorter than the painted shell.
+    pub(super) const STATIC_HEIGHT: f32 = BODY_TOP_PADDING
+        + BODY_BOTTOM_PADDING
+        + FOOTER_VERTICAL_PADDING
+        + FOOTER_BORDER
+        + OUTER_BORDER
+        + 1.0; // extra pixel of tolerance
+}
+
+/// Total vertical chrome around the inner comment editor: the static paddings/borders plus the
+/// footer button row measured at the current appearance, so the reserved inline height tracks
+/// button-height changes (e.g. UI font scaling) instead of assuming the default 24px row.
+pub(crate) fn comment_chrome_height(
+    footer_button: &ViewHandle<ActionButton>,
+    app: &AppContext,
+) -> f32 {
+    chrome::STATIC_HEIGHT + footer_button.as_ref(app).height(app)
+}
+
+pub(crate) fn inline_comment_background(appearance: &Appearance) -> ColorU {
+    blended_colors::neutral_2(appearance.theme())
+}
+
+pub(crate) fn inline_comment_border_color(appearance: &Appearance) -> ColorU {
+    blended_colors::neutral_4(appearance.theme())
+}
+
+pub(crate) fn render_inline_comment_shell(
+    body: Box<dyn Element>,
+    footer_row: Box<dyn Element>,
+    max_height: Option<f32>,
+    footer_horizontal_padding: f32,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let background = inline_comment_background(appearance);
+    let border_color = inline_comment_border_color(appearance);
+
+    let body = Container::new(Clipped::new(body).finish())
+        .with_padding_bottom(chrome::BODY_BOTTOM_PADDING)
+        .with_padding_top(chrome::BODY_TOP_PADDING)
+        .with_horizontal_padding(12.)
+        .finish();
+    let body = if max_height.is_some() {
+        Shrinkable::new(1., body).finish()
+    } else {
+        body
+    };
+
+    let content = Flex::column()
+        .with_child(body)
+        .with_child(
+            Container::new(footer_row)
+                .with_vertical_padding(chrome::FOOTER_VERTICAL_PADDING / 2.0)
+                .with_horizontal_padding(footer_horizontal_padding)
+                .with_border(Border::top(chrome::FOOTER_BORDER).with_border_fill(border_color))
+                .finish(),
+        )
+        .finish();
+
+    let mut constrained = ConstrainedBox::new(content).with_max_width(DEFAULT_COMMENT_MAX_WIDTH);
+    if let Some(max_height) = max_height {
+        constrained = constrained.with_max_height(max_height);
+    }
+
+    Container::new(constrained.finish())
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .with_background_color(background)
+        .with_border(Border::all(chrome::OUTER_BORDER / 2.0).with_border_fill(border_color))
+        .finish()
+}
 
 #[derive(Debug)]
 pub enum CommentEditorEvent {
@@ -104,46 +197,20 @@ impl CommentEditor {
         me
     }
 
-    #[allow(unused)] // TODO(CODE-1464): use this
-    pub fn new_embedded(
-        ctx: &mut ViewContext<Self>,
-        comment_model: ModelHandle<EditorCommentsModel>,
-        comment_id: Option<CommentId>,
-        line: EditorLineLocation,
-    ) -> Self {
-        let editor = create_editable_comment_markdown_editor(None, ctx);
-
-        ctx.subscribe_to_view(&editor, |me, _, event, ctx| {
-            me.handle_editor_event(event, ctx);
-        });
-
-        ctx.subscribe_to_model(&comment_model, |me, _, event, ctx| {
-            me.handle_comment_model_event(event, ctx);
-        });
-
-        let (save_button, close_button, remove_button) = Self::create_buttons(ctx);
-
-        let show_remove_button = comment_id.is_some();
-
-        let mut me = Self {
-            comment_id,
-            editor,
-            save_button,
-            close_button,
-            remove_button,
-            line: Some(line),
-            show_remove_button,
-            save_button_disabled: true,
-            laid_out_size: RefCell::new(None),
-            is_imported_comment: false,
-        };
-        me.update_save_button_state(ctx);
-        me
-    }
-
     #[cfg_attr(not(feature = "local_fs"), allow(unused))]
     pub fn comment_text(&self, app: &AppContext) -> String {
         self.editor.as_ref(app).model().as_ref(app).markdown(app)
+    }
+
+    /// The render state backing the inner markdown editor. Observing it lets a host re-measure the
+    /// composer's reserved inline height when its content (and therefore laid-out height) changes.
+    pub fn inner_render_state(&self, app: &AppContext) -> ModelHandle<RenderState> {
+        self.editor
+            .as_ref(app)
+            .model()
+            .as_ref(app)
+            .render_state()
+            .clone()
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(unused))]
@@ -151,7 +218,6 @@ impl CommentEditor {
         self.laid_out_size.borrow().as_ref().cloned()
     }
 
-    #[allow(unused)] // TODO(CODE-1464): use this
     pub fn set_laid_out_size(&self, value: Vector2F) {
         self.laid_out_size.replace(Some(value));
     }
@@ -236,13 +302,30 @@ impl CommentEditor {
                 self.save_comment(ctx);
             }
             EditorViewEvent::EscapePressed => {
-                // Dismiss the comment composer when pressing Escape on an empty draft.
-                if self.editor.as_ref(ctx).model().as_ref(ctx).is_empty(ctx) {
-                    self.reset(ctx);
-                    ctx.emit(CommentEditorEvent::CloseEditor);
-                }
+                self.handle_escape(ctx);
             }
-            _ => {}
+            EditorViewEvent::Focused
+            | EditorViewEvent::Navigate(_)
+            | EditorViewEvent::OpenFile { .. }
+            | EditorViewEvent::RunWorkflow(_)
+            | EditorViewEvent::EditWorkflow(_)
+            | EditorViewEvent::OpenedBlockInsertionMenu(_)
+            | EditorViewEvent::OpenedEmbeddedObjectSearch
+            | EditorViewEvent::OpenedFindBar
+            | EditorViewEvent::InsertedEmbeddedObject(_)
+            | EditorViewEvent::CopiedBlock { .. }
+            | EditorViewEvent::NavigatedCommands
+            | EditorViewEvent::ChangedSelectionMode(_)
+            | EditorViewEvent::TextSelectionChanged => {}
+        }
+    }
+
+    /// Dismiss the composer when Escape is pressed, but only if the draft body is empty.
+    /// A non-empty draft is preserved so Escape doesn't silently discard work.
+    fn handle_escape(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.editor.as_ref(ctx).model().as_ref(ctx).is_empty(ctx) {
+            self.reset(ctx);
+            ctx.emit(CommentEditorEvent::CloseEditor);
         }
     }
 
@@ -252,7 +335,13 @@ impl CommentEditor {
             // The `reset_with_markdown` call below is a band-aid fix.
             editor.reset_with_markdown("", ctx);
         });
+        self.comment_id = None;
         self.line = Some(line.clone());
+        self.show_remove_button = false;
+        self.is_imported_comment = false;
+        self.save_button.update(ctx, |button, ctx| {
+            button.set_label("Comment", ctx);
+        });
         self.update_save_button_state(ctx);
     }
 
@@ -315,7 +404,6 @@ impl CommentEditor {
             comment_text: comment_text.clone(),
             line: self.line.clone(),
         });
-        self.reset(ctx);
         ctx.emit(CommentEditorEvent::CloseEditor);
     }
 
@@ -400,45 +488,22 @@ impl View for CommentEditor {
 
     fn render(&self, ctx: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::handle(ctx).as_ref(ctx);
-        let theme = appearance.theme();
-        let background = blended_colors::neutral_2(theme);
-        let border_color = blended_colors::neutral_4(theme);
+        let background = inline_comment_background(appearance);
 
         let footer_row = self.render_footer_row(appearance, background);
 
-        Container::new(
-            ConstrainedBox::new(
-                Flex::column()
-                    .with_child(
-                        Shrinkable::new(
-                            1.,
-                            Container::new(
-                                Clipped::new(ChildView::new(&self.editor).finish()).finish(),
-                            )
-                            .with_padding_bottom(4.)
-                            .with_padding_top(8.)
-                            .with_horizontal_padding(12.)
-                            .finish(),
-                        )
-                        .finish(),
-                    )
-                    .with_child(
-                        Container::new(footer_row)
-                            .with_vertical_padding(4.)
-                            .with_horizontal_padding(4.)
-                            .with_border(Border::top(1.).with_border_fill(border_color))
-                            .finish(),
-                    )
-                    .finish(),
-            )
-            .with_max_height(200.)
-            .with_max_width(DEFAULT_COMMENT_MAX_WIDTH)
-            .finish(),
+        let footer_padding = if FeatureFlag::EmbeddedCodeReviewComments.is_enabled() {
+            12.
+        } else {
+            4.
+        };
+        render_inline_comment_shell(
+            ChildView::new(&self.editor).finish(),
+            footer_row,
+            Some(MAX_COMMENT_HEIGHT),
+            footer_padding,
+            appearance,
         )
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-        .with_background_color(background)
-        .with_border(Border::all(1.).with_border_fill(border_color))
-        .finish()
     }
 
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
