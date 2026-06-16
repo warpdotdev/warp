@@ -359,6 +359,10 @@ impl DecorationLayer for SyntaxTreeState {
                     let Some(new_tree) = new_tree else {
                         // Buffer exceeded MAX_PARSE_BYTES; skip updating the syntax tree, but
                         // still emit DecorationUpdated so any delayed rendering is flushed
+                        let mut syntax_tree_lock = model.syntax_tree.lock();
+                        syntax_tree_lock.remove(&version);
+                        drop(syntax_tree_lock);
+                        model.invalidate_highlight_cache_for_version(version);
                         // (the editor delays showing content until this event fires).
                         ctx.emit(DecorationStateEvent::DecorationUpdated { version });
                         return;
