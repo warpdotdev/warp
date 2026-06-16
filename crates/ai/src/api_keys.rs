@@ -7,6 +7,10 @@ use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
 
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
+pub use crate::geap_credentials::{
+    GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
+    LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
+};
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
 
@@ -164,6 +168,8 @@ pub struct ApiKeyManager {
     pub(crate) grok_refresh_in_flight: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
     aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy,
+    /// In-memory Gemini Enterprise (GEAP) credential state.
+    pub(crate) geap_credentials_state: GeapCredentialsState,
     secure_storage_write_version: u64,
     grok_secure_storage_write_version: u64,
 }
@@ -181,6 +187,7 @@ impl ApiKeyManager {
             grok_refresh_in_flight: false,
             aws_credentials_state: AwsCredentialsState::Missing,
             aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
+            geap_credentials_state: GeapCredentialsState::Missing,
             secure_storage_write_version: 0,
             grok_secure_storage_write_version: 0,
         }
@@ -321,6 +328,22 @@ impl ApiKeyManager {
         &self.aws_credentials_state
     }
 
+    pub fn set_geap_credentials_state(
+        &mut self,
+        state: GeapCredentialsState,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.geap_credentials_state == state {
+            return;
+        }
+        self.geap_credentials_state = state;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    pub fn geap_credentials_state(&self) -> &GeapCredentialsState {
+        &self.geap_credentials_state
+    }
+
     pub fn aws_credentials_refresh_strategy(&self) -> AwsCredentialsRefreshStrategy {
         self.aws_credentials_refresh_strategy.clone()
     }
@@ -385,6 +408,7 @@ impl ApiKeyManager {
         &self,
         include_byo_keys: bool,
         include_aws_bedrock_credentials: bool,
+        geap_binding: Option<GeapMintBinding>,
     ) -> Option<api::request::settings::ApiKeys> {
         let anthropic = include_byo_keys
             .then(|| self.keys.anthropic.clone())
@@ -434,12 +458,36 @@ impl ApiKeyManager {
             })
             .flatten();
 
+        // Gemini Enterprise (GEAP) credentials attach only when the caller's
+        // gate is on AND the stored token was minted for that same
+        // (user, audience, SA) binding.
+        let google_cloud_credentials: Option<
+            api::request::settings::api_keys::GoogleCloudCredentials,
+        > = geap_binding
+            .as_ref()
+            .and_then(|binding| match self.geap_credentials_state {
+                GeapCredentialsState::Loaded {
+                    ref credentials,
+                    ref minted_for,
+                    ..
+                } if minted_for == binding => credentials
+                    .access_token_for_request()
+                    .map(|_| credentials.clone().into()),
+                GeapCredentialsState::Refreshing {
+                    previous: Some((ref credentials, ref minted_for)),
+                } if minted_for == binding => credentials
+                    .access_token_for_request()
+                    .map(|_| credentials.clone().into()),
+                _ => None,
+            });
+
         if anthropic.is_empty()
             && openai.is_empty()
             && google.is_empty()
             && open_router.is_empty()
             && grok_oauth_access_token.is_empty()
             && aws_credentials.is_none()
+            && google_cloud_credentials.is_none()
         {
             None
         } else {
@@ -451,9 +499,7 @@ impl ApiKeyManager {
                 grok_oauth_access_token,
                 allow_use_of_warp_credits: false,
                 aws_credentials,
-                // GCP credentials (Gemini Enterprise Agent Platform) are not
-                // collected by the client yet.
-                google_cloud_credentials: None,
+                google_cloud_credentials,
             })
         }
     }

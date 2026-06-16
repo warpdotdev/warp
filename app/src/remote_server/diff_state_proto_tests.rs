@@ -5,8 +5,8 @@ use warp_util::standardized_path::StandardizedPath;
 use super::super::proto;
 use crate::code_review::diff_size_limits::{DiffSize, UnrenderableReason, MAX_DIFF_SIZE};
 use crate::code_review::diff_state::{
-    DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState, DiffStats, FileDiff,
-    FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
+    DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState, FileDiff, FileDiffAndContent,
+    FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
 };
 use crate::util::git::PrInfo;
 
@@ -78,7 +78,6 @@ fn diff_metadata_requires_against_head() {
         has_head_commit: true,
         unpushed_commits: vec![],
         upstream_ref: None,
-        pr_info: None,
     };
 
     assert!(DiffMetadata::try_from(&metadata).is_err());
@@ -95,46 +94,19 @@ fn diff_metadata_against_base_requires_stats() {
 }
 
 #[test]
-fn diff_metadata_preserves_pr_info() {
-    let metadata = DiffMetadata {
-        main_branch_name: "main".to_string(),
-        current_branch_name: "feature".to_string(),
-        against_head: DiffMetadataAgainstBase {
-            aggregate_stats: DiffStats {
-                files_changed: 1,
-                total_additions: 2,
-                total_deletions: 3,
-            },
-            files: vec![],
-        },
-        against_base_branch: None,
-        has_head_commit: true,
-        unpushed_commits: vec![],
-        upstream_ref: Some("origin/feature".to_string()),
-        pr_info: Some(PrInfo {
-            number: 42,
-            url: "https://github.com/test/repo/pull/42".to_string(),
-            state: "OPEN".to_string(),
-            draft: true,
-            base_branch: "main".to_string(),
-        }),
+fn pr_info_round_trips_through_proto() {
+    let pr_info = PrInfo {
+        number: 42,
+        url: "https://github.com/warpdotdev/Warp/pull/42".into(),
+        state: "OPEN".into(),
+        draft: true,
+        base_branch: "develop".into(),
     };
 
-    let proto_metadata = proto::DiffMetadata::from(&metadata);
-    let proto_pr_info = proto_metadata
-        .pr_info
-        .as_ref()
-        .expect("proto metadata should include PR info");
-    assert_eq!(proto_pr_info.number, 42);
-    assert_eq!(proto_pr_info.url, "https://github.com/test/repo/pull/42");
+    let proto_info = proto::PrInfo::from(&pr_info);
+    let decoded = PrInfo::from(&proto_info);
 
-    let decoded_metadata =
-        DiffMetadata::try_from(&proto_metadata).expect("metadata should decode from proto");
-    let decoded_pr_info = decoded_metadata
-        .pr_info
-        .expect("decoded metadata should include PR info");
-    assert_eq!(decoded_pr_info.number, 42);
-    assert_eq!(decoded_pr_info.url, "https://github.com/test/repo/pull/42");
+    assert_eq!(decoded, pr_info);
 }
 
 #[test]

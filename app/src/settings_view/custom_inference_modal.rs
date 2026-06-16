@@ -14,7 +14,7 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-use crate::appearance::Appearance;
+use crate::appearance::{Appearance, AppearanceEvent};
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
     TextOptions,
@@ -86,6 +86,13 @@ impl CustomEndpointModal {
         editing_index: Option<usize>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        // Editor text colors are snapshotted at construction via
+        // `text_colors_override`, so refresh them whenever the theme changes.
+        ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, event, ctx| {
+            if let AppearanceEvent::ThemeChanged = event {
+                me.update_editor_text_colors(ctx);
+            }
+        });
         let font_family = Appearance::as_ref(ctx).ui_font_family();
         let text_colors = crate::settings_view::editor_text_colors(Appearance::as_ref(ctx));
 
@@ -352,6 +359,28 @@ impl CustomEndpointModal {
             });
             row.alias_editor.update(ctx, |editor, ctx| {
                 editor.clear_buffer_and_reset_undo_stack(ctx);
+            });
+        }
+    }
+
+    /// Re-applies theme-derived text colors to every editor in the modal.
+    /// Called on appearance changes since editors only snapshot their text
+    /// colors at construction.
+    fn update_editor_text_colors(&mut self, ctx: &mut ViewContext<Self>) {
+        let text_colors = crate::settings_view::editor_text_colors(Appearance::as_ref(ctx));
+        let mut editors = vec![
+            self.endpoint_name_editor.clone(),
+            self.endpoint_url_editor.clone(),
+            self.api_key_editor.clone(),
+        ];
+        for row in &self.model_rows {
+            editors.push(row.name_editor.clone());
+            editors.push(row.alias_editor.clone());
+        }
+        for editor in editors {
+            let colors = text_colors.clone();
+            editor.update(ctx, move |editor, ctx| {
+                editor.set_text_colors(colors, ctx);
             });
         }
     }

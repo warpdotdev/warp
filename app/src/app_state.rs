@@ -146,11 +146,6 @@ pub enum LeafContents {
     /// The in-app network log pane. Not persisted across restarts because the
     /// backing log is an in-memory ring buffer that starts empty on launch.
     NetworkLog,
-    /// An entrypoint pane type to launch other pane types from a search palette. The default view
-    /// when creating a tab.
-    Welcome {
-        startup_directory: Option<PathBuf>,
-    },
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStarted,
 }
@@ -186,7 +181,6 @@ impl LeafContents {
             | LeafContents::ExecutionProfileEditor
             | LeafContents::CodeReview(_)
             | LeafContents::AmbientAgent(_)
-            | LeafContents::Welcome { .. }
             | LeafContents::GetStarted => true,
         }
     }

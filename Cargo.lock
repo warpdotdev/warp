@@ -631,6 +631,7 @@ dependencies = [
  "arborium-json",
  "arborium-kotlin",
  "arborium-lua",
+ "arborium-nix",
  "arborium-objc",
  "arborium-php",
  "arborium-powershell",
@@ -836,6 +837,17 @@ name = "arborium-lua"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0132cce1b343560a26ae8a9af8da70bcec44432106c9670399ac9c59c61f2dee"
+dependencies = [
+ "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "arborium-nix"
+version = "2.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a08a703d5502526e68f7ad8dbffd303537d6828005bed0ef0fc7d37e45bf7078"
 dependencies = [
  "arborium-sysroot",
  "cc",
@@ -3841,7 +3853,7 @@ dependencies = [
 [[package]]
 name = "dagre_rust"
 version = "0.0.5"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=40cecf2be376e47e15053eadbfb782a531777420#40cecf2be376e47e15053eadbfb782a531777420"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
 dependencies = [
  "graphlib_rust",
  "ordered_hashmap",
@@ -8017,7 +8029,7 @@ dependencies = [
 [[package]]
 name = "mermaid_to_svg"
 version = "0.1.0"
-source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=40cecf2be376e47e15053eadbfb782a531777420#40cecf2be376e47e15053eadbfb782a531777420"
+source = "git+https://github.com/warpdotdev/mermaid-to-svg.git?rev=79aecc74187c29a027e85e18d070ff0dd884a0a7#79aecc74187c29a027e85e18d070ff0dd884a0a7"
 dependencies = [
  "dagre_rust",
  "graphlib_rust",
@@ -9257,9 +9269,9 @@ dependencies = [
 
 [[package]]
 name = "openssl"
-version = "0.10.79"
+version = "0.10.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf0b434746ee2832f4f0baf10137e1cabb18cbe6912c69e2e33263c45250f542"
+checksum = "a45fa2aa886c42762255da344f0a0d313e254066c46aad76f300c3d3da62d967"
 dependencies = [
  "bitflags 2.9.4",
  "cfg-if",
@@ -9288,9 +9300,9 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.115"
+version = "0.9.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158fe5b292746440aa6e7a7e690e55aeb72d41505e2804c23c6973ad0e9c9781"
+checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
 dependencies = [
  "cc",
  "libc",
@@ -9309,6 +9321,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.17",
+ "tracing",
 ]
 
 [[package]]
@@ -9321,7 +9334,6 @@ dependencies = [
  "bytes",
  "http 1.4.0",
  "opentelemetry",
- "reqwest",
 ]
 
 [[package]]
@@ -9337,7 +9349,6 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
- "reqwest",
  "thiserror 2.0.17",
  "zstd",
 ]
@@ -14653,6 +14664,7 @@ dependencies = [
  "onboarding",
  "once_cell",
  "opentelemetry",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "ordered-float 3.9.2",

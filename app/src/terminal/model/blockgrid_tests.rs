@@ -1,10 +1,14 @@
+use warp_core::features::FeatureFlag;
+
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ansi::{self, Handler};
 use crate::terminal::model::blockgrid::{BlockGrid, CursorDisplayPoint};
 use crate::terminal::model::grid::grid_handler::PerformResetGridChecks;
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::{Point, VisibleRow};
+use crate::terminal::model::kitty::{CursorMovementPolicy, KittyAction};
 use crate::terminal::model::secrets::ObfuscateSecrets;
+use crate::terminal::model::test_utils;
 use crate::terminal::SizeInfo;
 use crate::test_util::mock_blockgrid;
 
@@ -174,6 +178,34 @@ pub fn test_trim_trailing_blank_rows_uses_active_floor_for_blank_started_grid() 
         block_grid.cursor_display_point(),
         Some(CursorDisplayPoint::HiddenCache(Point::new(0, 0)))
     );
+}
+
+#[test]
+pub fn test_non_moving_kitty_image_keeps_finished_grid_visible() {
+    let _kitty_images = FeatureFlag::KittyImages.override_enabled(true);
+    let size = SizeInfo::new_without_font_metrics(10, 10);
+    let mut block_grid = BlockGrid::new(
+        size,
+        1000,
+        ChannelEventListener::new_for_test(),
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+    let mut metadata = test_utils::test_kitty_image_metadata_map(1);
+    let mut action = test_utils::test_kitty_store_and_display_action(1, 1);
+    let KittyAction::StoreAndDisplay(store_and_display) = &mut action else {
+        panic!("expected StoreAndDisplay action");
+    };
+    store_and_display.placement_data.cursor_movement_policy = CursorMovementPolicy::DoNotMoveCursor;
+
+    block_grid
+        .handle_completed_kitty_action(action, &mut metadata)
+        .expect("kitty action should be handled")
+        .expect("kitty image should render");
+
+    assert_eq!(block_grid.grid_handler().cursor_point(), Point::new(0, 0));
+    assert!(block_grid.grid_handler().has_visible_images());
+    assert!(!block_grid.should_show_as_empty_when_finished());
 }
 
 #[test]

@@ -46,6 +46,10 @@ impl GridHandler {
         self.images.has_image_in_row(absolute_row)
     }
 
+    pub(in crate::terminal::model) fn has_visible_images(&self) -> bool {
+        !self.has_displayed_output() && !self.images.is_empty()
+    }
+
     pub fn get_image_placement_data(
         &self,
         image_id: u32,

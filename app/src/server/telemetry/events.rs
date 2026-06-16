@@ -60,14 +60,12 @@ use crate::tab::TabTelemetryAction;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentRichInputCloseReason};
 use crate::terminal::input::TelemetryInputSuggestionsMode;
-use crate::terminal::model::ansi::WarpificationUnavailableReason;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionId;
-use crate::terminal::model::terminal_model::{BlockSelectionCardinality, TmuxInstallationState};
+use crate::terminal::model::terminal_model::BlockSelectionCardinality;
 use crate::terminal::settings::AltScreenPaddingMode;
 use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::shell::ShellType;
-use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
 use crate::terminal::view::inline_banner::{
     ZeroStatePromptSuggestionTriggeredFrom, ZeroStatePromptSuggestionType,
@@ -1158,7 +1156,7 @@ impl From<AgentViewEntryOrigin> for TelemetryAgentViewEntryOrigin {
             AgentViewEntryOrigin::OnboardingCallout => Self::OnboardingCallout,
             AgentViewEntryOrigin::ConversationListView => Self::ConversationListView,
             AgentViewEntryOrigin::Onboarding => Self::Onboarding,
-            AgentViewEntryOrigin::Keybinding => Self::Keybinding,
+            AgentViewEntryOrigin::Keybinding(_) => Self::Keybinding,
             AgentViewEntryOrigin::SlashInit => Self::SlashInit,
             AgentViewEntryOrigin::CreateEnvironment => Self::CreateEnvironment,
             AgentViewEntryOrigin::ProjectEntry => Self::ProjectEntry,
@@ -1207,6 +1205,14 @@ impl From<QueuedQueryOrigin> for TelemetryQueuedQueryOrigin {
             QueuedQueryOrigin::ForkAndCompactSlashCommand => Self::ForkAndCompactSlashCommand,
         }
     }
+}
+
+/// How a queued prompt row was sent immediately.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuedPromptSendNowTrigger {
+    SendNowButton,
+    EnterOnEmptyInput,
 }
 
 /// Details about which type of slash command was accepted
@@ -1697,12 +1703,6 @@ pub enum TelemetryEvent {
     AddAddedSubshellCommand,
     RemoveAddedSubshellCommand,
     ReceivedSubshellRcFileDcs,
-    AddDenylistedSshTmuxWrapperHost,
-    RemoveDenylistedSshTmuxWrapperHost,
-    /// User Setting for enabling SSH Tmux Wrapper changed.
-    ToggleSshTmuxWrapper {
-        enabled: bool,
-    },
     ToggleSshWarpification {
         enabled: bool,
     },
@@ -1715,13 +1715,6 @@ pub enum TelemetryEvent {
     SshRemoteServerChoiceDoNotAskAgainToggled {
         checked: bool,
     },
-    /// An ssh interactive session was detected.
-    SshInteractiveSessionDetected(SshInteractiveSessionDetected),
-    SshTmuxWarpifyBannerDisplayed,
-    /// A SSH Warpify Block was accepted
-    SshTmuxWarpifyBlockAccepted,
-    /// A SSH Warpify Block was dismissed
-    SshTmuxWarpifyBlockDismissed,
     WarpifyFooterShown {
         is_ssh: bool,
     },
@@ -1729,22 +1722,6 @@ pub enum TelemetryEvent {
     WarpifyFooterAcceptedWarpify {
         is_ssh: bool,
     },
-    /// How long until the warpify process succeeded
-    SshTmuxWarpificationSuccess {
-        tmux_installation: Option<TmuxInstallationState>,
-        duration_ms: u64,
-    },
-    /// An SSH Error block was displayed to the user.
-    SshTmuxWarpificationErrorBlock {
-        error: WarpificationUnavailableReason,
-        tmux_installation: Option<TmuxInstallationState>,
-    },
-    /// A SSH Install Tmux Block was displayed.
-    SshInstallTmuxBlockDisplayed,
-    /// A SSH Install Tmux Block was accepted.
-    SshInstallTmuxBlockAccepted,
-    /// A SSH Install Tmux Block was dismissed.
-    SshInstallTmuxBlockDismissed,
     ShowAliasExpansionBanner,
     EnableAliasExpansionFromBanner,
     DismissAliasExpansionBanner,
@@ -2908,7 +2885,7 @@ pub enum TelemetryEvent {
     },
     /// Emitted when the preinstall check classifies the remote host as
     /// unsupported by the prebuilt remote-server binary, so the controller
-    /// silently falls back to the legacy SSH/`RemoteCommandExecutor`
+    /// silently falls back to the wrapper-only SSH/`RemoteCommandExecutor`
     /// flow without surfacing an install prompt.
     RemoteServerHostUnsupported {
         remote_os: Option<String>,
@@ -2980,6 +2957,12 @@ pub enum TelemetryEvent {
     /// Emitted when the user toggles the queued prompts panel collapse state.
     QueuedPromptPanelCollapseToggled {
         collapsed: bool,
+    },
+    /// Emitted when the user sends a queued prompt row immediately, via the row's send-now
+    /// button or by pressing Enter with an empty input.
+    QueuedPromptSentNow {
+        origin: TelemetryQueuedQueryOrigin,
+        trigger: QueuedPromptSendNowTrigger,
     },
 }
 
@@ -3520,29 +3503,11 @@ impl TelemetryEvent {
             TelemetryEvent::ToggleNewWindowsAtCustomSize { enabled } => {
                 Some(json!({"enabled": enabled}))
             }
-            TelemetryEvent::ToggleSshTmuxWrapper { enabled } => Some(json!({"enabled": enabled})),
             TelemetryEvent::ToggleSshWarpification { enabled } => Some(json!({"enabled": enabled})),
             TelemetryEvent::SetSshExtensionInstallMode { mode } => Some(json!({"mode": mode})),
             TelemetryEvent::SshRemoteServerChoiceDoNotAskAgainToggled { checked } => {
                 Some(json!({"checked": checked}))
             }
-            TelemetryEvent::SshInteractiveSessionDetected(ssh_interactive_session_detected) => {
-                Some(json!({"ssh_interactive_session": ssh_interactive_session_detected}))
-            }
-            TelemetryEvent::SshTmuxWarpificationSuccess {
-                duration_ms,
-                tmux_installation,
-            } => Some(json!({
-                "duration_ms": duration_ms,
-                "tmux_installation": *tmux_installation,
-            })),
-            TelemetryEvent::SshTmuxWarpificationErrorBlock {
-                error,
-                tmux_installation,
-            } => Some(json!({
-                "error": error,
-                "tmux_installation": *tmux_installation,
-            })),
             TelemetryEvent::JoinedSharedSession {
                 session_id,
                 source_type,
@@ -4220,19 +4185,11 @@ impl TelemetryEvent {
             | TelemetryEvent::SetNewWindowsAtCustomSize
             | TelemetryEvent::DisableInputSync
             | TelemetryEvent::ShowSubshellBanner
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
             | TelemetryEvent::AddDenylistedSubshellCommand
             | TelemetryEvent::RemoveDenylistedSubshellCommand
             | TelemetryEvent::AddAddedSubshellCommand
             | TelemetryEvent::RemoveAddedSubshellCommand
             | TelemetryEvent::ReceivedSubshellRcFileDcs
-            | TelemetryEvent::AddDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
-            | TelemetryEvent::SshInstallTmuxBlockDisplayed
-            | TelemetryEvent::SshInstallTmuxBlockAccepted
-            | TelemetryEvent::SshInstallTmuxBlockDismissed
             | TelemetryEvent::ShowAliasExpansionBanner
             | TelemetryEvent::EnableAliasExpansionFromBanner
             | TelemetryEvent::DismissAliasExpansionBanner
@@ -4823,6 +4780,10 @@ impl TelemetryEvent {
             TelemetryEvent::QueuedPromptPanelCollapseToggled { collapsed } => Some(json!({
                 "collapsed": collapsed,
             })),
+            TelemetryEvent::QueuedPromptSentNow { origin, trigger } => Some(json!({
+                "origin": origin,
+                "trigger": trigger,
+            })),
         }
     }
 
@@ -5046,21 +5007,9 @@ impl TelemetryEvent {
             | TelemetryEvent::AddAddedSubshellCommand
             | TelemetryEvent::RemoveAddedSubshellCommand
             | TelemetryEvent::ReceivedSubshellRcFileDcs
-            | TelemetryEvent::AddDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost
-            | TelemetryEvent::ToggleSshTmuxWrapper { .. }
-            | TelemetryEvent::SshInteractiveSessionDetected(_)
-            | TelemetryEvent::SshTmuxWarpifyBannerDisplayed
-            | TelemetryEvent::SshTmuxWarpifyBlockAccepted
-            | TelemetryEvent::SshTmuxWarpifyBlockDismissed
             | TelemetryEvent::WarpifyFooterShown { .. }
             | TelemetryEvent::AgentToolbarDismissed
             | TelemetryEvent::WarpifyFooterAcceptedWarpify { .. }
-            | TelemetryEvent::SshTmuxWarpificationSuccess { .. }
-            | TelemetryEvent::SshTmuxWarpificationErrorBlock { .. }
-            | TelemetryEvent::SshInstallTmuxBlockDisplayed
-            | TelemetryEvent::SshInstallTmuxBlockAccepted
-            | TelemetryEvent::SshInstallTmuxBlockDismissed
             | TelemetryEvent::ShowAliasExpansionBanner
             | TelemetryEvent::EnableAliasExpansionFromBanner
             | TelemetryEvent::DismissAliasExpansionBanner
@@ -5254,6 +5203,7 @@ impl TelemetryEvent {
             | TelemetryEvent::QueuedPromptDeleted { .. }
             | TelemetryEvent::QueuedPromptReordered { .. }
             | TelemetryEvent::QueuedPromptPanelCollapseToggled { .. }
+            | TelemetryEvent::QueuedPromptSentNow { .. }
             | TelemetryEvent::CLISubagentControlStateChanged { .. }
             | TelemetryEvent::CLISubagentResponsesToggled { .. }
             | TelemetryEvent::CLISubagentInputDismissed { .. }
@@ -5604,28 +5554,16 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleTabIndicators => EnablementState::Always,
             Self::TogglePreserveActiveTabColor => EnablementState::Always,
             Self::ShowSubshellBanner => EnablementState::Always,
-            Self::SshTmuxWarpifyBannerDisplayed => EnablementState::Always,
             Self::DeclineSubshellBootstrap => EnablementState::Always,
             Self::TriggerSubshellBootstrap => EnablementState::Always,
             Self::AddDenylistedSubshellCommand => EnablementState::Always,
             Self::RemoveDenylistedSubshellCommand => EnablementState::Always,
-            Self::ToggleSshTmuxWrapper => EnablementState::Always,
             Self::ToggleSshWarpification => EnablementState::Always,
             Self::SetSshExtensionInstallMode => EnablementState::Always,
             Self::SshRemoteServerChoiceDoNotAskAgainToggled => EnablementState::Always,
-            Self::AddDenylistedSshTmuxWrapperHost => EnablementState::Always,
-            Self::RemoveDenylistedSshTmuxWrapperHost => EnablementState::Always,
-            Self::SshInteractiveSessionDetected => EnablementState::Always,
-            Self::SshTmuxWarpifyBlockAccepted => EnablementState::Always,
-            Self::SshTmuxWarpifyBlockDismissed => EnablementState::Always,
             Self::WarpifyFooterShown
             | Self::AgentToolbarDismissed
             | Self::WarpifyFooterAcceptedWarpify => EnablementState::Always,
-            Self::SshTmuxWarpificationSuccess => EnablementState::Always,
-            Self::SshTmuxWarpificationErrorBlock => EnablementState::Always,
-            Self::SshInstallTmuxBlockDisplayed => EnablementState::Always,
-            Self::SshInstallTmuxBlockAccepted => EnablementState::Always,
-            Self::SshInstallTmuxBlockDismissed => EnablementState::Always,
             Self::AddAddedSubshellCommand => EnablementState::Always,
             Self::RemoveAddedSubshellCommand => EnablementState::Always,
             Self::ReceivedSubshellRcFileDcs => EnablementState::Always,
@@ -5888,9 +5826,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::QueuedPromptEdited
             | Self::QueuedPromptDeleted
             | Self::QueuedPromptReordered
-            | Self::QueuedPromptPanelCollapseToggled => {
-                EnablementState::Flag(FeatureFlag::QueueSlashCommand)
-            }
+            | Self::QueuedPromptPanelCollapseToggled
+            | Self::QueuedPromptSentNow => EnablementState::Flag(FeatureFlag::QueueSlashCommand),
         }
     }
 
@@ -6120,7 +6057,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ToggleTabIndicators => "Toggle Tab Indicators",
             Self::TogglePreserveActiveTabColor => "Toggle Preserve Active Tab Color",
             Self::ShowSubshellBanner => "Show Subshell Banner",
-            Self::SshTmuxWarpifyBannerDisplayed => "Show Warpify SSH Banner",
             Self::DeclineSubshellBootstrap => "Decline Subshell Bootstrap",
             Self::TriggerSubshellBootstrap => "Trigger Subshell Bootstrap",
             Self::AddDenylistedSubshellCommand => "Add Denylisted Subshell Command",
@@ -6128,25 +6064,14 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::AddAddedSubshellCommand => "Add Added Subshell Command",
             Self::RemoveAddedSubshellCommand => "Remove Added Subshell Command",
             Self::ReceivedSubshellRcFileDcs => "Received Subshell RC File DCS",
-            Self::ToggleSshTmuxWrapper => "Toggle SSH Tmux Wrapper",
             Self::ToggleSshWarpification => "Toggle SSH Warpification",
             Self::SetSshExtensionInstallMode => "Set SSH Extension Install Mode",
             Self::SshRemoteServerChoiceDoNotAskAgainToggled => {
                 "SSH Remote Server Choice Do Not Ask Again Toggled"
             }
-            Self::AddDenylistedSshTmuxWrapperHost => "Add Denylisted SSH Tmux Wrapper Host",
-            Self::RemoveDenylistedSshTmuxWrapperHost => "Remove Denylisted SSH Tmux Wrapper Host",
-            Self::SshInteractiveSessionDetected => "SSH Interactive Session Detected",
-            Self::SshTmuxWarpifyBlockAccepted => "SSH Tmux Warpify Block Accepted",
-            Self::SshTmuxWarpifyBlockDismissed => "SSH Tmux Warpify Block Dismissed",
             Self::WarpifyFooterShown => "Warpify Footer Shown",
             Self::AgentToolbarDismissed => "Agent Toolbar Dismissed",
             Self::WarpifyFooterAcceptedWarpify => "Warpify Footer Accepted Warpify",
-            Self::SshTmuxWarpificationSuccess => "SSH Tmux Warpification Succeeded",
-            Self::SshTmuxWarpificationErrorBlock => "SSH Tmux Warpification Error Block",
-            Self::SshInstallTmuxBlockDisplayed => "SSH Install Tmux Block Displayed",
-            Self::SshInstallTmuxBlockAccepted => "SSH Install Tmux Block Accepted",
-            Self::SshInstallTmuxBlockDismissed => "SSH Install Tmux Block Dismissed",
             Self::ShowAliasExpansionBanner => "Show Alias Expansion Banner",
             Self::DismissAliasExpansionBanner => "Dismiss Alias Expansion Banner",
             Self::EnableAliasExpansionFromBanner => "Enable Alias Expansion From Banner",
@@ -6310,6 +6235,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::QueuedPromptDeleted => "QueuedPrompt.Deleted",
             Self::QueuedPromptReordered => "QueuedPrompt.Reordered",
             Self::QueuedPromptPanelCollapseToggled => "QueuedPrompt.PanelCollapseToggled",
+            Self::QueuedPromptSentNow => "QueuedPrompt.SentNow",
             #[cfg(windows)]
             Self::WSLRegistryError => "WSL Distribution Registry Error",
             #[cfg(windows)]
@@ -6821,9 +6747,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::ShowSubshellBanner => {
                 "Displayed the banner asking whether Warp should Warpify the current session via Warp's subshell wrapper"
             }
-            Self::SshTmuxWarpifyBannerDisplayed => {
-                "Displayed the banner asking whether Warp should Warpify the current SSH session via Warp's SSH Wrapper"
-            }
             Self::DeclineSubshellBootstrap => {
                 "Developer declined the Warp banner to Warpify the current session"
             }
@@ -6843,9 +6766,6 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 "Removed a command from the list of commands to automatically Warpify via Warp's subshell wrapper"
             }
             Self::ReceivedSubshellRcFileDcs => "Spawned a subshell to be automatically Warpified",
-            Self::ToggleSshTmuxWrapper => {
-                "Changed the setting for SSH sessions to prompt for Tmux Wrapper"
-            }
             Self::ToggleSshWarpification => "Changed the setting for SSH sessions to be warified",
             Self::SetSshExtensionInstallMode => {
                 "Changed the SSH extension install mode (always ask / always allow / always skip)"
@@ -6853,26 +6773,12 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::SshRemoteServerChoiceDoNotAskAgainToggled => {
                 "Toggled the 'Don't ask me this again' checkbox on the SSH remote-server choice block"
             }
-            Self::AddDenylistedSshTmuxWrapperHost => {
-                "Added a SSH host to the denylist for prompting for Tmux Wrapper"
-            }
-            Self::RemoveDenylistedSshTmuxWrapperHost => {
-                "Removed an SSH host from the denylist from prompting for Tmux Wrapper"
-            }
             Self::AgentModeRatedResponse => "User rated an Agent Mode response",
-            Self::SshInteractiveSessionDetected => "An interactive SSH session was detected",
-            Self::SshTmuxWarpifyBlockAccepted => "User accepted an ssh tmux warpify block",
-            Self::SshTmuxWarpifyBlockDismissed => "User dismissed an ssh tmux warpify block",
             Self::WarpifyFooterShown => {
                 "Displayed the warpify footer for a detected subshell or SSH session"
             }
             Self::AgentToolbarDismissed => "User dismissed the use-agent toolbar",
             Self::WarpifyFooterAcceptedWarpify => "User clicked Warpify in the warpify footer",
-            Self::SshTmuxWarpificationSuccess => "Ssh tmux warpification succeeded",
-            Self::SshTmuxWarpificationErrorBlock => "Ssh tmux warpification errored out",
-            Self::SshInstallTmuxBlockDisplayed => "Displayed an ssh install tmux block",
-            Self::SshInstallTmuxBlockAccepted => "User accepted an ssh install tmux block",
-            Self::SshInstallTmuxBlockDismissed => "User dismissed an ssh install tmux block",
             Self::ShowAliasExpansionBanner => {
                 "Displayed the banner asking whether Warp should automatically expand aliases within the Input Editor"
             }
@@ -7364,7 +7270,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::RemoteServerHostUnsupported => {
                 "Preinstall check classified the remote host as unsupported, \
-                 falling back to the legacy SSH flow"
+                 falling back to the wrapper-only SSH flow"
             }
             Self::RemoteServerReconnection => {
                 "A reconnection attempt succeeded after a spontaneous disconnect"
@@ -7385,6 +7291,9 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::QueuedPromptPanelCollapseToggled => {
                 "User toggled the queued prompts panel collapse state"
+            }
+            Self::QueuedPromptSentNow => {
+                "User sent a queued prompt row immediately (send-now button or Enter on empty input)"
             }
         }
     }

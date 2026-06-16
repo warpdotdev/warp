@@ -253,8 +253,8 @@ use crate::server::server_api::ServerApi;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
-    EnvVarTelemetryMetadata, PaletteSource, SlashCommandAcceptedDetails, SlashMenuSource,
-    TelemetryEvent, WorkflowTelemetryMetadata,
+    EnvVarTelemetryMetadata, PaletteSource, QueuedPromptSendNowTrigger,
+    SlashCommandAcceptedDetails, SlashMenuSource, TelemetryEvent, WorkflowTelemetryMetadata,
 };
 use crate::session_management::SessionNavigationPromptElements;
 use crate::settings::{
@@ -1150,7 +1150,9 @@ pub enum InputAction {
     /// Toggles the inline conversation menu for selecting AI conversations.
     ToggleConversationsMenu,
 
-    StartNewAgentConversation,
+    StartNewAgentConversation {
+        origin: AgentViewEntryOrigin,
+    },
 
     /// This is for toggling whether autodetection is enabled/disabled at the app-level,
     /// not for whether its enabled/disabled for the current input
@@ -1982,7 +1984,11 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             START_NEW_CONVERSATION_KEYBINDING_NAME,
             "New agent conversation",
-            InputAction::StartNewAgentConversation,
+            InputAction::StartNewAgentConversation {
+                origin: AgentViewEntryOrigin::Input {
+                    was_prompt_autodetected: false,
+                },
+            },
         )
         .with_enabled(|| !FeatureFlag::AgentView.is_enabled())
         .with_group(bindings::BindingGroup::WarpAi.as_str())
@@ -3577,16 +3583,25 @@ impl Input {
 
         let queued_prompts_panel = FeatureFlag::QueueSlashCommand.is_enabled().then(|| {
             let cli_subagent_controller = cli_subagent_controller.clone();
+            let host_editor = editor.clone();
             let panel = ctx.add_typed_action_view(|ctx| {
                 QueuedPromptsPanelView::new(
                     terminal_view_id,
                     suggestions_mode_model.clone(),
                     cli_subagent_controller,
+                    host_editor,
                     ctx,
                 )
             });
             ctx.subscribe_to_view(&panel, |me, _, event, ctx| {
                 me.handle_queued_prompts_panel_event(event, ctx);
+            });
+            // Seed the host-pushed send permission; later changes flow through the
+            // shared-session role-change push in `TerminalView::on_self_role_updated`. Input
+            // emptiness is not pushed: the panel reads the host editor live.
+            let can_send_prompt = !model.lock().shared_session_status().is_reader();
+            panel.update(ctx, |panel, ctx| {
+                panel.set_can_send_prompt(can_send_prompt, ctx);
             });
             panel
         });
@@ -3765,24 +3780,14 @@ impl Input {
                 text,
                 is_command,
             } => {
-                let dispatched = if *is_command {
-                    self.execute_queued_command(text, *conversation_id, ctx)
-                } else {
-                    self.submit_queued_prompt_for_active_pane(
-                        text.clone(),
-                        *conversation_id,
-                        *query_id,
-                        ctx,
-                    );
-                    true
-                };
-                if !dispatched {
-                    return;
-                }
-                QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.remove_fired_row(*conversation_id, *query_id, ctx);
-                });
-                self.focus_input_box(ctx);
+                self.send_queued_row_immediately(
+                    *conversation_id,
+                    *query_id,
+                    text.clone(),
+                    *is_command,
+                    QueuedPromptSendNowTrigger::SendNowButton,
+                    ctx,
+                );
             }
             QueuedPromptsPanelEvent::RowDeleted => {
                 self.focus_input_box(ctx);
@@ -3791,6 +3796,53 @@ impl Input {
                 self.focus_input_box(ctx);
             }
         }
+    }
+
+    /// Dispatches a queued row immediately: commands execute in the terminal, prompts submit to
+    /// the conversation's current target. On dispatch, removes the fired row and refocuses the
+    /// input. Shared by the row's send-now button and empty-buffer Enter.
+    fn send_queued_row_immediately(
+        &mut self,
+        conversation_id: AIConversationId,
+        query_id: QueuedQueryId,
+        text: String,
+        is_command: bool,
+        trigger: QueuedPromptSendNowTrigger,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        // Read the origin before dispatch; the row is removed once it fires.
+        let origin = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .find(|row| row.id() == query_id)
+            .map(|row| row.origin());
+        let dispatched = if is_command {
+            self.execute_queued_command(&text, conversation_id, ctx)
+        } else {
+            self.submit_queued_prompt_for_active_pane(text, conversation_id, query_id, ctx);
+            true
+        };
+        if !dispatched {
+            return;
+        }
+        if let Some(origin) = origin {
+            send_telemetry_from_ctx!(
+                TelemetryEvent::QueuedPromptSentNow {
+                    origin: origin.into(),
+                    trigger,
+                },
+                ctx
+            );
+        }
+        QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_fired_row(conversation_id, query_id, ctx);
+        });
+        self.focus_input_box(ctx);
+    }
+
+    /// The queued prompts panel, when [`FeatureFlag::QueueSlashCommand`] is enabled.
+    pub(crate) fn queued_prompts_panel(&self) -> Option<&ViewHandle<QueuedPromptsPanelView>> {
+        self.queued_prompts_panel.as_ref()
     }
 
     pub fn agent_input_footer(&self) -> &ViewHandle<AgentInputFooter> {
@@ -6305,9 +6357,6 @@ impl Input {
             }
             PromptAlertEvent::OpenBillingAndUsagePage => {
                 ctx.emit(Event::OpenSettings(SettingsSection::BillingAndUsage));
-            }
-            PromptAlertEvent::OpenPrivacyPage => {
-                ctx.emit(Event::OpenSettings(SettingsSection::Privacy));
             }
             PromptAlertEvent::OpenBillingPortal { team_uid } => {
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
@@ -12983,6 +13032,36 @@ impl Input {
                 });
             }
             return;
+        } else if self
+            .queued_prompts_panel
+            .as_ref()
+            .is_some_and(|panel| panel.as_ref(ctx).enter_sends_queued_prompt(ctx))
+        {
+            // An empty-buffer Enter sends the top queued row, mirroring its send-now button.
+            // The locked initial cloud-mode head row is not sendable, so Enter does nothing
+            // while it sits at the head of the queue.
+            let conversation_id =
+                BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id);
+            let top_row = conversation_id.and_then(|conversation_id| {
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .first()
+                    .filter(|row| !row.is_locked())
+                    .map(|row| (row.id(), row.text().to_owned(), row.is_command()))
+            });
+            if let (Some(conversation_id), Some((query_id, text, is_command))) =
+                (conversation_id, top_row)
+            {
+                self.send_queued_row_immediately(
+                    conversation_id,
+                    query_id,
+                    text,
+                    is_command,
+                    QueuedPromptSendNowTrigger::EnterOnEmptyInput,
+                    ctx,
+                );
+            }
+            return;
         } else if self.maybe_launch_cloud_handoff_request(ctx)
             || self.maybe_queue_input_for_in_progress_conversation(ctx)
             || self.maybe_queue_input_during_cloud_setup(ctx)
@@ -15111,12 +15190,16 @@ impl Input {
         banner: Box<dyn Element>,
         is_compact_mode: bool,
         input_mode: InputMode,
+        appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        let constrained_banner = ConstrainedBox::new(banner)
+            .with_height(2. * appearance.line_height_ratio() * appearance.monospace_font_size())
+            .finish();
         let should_use_udi_spacing = self.should_show_universal_developer_input(app)
             || (FeatureFlag::AgentView.is_enabled()
                 && self.agent_view_controller.as_ref(app).is_active());
-        let mut container: Container = Container::new(banner);
+        let mut container: Container = Container::new(constrained_banner);
         let (suggestion_to_prompt_padding, suggestion_to_input_border_padding) =
             if should_use_udi_spacing {
                 (0., 0.)
@@ -15141,6 +15224,7 @@ impl Input {
     /// Renders a banner that should stay next to the input box.
     fn render_input_banner(
         &self,
+        appearance: &Appearance,
         app: &AppContext,
         input_mode: InputMode,
         is_compact_mode: bool,
@@ -15156,6 +15240,7 @@ impl Input {
                 prompt_suggestions_banner,
                 is_compact_mode,
                 input_mode,
+                appearance,
                 app,
             ))
         } else {
@@ -15466,9 +15551,6 @@ impl Input {
             PromptSuggestionsEvent::OpenBillingAndUsagePage => {
                 ctx.emit(Event::OpenSettings(SettingsSection::BillingAndUsage))
             }
-            PromptSuggestionsEvent::OpenPrivacyPage => {
-                ctx.emit(Event::OpenSettings(SettingsSection::Privacy))
-            }
             PromptSuggestionsEvent::OpenBillingPortal { team_uid } => {
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.generate_stripe_billing_portal_link(*team_uid, ctx);
@@ -15627,7 +15709,7 @@ impl TypedActionView for Input {
                 };
                 self.select_slash_command(command, SlashCommandTrigger::keybinding(), ctx);
             }
-            InputAction::StartNewAgentConversation => {
+            InputAction::StartNewAgentConversation { origin } => {
                 // Block starting a new conversation if the agent is in control of a long-running command
                 if !self
                     .ai_context_model
@@ -15648,27 +15730,28 @@ impl TypedActionView for Input {
                 }
 
                 if FeatureFlag::AgentView.is_enabled() {
-                    if let Err(e) = self.agent_view_controller.update(ctx, |controller, ctx| {
-                        controller.try_enter_agent_view(
-                            None,
-                            AgentViewEntryOrigin::Input {
-                                was_prompt_autodetected: false,
-                            },
-                            ctx,
-                        )
-                    }) {
-                        log::warn!("Failed to start new agent conversation from zero-state: {e:?}");
+                    if let AgentViewEntryOrigin::Keybinding(keystroke) = origin {
+                        let should_start_new_conversation =
+                            self.agent_view_controller.update(ctx, |controller, ctx| {
+                                controller.should_start_new_conversation_for_keystroke(
+                                    keystroke.clone(),
+                                    ctx,
+                                )
+                            });
+                        if !should_start_new_conversation {
+                            return;
+                        }
                     }
+                    ctx.emit(Event::EnterAgentView {
+                        initial_prompt: None,
+                        conversation_id: None,
+                        origin: origin.clone(),
+                    });
                 } else if self.should_show_universal_developer_input(ctx) {
                     // Clear follow-up state (start a fresh conversation)
                     self.ai_context_model.update(ctx, |ai_context_model, ctx| {
-                        ai_context_model.set_pending_query_state_for_new_conversation(
-                            // This is a placeholder origin, this codepath is dead when AgentView is enabled.
-                            AgentViewEntryOrigin::Input {
-                                was_prompt_autodetected: false,
-                            },
-                            ctx,
-                        );
+                        ai_context_model
+                            .set_pending_query_state_for_new_conversation(origin.clone(), ctx);
                     });
                     self.enter_ai_mode(
                         Some(InputTypeAutoDetectionSource::StartNewConversation),

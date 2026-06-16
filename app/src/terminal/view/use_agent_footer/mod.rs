@@ -58,7 +58,6 @@ use crate::settings::{
 };
 use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::view::block_banner::WarpificationMode;
 pub use crate::terminal::CLIAgent;
 use crate::terminal::TerminalModel;
 use crate::ui_components::blended_colors;
@@ -267,20 +266,11 @@ impl TerminalView {
             UseAgentToolbarEvent::HideRichInput => {
                 self.close_cli_agent_rich_input_and_disable_auto_toggle(ctx);
             }
-            UseAgentToolbarEvent::Warpify { mode } => {
+            UseAgentToolbarEvent::Warpify => {
                 self.hide_use_agent_footer_in_blocklist(ctx);
-                match mode {
-                    WarpificationMode::Ssh { .. } => {
-                        self.handle_action(&TerminalAction::WarpifySSHSession, ctx);
-                    }
-                    WarpificationMode::Subshell { .. } => {
-                        self.handle_action(&TerminalAction::TriggerSubshellBootstrap, ctx);
-                    }
-                }
+                self.handle_action(&TerminalAction::TriggerSubshellBootstrap, ctx);
                 send_telemetry_from_ctx!(
-                    TelemetryEvent::WarpifyFooterAcceptedWarpify {
-                        is_ssh: mode.is_ssh()
-                    },
+                    TelemetryEvent::WarpifyFooterAcceptedWarpify { is_ssh: false },
                     ctx
                 );
             }
@@ -304,13 +294,8 @@ impl TerminalView {
     ) -> bool {
         let ai_settings = AISettings::as_ref(app);
 
-        // If a warpify mode is set, that means ssh or subshell is detected and we should show the footer.
-        if self
-            .use_agent_footer
-            .as_ref(app)
-            .warpify_mode(app)
-            .is_some()
-        {
+        // If the warpify footer is active, a subshell was detected and we should show the footer.
+        if self.use_agent_footer.as_ref(app).is_warpify_active(app) {
             return true;
         }
 
@@ -435,7 +420,7 @@ impl TerminalView {
 
         if !self.model.lock().is_alt_screen_active() {
             self.use_agent_footer.update(ctx, |footer, ctx| {
-                footer.clear_warpify_mode(ctx);
+                footer.clear_warpify(ctx);
             });
             self.hide_use_agent_footer_in_blocklist(ctx);
         }
@@ -1217,8 +1202,8 @@ impl UseAgentToolbar {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            WarpifyFooterViewEvent::Warpify { mode } => {
-                ctx.emit(UseAgentToolbarEvent::Warpify { mode: mode.clone() });
+            WarpifyFooterViewEvent::Warpify => {
+                ctx.emit(UseAgentToolbarEvent::Warpify);
             }
             WarpifyFooterViewEvent::UseAgent => {
                 ctx.emit(UseAgentToolbarEvent::UseAgent);
@@ -1252,30 +1237,26 @@ impl UseAgentToolbar {
             .map(|session| session.agent)
     }
 
-    /// Sets the current warpification mode. When set, the footer shows the
+    /// Activates the warpify footer. When active, the footer shows the
     /// warpify view instead of the CLI agent or regular "Use agent" views.
-    pub(in crate::terminal) fn set_warpify_mode(
-        &mut self,
-        mode: WarpificationMode,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    pub(in crate::terminal) fn show_warpify(&mut self, ctx: &mut ViewContext<Self>) {
         self.warpify_footer_view.update(ctx, |view, ctx| {
-            view.set_mode(mode, ctx);
+            view.show(ctx);
         });
         ctx.notify();
     }
 
-    /// Clears the warpification mode so the footer reverts to its default behavior.
-    pub(in crate::terminal) fn clear_warpify_mode(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Deactivates the warpify footer so it reverts to its default behavior.
+    pub(in crate::terminal) fn clear_warpify(&mut self, ctx: &mut ViewContext<Self>) {
         self.warpify_footer_view.update(ctx, |view, ctx| {
-            view.clear_mode(ctx);
+            view.clear(ctx);
         });
         ctx.notify();
     }
 
-    /// Returns the current warpification mode, if set.
-    pub(in crate::terminal) fn warpify_mode(&self, app: &AppContext) -> Option<WarpificationMode> {
-        self.warpify_footer_view.as_ref(app).mode().cloned()
+    /// Returns whether the warpify footer is currently active.
+    pub(in crate::terminal) fn is_warpify_active(&self, app: &AppContext) -> bool {
+        self.warpify_footer_view.as_ref(app).is_active()
     }
 
     /// Returns whether there's a current CLI agent (like Claude Code).
@@ -1307,8 +1288,8 @@ pub enum UseAgentToolbarEvent {
     OpenRichInput,
     /// Hide the rich input editor (same as Escape).
     HideRichInput,
-    /// User chose to warpify the subshell/SSH session.
-    Warpify { mode: WarpificationMode },
+    /// User chose to warpify the subshell.
+    Warpify,
     /// User chose to use the agent.
     UseAgent,
 }
@@ -1323,8 +1304,8 @@ impl View for UseAgentToolbar {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
-        // If a warpify mode is set, delegate rendering to the warpify footer view.
-        if self.warpify_footer_view.as_ref(app).mode().is_some() {
+        // If the warpify footer is active, delegate rendering to the warpify footer view.
+        if self.warpify_footer_view.as_ref(app).is_active() {
             return ChildView::new(&self.warpify_footer_view).finish();
         }
 

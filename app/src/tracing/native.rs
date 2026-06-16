@@ -45,15 +45,16 @@
 //! best-effort cleanup that should continue after an unrelated panic.
 
 use std::borrow::Cow;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Context as _};
+use instant::Instant;
 use opentelemetry::trace::{
     Span as _, SpanBuilder, SpanContext, Status, Tracer as _, TracerProvider as _,
 };
 use opentelemetry::{Context as OtelContext, KeyValue, Value};
-use opentelemetry_otlp::{Protocol, WithExportConfig as _};
+use opentelemetry_otlp::{Protocol, WithExportConfig as _, WithHttpConfig as _};
 use opentelemetry_sdk::error::OTelSdkResult;
 use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
 use opentelemetry_sdk::trace::{
@@ -63,8 +64,11 @@ use opentelemetry_sdk::Resource;
 use tracing::subscriber;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::EnvFilter;
-use url::Url;
+use url::{Host, Url};
+use warp_managed_secrets::client::ManagedSecretsClient;
+use warpui::AppContext;
 
+use super::cloud_agent_auth::{self, AuthContext};
 use super::Initialization;
 use crate::channel::ChannelState;
 use crate::tracing::install_no_subscriber;
@@ -76,12 +80,22 @@ const CLOUD_AGENT_MARKER: &str = "tags.cloud_agent";
 const CLOUD_AGENT_OTLP_ENDPOINT: &str = "WARP_CLOUD_AGENT_OTLP_ENDPOINT";
 /// The environment variable used to configure the OTel service name.
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
+/// The minimum interval between local export failure diagnostics.
+const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Process-global authentication context for cloud-agent OTLP export.
+///
+/// The exporter is built once during [`init`], while the stored context later starts dynamic
+/// credential refresh after authenticated application services become available, and this static
+/// remains unset for processes that did not opt in.
+static AUTH_CONTEXT: OnceLock<AuthContext> = OnceLock::new();
 
 /// Installs the native tracing subscriber and optional cloud-agent OTLP exporter.
 ///
-/// Export is deliberately opt-in through [`CLOUD_AGENT_OTLP_ENDPOINT`]. When the endpoint is
-/// absent or the exporter cannot be constructed, a no-op subscriber is installed so tracing
-/// instrumentation remains safe without producing output or partially initializing export.
+/// Export is deliberately opt-in through [`CLOUD_AGENT_OTLP_ENDPOINT`] plus a currently valid
+/// dispatch token. When either is absent or the exporter cannot be constructed, a no-op subscriber
+/// is installed so tracing instrumentation remains safe without producing output or partially
+/// initializing export.
 pub fn init() -> anyhow::Result<Initialization> {
     // INFO is the default because this is a global subscriber and DEBUG-level application spans
     // would otherwise create substantial work even though only marked cloud-agent spans are
@@ -97,9 +111,13 @@ pub fn init() -> anyhow::Result<Initialization> {
         install_no_subscriber()?;
         return Ok(Initialization::default());
     };
+    let Ok(auth_context) = AuthContext::from_environment() else {
+        install_no_subscriber()?;
+        return Ok(Initialization::default());
+    };
 
     let shutdown_timeout = export_timeout();
-    let provider = match build_provider(base_endpoint.trim()) {
+    let provider = match build_provider(base_endpoint.trim(), &auth_context) {
         Ok(provider) => provider,
         Err(err) => {
             install_no_subscriber()?;
@@ -111,6 +129,7 @@ pub fn init() -> anyhow::Result<Initialization> {
             });
         }
     };
+    let _ = AUTH_CONTEXT.set(auth_context);
 
     let active_spans = ActiveSpanRegistry::default();
     let tracer =
@@ -134,11 +153,16 @@ pub fn init() -> anyhow::Result<Initialization> {
 /// by [`Initialization`] so application termination can explicitly shut it down after attempting
 /// to end registered active spans. Exported resources include Warp's version and channel alongside
 /// standard environment-detected OpenTelemetry attributes, with [`OTEL_SERVICE_NAME`] taking
-/// precedence over the default service name.
-fn build_provider(base_endpoint: &str) -> anyhow::Result<SdkTracerProvider> {
+/// precedence over the default service name. The exporter is built once with a dynamic HTTP client
+/// so credential refresh can update requests without reconstructing provider state.
+fn build_provider(
+    base_endpoint: &str,
+    auth_context: &AuthContext,
+) -> anyhow::Result<SdkTracerProvider> {
     let endpoint = traces_endpoint(base_endpoint)?;
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
+        .with_http_client(auth_context.http_client())
         .with_protocol(Protocol::HttpBinary)
         .with_endpoint(endpoint)
         .build()
@@ -163,19 +187,40 @@ fn build_provider(base_endpoint: &str) -> anyhow::Result<SdkTracerProvider> {
     .build();
 
     Ok(SdkTracerProvider::builder()
-        .with_batch_exporter(CloudAgentSpanExporter { inner: exporter })
+        .with_batch_exporter(CloudAgentSpanExporter {
+            inner: exporter,
+            diagnostics: RateLimitedDiagnostics::default(),
+        })
         .with_resource(resource)
         .build())
+}
+
+/// Starts the single refresh coordinator after the authenticated server client exists.
+///
+/// Processes that did not opt in with both an endpoint and valid dispatch credential have no
+/// retained [`AUTH_CONTEXT`] and remain no-ops here.
+pub(super) fn start_auth_refresh(client: Arc<dyn ManagedSecretsClient>, ctx: &mut AppContext) {
+    if let Some(auth_context) = AUTH_CONTEXT.get() {
+        cloud_agent_auth::start_refresh_coordinator(auth_context.clone(), client, ctx);
+    }
 }
 
 /// Converts the configured OTLP base URL into the HTTP/protobuf traces endpoint.
 ///
 /// The configuration is treated as a base URL rather than a complete signal-specific URL, so any
-/// query or fragment is discarded before appending `v1/traces`.
+/// query or fragment is discarded before appending `v1/traces`. Authenticated export requires
+/// HTTPS unless the configured host is guaranteed to resolve to the local machine.
 fn traces_endpoint(base_endpoint: &str) -> anyhow::Result<String> {
     let mut endpoint = Url::parse(base_endpoint).context("Invalid cloud-agent OTLP endpoint")?;
-    if !matches!(endpoint.scheme(), "http" | "https") {
-        return Err(anyhow!("Cloud-agent OTLP endpoint must use HTTP or HTTPS"));
+    match endpoint.scheme() {
+        "https" => {}
+        "http" if endpoint_host_is_loopback(&endpoint) => {}
+        "http" => {
+            return Err(anyhow!(
+                "Cloud-agent OTLP endpoint must use HTTPS unless its host is loopback"
+            ));
+        }
+        _ => return Err(anyhow!("Cloud-agent OTLP endpoint must use HTTP or HTTPS")),
     }
 
     endpoint.set_query(None);
@@ -186,6 +231,15 @@ fn traces_endpoint(base_endpoint: &str) -> anyhow::Result<String> {
         .pop_if_empty()
         .extend(["v1", "traces"]);
     Ok(endpoint.into())
+}
+/// Returns whether the endpoint host is guaranteed to resolve to the local machine.
+fn endpoint_host_is_loopback(endpoint: &Url) -> bool {
+    match endpoint.host() {
+        Some(Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        Some(Host::Ipv4(address)) => address.is_loopback(),
+        Some(Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
+    }
 }
 
 /// Returns the export shutdown timeout using the standard OpenTelemetry environment variables.
@@ -390,9 +444,16 @@ impl opentelemetry::trace::Span for ShutdownAwareSpan {
 /// ensuring unrelated application tracing is never sent to the configured cloud-agent endpoint.
 /// The marker is a per-span routing attribute rather than an inherited property, so every span
 /// intended for export must set it explicitly.
-#[derive(Debug)]
 struct CloudAgentSpanExporter {
     inner: opentelemetry_otlp::SpanExporter,
+    diagnostics: RateLimitedDiagnostics,
+}
+impl std::fmt::Debug for CloudAgentSpanExporter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CloudAgentSpanExporter")
+            .finish_non_exhaustive()
+    }
 }
 
 impl SpanExporter for CloudAgentSpanExporter {
@@ -411,8 +472,8 @@ impl SpanExporter for CloudAgentSpanExporter {
             }
 
             let result = self.inner.export(batch).await;
-            if let Err(err) = &result {
-                log::warn!("Failed to export cloud-agent OpenTelemetry spans: {err}");
+            if result.is_err() {
+                self.diagnostics.warn_export_failure();
             }
             result
         }
@@ -436,6 +497,27 @@ impl SpanExporter for CloudAgentSpanExporter {
 
     fn set_resource(&mut self, resource: &Resource) {
         self.inner.set_resource(resource);
+    }
+}
+
+/// Rate-limits local token-free export diagnostics independently of exporter retries.
+#[derive(Debug, Default)]
+struct RateLimitedDiagnostics {
+    last_export_failure: Mutex<Option<Instant>>,
+}
+
+impl RateLimitedDiagnostics {
+    /// Emits at most one local export-failure warning per configured interval.
+    fn warn_export_failure(&self) {
+        let now = Instant::now();
+        let mut last_failure = self
+            .last_export_failure
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if last_failure.is_none_or(|last| now.duration_since(last) >= EXPORT_FAILURE_LOG_INTERVAL) {
+            *last_failure = Some(now);
+            log::warn!("Failed to export cloud-agent OpenTelemetry spans");
+        }
     }
 }
 
