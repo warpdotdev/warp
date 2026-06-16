@@ -211,10 +211,8 @@ impl ActiveDrag {
 /// See the module-level doc for full state-transition diagrams.
 enum DragPhase {
     /// The preview window is floating freely, following the cursor. When the cursor
-    /// enters another window's tab bar the model transitions to `GhostInTarget`
-    /// (no view-tree transfer yet). For the back-to-caller path (cursor re-enters
-    /// the source window's own tab bar during a multi-tab drag) it returns
-    /// `HandoffNeeded` to trigger a live transfer.
+    /// enters another window's tab bar (or re-enters the source window's tab bar)
+    /// the model transitions to `GhostInTarget` (no view-tree transfer yet).
     Floating,
     /// The cursor is hovering over a target window's tab bar but **no view-tree
     /// transfer has occurred**. The target renders a lightweight visual ghost
@@ -285,9 +283,6 @@ pub enum DragResult {
     /// This happens in the single-tab case where the source window is physically
     /// repositioned and the draggable coordinates must be corrected to match.
     AdjustDraggable { adjustment: Vector2F },
-    /// The cursor is over a target tab bar and a handoff should be initiated.
-    /// The caller must call the appropriate `execute_handoff_*` method.
-    HandoffNeeded { target: AttachTarget },
 }
 
 /// Result of processing a drop event (`on_drop`).
@@ -869,9 +864,10 @@ impl CrossWindowTabDrag {
 
     /// Handles a drag event while the tab is floating freely.
     ///
-    /// Repositions the preview window to follow the cursor, checks whether the cursor
-    /// is now over another window's tab bar, and returns `HandoffNeeded` if the tab
-    /// should be transferred into the target.
+    /// Repositions the preview window to follow the cursor and checks whether the
+    /// cursor is now over a candidate window's tab bar (including the source's own).
+    /// If so, transitions to `GhostInTarget` and shows a lightweight ghost in that
+    /// window; the real view-tree transfer is deferred to drop time.
     fn on_drag_while_floating(
         &mut self,
         caller_window_id: WindowId,
@@ -924,22 +920,10 @@ impl CrossWindowTabDrag {
                 return drag_result;
             };
 
-            // Back-to-caller path: cursor returned to the source window's own
-            // tab bar during a multi-tab drag. This requires a live handoff
-            // since the tab needs to be physically re-inserted into the source.
-            if target.window_id == caller_window_id {
-                log::info!(
-                    "tab_drag: on_drag_while_floating -> HandoffNeeded (back-to-caller) target_wid={} insertion_index={} caller_wid={caller_window_id} (phase Floating->Transitioning)",
-                    target.window_id,
-                    target.insertion_index
-                );
-                drag.phase = DragPhase::Transitioning;
-                return DragResult::HandoffNeeded { target };
-            }
-
-            // Cross-window target: enter GhostInTarget — show a cheap visual
-            // in the target without any view-tree transfer. The real
-            // `transfer_view_tree_to_window` is deferred until drop.
+            // Cross-window target (including back to the source's own tab bar):
+            // enter GhostInTarget — show a cheap visual in the target without any
+            // view-tree transfer. The real `transfer_view_tree_to_window` is
+            // deferred until drop.
             log::info!(
                 "tab_drag: on_drag_while_floating -> GhostInTarget target_wid={} insertion_index={} caller_wid={caller_window_id} (Floating->GhostInTarget)",
                 target.window_id,

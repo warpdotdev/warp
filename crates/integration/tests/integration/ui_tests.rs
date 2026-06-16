@@ -223,6 +223,7 @@ integration_tests! {
     test_detach_tab_to_new_window_with_drag,
     test_attach_tab_to_other_window_and_continue_drag,
     test_single_tab_handoff_continues_drag,
+    test_multi_tab_drag_back_to_source_and_out_again,
 
     test_restore_single_closed_pane,
     test_restore_multiple_closed_panes,
