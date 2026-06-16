@@ -214,7 +214,6 @@ static NSView *get_titlebar_container_view(NSWindow *window) {
     return [titleBarView superview];
 }
 
-
 // Configures titlebar height and traffic light button constraints for a window.
 // Returns the height constraint if newly created, or NULL if just updating.
 static NSLayoutConstraint *configure_titlebar_height(NSWindow *window, CGFloat height,
