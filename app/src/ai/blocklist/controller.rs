@@ -79,6 +79,7 @@ use crate::terminal::model::session::SessionType;
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::terminal::ShellLaunchData;
+use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -2001,6 +2002,41 @@ impl BlocklistAIController {
         );
     }
 
+    /// Schedules an auto-resume-after-error for the conversation once the network is online
+    /// and the auto-handoff sleep modal is closed, so the resume doesn't race the user's
+    /// enable/dismiss decision on wake.
+    fn schedule_auto_resume_after_error(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let wait_for_online = NetworkStatus::as_ref(ctx).wait_until_online();
+        let wait_for_modal_closed =
+            OneTimeModalModel::as_ref(ctx).wait_until_auto_handoff_sleep_modal_closed();
+        let wait = async move {
+            wait_for_online.await;
+            // Await the modal second: the future reads live modal state at
+            // poll time, so a modal surfaced on wake (after connectivity
+            // returns) is still observed.
+            wait_for_modal_closed.await;
+        };
+        let handle = ctx.spawn(wait, move |me, _, ctx| {
+            // Clean up the pending handle now that the resume is executing.
+            me.pending_auto_resume_handles.remove(&conversation_id);
+            me.resume_conversation(
+                conversation_id,
+                // Don't allow a second resume-on-error to prevent a persistent loop.
+                /*can_attempt_resume_on_error*/
+                false,
+                /*is_auto_resume_after_error*/ true,
+                vec![],
+                ctx,
+            );
+        });
+        self.pending_auto_resume_handles
+            .insert(conversation_id, handle);
+    }
+
     pub fn send_passive_code_diff_request(
         &mut self,
         query: String,
@@ -2898,25 +2934,7 @@ impl BlocklistAIController {
                     .as_ref(ctx)
                     .should_resume_conversation_after_stream_finished()
                 {
-                    let network_status = NetworkStatus::handle(ctx);
-                    let wait_for_online = network_status.as_ref(ctx).wait_until_online();
-                    let handle = ctx.spawn(wait_for_online, move |me, _, ctx| {
-                        // Clean up the pending handle now that the resume is executing.
-                        me.pending_auto_resume_handles.remove(&conversation_id);
-                        me.resume_conversation(
-                            conversation_id,
-                            // Don't allow a second resume-on-error to prevent a persistent
-                            // loop.
-                            /*can_attempt_resume_on_error*/
-                            false,
-                            /*is_auto_resume_after_error*/
-                            true,
-                            vec![],
-                            ctx,
-                        );
-                    });
-                    self.pending_auto_resume_handles
-                        .insert(conversation_id, handle);
+                    self.schedule_auto_resume_after_error(conversation_id, ctx);
                 }
 
                 // Clean up the response stream tracking entry now that the stream is complete.
