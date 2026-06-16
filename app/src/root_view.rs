@@ -982,6 +982,8 @@ fn open_settings_page_in_new_window(section: &SettingsSection, ctx: &mut AppCont
     });
 }
 
+/// MCP servers need to wait for initial load to complete, so we have this action in addition
+/// to the general-purpose [`open_settings_page_in_new_window`].
 fn open_mcp_settings_in_new_window(args: &OpenMCPSettingsArgs, ctx: &mut AppContext) {
     let autoinstall = args.autoinstall.clone();
     let root_handle = open_new_window_get_handles(None, ctx).1;
@@ -1427,6 +1429,11 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
     };
 }
 
+/// This action will show or hide all of Warp's windows except the quake window
+///
+/// - If Warp is active and has any windows, hide those windows.
+/// - If Warp is hidden, show all windows.
+/// - If Warp is active but has 0 normal windows, create a new window with a new session.
 fn show_or_hide_non_quake_mode_windows(_: &(), ctx: &mut AppContext) {
     let quake_window_id = get_quake_mode_state(ctx).map(|state| state.window_id);
     let non_quake_mode_window_ids = ctx
