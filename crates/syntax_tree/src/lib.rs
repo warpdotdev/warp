@@ -25,8 +25,7 @@ const MAX_SYNTAX_TREES: usize = 3;
 
 /// Maximum buffer size in bytes for which we attempt to parse a syntax tree.
 /// Files larger than this are skipped to avoid tree-sitter's super-linear
-/// memory growth on large inputs (consistent with snacks.nvim / astrocore defaults).
-/// See this tree-sitter issue:
+/// memory growth on large inputs. See this tree-sitter issue:
 /// https://github.com/tree-sitter/tree-sitter/issues/222#issuecomment-435987441
 const MAX_PARSE_BYTES: usize = 2 * 1024 * 1024; // 2 MB
 
