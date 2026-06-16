@@ -81,12 +81,21 @@ pub(super) fn new_state(
     // something else via the segmented intent selector inside the dialog.
     let intent = CommitChainMode::CommitOnly;
     // `CommitAndPush` always runs `git push --set-upstream`, so it works
-    // whether or not the branch already has an upstream — but the label
-    // and icon flip to communicate the user-visible difference.
-    let (push_label, push_icon) = if has_upstream {
-        ("Commit and push", Icon::ArrowUp)
+    // whether or not the branch already has an upstream — but the label,
+    // icon, and tooltip flip to communicate the user-visible difference
+    // between pushing to an existing upstream and publishing a new branch.
+    let (push_label, push_icon, push_tooltip) = if has_upstream {
+        (
+            "Commit and push",
+            Icon::ArrowUp,
+            "Commit your changes, then push them to this branch's upstream on the remote.",
+        )
     } else {
-        ("Commit and publish", Icon::UploadCloud)
+        (
+            "Commit and publish",
+            Icon::UploadCloud,
+            "Commit your changes, then publish this branch to the remote and set it as the upstream.",
+        )
     };
     // If AI autogen is on, the dialog opens with "Generating\u{2026}" and a
     // background request fills the editor when it resolves. Otherwise, we
@@ -127,6 +136,7 @@ pub(super) fn new_state(
             .with_size(ButtonSize::XSmall)
             .with_height(32.)
             .with_icon(Icon::GitCommit)
+            .with_tooltip("Commit your changes locally without pushing to the remote.")
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(GitDialogAction::Commit(CommitSubAction::SetIntent(
                     CommitChainMode::CommitOnly,
@@ -138,6 +148,7 @@ pub(super) fn new_state(
             .with_size(ButtonSize::XSmall)
             .with_height(32.)
             .with_icon(push_icon)
+            .with_tooltip(push_tooltip)
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(GitDialogAction::Commit(CommitSubAction::SetIntent(
                     CommitChainMode::CommitAndPush,
@@ -151,6 +162,9 @@ pub(super) fn new_state(
                 .with_size(ButtonSize::XSmall)
                 .with_height(32.)
                 .with_icon(Icon::Github)
+                .with_tooltip(
+                    "Commit your changes, then open a pull request on GitHub for this branch.",
+                )
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(GitDialogAction::Commit(CommitSubAction::SetIntent(
                         CommitChainMode::CommitAndCreatePr,

@@ -45,6 +45,11 @@ pub(super) fn confirm_icon_for() -> Icon {
     Icon::Github
 }
 
+/// Tooltip for the confirm button explaining what creating the PR does.
+pub(super) fn confirm_tooltip_for() -> &'static str {
+    "Open a pull request on GitHub for this branch."
+}
+
 fn loading_label_for() -> &'static str {
     "Creating\u{2026}"
 }
