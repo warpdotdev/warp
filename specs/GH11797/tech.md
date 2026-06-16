@@ -84,25 +84,42 @@ Produces the count of changed files in the working copy:
 ```rust
 // Bash/Zsh:
 const SH_DIRTY_CMD: &str =
-    "count=$(jj diff --summary --ignore-working-copy 2>/dev/null | wc -l) && [ \"$count\" -gt 0 ] && echo \"$count\"";
+    "count=$(jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') && [ \"$count\" -gt 0 ] && echo \"$count\"";
 ```
 
 ```rust
 // Fish:
-const FISH_DIRTY_CMD: &str = "set count (jj diff --summary --ignore-working-copy 2>/dev/null | wc -l) \
+const FISH_DIRTY_CMD: &str = "set count (jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') \
     && test $count -gt 0 && string trim $count";
 ```
 
 ```rust
 // PowerShell:
-const PWSH_DIRTY_CMD: &str = "jj diff --summary --ignore-working-copy 2>$null | Measure-Object -Line | \
-    Where-Object { $_.Lines -gt 0 } | ForEach-Object { $_.Lines }";
+const PWSH_DIRTY_CMD: &str = "$count = (jj diff --summary 2>$null | Select-String -Pattern '^[AMD] ').Count; \
+    if ($count -gt 0) { $count }";
 ```
 
-`jj diff --summary` outputs one line per changed file. The `--ignore-working-copy` flag prevents
-auto-snapshotting during prompt rendering while still showing accurate file counts. The pipe to
-`wc -l` / `Measure-Object` gives an accurate count. When the workspace is clean (zero changes),
-the chip value is empty and the chip is hidden.
+#### `--ignore-working-copy` asymmetry
+
+This command **intentionally omits `--ignore-working-copy`**, unlike `jj_bookmark()`. Reason: with
+`--ignore-working-copy`, `jj diff` compares the last snapshot against the parent — it does not see
+filesystem edits made since the last `jj` invocation. The dirty-count chip would then show stale
+or zero values until the user ran some other jj command. Dropping the flag lets `jj diff` snapshot
+the working copy on each prompt render and report a live count.
+
+The cost is that each prompt render appends one operation log entry. jj is designed for frequent
+snapshots and the operation log is inexpensive (and garbage-collected). This is the same
+behavior `jj status` already does when users run it manually.
+
+The bookmark chip keeps `--ignore-working-copy` because reading bookmarks doesn't depend on the
+working-copy snapshot.
+
+#### Output parsing
+
+`jj diff --summary` outputs one line per changed file with an `A`/`M`/`D` prefix followed by a
+space (e.g., `M foo.rs`). The `grep -cE '^[AMD] '` pattern counts only those lines, which is
+robust against trailing-newline edge cases and any future status footer lines jj might add.
+When the workspace is clean (zero matches), the chip value is empty and the chip is hidden.
 
 ## Proposed changes
 
