@@ -1660,7 +1660,6 @@ impl AISettingsPageView {
             )
             .with_modal_style(UiComponentStyles {
                 width: Some(560.),
-                height: Some(600.),
                 ..Default::default()
             })
             .with_header_style(UiComponentStyles {

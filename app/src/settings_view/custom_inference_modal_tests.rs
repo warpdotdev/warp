@@ -1,8 +1,11 @@
+use std::collections::HashSet;
+
 use ai::api_keys::CustomEndpointModel;
 use pathfinder_geometry::vector::vec2f;
 use warpui::platform::WindowStyle;
+use warpui::scene::Scene;
 use warpui::units::Pixels;
-use warpui::App;
+use warpui::{App, Presenter, WindowInvalidation};
 
 use super::*;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
@@ -24,6 +27,86 @@ fn endpoint_with_models(model_count: usize) -> CustomEndpoint {
 
 fn init_modal_test_models(app: &mut App) {
     initialize_app_for_terminal_view(app);
+}
+fn custom_endpoint_modal_height(scene: &Scene) -> f32 {
+    let rects = scene
+        .layers()
+        .flat_map(|layer| &layer.rects)
+        .map(|rect| (rect.bounds.width(), rect.bounds.height(), rect.border.width))
+        .collect::<Vec<_>>();
+    rects
+        .iter()
+        .filter(|(width, _, _)| *width > INPUT_WIDTH && *width <= 560.)
+        .map(|(_, height, _)| *height)
+        .max_by(f32::total_cmp)
+        .unwrap_or_else(|| panic!("custom endpoint modal rect should exist: {rects:?}"))
+}
+
+#[test]
+fn modal_resizes_with_window_and_added_models() {
+    App::test((), |mut app| async move {
+        init_modal_test_models(&mut app);
+        let endpoint = endpoint_with_models(1);
+        let (window_id, modal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            let body = ctx.add_typed_action_view(|ctx| {
+                CustomEndpointModal::new(Some(&endpoint), Some(0), ctx)
+            });
+            Modal::new(Some("Edit custom endpoint".to_string()), body, ctx)
+                .with_modal_style(UiComponentStyles {
+                    width: Some(560.),
+                    ..Default::default()
+                })
+                .with_max_height_percentage(0.8)
+        });
+        let body = modal.read(&app, |modal, _| modal.body().clone());
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: HashSet::from([
+                app.root_view_id(window_id).expect("root view should exist"),
+                body.id(),
+            ]),
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation.clone(), ctx);
+            let initial_modal_height = {
+                let scene = presenter.build_scene(vec2f(800., 1000.), 1., None, ctx);
+                custom_endpoint_modal_height(&scene)
+            };
+            body.update(ctx, |body, ctx| {
+                for _ in 0..20 {
+                    body.add_model(ctx);
+                }
+            });
+            presenter.invalidate(invalidation, ctx);
+            let expanded_modal_height = {
+                let scene = presenter.build_scene(vec2f(800., 1000.), 1., None, ctx);
+                custom_endpoint_modal_height(&scene)
+            };
+            let small_window_height = {
+                let scene = presenter.build_scene(vec2f(800., 500.), 1., None, ctx);
+                custom_endpoint_modal_height(&scene)
+            };
+
+            assert!(
+                expanded_modal_height > initial_modal_height,
+                "expanded modal height {expanded_modal_height} should be greater than initial modal height {initial_modal_height}"
+            );
+            assert!(
+                (expanded_modal_height - 765.).abs() < 0.1,
+                "expanded modal height {expanded_modal_height} should reach the 80% window-height cap"
+            );
+            assert!(
+                small_window_height < expanded_modal_height,
+                "small modal height {small_window_height} should be less than expanded modal height {expanded_modal_height}"
+            );
+            assert!(
+                (small_window_height - 365.).abs() < 0.1,
+                "small modal height {small_window_height} should reach the 80% window-height cap"
+            );
+        });
+    })
 }
 
 #[test]
@@ -47,12 +130,11 @@ fn modal_with_many_models_lays_out() {
 }
 
 #[test]
-fn model_row_width_reserves_remove_button_column() {
+fn model_row_inputs_align_and_controls_fit_gutter() {
+    assert_eq!(MODEL_INPUT_WIDTH * 2. + MODEL_ROW_SPACING, INPUT_WIDTH);
     assert_eq!(
-        MODEL_INPUT_WIDTH_WITH_REMOVE_BUTTON * 2.
-            + MODEL_ROW_SPACING * 2.
-            + REMOVE_MODEL_BUTTON_COL_WIDTH,
-        INPUT_WIDTH
+        REMOVE_MODEL_BUTTON_SPACING + REMOVE_MODEL_BUTTON_COL_WIDTH + MODEL_SCROLLBAR_WIDTH,
+        32.
     );
 }
 

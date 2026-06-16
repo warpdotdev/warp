@@ -30,10 +30,10 @@ const LABEL_FONT_SIZE: f32 = 12.;
 const INPUT_WIDTH: f32 = 480.;
 
 const MODEL_ROW_SPACING: f32 = 16.;
-const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 32.;
+const REMOVE_MODEL_BUTTON_SPACING: f32 = 8.;
+const REMOVE_MODEL_BUTTON_COL_WIDTH: f32 = 20.;
+const MODEL_SCROLLBAR_WIDTH: f32 = 4.;
 const MODEL_INPUT_WIDTH: f32 = (INPUT_WIDTH - MODEL_ROW_SPACING) / 2.;
-const MODEL_INPUT_WIDTH_WITH_REMOVE_BUTTON: f32 =
-    (INPUT_WIDTH - MODEL_ROW_SPACING * 2. - REMOVE_MODEL_BUTTON_COL_WIDTH) / 2.;
 fn model_row_scroll_position_id(index: usize) -> String {
     format!("custom_endpoint_model_row_{index}")
 }
@@ -756,23 +756,23 @@ impl View for CustomEndpointModal {
 
         // Model rows
         let has_remove_model_button = self.model_rows.len() > 1;
-        let model_input_width = if has_remove_model_button {
-            MODEL_INPUT_WIDTH_WITH_REMOVE_BUTTON
-        } else {
-            MODEL_INPUT_WIDTH
-        };
         let mut model_labels = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(MODEL_ROW_SPACING)
+            .with_spacing(REMOVE_MODEL_BUTTON_SPACING)
             .with_child(
-                ConstrainedBox::new(label("Model name"))
-                    .with_width(model_input_width)
-                    .finish(),
-            )
-            .with_child(
-                ConstrainedBox::new(label("Model alias (optional)"))
-                    .with_width(model_input_width)
+                Flex::row()
+                    .with_spacing(MODEL_ROW_SPACING)
+                    .with_child(
+                        ConstrainedBox::new(label("Model name"))
+                            .with_width(MODEL_INPUT_WIDTH)
+                            .finish(),
+                    )
+                    .with_child(
+                        ConstrainedBox::new(label("Model alias (optional)"))
+                            .with_width(MODEL_INPUT_WIDTH)
+                            .finish(),
+                    )
                     .finish(),
             );
         if has_remove_model_button {
@@ -796,7 +796,7 @@ impl View for CustomEndpointModal {
                 .ui_builder()
                 .text_input(row.name_editor.clone())
                 .with_style(UiComponentStyles {
-                    width: Some(model_input_width),
+                    width: Some(MODEL_INPUT_WIDTH),
                     ..Default::default()
                 })
                 .build()
@@ -806,7 +806,7 @@ impl View for CustomEndpointModal {
                 .ui_builder()
                 .text_input(row.alias_editor.clone())
                 .with_style(UiComponentStyles {
-                    width: Some(model_input_width),
+                    width: Some(MODEL_INPUT_WIDTH),
                     ..Default::default()
                 })
                 .build()
@@ -824,13 +824,17 @@ impl View for CustomEndpointModal {
             } else {
                 Empty::new().finish()
             };
+            let model_inputs = Flex::row()
+                .with_spacing(MODEL_ROW_SPACING)
+                .with_child(name_input)
+                .with_child(alias_input)
+                .finish();
 
             let mut row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(MODEL_ROW_SPACING)
-                .with_child(name_input)
-                .with_child(alias_input);
+                .with_spacing(REMOVE_MODEL_BUTTON_SPACING)
+                .with_child(model_inputs);
             if has_remove_model_button {
                 row.add_child(
                     ConstrainedBox::new(remove_button)
@@ -852,7 +856,7 @@ impl View for CustomEndpointModal {
         let model_scrollable = ClippedScrollable::vertical(
             self.model_section_scroll_state.clone(),
             model_section.finish(),
-            ScrollbarWidth::Auto,
+            ScrollbarWidth::Custom(MODEL_SCROLLBAR_WIDTH),
             theme.nonactive_ui_text_color().into(),
             theme.active_ui_text_color().into(),
             warpui::elements::Fill::None,

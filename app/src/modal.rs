@@ -3,7 +3,7 @@ use warpui::color::ColorU;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Dismiss, Element, Flex, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
+    ParentElement, ParentOffsetBounds, Percentage, Radius, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::{FixedBinding, Keystroke};
@@ -420,26 +420,6 @@ impl<T: View> Modal<T> {
             .finish()
     }
 
-    fn max_heights(&self, app: &AppContext) -> (f32, f32) {
-        let modal_max_height = self.modal_styles.height.unwrap();
-        let body_max_height = self.body_styles.height.unwrap();
-        let Some(max_height_percentage) = self.max_height_percentage else {
-            return (modal_max_height, body_max_height);
-        };
-        let Some(window) = app.windows().platform_window(self.body.window_id(app)) else {
-            return (modal_max_height, body_max_height);
-        };
-
-        let modal_max_height = window.size().y() * max_height_percentage;
-        let header_max_height = if self.title.is_some() {
-            self.header_styles.height.unwrap_or(MODAL_HEADER_HEIGHT)
-        } else {
-            0.
-        };
-        let body_max_height = (modal_max_height - MODAL_TOP_MARGIN - header_max_height).max(0.);
-        (modal_max_height, body_max_height)
-    }
-
     pub fn body(&self) -> &ViewHandle<T> {
         &self.body
     }
@@ -484,18 +464,32 @@ impl<T: View> View for Modal<T> {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let (modal_max_height, body_max_height) = self.max_heights(app);
+        let has_relative_max_height = self.max_height_percentage.is_some();
+        let body_max_height = if has_relative_max_height {
+            f32::INFINITY
+        } else {
+            self.body_styles.height.unwrap()
+        };
+        let modal_max_height = if has_relative_max_height {
+            f32::INFINITY
+        } else {
+            self.modal_styles.height.unwrap()
+        };
+        let body = self.render_body(body_max_height);
         let header = self.render_header(appearance);
         let contents = if let Some(header) = header {
-            Flex::column()
-                .with_child(header)
-                .with_child(self.render_body(body_max_height))
-                .finish()
+            let mut contents = Flex::column().with_child(header);
+            if has_relative_max_height {
+                contents.add_child(Shrinkable::new(1., body).finish());
+            } else {
+                contents.add_child(body);
+            }
+            contents.finish()
         } else {
-            self.render_body(body_max_height)
+            body
         };
 
-        let mut modal = ConstrainedBox::new(
+        let modal = ConstrainedBox::new(
             Container::new(contents)
                 .with_background(blended_colors::neutral_2(appearance.theme()))
                 .with_corner_radius(self.modal_styles.border_radius.unwrap_or_default())
@@ -509,6 +503,11 @@ impl<T: View> View for Modal<T> {
         .with_max_width(self.modal_styles.width.unwrap())
         .with_max_height(modal_max_height)
         .finish();
+        let mut modal = if let Some(max_height_percentage) = self.max_height_percentage {
+            Percentage::height(max_height_percentage, modal).finish()
+        } else {
+            modal
+        };
 
         if self.dismiss_on_click {
             modal = Dismiss::new(modal)
