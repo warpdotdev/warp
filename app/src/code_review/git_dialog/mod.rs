@@ -490,7 +490,7 @@ impl GitDialog {
         // communicates which of commit / commit-and-push / commit-and-create-PR
         // will actually run on click.
         let (confirm_button, cancel_button, close_button) =
-            Self::build_dialog_buttons("Confirm", None, None, ctx);
+            Self::build_dialog_buttons("Confirm", None, ctx);
         ctx.subscribe_to_model(&diff_state_model, Self::handle_diff_state_event);
         let state = commit::new_state(
             repo_location.to_local_path(),
@@ -530,7 +530,6 @@ impl GitDialog {
         let (confirm_button, cancel_button, close_button) = Self::build_dialog_buttons(
             push::confirm_label(publish),
             Some(push::confirm_icon(publish)),
-            Some(push::confirm_tooltip(publish)),
             ctx,
         );
         ctx.subscribe_to_model(&diff_state_model, Self::handle_diff_state_event);
@@ -554,12 +553,8 @@ impl GitDialog {
         base_branch_name: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let (confirm_button, cancel_button, close_button) = Self::build_dialog_buttons(
-            pr::confirm_label_for(),
-            Some(pr::confirm_icon_for()),
-            Some(pr::confirm_tooltip_for()),
-            ctx,
-        );
+        let (confirm_button, cancel_button, close_button) =
+            Self::build_dialog_buttons(pr::confirm_label_for(), Some(pr::confirm_icon_for()), ctx);
         ctx.subscribe_to_model(&diff_state_model, Self::handle_diff_state_event);
         let state = pr::new_state(base_branch_name);
         let mut this = Self {
@@ -583,7 +578,6 @@ impl GitDialog {
     fn build_dialog_buttons(
         confirm_label: &'static str,
         confirm_icon: Option<Icon>,
-        confirm_tooltip: Option<&'static str>,
         ctx: &mut ViewContext<Self>,
     ) -> (
         ViewHandle<ActionButton>,
@@ -596,9 +590,6 @@ impl GitDialog {
                 .with_height(32.);
             if let Some(icon) = confirm_icon {
                 button = button.with_icon(icon);
-            }
-            if let Some(tooltip) = confirm_tooltip {
-                button = button.with_tooltip(tooltip);
             }
             button.on_click(|ctx| ctx.dispatch_typed_action(GitDialogAction::Confirm))
         });
@@ -736,11 +727,8 @@ impl GitDialog {
                 !commit::is_ready_to_confirm(state, ctx),
                 commit::confirm_tooltip(state, ctx),
             ),
-            GitDialogMode::Push(state) => (false, Some(push::confirm_tooltip(state.publish))),
-            GitDialogMode::CreatePr(state) => (
-                !pr::is_ready_to_confirm(state),
-                Some(pr::confirm_tooltip_for()),
-            ),
+            GitDialogMode::Push(_) => (false, None),
+            GitDialogMode::CreatePr(state) => (!pr::is_ready_to_confirm(state), None),
         };
         self.confirm_button.update(ctx, |b, ctx| {
             b.set_disabled(disabled, ctx);

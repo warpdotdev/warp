@@ -73,18 +73,6 @@ pub(super) fn confirm_icon(publish: bool) -> Icon {
     }
 }
 
-/// Tooltip for the confirm button, drawing the push/publish distinction:
-/// "Publish" creates the branch on the remote for the first time and sets it
-/// as the upstream, while "Push" sends new commits to an upstream that already
-/// exists.
-pub(super) fn confirm_tooltip(publish: bool) -> &'static str {
-    if publish {
-        "Publish this branch to the remote for the first time and set it as the upstream."
-    } else {
-        "Push your local commits to this branch's upstream on the remote."
-    }
-}
-
 fn loading_label(publish: bool) -> &'static str {
     if publish {
         "Publishing…"
