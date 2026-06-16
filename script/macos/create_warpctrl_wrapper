@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -e
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: $0 <wrapper-path> <binary-relative-path>" >&2
+  exit 1
+fi
+
+WRAPPER_PATH="$1"
+BINARY_RELATIVE_PATH="$2"
+
+mkdir -p "$(dirname "$WRAPPER_PATH")"
+cat > "$WRAPPER_PATH" << EOF
+#!/bin/bash
+script_dir="\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+exec -a "\$0" "\$script_dir/$BINARY_RELATIVE_PATH" --warpctrl "\$@"
+EOF
+chmod +x "$WRAPPER_PATH"

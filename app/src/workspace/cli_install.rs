@@ -108,6 +108,11 @@ fn remove_file_with_admin(target: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Install a channel-specific CLI symlink.
+///
+/// The target must either be absent or already be a symlink. Installation first
+/// attempts to create the symlink without elevated privileges, then falls back
+/// to prompting for administrator privileges.
 fn install_symlink(source: &Path, target: &Path, command_name: &str) -> Result<()> {
     if target.exists() && !target.is_symlink() {
         return Err(anyhow!(
@@ -135,6 +140,11 @@ fn install_symlink(source: &Path, target: &Path, command_name: &str) -> Result<(
     Ok(())
 }
 
+/// Uninstall a channel-specific CLI symlink.
+///
+/// The target must be a symlink so uninstalling cannot remove an unrelated
+/// file. Removal first runs without elevated privileges, then falls back to
+/// prompting for administrator privileges.
 fn uninstall_symlink(target: &Path, command_name: &str) -> Result<()> {
     if !target.exists() {
         return Err(anyhow!("{command_name} is not currently installed."));

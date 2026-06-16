@@ -41,6 +41,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ::settings::{Setting, ToggleableSetting};
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
+#[cfg(target_os = "macos")]
+use anyhow::Result;
 use autoupdate::AutoupdateStage;
 #[cfg(target_os = "macos")]
 use command::blocking::Command;
@@ -8547,33 +8549,43 @@ impl Workspace {
         }
     }
 
+    /// Show an ephemeral success toast or persistent failure toast for a CLI command operation.
+    #[cfg(target_os = "macos")]
+    fn handle_cli_command_result(
+        &mut self,
+        result: Result<()>,
+        success_toast: DismissibleToast<WorkspaceAction>,
+        failure_message: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match result {
+            Ok(()) => {
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    toast_stack.add_ephemeral_toast(success_toast, ctx);
+                });
+            }
+            Err(error) => {
+                let error_message = format!("{failure_message}: {error}");
+                log::warn!("{error_message}");
+                self.toast_stack.update(ctx, |toast_stack, ctx| {
+                    let toast = DismissibleToast::error(error_message);
+                    toast_stack.add_persistent_toast(toast, ctx);
+                });
+            }
+        }
+    }
+
     /// Install the Warp CLI by creating a symlink in /usr/local/bin
     #[cfg(target_os = "macos")]
     fn install_cli(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(async { cli_install::install_cli() }, |view, result, ctx| {
-            match result {
-                Ok(_) => {
-                    let command_name = ChannelState::channel().cli_command_name();
-                    let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string())
-                            .with_link(
-                                ToastLink::new("Learn more".to_string()).with_href(
-                                    "https://docs.warp.dev/reference/cli".to_string(),
-                                ),
-                            );
-                        toast_stack.add_ephemeral_toast(toast, ctx);
-                    });
-                }
-                Err(error) => {
-                    let error_message = format!("Failed to install Oz command: {error}");
-                    log::error!("{error_message}");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::error(error_message);
-                        toast_stack.add_persistent_toast(toast, ctx);
-                    });
-                }
-            }
+            let command_name = ChannelState::channel().cli_command_name();
+            let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
+            let toast = DismissibleToast::success(message).with_link(
+                ToastLink::new("Learn more".to_string())
+                    .with_href("https://docs.warp.dev/reference/cli".to_string()),
+            );
+            view.handle_cli_command_result(result, toast, "Failed to install Oz command", ctx);
         });
     }
 
@@ -8582,22 +8594,16 @@ impl Workspace {
     fn uninstall_cli(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
             async { cli_install::uninstall_cli() },
-            |view, result, ctx| match result {
-                Ok(_) => {
-                    let message = "Successfully uninstalled the Oz command.";
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string());
-                        toast_stack.add_ephemeral_toast(toast, ctx);
-                    });
-                }
-                Err(error) => {
-                    let error_message = format!("Failed to uninstall Oz command: {error}");
-                    log::error!("{error_message}");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::error(error_message);
-                        toast_stack.add_persistent_toast(toast, ctx);
-                    });
-                }
+            |view, result, ctx| {
+                let toast = DismissibleToast::success(
+                    "Successfully uninstalled the Oz command.".to_string(),
+                );
+                view.handle_cli_command_result(
+                    result,
+                    toast,
+                    "Failed to uninstall Oz command",
+                    ctx,
+                );
             },
         );
     }
@@ -8607,23 +8613,16 @@ impl Workspace {
     fn install_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
             async { cli_install::install_warpctrl() },
-            |view, result, ctx| match result {
-                Ok(_) => {
-                    let command_name = ChannelState::channel().warpctrl_command_name();
-                    let message = format!("Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line.");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string());
-                        toast_stack.add_ephemeral_toast(toast, ctx);
-                    });
-                }
-                Err(error) => {
-                    let error_message = format!("Failed to install Warp Control command: {error}");
-                    log::error!("{error_message}");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::error(error_message);
-                        toast_stack.add_persistent_toast(toast, ctx);
-                    });
-                }
+            |view, result, ctx| {
+                let command_name = ChannelState::channel().warpctrl_command_name();
+                let message = format!("Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line.");
+                let toast = DismissibleToast::success(message);
+                view.handle_cli_command_result(
+                    result,
+                    toast,
+                    "Failed to install Warp Control command",
+                    ctx,
+                );
             },
         );
     }
@@ -8633,23 +8632,16 @@ impl Workspace {
     fn uninstall_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
             async { cli_install::uninstall_warpctrl() },
-            |view, result, ctx| match result {
-                Ok(_) => {
-                    let message = "Successfully uninstalled the Warp Control command.";
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::success(message.to_string());
-                        toast_stack.add_ephemeral_toast(toast, ctx);
-                    });
-                }
-                Err(error) => {
-                    let error_message =
-                        format!("Failed to uninstall Warp Control command: {error}");
-                    log::error!("{error_message}");
-                    view.toast_stack.update(ctx, |toast_stack, ctx| {
-                        let toast = DismissibleToast::error(error_message);
-                        toast_stack.add_persistent_toast(toast, ctx);
-                    });
-                }
+            |view, result, ctx| {
+                let toast = DismissibleToast::success(
+                    "Successfully uninstalled the Warp Control command.".to_string(),
+                );
+                view.handle_cli_command_result(
+                    result,
+                    toast,
+                    "Failed to uninstall Warp Control command",
+                    ctx,
+                );
             },
         );
     }

@@ -11,7 +11,7 @@ Prefer `warpctrl` when the requested action changes Warp itself rather than the 
 
 ## How to invoke Warp Control
 
-Warp Control is bundled into the Warp application. It is not a separate standalone binary; it is a hidden control mode that is served by the running Warp process. A small wrapper script is installed into the app bundle at `Contents/Resources/bin/warpctrl`, and the Warp UI can install a symlink for that wrapper to `/usr/local/bin` so it is available on `PATH`.
+Warp Control is bundled into the Warp application. It is not a separate standalone binary; it is a hidden control mode that is served by the running Warp process. A small channel-specific wrapper script is installed into the app bundle under `Contents/Resources/bin`, and the Warp UI can install a symlink for that wrapper to `/usr/local/bin` so it is available on `PATH`.
 
 When invoking Warp Control, use the wrapper name that matches the currently running Warp channel:
 
@@ -164,14 +164,4 @@ Warp Control availability depends on the build channel and the **Settings > Scri
 
 If `warpctrl instance list` is empty, confirm that a compatible Warp app is running and Scripting is enabled. If a command reports multiple instances, rerun it with `--instance <instance_id>`.
 
-If the wrapper is not present in the bundle (e.g., older builds), invoke the channel executable directly with the `--warpctrl` flag:
-
-```sh
-/Applications/WarpDev.app/Contents/MacOS/dev --warpctrl instance list
-```
-
-If the wrapper is present but not on `PATH`, use the full bundle path to the channel-specific wrapper:
-
-```sh
-/Applications/WarpDev.app/Contents/Resources/bin/warpctrl-dev instance list
-```
+If the wrapper is missing from the bundle or is not on `PATH`, use the matching direct-executable or full-bundle invocation documented in **How to invoke Warp Control**.

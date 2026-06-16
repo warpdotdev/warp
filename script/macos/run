@@ -136,17 +136,11 @@ if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
 fi
 
 if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
-  WARPCTRL_RESOURCES_DIR="$WARP_APP_PATH/Contents/Resources/bin"
-  echo "Creating warpctrl wrapper script for local run..."
-  mkdir -p "$WARPCTRL_RESOURCES_DIR"
-  WARPCTRL_SCRIPT_PATH="$WARPCTRL_RESOURCES_DIR/warpctrl"
-  cat > "$WARPCTRL_SCRIPT_PATH" << 'EOF'
-#!/bin/bash
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec -a "$0" "$script_dir/../../MacOS/WARP_BIN_PLACEHOLDER" --warpctrl "$@"
-EOF
-  sed -i '' "s/WARP_BIN_PLACEHOLDER/$WARP_BIN_NAME/" "$WARPCTRL_SCRIPT_PATH"
-  chmod +x "$WARPCTRL_SCRIPT_PATH"
+  WARPCTRL_SCRIPT_PATH="$WARP_APP_PATH/Contents/Resources/bin/warpctrl-$WARP_CHANNEL"
+  echo "Creating warpctrl wrapper script at $WARPCTRL_SCRIPT_PATH..."
+  "${REPO_ROOT}/script/macos/create_warpctrl_wrapper" \
+    "$WARPCTRL_SCRIPT_PATH" \
+    "../../MacOS/$WARP_BIN_NAME"
 fi
 
 echo "Codesigning app..."
