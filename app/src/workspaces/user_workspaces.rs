@@ -556,6 +556,63 @@ impl UserWorkspaces {
         }
     }
 
+    pub fn gemini_enterprise_host_settings(&self) -> Option<&super::workspace::LlmHostSettings> {
+        self.current_workspace().and_then(|workspace| {
+            workspace
+                .settings
+                .llm_settings
+                .host_configs
+                .get(&LLMModelHost::GeminiEnterprise)
+        })
+    }
+
+    /// Did the admin enable Gemini Enterprise (GEAP) for the current workspace?
+    pub fn is_gemini_enterprise_available_from_workspace(&self) -> bool {
+        self.current_workspace().is_some_and(|workspace| {
+            workspace.settings.llm_settings.enabled
+                && self
+                    .gemini_enterprise_host_settings()
+                    .is_some_and(|settings| settings.enabled)
+        })
+    }
+
+    pub fn gemini_enterprise_host_enablement_setting(&self) -> HostEnablementSetting {
+        self.gemini_enterprise_host_settings()
+            .map(|settings| settings.enablement_setting.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn is_gemini_enterprise_credentials_toggleable(&self) -> bool {
+        matches!(
+            self.gemini_enterprise_host_enablement_setting(),
+            HostEnablementSetting::RespectUserSetting
+        )
+    }
+
+    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached for the
+    /// current user. Anonymous/logged-out guard from [`Self::is_byo_api_key_enabled`]:
+    /// a GEAP credential mint is rooted in the user's Warp session, so without one
+    /// there is nothing to mint from.
+    pub fn is_gemini_enterprise_credentials_enabled(&self, app: &AppContext) -> bool {
+        if AuthStateProvider::as_ref(app)
+            .get()
+            .is_anonymous_or_logged_out()
+        {
+            return false;
+        }
+        // i.e. did the admin toggle on Gemini Enterprise in the admin panel?
+        if !self.is_gemini_enterprise_available_from_workspace() {
+            return false;
+        }
+
+        match self.gemini_enterprise_host_enablement_setting() {
+            HostEnablementSetting::Enforce => true,
+            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+                .gemini_enterprise_credentials_enabled
+                .value(),
+        }
+    }
+
     /// Returns the AI autonomy settings that are enforced by the workspace for all its members.
     /// If a setting is `None`, the workspace doesn't enforce a particular setting.
     pub fn ai_autonomy_settings(&self) -> AiAutonomySettings {

@@ -316,6 +316,9 @@ fn map_conversation_status(
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match conversation.status() {
         ConversationStatus::InProgress => (AgentTaskState::InProgress, None),
+        // Report WaitingForEvents as IN_PROGRESS so the server task state
+        // matches the local view.
+        ConversationStatus::WaitingForEvents => (AgentTaskState::InProgress, None),
         ConversationStatus::Success => (AgentTaskState::Succeeded, None),
         ConversationStatus::Error => {
             // Extract the specific RenderableAIError from the last exchange to

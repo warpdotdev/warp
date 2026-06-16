@@ -151,6 +151,15 @@ pub(crate) fn write_git_credentials(credentials: &[GitCredential]) -> Result<()>
     Ok(())
 }
 
+pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result<()> {
+    if credentials.is_empty() {
+        return Ok(());
+    }
+    setup_git_config(credentials);
+    configure_git_identity(credentials);
+    write_git_credentials(credentials)
+}
+
 /// Run a git config command, logging a warning on failure rather than
 /// propagating the error (git may not be installed in all sandboxes).
 fn run_git_config(key: &str, value: &str) {
@@ -239,6 +248,10 @@ pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
 /// Returns `Ok(())` on success (including when the server returns no
 /// credentials). Returns `Err` when the workload-token issuance or the server
 /// API call fails — these are transient failures worth retrying.
+#[tracing::instrument(name = "git_credentials::try_refresh", skip_all, err, fields(
+    tags.cloud_agent = true,
+    task_id,
+))]
 async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()> {
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))

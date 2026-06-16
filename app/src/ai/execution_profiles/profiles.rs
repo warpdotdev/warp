@@ -17,7 +17,7 @@ use crate::ai::mcp::templatable_manager::TemplatableMCPServerManagerEvent;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::{CloudModelEvent, UpdateSource};
-use crate::cloud_object::{GenericStringObjectFormat, JsonObjectType};
+use crate::cloud_object::{CloudObject as _, GenericStringObjectFormat, JsonObjectType};
 use crate::drive::CloudObjectTypeAndId;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ClientId, SyncId};
@@ -139,6 +139,7 @@ impl AIExecutionProfilesModel {
                 let cloud_model = CloudModel::handle(ctx).as_ref(ctx);
                 let all_profiles_from_cloud: Vec<&super::CloudAIExecutionProfile> = cloud_model
                     .get_all_objects_of_type::<GenericStringObjectId, CloudAIExecutionProfileModel>()
+                    .filter(|p| Self::is_owned_by_current_user(p, ctx))
                     .collect();
 
                 let default_profile_from_cloud: Option<&super::CloudAIExecutionProfile> = all_profiles_from_cloud
@@ -241,6 +242,15 @@ impl AIExecutionProfilesModel {
 
         model.maybe_inherit_from_legacy_settings(ctx);
         model
+    }
+
+    fn is_owned_by_current_user(
+        profile: &super::CloudAIExecutionProfile,
+        ctx: &AppContext,
+    ) -> bool {
+        UserWorkspaces::as_ref(ctx)
+            .personal_drive(ctx)
+            .is_some_and(|owner| profile.permissions().owner == owner)
     }
 
     /// This function performs one-time migrations from legacy settings into the default profile.
@@ -1403,6 +1413,7 @@ impl AIExecutionProfilesModel {
         let cloud_model = CloudModel::as_ref(ctx);
         let all_profiles: Vec<(SyncId, bool)> = cloud_model
             .get_all_objects_of_type::<GenericStringObjectId, CloudAIExecutionProfileModel>()
+            .filter(|o| Self::is_owned_by_current_user(o, ctx))
             .map(|o| (o.id, o.model().string_model.is_default_profile))
             .collect();
 
@@ -1419,7 +1430,7 @@ impl AIExecutionProfilesModel {
             }
         }
 
-        // Register any non-default profiles from cloud that we aren't
+        // Register non-default profiles from cloud that we aren't
         // already tracking so later edits find their backing sync_id.
         let mut added_non_default = false;
         for (sync_id, is_default) in all_profiles {
@@ -1469,6 +1480,11 @@ impl AIExecutionProfilesModel {
             log::warn!("Received ObjectCreated event for AI execution profile but object not found in CloudModel: {sync_id:?}");
             return;
         };
+
+        if !Self::is_owned_by_current_user(object, ctx) {
+            log::info!("Ignoring non-owned execution profile from cloud: {sync_id:?}");
+            return;
+        }
 
         // Check if this is the default profile
         if object.model().string_model.is_default_profile {

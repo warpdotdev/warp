@@ -86,8 +86,10 @@ fn api_keys_with_warp_credit_fallback_setting_preserves_existing_keys() {
             openai: String::new(),
             google: String::new(),
             open_router: String::new(),
+            grok_oauth_access_token: String::new(),
             allow_use_of_warp_credits: false,
             aws_credentials: None,
+            google_cloud_credentials: None,
         }),
         true,
     )

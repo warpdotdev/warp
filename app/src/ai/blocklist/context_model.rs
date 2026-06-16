@@ -28,7 +28,7 @@ use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::AIDocumentId;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::outline::RepoOutlines;
-use crate::code_review::git_status_update::GitRepoStatusModel;
+use crate::code_review::github_repo_model::GitHubRepoModel;
 use crate::terminal::event::{BlockCompletedEvent, BlockType};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::Sessions;
@@ -103,7 +103,7 @@ impl PendingQueryState {
 pub struct BlocklistAIContextModel {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     directory_context: DirectoryContext,
-    git_repo_status: Option<WeakModelHandle<GitRepoStatusModel>>,
+    github_repo_model: Option<WeakModelHandle<GitHubRepoModel>>,
 
     /// `BlockId`s corresponding to blocks to be included as context with the next AI query.
     pending_context_block_ids: HashSet<BlockId>,
@@ -282,7 +282,7 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
-            git_repo_status: None,
+            github_repo_model: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -310,7 +310,7 @@ impl BlocklistAIContextModel {
         Self {
             terminal_model,
             directory_context: Default::default(),
-            git_repo_status: None,
+            github_repo_model: None,
             pending_context_block_ids: HashSet::new(),
             pending_context_selected_text: None,
             pending_attachments: Default::default(),
@@ -495,13 +495,6 @@ impl BlocklistAIContextModel {
             // Add selected text
             if let Some(selected_text) = &self.pending_context_selected_text {
                 context.push(AIAgentContext::SelectedText(selected_text.clone()));
-            }
-
-            // Add images from pending attachments
-            for attachment in &self.pending_attachments {
-                if let PendingAttachment::Image(image) = attachment {
-                    context.push(AIAgentContext::Image(image.clone()));
-                }
             }
         }
 
@@ -991,19 +984,18 @@ impl BlocklistAIContextModel {
         }
     }
 
-    pub fn set_git_repo_status(&mut self, handle: Option<WeakModelHandle<GitRepoStatusModel>>) {
-        self.git_repo_status = handle;
+    pub fn set_github_repo_model(&mut self, handle: Option<WeakModelHandle<GitHubRepoModel>>) {
+        self.github_repo_model = handle;
     }
 
     /// Builds an `AIAgentContext::Repository` from cached git remote metadata, if available.
     fn repository_context(&self, app: &AppContext) -> Option<AIAgentContext> {
-        let handle = self.git_repo_status.as_ref()?.upgrade(app)?;
-        let repository_info = handle.as_ref(app).repository_info()?;
+        let handle = self.github_repo_model.as_ref()?.upgrade(app)?;
+        let repository_info = handle.as_ref(app).repository_info(app)?;
         Some(Self::repository_context_from_repository_info(
             repository_info,
         ))
     }
-
     fn repository_context_from_repository_info(repository_info: &RepositoryInfo) -> AIAgentContext {
         AIAgentContext::Repository {
             name: repository_info.name.clone(),
@@ -1012,11 +1004,10 @@ impl BlocklistAIContextModel {
     }
 
     fn pull_request_context(&self, app: &AppContext) -> Option<AIAgentContext> {
-        let handle = self.git_repo_status.as_ref()?.upgrade(app)?;
-        let pr_info = handle.as_ref(app).pr_info()?;
+        let handle = self.github_repo_model.as_ref()?.upgrade(app)?;
+        let pr_info = handle.as_ref(app).pr_info(app)?;
         Self::pull_request_context_from_pr_info(pr_info)
     }
-
     fn pull_request_context_from_pr_info(pr_info: &PrInfo) -> Option<AIAgentContext> {
         Some(AIAgentContext::PullRequest {
             number: i32::try_from(pr_info.number).ok()?,
@@ -1036,6 +1027,23 @@ impl BlocklistAIContextModel {
             });
         }
         self.pending_attachments.clear();
+    }
+
+    /// Drains all pending attachments, returning them, and emits the same update event as
+    /// [`Self::clear_pending_attachments`] so the input's attachment chips disappear. Used to
+    /// move staged attachments onto a queued prompt row at enqueue time.
+    pub fn take_pending_attachments(
+        &mut self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Vec<PendingAttachment> {
+        if !self.pending_attachments.is_empty() {
+            ctx.emit(BlocklistAIContextEvent::UpdatedPendingContext {
+                previous_block_ids: self.pending_context_block_ids.clone(),
+                requires_block_resync: false,
+                requires_text_resync: false,
+            });
+        }
+        std::mem::take(&mut self.pending_attachments)
     }
 }
 

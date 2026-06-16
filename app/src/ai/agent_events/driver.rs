@@ -23,19 +23,25 @@ pub(crate) const DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG: usize = 5;
 /// when opening a stream.
 ///
 /// `RunIds` maps to the `?run_ids[]=` query parameter on the SSE endpoint
-/// and is used by the orchestrator-owner per-conversation stream and the
-/// dormant Claude wake listener. `AncestorRunId` maps to the
-/// `?ancestor_run_id=` shape and streams events for every direct child of
-/// the supplied parent run; today only the shared-session viewer's
-/// pill bar consumes it.
+/// and is used by child-only per-conversation streams and the dormant
+/// Claude wake listener. `AncestorRunId` maps to the `?ancestor_run_id=`
+/// shape: with `include_self=false` it streams events for every direct
+/// child of the supplied parent run (the shared-session viewer's pill bar),
+/// and with `include_self=true` it additionally streams the parent run's
+/// own events so an owner-side orchestrator can receive child lifecycle
+/// events plus its own inbox on one ordered stream.
 #[derive(Clone, Debug)]
 pub(crate) enum AgentEventFilter {
     /// One stream per multiplexed set of run IDs. Matches today's
     /// `?run_ids[]=` endpoint.
     RunIds(Vec<String>),
-    /// Stream events for every direct child of the supplied parent run.
-    /// Matches the `?ancestor_run_id=` endpoint.
-    AncestorRunId(String),
+    /// Stream events for every direct child of the supplied parent run, and
+    /// (when `include_self` is true) the parent run itself. Matches the
+    /// `?ancestor_run_id=` endpoint.
+    AncestorRunId {
+        ancestor_run_id: String,
+        include_self: bool,
+    },
 }
 
 impl AgentEventFilter {
@@ -44,7 +50,10 @@ impl AgentEventFilter {
     pub(crate) fn log_label(&self) -> String {
         match self {
             AgentEventFilter::RunIds(ids) => format!("run_ids={ids:?}"),
-            AgentEventFilter::AncestorRunId(id) => format!("ancestor_run_id={id}"),
+            AgentEventFilter::AncestorRunId {
+                ancestor_run_id,
+                include_self,
+            } => format!("ancestor_run_id={ancestor_run_id} include_self={include_self}"),
         }
     }
 }
@@ -195,9 +204,16 @@ impl AgentEventSource for ServerApiAgentEventSource {
                     .stream_agent_events(run_ids, since_sequence)
                     .await?
             }
-            AgentEventFilter::AncestorRunId(ancestor_run_id) => {
+            AgentEventFilter::AncestorRunId {
+                ancestor_run_id,
+                include_self,
+            } => {
                 self.server_api
-                    .stream_agent_events_for_ancestor(ancestor_run_id, since_sequence)
+                    .stream_agent_events_for_ancestor(
+                        ancestor_run_id,
+                        *include_self,
+                        since_sequence,
+                    )
                     .await?
             }
         };

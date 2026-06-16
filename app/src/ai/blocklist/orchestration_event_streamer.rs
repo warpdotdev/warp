@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use futures::channel::mpsc;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
@@ -41,6 +42,8 @@ const RESTORE_FETCH_PERMANENT_BACKOFF_STEPS: &[u64] = &[30];
 const SSE_DRAIN_INTERVAL_MS: u64 = 500;
 /// Cap killed-run tombstones while keeping normal sessions well below the limit.
 const MAX_KILLED_RUN_IDS: usize = 1024;
+/// Maximum number of explicit run IDs the server accepts on a `run_ids[]` SSE stream.
+const MAX_RUN_ID_STREAM_FILTER: usize = 100;
 /// Max child runs fetched per cold-start `?ancestor_run_id=` REST seed in
 /// viewer mode. Matches the legacy `OrchestrationViewerModel` poller's value
 /// (the server caps at 100 anyway).
@@ -60,9 +63,8 @@ struct SseConnectionState {
     generation: u64,
     /// Abort handle for the spawned SSE driver task, used to cancel on teardown.
     abort_handle: futures::future::AbortHandle,
-    /// Snapshot of `watched_run_ids` at the time this connection was opened;
-    /// compared in `reevaluate_eligibility` to skip same-set reconnects.
-    connected_run_ids: HashSet<String>,
+    /// Wire filter this connection was opened with.
+    connected_filter: AgentEventFilter,
 }
 
 struct SseForwardingConsumer {
@@ -314,6 +316,19 @@ pub enum OrchestrationEventStreamerEvent {
         run_id: String,
         status: ConversationStatus,
     },
+}
+
+/// Outcome of selecting the SSE wire filter for an owner-side conversation.
+enum DesiredSseFilter {
+    /// Open (or keep) a stream with this filter.
+    Filter(AgentEventFilter),
+    /// Nothing to watch yet (no watched run IDs); do not open a stream.
+    NoFilter,
+    /// The conversation is a parent with more watched children than the
+    /// explicit `run_ids[]` stream allows and parent-family ancestor
+    /// streaming is unavailable. The payload is the watched-run-id total,
+    /// used only for diagnostics.
+    UnsupportedRunIdCount(usize),
 }
 
 impl OrchestrationEventStreamer {
@@ -802,7 +817,13 @@ impl OrchestrationEventStreamer {
              (gen={generation}, since={cursor})"
         );
 
-        let filter = AgentEventFilter::AncestorRunId(parent_task_id.to_string());
+        // Viewer mode subscribes to direct children only: it surfaces child
+        // lifecycle in the pill bar and never needs the orchestrator's inbox,
+        // so `include_self` stays false to preserve the existing contract.
+        let filter = AgentEventFilter::AncestorRunId {
+            ancestor_run_id: parent_task_id.to_string(),
+            include_self: false,
+        };
         let config = AgentEventDriverConfig::retry_forever(filter, cursor);
         let source = ServerApiAgentEventSource::new(server_api);
 
@@ -1017,6 +1038,7 @@ impl OrchestrationEventStreamer {
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
+            | BlocklistAIHistoryEvent::UpdatedConversationTitle { .. }
             | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
             | BlocklistAIHistoryEvent::ConversationOwnershipTransferred { .. }
             | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. }
@@ -1345,8 +1367,6 @@ impl OrchestrationEventStreamer {
                 // in-flight, the removal handler already cleaned up all
                 // streamer state. Return early to avoid recreating
                 // state for a deleted conversation.
-                let had_sse;
-                let any_new_children;
                 {
                     let Some(stream) = self.streams.get_mut(&conv_id) else {
                         return;
@@ -1362,25 +1382,12 @@ impl OrchestrationEventStreamer {
                     let server_seq = task.last_event_sequence.unwrap_or(0);
                     stream.event_cursor = sqlite_cursor.max(server_seq);
 
-                    // Insert any new children. If new run_ids were added
-                    // and an SSE connection is already open (e.g. a
-                    // status race opened SSE with only the parent's own
-                    // run_id), reconnect so the new run_ids are included
-                    // in the filter; otherwise re-evaluate eligibility.
-                    had_sse = stream.sse_connection.is_some();
-                    let mut added = false;
+                    // Server-reported children may be absent from local history.
                     for child in task.children {
-                        if stream.watched_run_ids.insert(child) {
-                            added = true;
-                        }
+                        stream.watched_run_ids.insert(child);
                     }
-                    any_new_children = added;
                 }
-                if any_new_children && had_sse {
-                    self.reconnect_sse(conv_id, ctx);
-                } else {
-                    self.reevaluate_eligibility(conv_id, ctx);
-                }
+                self.reevaluate_eligibility(conv_id, ctx);
             }
             Err(err) => {
                 // If the conversation was removed mid-flight, drop the
@@ -1564,6 +1571,32 @@ impl OrchestrationEventStreamer {
             .unwrap_or_default()
     }
 
+    /// Selects the owner-side event stream filter for a conversation.
+    fn desired_sse_filter(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &warpui::AppContext,
+    ) -> DesiredSseFilter {
+        let is_parent = self.is_parent_agent_conversation(conversation_id, ctx);
+        if is_parent && FeatureFlag::OwnerOrchestrationAncestorStreamer.is_enabled() {
+            if let Some(self_run_id) = self.self_run_id(conversation_id, ctx) {
+                return DesiredSseFilter::Filter(AgentEventFilter::AncestorRunId {
+                    ancestor_run_id: self_run_id,
+                    include_self: true,
+                });
+            }
+        }
+
+        let run_ids = self.run_ids_for_sse(conversation_id);
+        if run_ids.is_empty() {
+            return DesiredSseFilter::NoFilter;
+        }
+        if is_parent && run_ids.len() > MAX_RUN_ID_STREAM_FILTER {
+            return DesiredSseFilter::UnsupportedRunIdCount(run_ids.len());
+        }
+        DesiredSseFilter::Filter(AgentEventFilter::RunIds(run_ids))
+    }
+
     /// Re-evaluates eligibility and either opens / reconnects or tears
     /// down the SSE connection for the given conversation.
     fn reevaluate_eligibility(
@@ -1581,9 +1614,11 @@ impl OrchestrationEventStreamer {
             (true, false) => self.start_sse_connection(conversation_id, ctx),
             (true, true) => {
                 // Status / metadata updates fire `reevaluate_eligibility` on
-                // every exchange transition; only reconnect when the run-id
-                // filter actually changed.
-                if self.watched_run_ids_differ_from_connected(conversation_id) {
+                // every exchange transition; only reconnect when the desired
+                // filter shape actually changed. Registering more children
+                // while a parent-family ancestor stream is connected leaves
+                // the filter unchanged, so it does not reconnect.
+                if self.stream_filter_stale(conversation_id, ctx) {
                     self.reconnect_sse(conversation_id, ctx);
                 }
             }
@@ -1740,10 +1775,19 @@ impl OrchestrationEventStreamer {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let run_ids = self.run_ids_for_sse(conversation_id);
-        if run_ids.is_empty() {
-            return;
-        }
+        let filter = match self.desired_sse_filter(conversation_id, ctx) {
+            DesiredSseFilter::Filter(filter) => filter,
+            DesiredSseFilter::NoFilter => return,
+            DesiredSseFilter::UnsupportedRunIdCount(count) => {
+                log::error!(
+                    "Owner-side SSE delivery blocked for {conversation_id:?}: {count} watched \
+                     run IDs exceed the {MAX_RUN_ID_STREAM_FILTER} explicit-run-id limit and \
+                     parent-family ancestor streaming is disabled; enable \
+                     OwnerOrchestrationAncestorStreamer to deliver events for large orchestrators"
+                );
+                return;
+            }
+        };
 
         let cursor = self
             .streams
@@ -1761,10 +1805,11 @@ impl OrchestrationEventStreamer {
 
         log::info!(
             "Opening SSE stream for {conversation_id:?} (gen={generation}, \
-             run_ids={run_ids:?}, since={cursor})"
+             filter={}, since={cursor})",
+            filter.log_label()
         );
 
-        let config = AgentEventDriverConfig::retry_forever_run_ids(run_ids.clone(), cursor);
+        let config = AgentEventDriverConfig::retry_forever(filter.clone(), cursor);
         let source = ServerApiAgentEventSource::new(server_api);
         let hydrator = self.message_hydrator_for_run_id(&self_run_id);
 
@@ -1799,29 +1844,42 @@ impl OrchestrationEventStreamer {
             },
         );
 
-        let connected_run_ids: HashSet<String> = run_ids.iter().cloned().collect();
         let stream = self.streams.entry(conversation_id).or_default();
         stream.sse_connection = Some(SseConnectionState {
             event_receiver: rx,
             generation,
             abort_handle: handle.abort_handle(),
-            connected_run_ids,
+            connected_filter: filter,
         });
 
         // Start periodic event drain.
         self.start_sse_drain_timer(conversation_id, generation, ctx);
     }
 
-    /// True iff the open SSE's recorded run-id set is stale relative to the
-    /// conversation's current `watched_run_ids`.
-    fn watched_run_ids_differ_from_connected(&self, conversation_id: AIConversationId) -> bool {
+    /// True iff the open SSE's connected filter is stale relative to the
+    /// filter the conversation should currently use. Compares the desired
+    /// filter shape (run-id set or parent-family ancestor scope) rather than
+    /// the raw `watched_run_ids` set, so a parent-family stream is not
+    /// reconnected just because additional child IDs were registered.
+    fn stream_filter_stale(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &warpui::AppContext,
+    ) -> bool {
         let Some(stream) = self.streams.get(&conversation_id) else {
             return false;
         };
         let Some(connection) = stream.sse_connection.as_ref() else {
             return false;
         };
-        stream.watched_run_ids != connection.connected_run_ids
+        match self.desired_sse_filter(conversation_id, ctx) {
+            DesiredSseFilter::Filter(desired) => {
+                !agent_event_filters_equivalent(&desired, &connection.connected_filter)
+            }
+            // Nothing watchable tears down through the eligibility predicate.
+            DesiredSseFilter::NoFilter => false,
+            DesiredSseFilter::UnsupportedRunIdCount(_) => true,
+        }
     }
 
     /// Periodically fires to drain buffered SSE events into the event
@@ -2010,6 +2068,28 @@ async fn resolve_dormant_claude_wake_cursor(
             );
             local_cursor
         }
+    }
+}
+
+fn agent_event_filters_equivalent(a: &AgentEventFilter, b: &AgentEventFilter) -> bool {
+    match (a, b) {
+        (AgentEventFilter::RunIds(a), AgentEventFilter::RunIds(b)) => {
+            a.len() == b.len() && {
+                let set: HashSet<&String> = a.iter().collect();
+                b.iter().all(|id| set.contains(id))
+            }
+        }
+        (
+            AgentEventFilter::AncestorRunId {
+                ancestor_run_id: a_run,
+                include_self: a_self,
+            },
+            AgentEventFilter::AncestorRunId {
+                ancestor_run_id: b_run,
+                include_self: b_self,
+            },
+        ) => a_run == b_run && a_self == b_self,
+        _ => false,
     }
 }
 

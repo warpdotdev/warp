@@ -21,11 +21,19 @@ cd "${REPO_ROOT}"
 : "${WARP_CHANNEL:?WARP_CHANNEL must be set (invoke via ./script/run)}"
 : "${FEATURES:?FEATURES must be set (invoke via ./script/run)}"
 
+# Resolve Cargo's actual target directory rather than assuming ./target. This
+# honors a shared CARGO_TARGET_DIR / build.target-dir (e.g. set in
+# ~/.cargo/config.toml), which is where `cargo bundle` writes the .app bundle.
+TARGET_DIR="$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)"
+if [ -z "$TARGET_DIR" ] || [ "$TARGET_DIR" = "null" ]; then
+    TARGET_DIR="${REPO_ROOT}/target"
+fi
+
 if [ "$WARP_CHANNEL" = "local" ]; then
-    WARP_APP_PATH="target/debug/bundle/osx/WarpLocal.app"
+    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpLocal.app"
     WARP_SCHEME_NAME="warplocal"
 else
-    WARP_APP_PATH="target/debug/bundle/osx/WarpOss.app"
+    WARP_APP_PATH="${TARGET_DIR}/debug/bundle/osx/WarpOss.app"
     WARP_SCHEME_NAME="warposs"
 fi
 DONT_OPEN=false
@@ -58,11 +66,11 @@ while (( "$#" )); do
       shift
       ;;
     --release)
-      echo "Detected release build, pointing at release bundle under target/release/bundle"
+      echo "Detected release build, pointing at release bundle under ${TARGET_DIR}/release/bundle"
       if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="target/release/bundle/osx/WarpLocal.app"
+          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpLocal.app"
       else
-          WARP_APP_PATH="target/release/bundle/osx/WarpOss.app"
+          WARP_APP_PATH="${TARGET_DIR}/release/bundle/osx/WarpOss.app"
       fi
       PARAMS="$PARAMS $1"
       shift
@@ -71,9 +79,9 @@ while (( "$#" )); do
       PROFILE="$2"
       shift 2
       if [ "$WARP_CHANNEL" = "local" ]; then
-          WARP_APP_PATH="target/${PROFILE}/bundle/osx/WarpLocal.app"
+          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpLocal.app"
       else
-          WARP_APP_PATH="target/${PROFILE}/bundle/osx/WarpOss.app"
+          WARP_APP_PATH="${TARGET_DIR}/${PROFILE}/bundle/osx/WarpOss.app"
       fi
       PARAMS="$PARAMS --profile $PROFILE"
       ;;
@@ -134,7 +142,7 @@ codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$WARP_APP
 if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
         echo "Launching with MacOS application launcher"
-        PATH="" /usr/bin/open "./$WARP_APP_PATH"
+        PATH="" /usr/bin/open "$WARP_APP_PATH"
         if [ "$WARP_CHANNEL" = "local" ]; then
             LOG_FILE=~/Library/Logs/warp_local.log
         elif [ "$WARP_CHANNEL" = "oss" ]; then
@@ -145,7 +153,7 @@ if [ "$DONT_OPEN" = false ] ; then
         fi
         tail -F "$LOG_FILE"
     else
-        echo "Opening app at ./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
-        "./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"
+        echo "Opening app at $WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
+        "$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"
     fi
 fi

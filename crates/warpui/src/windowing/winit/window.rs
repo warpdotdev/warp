@@ -1416,6 +1416,18 @@ fn create_window(
         .create_window(window_attributes)
         .map_err(Into::into);
 
+    #[cfg(target_os = "linux")]
+    if let Ok(window) = created_window.as_ref() {
+        use wgpu::rwh::RawDisplayHandle;
+        let is_x11 = matches!(
+            window_target.display_handle().map(|dh| dh.as_raw()),
+            Ok(RawDisplayHandle::Xlib(_)) | Ok(RawDisplayHandle::Xcb(_))
+        );
+        if is_x11 {
+            window.set_ime_allowed(true);
+        }
+    }
+
     #[cfg(windows)]
     {
         use super::windows::WindowExt;

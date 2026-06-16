@@ -100,6 +100,10 @@ pub enum AIAgentActionResultType {
     /// The result of an orchestrate tool call: launched (with per-agent
     /// outcomes), launch denied (Stage 2), failure, or cancelled.
     RunAgents(RunAgentsResult),
+
+    /// Result of the client-side wait_for_events watchdog or inbound
+    /// resume.
+    WaitForEvents(WaitForEventsResult),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -167,6 +171,7 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::TransferShellCommandControlToUser(result) => result.fmt(f),
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
             AIAgentActionResultType::RunAgents(result) => result.fmt(f),
+            AIAgentActionResultType::WaitForEvents(result) => result.fmt(f),
             AIAgentActionResultType::OpenCodeReview | AIAgentActionResultType::InitProject => {
                 Ok(())
             }
@@ -768,6 +773,9 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::RunAgents(_) => {
                 "The result of an orchestrate batch of child agents"
             }
+            AIAgentActionResultType::WaitForEvents(_) => {
+                "The local watchdog timed out while waiting for inbound events"
+            }
         }
     }
 
@@ -806,6 +814,7 @@ impl AIAgentActionResultType {
             ) => true,
             Self::AskUserQuestion(AskUserQuestionResult::Success { .. }) => true,
             Self::RunAgents(RunAgentsResult::Launched { .. }) => true,
+            Self::WaitForEvents(WaitForEventsResult::Completed) => true,
             _ => false,
         }
     }
@@ -880,7 +889,8 @@ impl AIAgentActionResultType {
             | Self::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             // SkippedByAutoApprove is intentionally excluded: the agent should continue.
             | Self::AskUserQuestion(AskUserQuestionResult::Cancelled)
-            | Self::RunAgents(RunAgentsResult::Cancelled) => true,
+            | Self::RunAgents(RunAgentsResult::Cancelled)
+            | Self::WaitForEvents(WaitForEventsResult::Cancelled) => true,
             _ => false,
         }
     }
@@ -1454,6 +1464,27 @@ impl Display for AskUserQuestionResult {
                     question_ids.len()
                 )
             }
+        }
+    }
+}
+
+/// Result of a client-side wait_for_events action.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WaitForEventsResult {
+    /// Watchdog fired or an inbound resume signal closed the wait. The
+    /// agent's next turn observes an empty WaitForEvents result on the
+    /// wire and decides how to proceed.
+    Completed,
+    /// User cancelled the conversation while waiting. Mirrors
+    /// RunAgents::Cancelled: no tool-call result is sent on the wire.
+    Cancelled,
+}
+
+impl Display for WaitForEventsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed => write!(f, "Wait for events completed"),
+            Self::Cancelled => write!(f, "Wait for events cancelled"),
         }
     }
 }

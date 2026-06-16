@@ -7,8 +7,11 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::App;
 
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
-use super::{classify_renderable_error, map_cli_session_status, LocalAgentTaskSyncModel};
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use super::{
+    classify_renderable_error, map_cli_session_status, map_conversation_status,
+    LocalAgentTaskSyncModel,
+};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::RenderableAIError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
@@ -120,6 +123,57 @@ fn other_error_is_error_with_internal() {
         Some(PlatformErrorCode::InternalError),
         Some("something broke"),
     );
+}
+
+// --- map_conversation_status ---
+
+/// A yielded conversation must report `IN_PROGRESS` to the task service
+/// so the task row stays active across the yield. No status message is
+/// attached because the yield is an internal state.
+#[test]
+fn map_conversation_status_waiting_for_events_reports_in_progress_with_no_message() {
+    App::test((), |mut app| async move {
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+        history_model.update(&mut app, |model, ctx| {
+            let conv = model
+                .conversation_mut(&conversation_id)
+                .expect("conversation was just restored");
+            conv.update_status(ConversationStatus::WaitingForEvents, terminal_view_id, ctx);
+        });
+
+        history_model.read(&app, |model, _| {
+            let conv = model.conversation(&conversation_id).unwrap();
+            assert_eq!(conv.status(), &ConversationStatus::WaitingForEvents);
+            let (state, update) = map_conversation_status(conv);
+            assert_eq!(state, AgentTaskState::InProgress);
+            assert!(
+                update.is_none(),
+                "WaitingForEvents must not attach a status message"
+            );
+        });
+    });
+}
+
+#[test]
+fn map_conversation_status_in_progress_reports_in_progress_with_no_message() {
+    let conversation = AIConversation::new(false, false);
+    assert_eq!(
+        conversation.status(),
+        &ConversationStatus::InProgress,
+        "freshly constructed conversation should start in InProgress"
+    );
+
+    let (state, update) = map_conversation_status(&conversation);
+
+    assert_eq!(state, AgentTaskState::InProgress);
+    assert!(update.is_none());
 }
 
 // --- map_cli_session_status ---

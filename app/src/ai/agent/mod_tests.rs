@@ -8,6 +8,7 @@ use crate::ai::agent::{
     AIAgentContext, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
     AIAgentTextSection, AgentOutputImage, AgentOutputImageLayout, AgentOutputMermaidDiagram,
     AnyFileContent, FileContext, FormattedTextWrapper, MessageId, ProgrammingLanguage,
+    RenderableAIError,
 };
 use crate::terminal::shell::ShellType;
 
@@ -84,6 +85,27 @@ fn pull_request_number_deserializer_rejects_unsupported_json_types() {
             "expected {number_json} to fail deserialization",
         );
     }
+}
+
+#[test]
+fn transient_network_error_uses_user_facing_message() {
+    let error = RenderableAIError::transient_network_error(false, false);
+
+    assert_eq!(
+        error.to_string(),
+        "Warp lost connection while receiving the agent response. This is usually temporary."
+    );
+    assert!(!error.will_attempt_resume());
+    assert_eq!(
+        error,
+        RenderableAIError::Other {
+            error_message:
+                "Warp lost connection while receiving the agent response. This is usually temporary."
+                    .to_string(),
+            will_attempt_resume: false,
+            waiting_for_network: false,
+        }
+    );
 }
 #[test]
 fn test_convert_files() {

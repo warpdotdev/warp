@@ -731,6 +731,10 @@ impl Network {
             }
         }
 
+        sharer_info!(
+            self,
+            "sending universal developer input context update: {update:?}"
+        );
         self.apply_context_update_to_cache(update.clone());
         self.send_message_to_server(UpstreamMessage::UpdateUniversalDeveloperInputContext(
             update,

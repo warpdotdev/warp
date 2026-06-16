@@ -61,7 +61,7 @@ use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::auth::{AuthManager, AuthStateProvider};
 use crate::completer::SessionContext;
-use crate::context_chips::display_chip::{DisplayChip, DisplayChipConfig};
+use crate::context_chips::display_chip::{DisplayChip, DisplayChipConfig, PromptChipShellCommand};
 use crate::context_chips::prompt_type::PromptType;
 use crate::context_chips::{self, ContextChipKind};
 use crate::features::FeatureFlag;
@@ -2640,7 +2640,7 @@ pub enum AgentInputFooterEvent {
     ToggledChipMenu {
         open: bool,
     },
-    TryExecuteChipCommand(String),
+    TryExecuteChipCommand(PromptChipShellCommand),
     PromptAlert(PromptAlertEvent),
     ModelSelectorOpened,
     ModelSelectorClosed,

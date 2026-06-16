@@ -395,6 +395,82 @@ impl ThinkingDisplayMode {
     }
 }
 
+/// Controls how child-agent message bodies are displayed.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Controls how child-agent messages are displayed.",
+    rename_all = "snake_case"
+)]
+pub enum OrchestrationMessageDisplayMode {
+    /// Show child-agent messages while streaming, then collapse them.
+    ShowAndCollapse,
+    /// Keep child-agent message bodies expanded.
+    AlwaysShow,
+    /// Keep child-agent message bodies collapsed.
+    #[default]
+    AlwaysCollapse,
+}
+
+settings::macros::implement_setting_for_enum!(
+    OrchestrationMessageDisplayMode,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "agents.warp_agent.other.orchestration_message_display_mode",
+    description: "Controls how child-agent messages are displayed.",
+);
+
+impl OrchestrationMessageDisplayMode {
+    /// Display name for the settings dropdown.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            OrchestrationMessageDisplayMode::ShowAndCollapse => "Show & collapse",
+            OrchestrationMessageDisplayMode::AlwaysShow => "Always show",
+            OrchestrationMessageDisplayMode::AlwaysCollapse => "Always collapse",
+        }
+    }
+
+    pub fn command_palette_description(&self) -> &'static str {
+        match self {
+            OrchestrationMessageDisplayMode::ShowAndCollapse => {
+                "Set child-agent message display: show & collapse"
+            }
+            OrchestrationMessageDisplayMode::AlwaysShow => {
+                "Set child-agent message display: always show"
+            }
+            OrchestrationMessageDisplayMode::AlwaysCollapse => {
+                "Set child-agent message display: always collapse"
+            }
+        }
+    }
+
+    /// Whether child-agent message bodies should expand while streaming.
+    pub fn should_expand_agent_message_body(&self) -> bool {
+        matches!(
+            self,
+            OrchestrationMessageDisplayMode::ShowAndCollapse
+                | OrchestrationMessageDisplayMode::AlwaysShow
+        )
+    }
+
+    /// Whether child-agent message bodies should collapse after streaming.
+    pub fn should_collapse_agent_message_body_on_finish(&self) -> bool {
+        matches!(self, OrchestrationMessageDisplayMode::ShowAndCollapse)
+    }
+}
+
 /// Controls what happens when a user submits a new prompt while the agent is
 /// still responding to an earlier prompt.
 ///
@@ -993,6 +1069,20 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: true,
     }
+    // Whether to mint and attach Gemini Enterprise (GEAP) credentials to eligible agent
+    // requests, routing them through the workspace's Google Cloud project. Only consulted
+    // when the admin sets the GEAP host to RESPECT_USER_SETTING; ENFORCE bypasses it.
+    // Prefer [`UserWorkspaces::is_gemini_enterprise_credentials_enabled`] to interpret
+    // this setting.
+    gemini_enterprise_credentials_enabled: GeminiEnterpriseCredentialsEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::DESKTOP,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "cloud_platform.third_party_api_keys.gemini_enterprise_credentials_enabled",
+        description: "Whether Warp should route eligible requests through your workspace's Gemini Enterprise Google Cloud project.",
+    }
     // Whether or not the user wants agent mode requests to use their saved rules.
     memory_enabled: MemoryEnabled {
         type: bool,
@@ -1321,6 +1411,9 @@ define_settings_group!(AISettings, settings: [
 
     // Controls how agent thinking/reasoning traces are displayed.
     thinking_display_mode: ThinkingDisplayMode,
+
+    // Controls how orchestration message bodies are expanded by default.
+    orchestration_message_display_mode: OrchestrationMessageDisplayMode,
 
     // Default behavior when the user submits a new prompt while the agent is still
     // responding. Per-conversation overrides live on `QueuedQueryModel`; this

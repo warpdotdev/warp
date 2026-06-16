@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use mockall::predicate::eq;
+use warp_core::features::FeatureFlag;
 use warpui::App;
 
 use super::*;
@@ -1606,14 +1607,13 @@ fn reevaluate_eligibility_does_not_reconnect_when_watched_run_ids_unchanged() {
             stream.watched_run_ids.insert(child_run_id.to_string());
             stream.consumers.insert(consumer_id);
             let (abort_handle, _) = futures::future::AbortHandle::new_pair();
-            let mut connected_run_ids = HashSet::new();
-            connected_run_ids.insert(own_run_id.to_string());
-            connected_run_ids.insert(child_run_id.to_string());
+            let connected_filter =
+                AgentEventFilter::RunIds(vec![own_run_id.to_string(), child_run_id.to_string()]);
             stream.sse_connection = Some(SseConnectionState {
                 event_receiver: rx,
                 generation: 0,
                 abort_handle,
-                connected_run_ids,
+                connected_filter,
             });
             me.next_sse_generation = 1;
         });
@@ -1698,13 +1698,12 @@ fn finish_restore_fetch_reconnects_sse_when_children_added_to_open_connection() 
             stream.watched_run_ids.insert(own_run_id.to_string());
             stream.consumers.insert(consumer_id);
             let (abort_handle, _) = futures::future::AbortHandle::new_pair();
-            let mut connected_run_ids = HashSet::new();
-            connected_run_ids.insert(own_run_id.to_string());
+            let connected_filter = AgentEventFilter::RunIds(vec![own_run_id.to_string()]);
             stream.sse_connection = Some(SseConnectionState {
                 event_receiver: rx,
                 generation: 0,
                 abort_handle,
-                connected_run_ids,
+                connected_filter,
             });
             me.next_sse_generation = 1;
         });
@@ -1924,5 +1923,437 @@ fn register_viewer_mode_consumer_replays_known_children_for_later_panes() {
             "second viewer-mode registration must replay ChildSpawned exactly once \
              per known child (captured={spawns:?})"
         );
+    });
+}
+
+// ---- Owner-side parent-family ancestor streaming -------------------------
+
+/// Reads the connected filter for a conversation's owner-side SSE.
+fn connected_filter(
+    me: &OrchestrationEventStreamer,
+    conversation_id: AIConversationId,
+) -> Option<AgentEventFilter> {
+    me.streams
+        .get(&conversation_id)
+        .and_then(|s| s.sse_connection.as_ref())
+        .map(|c| c.connected_filter.clone())
+}
+
+/// Reads the generation for a conversation's owner-side SSE.
+fn sse_generation(
+    me: &OrchestrationEventStreamer,
+    conversation_id: AIConversationId,
+) -> Option<u64> {
+    me.streams
+        .get(&conversation_id)
+        .and_then(|s| s.sse_connection.as_ref())
+        .map(|c| c.generation)
+}
+
+#[test]
+fn parent_with_many_children_opens_one_ancestor_include_self_stream() {
+    // A parent with far more than the 100 explicit-run-id limit must open a
+    // single parent-family ancestor stream rather than a run-id vector.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440500";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, ctx| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.consumers.insert(consumer_id);
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            for i in 0..190 {
+                stream.watched_run_ids.insert(format!("child-{i}"));
+            }
+            me.start_sse_connection(conversation_id, ctx);
+        });
+
+        poller.read(&app, |me, _| match connected_filter(me, conversation_id) {
+            Some(AgentEventFilter::AncestorRunId {
+                ancestor_run_id,
+                include_self,
+            }) => {
+                assert_eq!(ancestor_run_id, own_run_id);
+                assert!(
+                    include_self,
+                    "owner-side parent-family stream must include self"
+                );
+            }
+            other => panic!("expected AncestorRunId include_self filter, got {other:?}"),
+        });
+    });
+}
+
+#[test]
+fn registering_additional_child_does_not_reconnect_parent_family_stream() {
+    // Once a parent-family ancestor stream is connected, registering more
+    // children must not reconnect: the filter shape is unchanged.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440501";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, ctx| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.consumers.insert(consumer_id);
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.watched_run_ids.insert("child-1".to_string());
+            me.start_sse_connection(conversation_id, ctx);
+        });
+        poller.read(&app, |me, _| {
+            assert_eq!(sse_generation(me, conversation_id), Some(0));
+            assert!(matches!(
+                connected_filter(me, conversation_id),
+                Some(AgentEventFilter::AncestorRunId {
+                    include_self: true,
+                    ..
+                })
+            ));
+        });
+
+        // Registering another child re-evaluates eligibility but must not
+        // reconnect, since the parent-family filter is unchanged.
+        poller.update(&mut app, |me, ctx| {
+            me.register_watched_run_id(conversation_id, "child-2".to_string(), ctx);
+        });
+        poller.read(&app, |me, _| {
+            assert_eq!(
+                sse_generation(me, conversation_id),
+                Some(0),
+                "parent-family stream must not reconnect when a new child is registered"
+            );
+        });
+    });
+}
+
+#[test]
+fn child_only_conversation_opens_self_run_id_filter() {
+    // A child-only conversation keeps the explicit run-id stream watching
+    // only its own run_id, even when the owner-ancestor flag is enabled.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440502";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        conversation.set_parent_agent_id("550e8400-e29b-41d4-a716-4466554405ff".to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, ctx| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.consumers.insert(consumer_id);
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            me.start_sse_connection(conversation_id, ctx);
+        });
+
+        poller.read(&app, |me, _| match connected_filter(me, conversation_id) {
+            Some(AgentEventFilter::RunIds(run_ids)) => {
+                assert_eq!(run_ids, vec![own_run_id.to_string()]);
+            }
+            other => panic!("expected RunIds([self]) filter, got {other:?}"),
+        });
+    });
+}
+
+#[test]
+fn parent_over_run_id_limit_without_flag_does_not_open_stream() {
+    // With owner-ancestor streaming disabled, a parent that exceeds the
+    // explicit-run-id limit must not open a known-bad stream; instead it
+    // avoids opening a stream the server would reject.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(false);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440503";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, ctx| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.consumers.insert(consumer_id);
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            for i in 0..150 {
+                stream.watched_run_ids.insert(format!("child-{i}"));
+            }
+            me.start_sse_connection(conversation_id, ctx);
+        });
+
+        poller.read(&app, |me, _| {
+            let stream = me.streams.get(&conversation_id).expect("stream present");
+            assert!(
+                stream.sse_connection.is_none(),
+                "must not open an oversized run-id stream the server would reject"
+            );
+        });
+    });
+}
+
+#[test]
+fn parent_crossing_run_id_limit_without_flag_tears_down_partial_stream() {
+    // If a parent starts below the explicit-run-id limit and later registers
+    // enough children to exceed it, the old stream has become partial. It must
+    // be torn down instead of silently missing newly-registered children.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(false);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440507";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, ctx| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.consumers.insert(consumer_id);
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            for i in 0..99 {
+                stream.watched_run_ids.insert(format!("child-{i}"));
+            }
+            me.start_sse_connection(conversation_id, ctx);
+        });
+
+        poller.read(&app, |me, _| {
+            let stream = me.streams.get(&conversation_id).expect("stream present");
+            assert!(
+                stream.sse_connection.is_some(),
+                "100 watched run IDs is still within the explicit-run-id limit"
+            );
+        });
+
+        poller.update(&mut app, |me, ctx| {
+            me.register_watched_run_id(conversation_id, "child-over-limit".to_string(), ctx);
+        });
+
+        poller.read(&app, |me, _| {
+            let stream = me.streams.get(&conversation_id).expect("stream present");
+            assert!(
+                stream.sse_connection.is_none(),
+                "oversized parent must tear down the old partial run-id stream"
+            );
+        });
+    });
+}
+#[test]
+fn restored_parent_with_children_opens_ancestor_include_self_stream() {
+    // A restored parent whose children come back from the server fetch opens
+    // a parent-family ancestor stream using the merged cursor.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440504";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.event_cursor = 5;
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.consumers.insert(consumer_id);
+        });
+
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+        poller.update(&mut app, |me, ctx| {
+            me.finish_restore_fetch(
+                conversation_id,
+                task_id,
+                /* sqlite_cursor */ 5,
+                Ok(make_ambient_task_with_children(vec![
+                    "child-run-1".to_string()
+                ])),
+                ctx,
+            );
+        });
+
+        poller.read(&app, |me, _| {
+            match connected_filter(me, conversation_id) {
+                Some(AgentEventFilter::AncestorRunId {
+                    ancestor_run_id,
+                    include_self,
+                }) => {
+                    assert_eq!(ancestor_run_id, own_run_id);
+                    assert!(include_self);
+                }
+                other => panic!("expected AncestorRunId include_self filter, got {other:?}"),
+            }
+            assert_eq!(
+                me.streams.get(&conversation_id).map(|s| s.event_cursor),
+                Some(5),
+                "restore must keep the merged cursor"
+            );
+        });
+    });
+}
+
+#[test]
+fn restored_child_without_children_opens_self_run_id_stream() {
+    // A restored child conversation with no children of its own stays on the
+    // explicit self run-id stream even when the owner-ancestor flag is on.
+    App::test((), |mut app| async move {
+        let _owner_guard = FeatureFlag::OwnerOrchestrationAncestorStreamer.override_enabled(true);
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+        let own_run_id = "550e8400-e29b-41d4-a716-446655440505";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(own_run_id.to_string());
+        conversation.set_parent_agent_id("550e8400-e29b-41d4-a716-4466554405fe".to_string());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+            model.update_conversation_status(
+                terminal_view_id,
+                conversation_id,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let poller = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let consumer_id = warpui::EntityId::new();
+        poller.update(&mut app, |me, _| {
+            let stream = me.streams.entry(conversation_id).or_default();
+            stream.watched_run_ids.insert(own_run_id.to_string());
+            stream.consumers.insert(consumer_id);
+        });
+
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "550e8400-e29b-41d4-a716-446655440000".parse().unwrap();
+        poller.update(&mut app, |me, ctx| {
+            me.finish_restore_fetch(
+                conversation_id,
+                task_id,
+                /* sqlite_cursor */ 0,
+                Ok(make_ambient_task_with_children(vec![])),
+                ctx,
+            );
+        });
+
+        poller.read(&app, |me, _| match connected_filter(me, conversation_id) {
+            Some(AgentEventFilter::RunIds(run_ids)) => {
+                assert_eq!(run_ids, vec![own_run_id.to_string()]);
+            }
+            other => panic!("expected RunIds([self]) filter, got {other:?}"),
+        });
     });
 }

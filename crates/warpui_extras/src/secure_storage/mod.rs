@@ -10,6 +10,7 @@
 #[cfg_attr(target_os = "windows", path = "windows.rs")]
 mod imp;
 mod noop;
+mod unavailable;
 
 // Treat this as a noop on web, as there is no backing storage which is "secure".
 #[cfg(target_family = "wasm")]
@@ -60,6 +61,13 @@ pub fn register_noop(service_name: &str, ctx: &mut warpui_core::AppContext) {
     ctx.add_singleton_model(|_| -> Model { Box::new(noop::SecureStorage::new(service_name)) });
 }
 
+/// Registers an unavailable Secure Storage provider that deliberately does not persist values.
+///
+/// Reads report missing values, while writes and removals succeed without accessing storage.
+pub fn register_unavailable(ctx: &mut warpui_core::AppContext) {
+    ctx.add_singleton_model(|_| -> Model { Box::new(unavailable::SecureStorage) });
+}
+
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub fn register_with_fallback(
     service_name: &str,
@@ -93,6 +101,14 @@ pub fn register_with_dir(
 pub trait SecureStorage {
     /// Writes a value at the given key.
     fn write_value(&self, key: &str, value: &str) -> Result<(), Error>;
+    /// Writes a value while requiring any file fallback to be owner-only.
+    ///
+    /// Platforms without a file fallback use their normal secure-storage write
+    /// path. Callers should opt into this only when they require the stronger
+    /// fallback behavior because it may create or change fallback permissions.
+    fn write_value_with_owner_only_fallback(&self, key: &str, value: &str) -> Result<(), Error> {
+        self.write_value(key, value)
+    }
 
     /// Reads the value stored at the given key.
     fn read_value(&self, key: &str) -> Result<String, Error>;

@@ -113,6 +113,9 @@ FEATURES="release_bundle,crash_reporting,standalone,agent_mode_debug,remote_code
 WARP_BIN="warp"
 BINARY_NAME="oz-local"
 REMOTE_DIR=".warp-local/remote-server"
+# Global, version-independent resources location read by the daemon. Must
+# match BUNDLED_RESOURCES_DIR_NAME in crates/remote_server/src/setup.rs.
+BUNDLED_RESOURCES_DIR_NAME="bundled_resources"
 
 # Determine the output directory
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$WORKSPACE_ROOT/target}"
@@ -125,6 +128,7 @@ case "$CARGO_PROFILE" in
     ;;
 esac
 BUILT_BINARY="$OUTPUT_DIR/$WARP_BIN"
+LOCAL_RESOURCES_DIR="$OUTPUT_DIR/remote-server-resources"
 
 echo "==> Building Oz CLI for $TARGET (profile=$CARGO_PROFILE)"
 echo "    Binary: $WARP_BIN -> $BINARY_NAME"
@@ -150,6 +154,13 @@ fi
 BINARY_SIZE=$(du -h "$BUILT_BINARY" | cut -f1)
 echo ""
 echo "==> Build complete ($BINARY_SIZE)"
+# Prepare the bundled resources tree (skills, settings schema) deployed to
+# the global, version-independent location the daemon reads.
+rm -rf "$LOCAL_RESOURCES_DIR"
+"$WORKSPACE_ROOT/script/prepare_bundled_resources" \
+  "$LOCAL_RESOURCES_DIR" \
+  local \
+  "$CARGO_PROFILE"
 
 # Resolve $HOME on the remote so our upload lands in the same directory the
 # Warp client checks. The client runs `test -x ~/.warp-local/...` and lets
@@ -175,10 +186,10 @@ if ! ssh "$HOST" "command -v rsync" &>/dev/null; then
   fi
 fi
 
-# Ensure the remote directory exists
+# Ensure the remote install directory exists
 ssh "$HOST" "mkdir -p $REMOTE_ABS_DIR"
 
-echo "==> Uploading to $HOST:$REMOTE_ABS_DIR/$BINARY_NAME"
+echo "==> Uploading binary to $HOST:$REMOTE_ABS_DIR/$BINARY_NAME"
 
 # Upload via rsync with delta transfer and compression.
 # After the first deploy, only changed bytes are transferred.
@@ -188,6 +199,11 @@ rsync -z -t --partial --progress \
 
 # Set executable permissions (done separately for openrsync compatibility on macOS)
 ssh "$HOST" "chmod 755 $REMOTE_ABS_DIR/$BINARY_NAME"
+
+echo "==> Uploading bundled resources to $HOST:$REMOTE_ABS_DIR/$BUNDLED_RESOURCES_DIR_NAME"
+rsync -z -rlt --delete --partial --progress \
+  "$LOCAL_RESOURCES_DIR/" \
+  "$HOST:$REMOTE_ABS_DIR/$BUNDLED_RESOURCES_DIR_NAME/"
 
 echo "==> Stopping stale remote-server daemons on $HOST"
 ssh "$HOST" bash <<'EOF'
@@ -232,4 +248,5 @@ EOF
 
 echo ""
 echo "==> Done! Binary deployed to $HOST:$REMOTE_ABS_DIR/$BINARY_NAME"
-echo "    (resolved from ~/$REMOTE_DIR/$BINARY_NAME on remote)"
+echo "    Bundled resources: $REMOTE_ABS_DIR/$BUNDLED_RESOURCES_DIR_NAME"
+echo "    (resolved from ~/$REMOTE_DIR on remote)"

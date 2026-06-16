@@ -6,10 +6,10 @@ use warpui_core::r#async::executor;
 use super::*;
 use crate::proto::{
     client_message, host_scoped_request, notification, run_command_response, server_message,
-    session_scoped_request, ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState,
-    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, ErrorCode, GetDiffStateResponse,
-    InitializeResponse, OpenBufferResponse, RunCommandResponse, RunCommandSuccess, ServerMessage,
-    WriteFile,
+    session_scoped_request, BundledSkillsSnapshot, ClientMessage, CodebaseIndexStatus,
+    CodebaseIndexStatusState, CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, ErrorCode,
+    GetDiffStateResponse, InitializeResponse, OpenBufferResponse, RunCommandResponse,
+    RunCommandSuccess, ServerMessage, WriteFile,
 };
 use crate::protocol;
 
@@ -127,6 +127,49 @@ async fn codebase_index_push_messages_become_client_events() {
             assert_eq!(status.repo_path, "/repo");
         }
         other => panic!("Expected CodebaseIndexStatusUpdated, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bundled_skills_snapshot_push_becomes_client_event() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    drop(server_read);
+
+    let executor = executor::Background::default();
+    let (_client, event_rx, _failure_rx, _host_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+    let mut writer = server_write.compat_write();
+
+    protocol::write_server_message(
+        &mut writer,
+        &ServerMessage {
+            request_id: String::new(),
+            message: Some(server_message::Message::BundledSkillsSnapshot(
+                BundledSkillsSnapshot {
+                    skills: vec![crate::proto::BundledSkillProto {
+                        id: "test-skill".to_string(),
+                        name: "test-skill".to_string(),
+                        description: "A test skill".to_string(),
+                        path: "/remote/SKILL.md".to_string(),
+                        content: "body".to_string(),
+                        requires_mcp: None,
+                    }],
+                },
+            )),
+        },
+    )
+    .await
+    .unwrap();
+    writer.flush().await.unwrap();
+
+    match event_rx.recv().await.unwrap() {
+        ClientEvent::BundledSkillsSnapshotReceived { skills } => {
+            assert_eq!(skills.len(), 1);
+            assert_eq!(skills[0].id, "test-skill");
+        }
+        other => panic!("Expected BundledSkillsSnapshotReceived, got {other:?}"),
     }
 }
 
