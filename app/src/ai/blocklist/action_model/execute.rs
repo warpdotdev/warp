@@ -51,9 +51,15 @@ use use_computer::UseComputerExecutor;
 use warp_core::{execution_mode::AppExecutionMode, features::FeatureFlag};
 
 #[cfg(feature = "local_fs")]
+use crate::util::image::{
+    is_supported_image_mime_type, process_image_for_agent, ProcessImageResult,
+};
+#[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::is_binary_file;
 #[cfg(feature = "local_fs")]
 use futures::AsyncReadExt;
+#[cfg(feature = "local_fs")]
+use mime_guess::from_path;
 use std::{any::Any, path::PathBuf, pin::Pin, sync::Arc};
 #[cfg(feature = "local_fs")]
 use warp_files::{FileModel, TextFileReadResult};
@@ -65,12 +71,6 @@ use warpui::{
     r#async::{Spawnable, SpawnableOutput},
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity,
 };
-#[cfg(feature = "local_fs")]
-use crate::util::image::{
-    is_supported_image_mime_type, process_image_for_agent, ProcessImageResult,
-};
-#[cfg(feature = "local_fs")]
-use mime_guess::from_path;
 
 use self::search_codebase::SearchCodebaseExecutor;
 #[cfg(feature = "local_fs")]
