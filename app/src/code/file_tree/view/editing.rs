@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use repo_metadata::file_tree_store::FileTreeEntryState;
 use repo_metadata::{FileMetadata, FileTreeEntry};
-use warp_util::natural_sort::natural_cmp;
 use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::MouseStateHandle;
 use warpui::ViewContext;
@@ -69,7 +68,7 @@ pub(super) fn sort_entries_for_file_tree(
     match (starts_with_dot_1, starts_with_dot_2) {
         (true, false) => Ordering::Less,
         (false, true) => Ordering::Greater,
-        _ => natural_cmp(name_1, name_2),
+        _ => alphanumeric_sort::compare_str(name_1, name_2),
     }
 }
 

@@ -10,7 +10,6 @@ pub mod file_type;
 pub mod git;
 pub mod host_id;
 pub mod local_or_remote_path;
-pub mod natural_sort;
 pub mod on_cancel;
 pub mod path;
 pub mod remote_path;
