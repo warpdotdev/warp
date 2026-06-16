@@ -133,13 +133,13 @@ fn modal_with_many_models_lays_out() {
 fn model_row_inputs_align_and_controls_fit_gutter() {
     assert_eq!(MODEL_INPUT_WIDTH * 2. + MODEL_ROW_SPACING, INPUT_WIDTH);
     assert_eq!(
-        REMOVE_MODEL_BUTTON_SPACING + REMOVE_MODEL_BUTTON_COL_WIDTH + MODEL_SCROLLBAR_WIDTH,
+        REMOVE_MODEL_BUTTON_SPACING + REMOVE_MODEL_BUTTON_COL_WIDTH + MODAL_SCROLLBAR_WIDTH,
         32.
     );
 }
 
 #[test]
-fn focus_editor_scrolls_model_row_into_view() {
+fn focus_editor_scrolls_whole_form_to_field() {
     App::test((), |mut app| async move {
         init_modal_test_models(&mut app);
         let endpoint = endpoint_with_models(20);
@@ -167,14 +167,24 @@ fn focus_editor_scrolls_model_row_into_view() {
                 .expect("presenter should exist")
                 .borrow_mut()
                 .build_scene(vec2f(560., 600.), 1., None, ctx);
-
-            assert!(modal.as_ref(ctx).model_section_scroll_state.scroll_start() > Pixels::zero());
+            assert!(modal.as_ref(ctx).scroll_state.scroll_start() > Pixels::zero());
+        });
+        let model_scroll_start = modal.read(&app, |modal, _| modal.scroll_state.scroll_start());
+        modal.update(&mut app, |modal, ctx| {
+            modal.focus_editor(&modal.endpoint_name_editor.clone(), ctx);
+        });
+        app.update(|ctx| {
+            ctx.presenter(window_id)
+                .expect("presenter should exist")
+                .borrow_mut()
+                .build_scene(vec2f(560., 600.), 1., None, ctx);
+            assert!(modal.as_ref(ctx).scroll_state.scroll_start() < model_scroll_start);
         });
     })
 }
 
 #[test]
-fn add_model_scrolls_only_after_model_section_is_full() {
+fn add_model_scrolls_only_after_form_is_full() {
     App::test((), |mut app| async move {
         init_modal_test_models(&mut app);
         let endpoint = endpoint_with_models(1);
@@ -190,7 +200,7 @@ fn add_model_scrolls_only_after_model_section_is_full() {
                 .build_scene(vec2f(560., 600.), 1., None, ctx);
 
             assert_eq!(
-                modal.as_ref(ctx).model_section_scroll_state.scroll_start(),
+                modal.as_ref(ctx).scroll_state.scroll_start(),
                 Pixels::zero()
             );
         });
@@ -199,17 +209,14 @@ fn add_model_scrolls_only_after_model_section_is_full() {
             for _ in 0..20 {
                 modal.add_model(ctx);
             }
-            assert_eq!(
-                modal.model_section_scroll_state.scroll_start(),
-                Pixels::new(f32::MAX)
-            );
+            assert_eq!(modal.scroll_state.scroll_start(), Pixels::new(f32::MAX));
         });
         app.update(|ctx| {
             ctx.presenter(window_id)
                 .expect("presenter should exist")
                 .borrow_mut()
                 .build_scene(vec2f(560., 600.), 1., None, ctx);
-            let scroll_start = modal.as_ref(ctx).model_section_scroll_state.scroll_start();
+            let scroll_start = modal.as_ref(ctx).scroll_state.scroll_start();
             assert!(scroll_start > Pixels::zero());
             assert!(scroll_start < Pixels::new(f32::MAX));
         });
@@ -217,7 +224,7 @@ fn add_model_scrolls_only_after_model_section_is_full() {
 }
 
 #[test]
-fn prefill_resets_model_scroll_position() {
+fn prefill_resets_form_scroll_position() {
     App::test((), |mut app| async move {
         init_modal_test_models(&mut app);
         let endpoint = endpoint_with_models(20);
@@ -226,20 +233,12 @@ fn prefill_resets_model_scroll_position() {
         });
 
         modal.update(&mut app, |modal, ctx| {
-            modal
-                .model_section_scroll_state
-                .scroll_to(Pixels::new(100.));
-            assert_eq!(
-                modal.model_section_scroll_state.scroll_start(),
-                Pixels::new(100.)
-            );
+            modal.scroll_state.scroll_to(Pixels::new(100.));
+            assert_eq!(modal.scroll_state.scroll_start(), Pixels::new(100.));
 
             modal.prefill(None, None, ctx);
 
-            assert_eq!(
-                modal.model_section_scroll_state.scroll_start(),
-                Pixels::zero()
-            );
+            assert_eq!(modal.scroll_state.scroll_start(), Pixels::zero());
         });
     })
 }
