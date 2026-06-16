@@ -3225,6 +3225,23 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
     }
 
     if !props.is_conversation_transcript_viewer && !cfg!(target_family = "wasm") {
+        // Use "Continue locally" tooltip when the button will insert /continue-locally
+        // (i.e. for cloud Oz conversations where /fork is unavailable).
+        #[cfg(not(target_family = "wasm"))]
+        let fork_button_tooltip = {
+            use crate::terminal::input::slash_commands::conversation_is_cloud_oz_for_slash_command;
+            let is_cloud_oz = props
+                .model
+                .conversation_id(app)
+                .is_some_and(|id| conversation_is_cloud_oz_for_slash_command(id, app));
+            if is_cloud_oz {
+                "Continue locally"
+            } else {
+                "Fork conversation"
+            }
+        };
+        #[cfg(target_family = "wasm")]
+        let fork_button_tooltip = "Fork conversation";
         let ui_builder = appearance.ui_builder().clone();
         let fork_button = icon_button(
             appearance,
@@ -3234,7 +3251,7 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         )
         .with_tooltip(move || {
             ui_builder
-                .tool_tip("Fork conversation".to_string())
+                .tool_tip(fork_button_tooltip.to_string())
                 .build()
                 .finish()
         })

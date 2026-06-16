@@ -1401,7 +1401,7 @@ impl Input {
 /// keybinding-triggered execution can't fall through onto a non-cloud-Oz conversation after
 /// the menu has been recomputed. Mirrors `SlashCommandDataSource::active_conversation_is_cloud_oz`.
 #[cfg(not(target_family = "wasm"))]
-fn conversation_is_cloud_oz_for_slash_command(
+pub(crate) fn conversation_is_cloud_oz_for_slash_command(
     conversation_id: AIConversationId,
     ctx: &AppContext,
 ) -> bool {

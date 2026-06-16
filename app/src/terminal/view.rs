@@ -6698,6 +6698,49 @@ impl TerminalView {
         self.redetermine_global_focus(ctx);
     }
 
+    /// Inserts the appropriate fork-like slash command into the input:
+    /// `/continue-locally` for cloud Oz conversations, `/fork` for others.
+    pub(crate) fn insert_fork_or_continue_locally_slash_command(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let command_name = self.fork_or_continue_locally_command_name(ctx);
+        self.input.update(ctx, |input, ctx| {
+            input.replace_buffer_content(&format!("{} ", command_name), ctx);
+            ctx.focus_self();
+        });
+    }
+
+    /// Returns the slash command name for the fork button action.
+    /// Uses `/continue-locally` for cloud Oz conversations where `/fork` is unavailable.
+    fn fork_or_continue_locally_command_name(&self, ctx: &AppContext) -> &'static str {
+        #[cfg(not(target_family = "wasm"))]
+        if self.active_conversation_is_cloud_oz(ctx) {
+            return commands::CONTINUE_LOCALLY.name;
+        }
+        commands::FORK.name
+    }
+
+    /// Returns `true` when the active conversation is a cloud Oz run.
+    /// Mirrors `SlashCommandDataSource::active_conversation_is_cloud_oz`.
+    #[cfg(not(target_family = "wasm"))]
+    fn active_conversation_is_cloud_oz(&self, ctx: &AppContext) -> bool {
+        use crate::terminal::input::slash_commands::conversation_is_cloud_oz_for_slash_command;
+        let conversation_id = match self
+            .agent_view_controller
+            .as_ref(ctx)
+            .agent_view_state()
+            .active_conversation_id()
+        {
+            Some(id) => id,
+            None => match BlocklistAIHistoryModel::as_ref(ctx).active_conversation(self.view_id) {
+                Some(conv) => conv.id(),
+                None => return false,
+            },
+        };
+        conversation_is_cloud_oz_for_slash_command(conversation_id, ctx)
+    }
+
     fn handle_resume_conversation(
         &mut self,
         conversation_id: &AIConversationId,
@@ -20116,10 +20159,7 @@ impl TerminalView {
                 self.handle_resume_conversation(conversation_id, ctx);
             }
             AIBlockEvent::InsertForkSlashCommand => {
-                self.input.update(ctx, |input, ctx| {
-                    input.replace_buffer_content(&format!("{} ", commands::FORK.name), ctx);
-                    ctx.focus_self();
-                });
+                self.insert_fork_or_continue_locally_slash_command(ctx);
             }
             AIBlockEvent::ChildViewTextSelected => {
                 self.clear_selected_text_except(Some(block.id()), ctx);
