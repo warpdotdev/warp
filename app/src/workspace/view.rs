@@ -11931,9 +11931,7 @@ impl Workspace {
         let before = self.tabs[index - 1].group_id;
         let after = self.tabs[index].group_id;
         match before {
-            Some(group_id) if before == after => {
-                self.index_after_group(group_id).unwrap_or(index)
-            }
+            Some(group_id) if before == after => self.index_after_group(group_id).unwrap_or(index),
             _ => index,
         }
     }
