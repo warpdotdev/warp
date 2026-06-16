@@ -8575,10 +8575,10 @@ impl Workspace {
         }
     }
 
-    /// Install the Warp CLI by creating a symlink in /usr/local/bin
+    /// Install the Oz CLI by creating a symlink in /usr/local/bin
     #[cfg(target_os = "macos")]
-    fn install_cli(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.spawn(async { cli_install::install_cli() }, |view, result, ctx| {
+    fn install_oz(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(async { cli_install::install_oz() }, |view, result, ctx| {
             let command_name = ChannelState::channel().cli_command_name();
             let message = format!("Successfully installed the Oz CLI! You can now run '{command_name}' from the command line.");
             let toast = DismissibleToast::success(message).with_link(
@@ -8589,11 +8589,11 @@ impl Workspace {
         });
     }
 
-    /// Uninstall the Warp CLI by removing the symlink from /usr/local/bin
+    /// Uninstall the Oz CLI by removing the symlink from /usr/local/bin
     #[cfg(target_os = "macos")]
-    fn uninstall_cli(&mut self, ctx: &mut ViewContext<Self>) {
+    fn uninstall_oz(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
-            async { cli_install::uninstall_cli() },
+            async { cli_install::uninstall_oz() },
             |view, result, ctx| {
                 let toast = DismissibleToast::success(
                     "Successfully uninstalled the Oz command.".to_string(),
@@ -23308,9 +23308,9 @@ impl TypedActionView for Workspace {
                 });
             }
             #[cfg(target_os = "macos")]
-            InstallCLI => self.install_cli(ctx),
+            InstallOz => self.install_oz(ctx),
             #[cfg(target_os = "macos")]
-            UninstallCLI => self.uninstall_cli(ctx),
+            UninstallOz => self.uninstall_oz(ctx),
             #[cfg(target_os = "macos")]
             InstallWarpctrl => self.install_warpctrl(ctx),
             #[cfg(target_os = "macos")]

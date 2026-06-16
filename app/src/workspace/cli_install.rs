@@ -8,7 +8,7 @@ use warp_core::channel::ChannelState;
 use warp_util::path::ShellFamily;
 
 /// Compute the target path where the Oz CLI symlink should be installed, based on channel
-fn cli_install_target_path() -> PathBuf {
+fn oz_install_target_path() -> PathBuf {
     PathBuf::from("/usr/local/bin").join(ChannelState::channel().cli_command_name())
 }
 
@@ -18,6 +18,9 @@ fn warpctrl_install_target_path() -> PathBuf {
 }
 
 /// Compute the source path of the warpctrl wrapper inside the current app bundle.
+///
+/// Warp Control needs the wrapper as its symlink source because the wrapper adds
+/// the hidden `--warpctrl` flag. Oz can symlink directly to the current executable.
 fn warpctrl_bundle_source_path() -> Result<PathBuf> {
     let current_binary =
         std::env::current_exe().context("Failed to get current executable path")?;
@@ -173,16 +176,16 @@ fn uninstall_symlink(target: &Path, command_name: &str) -> Result<()> {
 }
 
 /// Install the Oz CLI by creating a symlink in /usr/local/bin
-pub fn install_cli() -> Result<()> {
-    let cli_path = cli_install_target_path();
+pub fn install_oz() -> Result<()> {
+    let oz_path = oz_install_target_path();
     let current_binary =
         std::env::current_exe().context("Failed to get current executable path")?;
-    install_symlink(&current_binary, &cli_path, "Oz CLI")
+    install_symlink(&current_binary, &oz_path, "Oz CLI")
 }
 
 /// Uninstall the Oz CLI by removing the symlink from /usr/local/bin
-pub fn uninstall_cli() -> Result<()> {
-    uninstall_symlink(&cli_install_target_path(), "Oz command")
+pub fn uninstall_oz() -> Result<()> {
+    uninstall_symlink(&oz_install_target_path(), "Oz command")
 }
 
 /// Install the Warp Control CLI by creating a symlink in /usr/local/bin
