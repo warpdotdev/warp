@@ -722,30 +722,19 @@ impl RenderableAIError {
 /// The cause behind a [`RenderableAIError::TransientNetworkError`]. Kept structured (rather than
 /// collapsed to a free-form string) so user reports preserve the raw error; rendered to text only
 /// at display time.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum TransientNetworkErrorKind {
-    /// A lost connection or truncated response stream — the raw underlying API error.
+    /// A lost connection or truncated response stream — the raw underlying API error. Rendered via
+    /// `Debug` so reports preserve the full structured error rather than its terse `Display`.
+    #[error("{0:?}")]
     Api(Arc<AIApiError>),
     /// The response stream completed with an unfinished exchange and no error event.
+    #[error("stream completed with an unfinished exchange and no error event")]
     UnfinishedExchange,
     /// The conversation was left in a transient-error state but the last exchange carried no
     /// structured error to surface.
+    #[error("no structured error on the last exchange")]
     MissingExchangeError,
-}
-
-impl Display for TransientNetworkErrorKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Api(error) => write!(f, "{error:?}"),
-            Self::UnfinishedExchange => {
-                write!(
-                    f,
-                    "stream completed with an unfinished exchange and no error event"
-                )
-            }
-            Self::MissingExchangeError => write!(f, "no structured error on the last exchange"),
-        }
-    }
 }
 
 impl From<&Arc<AIApiError>> for RenderableAIError {
