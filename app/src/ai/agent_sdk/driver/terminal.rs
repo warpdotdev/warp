@@ -731,10 +731,10 @@ impl TerminalDriver {
                 if !self.session_bootstrapped.is_set() {
                     if let Some(tx) = self.spawn_failure_tx.take() {
                         let _ = tx.send(
-                            "The shell process exited before the Warp bootstrap script \
-                             completed. Check any environment variables or secrets \
-                             configured for this run."
-                            .to_string(),
+                            "Shell spawn failed. This can happen when env vars or secrets \
+                             are too long — check your image for excessively long \
+                             environment variables or Oz for excessively long secrets."
+                                .to_string(),
                         );
                     }
                 }

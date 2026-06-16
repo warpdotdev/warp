@@ -192,35 +192,17 @@ impl PtySpawner {
                 "Failed to spawn pty via terminal server; falling back to spawning locally...",
             );
             if let Err(err) = result {
-                // Two failure modes can be caused by large values in env_vars:
-                //
-                // 1. E2BIG (Linux): execve rejects the combined argv + envp block when
-                //    the total exceeds ARG_MAX, or a single value exceeds MAX_ARG_STRLEN.
-                // 2. Socket overflow (macOS and others): the SpawnShellRequest message
-                //    serialises env_vars in full; large values exceed the Unix socket
-                //    receive-buffer and produce a truncated-read error on the server side.
-                //
-                // In both cases retrying via the direct-spawn fallback would hit the
-                // same limit, so we fail immediately with actionable diagnostics.
-                //
-                // We check for oversized env vars first (covers both cases), then fall
-                // back to E2BIG string-matching for inherited process-env overflows that
-                // don't come from env_vars.
-                if let Some((key, value_len)) = find_oversized_env_var(&options.env_vars) {
-                    log_e2big_env_diagnostics(&options.env_vars);
-                    return Err(err.context(format!(
-                        "Shell spawn failed: env var {key:?} is {value_len} bytes, which \
-                         exceeds the maximum allowed for values passed to the shell. \
-                         Large secret values should be stored in a file and referenced \
-                         by path rather than embedded directly as an environment variable."
-                    )));
-                }
+                // E2BIG means the combined environment + argument block passed to execve
+                // exceeds the kernel's ARG_MAX limit. This is deterministic — retrying from
+                // the main process with the same PtyOptions would hit the same limit — so
+                // fail immediately with a diagnostic message instead of silently falling back
+                // and then waiting for the bootstrap timeout.
                 if is_e2big(&err) {
                     log_e2big_env_diagnostics(&options.env_vars);
                     return Err(err.context(
-                        "Shell spawn failed: the combined environment is too large (E2BIG / \"Argument list too long\"). \
-                         Check the Warp logs for a breakdown of env var sizes. \
-                         Reduce or remove large environment variables from the run configuration.",
+                        "Shell spawn failed. This can happen when env vars or secrets are \
+                         too long — check your image for excessively long environment \
+                         variables or Oz for excessively long secrets.",
                     ));
                 }
                 report_error!(err);
@@ -294,26 +276,6 @@ impl Entity for PtySpawner {
 }
 
 impl SingletonEntity for PtySpawner {}
-
-/// The maximum byte-length of a single env var *value* that Warp will pass to
-/// the terminal server. Larger values cause two distinct failures:
-///   - On Linux: `execve` returns E2BIG (MAX_ARG_STRLEN is typically 128 KiB).
-///   - On macOS: the serialised `SpawnShellRequest` overflows the Unix socket
-///     receive buffer, producing a truncated-read error on the server side.
-/// 128 KiB is conservative enough to stay under both limits.
-#[cfg(unix)]
-const MAX_ENV_VAR_VALUE_BYTES: usize = 128 * 1024;
-
-/// If any value in `env_vars` exceeds [`MAX_ENV_VAR_VALUE_BYTES`], returns
-/// the name and byte-length of the largest offender; otherwise returns `None`.
-#[cfg(unix)]
-fn find_oversized_env_var(env_vars: &HashMap<OsString, OsString>) -> Option<(&OsString, usize)> {
-    env_vars
-        .iter()
-        .filter(|(_, v)| v.len() > MAX_ENV_VAR_VALUE_BYTES)
-        .max_by_key(|(_, v)| v.len())
-        .map(|(k, v)| (k, v.len()))
-}
 
 /// Returns `true` if the error (or any cause in its chain) indicates that
 /// `execve` failed with `ENAMETOOLONG` / E2BIG ("Argument list too long").
