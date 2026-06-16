@@ -419,7 +419,7 @@ pub(crate) fn classify_renderable_error(
                     AgentTaskState::Failed,
                     Some(TaskStatusUpdate::with_error_code(
                         error_message,
-                        PlatformErrorCode::FeatureNotAvailable,
+                        PlatformErrorCode::InvalidRequest,
                     )),
                 )
             } else {

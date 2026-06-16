@@ -708,6 +708,10 @@ impl RenderableAIError {
 
 impl From<&AIApiError> for RenderableAIError {
     fn from(value: &AIApiError) -> Self {
+        // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
+        // are user-originating — map them to a user error so the task reaches FAILED
+        // state rather than ERROR state.
+        let is_user_error = !value.is_retryable();
         match value {
             AIApiError::QuotaLimit {
                 user_display_message,
@@ -721,25 +725,11 @@ impl From<&AIApiError> for RenderableAIError {
             {
                 Self::transient_network_error(false, false)
             }
-            // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
-            // are user-originating — map them to a user error so the task reaches FAILED
-            // state rather than ERROR state.
-            AIApiError::ErrorStatus(status, body) if !value.is_retryable() => {
-                let message = serde_json::from_str::<ClientError>(body)
-                    .map(|e| e.error)
-                    .unwrap_or_else(|_| format!("Request rejected (HTTP {status})."));
-                Self::Other {
-                    error_message: message,
-                    will_attempt_resume: false,
-                    waiting_for_network: false,
-                    is_user_error: true,
-                }
-            }
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
                 waiting_for_network: false,
-                is_user_error: false,
+                is_user_error,
             },
         }
     }
