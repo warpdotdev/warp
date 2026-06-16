@@ -629,6 +629,12 @@ pub enum WorkspaceAction {
     /// Uninstall the Warp CLI command from /usr/local/bin
     #[cfg(target_os = "macos")]
     UninstallCLI,
+    /// Install the Warp Control CLI command to /usr/local/bin
+    #[cfg(target_os = "macos")]
+    InstallWarpctrl,
+    /// Uninstall the Warp Control CLI command from /usr/local/bin
+    #[cfg(target_os = "macos")]
+    UninstallWarpctrl,
     UndoRevertInCodeReviewPane {
         window_id: WindowId,
         view_id: EntityId,
@@ -1134,6 +1140,8 @@ impl WorkspaceAction {
             SampleProcess => false,
             #[cfg(target_os = "macos")]
             InstallCLI | UninstallCLI => false,
+            #[cfg(target_os = "macos")]
+            InstallWarpctrl | UninstallWarpctrl => false,
             #[cfg(feature = "local_fs")]
             FileRenamed { .. } => false, // File rename doesn't change workspace state
             #[cfg(feature = "local_fs")]

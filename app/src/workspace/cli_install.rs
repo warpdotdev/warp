@@ -7,9 +7,28 @@ use command::blocking::Command;
 use warp_core::channel::ChannelState;
 use warp_util::path::ShellFamily;
 
-/// Compute the target path where the symlink should be installed, based on channel
+/// Compute the target path where the Oz CLI symlink should be installed, based on channel
 fn cli_install_target_path() -> PathBuf {
     PathBuf::from("/usr/local/bin").join(ChannelState::channel().cli_command_name())
+}
+
+/// Compute the target path where the Warp Control symlink should be installed, based on channel
+fn warpctrl_install_target_path() -> PathBuf {
+    PathBuf::from("/usr/local/bin").join(ChannelState::channel().warpctrl_command_name())
+}
+
+/// Compute the source path of the warpctrl wrapper inside the current app bundle.
+fn warpctrl_bundle_source_path() -> Result<PathBuf> {
+    let current_binary =
+        std::env::current_exe().context("Failed to get current executable path")?;
+    let bundle_root = current_binary
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .ok_or_else(|| anyhow!("Current executable is not inside a bundled app"))?;
+    Ok(bundle_root
+        .join("Contents/Resources/bin")
+        .join(ChannelState::channel().warpctrl_command_name()))
 }
 
 /// Create a symlink with elevated privileges using osascript
@@ -89,87 +108,89 @@ fn remove_file_with_admin(target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Install the CLI by creating a symlink (channel-specific target)
-///
-/// This function:
-/// 1. Detects the current Warp channel and finds the appropriate binary
-/// 2. Attempts to create a symlink without admin privileges first
-/// 3. Falls back to prompting for admin privileges if needed
-/// 4. Handles existing installations and edge cases
-pub fn install_cli() -> Result<()> {
-    let cli_path = cli_install_target_path();
-    let current_binary =
-        std::env::current_exe().context("Failed to get current executable path")?;
-
-    // Check if target file exists and handle conflicts
-    if cli_path.exists() && !cli_path.is_symlink() {
+fn install_symlink(source: &Path, target: &Path, command_name: &str) -> Result<()> {
+    if target.exists() && !target.is_symlink() {
         return Err(anyhow!(
-            "Cannot install: {:?} exists but is not a symlink. Please remove it manually first.",
-            cli_path
+            "Cannot install {command_name}: {:?} exists but is not a symlink. Please remove it manually first.",
+            target
         ));
     }
 
-    // Try to create symlink without admin privileges first
-    let symlink_result = symlink(&current_binary, &cli_path);
-
-    match symlink_result {
+    match symlink(source, target) {
         Ok(_) => {
             log::debug!(
-                "CLI installed successfully without admin privileges: {:?} -> {}",
-                cli_path,
-                current_binary.display()
+                "{command_name} installed successfully without admin privileges: {:?} -> {}",
+                target,
+                source.display()
             );
         }
         Err(_) => {
-            log::debug!("Symlink creation failed, trying with admin privileges");
-
-            create_symlink_with_admin(&current_binary, &cli_path)
+            log::debug!("{command_name} symlink creation failed, trying with admin privileges");
+            create_symlink_with_admin(source, target)
                 .context("Failed to create symlink even with admin privileges")?;
-
-            log::debug!("CLI installed successfully with admin privileges");
+            log::debug!("{command_name} installed successfully with admin privileges");
         }
     }
 
     Ok(())
 }
 
-/// Uninstall the CLI by removing the symlink (channel-specific target)
-///
-/// This function:
-/// 1. Verifies that the target is actually a symlink (safety check)
-/// 2. Attempts to remove without admin privileges first
-/// 3. Falls back to prompting for admin privileges if needed
-pub fn uninstall_cli() -> Result<()> {
-    let cli_path = cli_install_target_path();
-
-    if !cli_path.exists() {
-        return Err(anyhow!("Oz command is not currently installed."));
+fn uninstall_symlink(target: &Path, command_name: &str) -> Result<()> {
+    if !target.exists() {
+        return Err(anyhow!("{command_name} is not currently installed."));
     }
 
-    // Safety check: verify it's actually a symlink before removing
-    if !cli_path.is_symlink() {
+    if !target.is_symlink() {
         return Err(anyhow!(
-            "Cannot uninstall: {:?} exists but is not a symlink. Please remove it manually.",
-            cli_path
+            "Cannot uninstall {command_name}: {:?} exists but is not a symlink. Please remove it manually.",
+            target
         ));
     }
 
-    // Try to remove without admin privileges first
-    let remove_result = fs::remove_file(&cli_path);
-
-    match remove_result {
+    match fs::remove_file(target) {
         Ok(_) => {
-            log::debug!("CLI uninstalled successfully without admin privileges");
+            log::debug!("{command_name} uninstalled successfully without admin privileges");
         }
         Err(_) => {
-            log::debug!("File removal failed, trying with admin privileges");
-
-            remove_file_with_admin(&cli_path)
+            log::debug!("{command_name} file removal failed, trying with admin privileges");
+            remove_file_with_admin(target)
                 .context("Failed to remove symlink even with admin privileges")?;
-
-            log::debug!("CLI uninstalled successfully with admin privileges");
+            log::debug!("{command_name} uninstalled successfully with admin privileges");
         }
     }
 
     Ok(())
+}
+
+/// Install the Oz CLI by creating a symlink in /usr/local/bin
+pub fn install_cli() -> Result<()> {
+    let cli_path = cli_install_target_path();
+    let current_binary =
+        std::env::current_exe().context("Failed to get current executable path")?;
+    install_symlink(&current_binary, &cli_path, "Oz CLI")
+}
+
+/// Uninstall the Oz CLI by removing the symlink from /usr/local/bin
+pub fn uninstall_cli() -> Result<()> {
+    uninstall_symlink(&cli_install_target_path(), "Oz command")
+}
+
+/// Install the Warp Control CLI by creating a symlink in /usr/local/bin
+pub fn install_warpctrl() -> Result<()> {
+    let warpctrl_path = warpctrl_install_target_path();
+    let warpctrl_source = warpctrl_bundle_source_path()?;
+
+    if !warpctrl_source.exists() {
+        return Err(anyhow!(
+            "Cannot install Warp Control CLI: bundled wrapper not found at {}",
+            warpctrl_source.display()
+        ));
+    }
+
+    install_symlink(&warpctrl_source, &warpctrl_path, "Warp Control CLI")
+}
+
+/// Uninstall the Warp Control CLI by removing the symlink from /usr/local/bin
+pub fn uninstall_warpctrl() -> Result<()> {
+    uninstall_symlink(&warpctrl_install_target_path(), "Warp Control command")
 }

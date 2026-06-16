@@ -135,6 +135,20 @@ if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
   "${REPO_ROOT}/script/prepare_bundled_pprof" "$HELPERS_DIR"
 fi
 
+if [[ ",$FEATURES," =~ ",warp_control_cli," ]]; then
+  WARPCTRL_RESOURCES_DIR="$WARP_APP_PATH/Contents/Resources/bin"
+  echo "Creating warpctrl wrapper script for local run..."
+  mkdir -p "$WARPCTRL_RESOURCES_DIR"
+  WARPCTRL_SCRIPT_PATH="$WARPCTRL_RESOURCES_DIR/warpctrl"
+  cat > "$WARPCTRL_SCRIPT_PATH" << 'EOF'
+#!/bin/bash
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec -a "$0" "$script_dir/../../MacOS/WARP_BIN_PLACEHOLDER" --warpctrl "$@"
+EOF
+  sed -i '' "s/WARP_BIN_PLACEHOLDER/$WARP_BIN_NAME/" "$WARPCTRL_SCRIPT_PATH"
+  chmod +x "$WARPCTRL_SCRIPT_PATH"
+fi
+
 echo "Codesigning app..."
 SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
 codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$WARP_APP_PATH" --entitlements script/Debug-Entitlements.plist

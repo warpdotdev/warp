@@ -8602,6 +8602,58 @@ impl Workspace {
         );
     }
 
+    /// Install the Warp Control CLI by creating a symlink in /usr/local/bin
+    #[cfg(target_os = "macos")]
+    fn install_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(
+            async { cli_install::install_warpctrl() },
+            |view, result, ctx| match result {
+                Ok(_) => {
+                    let command_name = ChannelState::channel().warpctrl_command_name();
+                    let message = format!("Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line.");
+                    view.toast_stack.update(ctx, |toast_stack, ctx| {
+                        let toast = DismissibleToast::success(message.to_string());
+                        toast_stack.add_ephemeral_toast(toast, ctx);
+                    });
+                }
+                Err(error) => {
+                    let error_message = format!("Failed to install Warp Control command: {error}");
+                    log::error!("{error_message}");
+                    view.toast_stack.update(ctx, |toast_stack, ctx| {
+                        let toast = DismissibleToast::error(error_message);
+                        toast_stack.add_persistent_toast(toast, ctx);
+                    });
+                }
+            },
+        );
+    }
+
+    /// Uninstall the Warp Control CLI by removing the symlink from /usr/local/bin
+    #[cfg(target_os = "macos")]
+    fn uninstall_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(
+            async { cli_install::uninstall_warpctrl() },
+            |view, result, ctx| match result {
+                Ok(_) => {
+                    let message = "Successfully uninstalled the Warp Control command.";
+                    view.toast_stack.update(ctx, |toast_stack, ctx| {
+                        let toast = DismissibleToast::success(message.to_string());
+                        toast_stack.add_ephemeral_toast(toast, ctx);
+                    });
+                }
+                Err(error) => {
+                    let error_message =
+                        format!("Failed to uninstall Warp Control command: {error}");
+                    log::error!("{error_message}");
+                    view.toast_stack.update(ctx, |toast_stack, ctx| {
+                        let toast = DismissibleToast::error(error_message);
+                        toast_stack.add_persistent_toast(toast, ctx);
+                    });
+                }
+            },
+        );
+    }
+
     fn undo_revert_in_code_review_pane(
         &mut self,
         window_id: WindowId,
@@ -23267,6 +23319,10 @@ impl TypedActionView for Workspace {
             InstallCLI => self.install_cli(ctx),
             #[cfg(target_os = "macos")]
             UninstallCLI => self.uninstall_cli(ctx),
+            #[cfg(target_os = "macos")]
+            InstallWarpctrl => self.install_warpctrl(ctx),
+            #[cfg(target_os = "macos")]
+            UninstallWarpctrl => self.uninstall_warpctrl(ctx),
             UndoRevertInCodeReviewPane { window_id, view_id } => {
                 self.undo_revert_in_code_review_pane(*window_id, *view_id, ctx)
             }
