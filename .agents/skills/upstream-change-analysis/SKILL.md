@@ -11,16 +11,16 @@ This skill exists because a previous pass produced fake analysis: dependency cla
 
 ## Hard Line
 
-- Apply XP scope control: do not recommend implementation unless Warper will fail its current local-first purpose without it. "Would be nice", "upstream fixed it", "security hygiene", "developer productivity", and "future compatibility" are not enough. A `Port` must stop an unsafe-to-run app, local data corruption, command execution exposure in a retained path, credential/local-file exposure, a crash that breaks normal terminal use, or a current build/release path from failing.
+- Apply XP scope control: do not recommend implementation unless Warper will fail its current local-first purpose without it. "Would be nice", "upstream fixed it", generic safety talk, team convenience, and future-facing compatibility are not enough. A `Port` must stop an unsafe-to-run app, local data corruption, command execution exposure in a retained path, credential/local-file exposure, a crash that breaks normal terminal use, or a current build/release path from failing.
 - Do not write BS. If a human can ask "did you actually check that?" and the answer is no, the analysis is invalid.
 - Do not write conditional relevance when the repo can answer the condition. Check the code.
-- Do not write generic rationale. "Security", "correctness", "compatibility", "ergonomics", "rendering", and "developer productivity" are labels, not reasons.
+- Do not write generic rationale. "Security", "correctness", "compatibility", "ergonomics", "rendering", and team-efficiency labels are not reasons.
 - Do not treat local features as automatically good. A local control API, local agent plugin, local OAuth flow, local watcher, local credential read, or local automation surface can still be exactly the startup/product bloat Warper is removing.
-- Do not create a spec file whose content is mostly "do not port X". That is not a spec. Put rejection in the audit and move on.
+- Do not create a spec file whose content is mostly "do not port X". That is not a spec. Put rejection in the audit and move on. If a previous pass created a deferred-record spec, delete it instead of preserving it as a tombstone.
 - Do not port startup/background work unless it directly supports `WARPER-001`, `WARPER-002`, or `WARPER-005`, and the code evidence proves it.
 - Do not use upstream VC-product logic as a rationale. New agent surfaces, plugin managers, control planes, queues, telemetry-adjacent plumbing, or "platform" abstractions are rejected unless Warper's own specs require them.
 - Do not launder upstream's reason into Warper's reason. "Why upstream did it" and "why Warper needs it" are separate answers. Upstream can have a real reason that is still useless or harmful for Warper.
-- Do not sanitize make-work. If the evidence says upstream moved code around because a large team needed a project, call it churn. Do not rename it "architecture", "platform maturity", or "developer productivity".
+- Do not sanitize make-work. If the evidence says upstream moved code around because a large team needed a project, call it churn. Do not rename it "architecture", "platform maturity", or team enablement.
 
 ## Failure Examples
 

@@ -6,15 +6,23 @@ This document records the correction pass after the audit was tightened to XP sc
 
 | Area | Earlier problem | Correction |
 | --- | --- | --- |
-| XP threshold | The audit treated "retained path plus upstream bug" as enough to port. | `Port` now means unsafe-to-run, local data corruption, normal-use crash/corruption, or current build/package blockage. Useful hygiene moved to `Defer`. |
+| XP threshold | The audit treated "retained path plus upstream bug" as enough to port. | `Port` now means unsafe-to-run, local data corruption, normal-use crash/corruption, or current build/package blockage. Rows without that evidence stay out of implementation scope. |
 | Private security rows | Rows used a vague "security diff" label as if that were an upstream reason. | Each row now says whether the PR is publicly resolvable and gives the actual commit-body cause: RCE advisory, command injection, clipboard exposure, file overwrite, spoofed DCS hooks, or restore `cd` injection. |
 | `0446a507` | The row claimed generic `CARGO_TARGET_DIR` breakage and missed the fork reason. | The row now cites PR `#12313` and issue `#11957`: shared Cargo target dirs made `cargo bundle` and post-bundle steps disagree. Warper relevance is the fork's need to test explicit target dirs/archs without launching or signing the wrong bundle. |
-| Dependencies | Dependency bumps were marked `Port` from package presence alone. | Moved to `Defer` until a targeted advisory/reachability pass proves vulnerable behavior matters for Warper or the update is release-required. |
-| CoreText | A memory leak was treated as stop-ship. | Moved to `Defer` until a current Warper crash/runaway memory issue is shown. |
 | Terminal/input | IME, zsh, PATH, and key fixes were over-promoted. | Kept only flat-storage underflow as `Port`; the rest are deferred until a retained-platform smoke test or user report proves breakage. |
 | Repo metadata | Scale/fidelity improvements were treated as WARPER-005 necessities. | Moved to `Defer` except local file-edit corruption in `a1b76c28`. |
-| Rule/skill/MCP | Hygiene fixes became a spec without a failing acceptance test. | `WARPER-010` is now a deferred record unless a WARPER-005 test fails without those fixes. |
+| Rule/skill/MCP | Rule, skill, MCP, and selected-context rows became a spec without a failing acceptance test. | The fake spec file was deleted. These rows stay in the audit until a WARPER-005 acceptance test fails. |
 | Build/package | Packaging rows were grouped without proving current Warper paths. | Kept only current blockers: macOS target-dir bundle path, Linux launcher naming mismatch, and deb bundler references to absent common repo templates. |
+
+## Dependency And CoreText Grounding
+
+| Commit | Public evidence | Current Warper evidence | XP decision |
+| --- | --- | --- | --- |
+| `9d9972cb` | PR `#10263` says Diesel's SQLite backend can corrupt UTF-8 and that `2.3.8+` is patched. | `Cargo.toml:123` pins vulnerable Diesel `2.3.4`; `cargo tree -i diesel` resolves it into `app`, `persistence`, and `warp_server_client`; `app/src/persistence/sqlite.rs:762`, `:1209`, `:1266`, and `:2016` write local state through Diesel. | Port; this is reachable local SQLite data-corruption risk. |
+| `64a0dfbe` | PR `#10060` says `rand 0.9.1` has `GHSA-cq8v-f236-94qc`, severity CVSS `0.0`, triggered by `rand::rng()` with a custom logger. | `crates/managed_secrets/Cargo.toml:31` pins `rand = "0.9"` and `cargo tree -i rand@0.9.1` finds transitive users, but this audit did not find the custom-logger trigger. | Defer; not runtime survival work from current evidence. |
+| `ac091058` | PR `#10513` is a Dependabot OpenSSL bump with release-note fixes. | `Cargo.lock` contains `openssl`, but `cargo tree -i openssl` and escalated `cargo tree --target=all --all-features -i openssl` find no resolved package. | Skip; stale lockfile entry. |
+| `cc1ee636` | PR `#12090` says `tar 0.4.46` fixes `GHSA-3cv2-h65g-fgmm`, a PAX header desync. | `cargo tree -i tar` shows `tar` through `crates/node_runtime`; `crates/node_runtime/src/lib.rs:205-232` downloads Node and `:282-287` unpacks the tarball. | Defer; retained remote-archive path exists, but the current input is a pinned Node distribution over HTTPS, not arbitrary tar data. |
+| `2f84587a` | PR `#9665` says `CTFontCollection::get_descriptors` leaked descriptor arrays during startup font enumeration, font picker use, font loading, and CJK/emoji fallback chains. | `Cargo.toml:467-470` pins the older `core-foundation-rs` rev; `crates/warpui/src/platform/mac/fonts.rs:82-88` and `:336-358` call `get_descriptors()`. | Defer; real retained macOS leak path, but no measurement or crash evidence proving Warper dies without the bump. |
 
 ## Public PR Findings
 
@@ -46,7 +54,5 @@ This document records the correction pass after the audit was tightened to XP sc
 
 ## Remaining Limits
 
-- Dependency advisories still need reachability analysis before implementation.
 - SSH command-injection work needs an explicit retained-SSH decision before implementation.
-- `WARPER-010` is not justified as an implementation spec from the current evidence.
 - Public PR titles alone are never used as upstream why when the body or issue is unavailable.

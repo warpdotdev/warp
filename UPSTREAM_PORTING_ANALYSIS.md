@@ -26,11 +26,19 @@ This audit uses the repo skill `.agents/skills/upstream-change-analysis/SKILL.md
 | Local code editor save | `app/src/code/local_code_editor.rs:984-1079` formats before saving; `:1542-1543` always calls that path. | Saving can mutate user files unexpectedly. Port format-on-save control. |
 | macOS run script | `script/macos/run:28`, `:62`, and `:69` hardcode relative `target` bundle paths. | Current Warper bundle-testing workflow can build one target and launch/sign another. Port target-dir resolution. |
 | Linux launcher/package scripts | `app/channels/oss/dev.warper.Warper.desktop:10` says `Exec=warp-oss`; `resources/linux/debian/app/postinst.template:4-5` creates `warp-terminal...`; `script/linux/bundle_deb:105-116` reads absent common repo templates. | Current Linux packaging can generate a launcher/package that does not work. Port manually as Warper packaging, not upstream naming. |
-| Dependencies | Diesel, `rand`, OpenSSL, and `tar` are present in the lockfile. | Presence is not enough under the XP bar. Defer until a targeted advisory pass proves reachable vulnerable behavior or a low-risk update needed for release. |
-| CoreText | CoreText/font descriptor paths are present. | Leak is real, but no current Warper crash/runaway evidence was shown. Defer. |
-| Rules/skills/MCP | Local paths exist. | Existing audit did not prove current acceptance-test failure. Defer rule/skill/MCP hygiene. |
+| Rules/skills/MCP | Local paths exist. | Existing audit did not prove current acceptance-test failure. Defer rule/skill/MCP rows. |
 | Repo metadata scale | Project Explorer/repo metadata paths remain. | Useful performance/fidelity work, but not stop-ship without a failing current workflow. Defer. |
 | Windows | Windows code exists. | Current WARPER specs do not target Windows. Skip. |
+
+## Dependency And CoreText Checks
+
+| Commit | Upstream why | Current Warper evidence | Decision | Warper reason |
+| --- | --- | --- | --- | --- |
+| `9d9972cb` | PR `#10263` updates Diesel because `GHSA-h5x4-m2qf-r4f2` / `RUSTSEC-2026-0111` says Diesel's SQLite backend can corrupt UTF-8; the PR says patched versions are `2.3.8+`. | `Cargo.toml:123` pins workspace Diesel at `2.3.4`; `cargo tree -i diesel` shows `app`, `persistence`, and `warp_server_client` use it; `app/src/persistence/sqlite.rs:762`, `:1209`, `:1266`, and `:2016` write local app state, project paths/rules, and command history through Diesel. | Port | This is not package-presence reasoning: Warper stores local state in SQLite through the vulnerable backend. A SQLite UTF-8 corruption bug can corrupt local Warper data, which clears the XP data-corruption bar. No new spec is needed for a patch-level dependency bump. |
+| `64a0dfbe` | PR `#10060` updates transitive `rand 0.9.1` to `0.9.4` for `GHSA-cq8v-f236-94qc` / `RUSTSEC-2026-0097`; the PR says the issue is low severity, CVSS `0.0`, and requires `rand::rng()` with a custom logger. | Workspace `rand` remains `0.8.6`; `crates/managed_secrets/Cargo.toml:31` pins `rand = "0.9"` for HPKE compatibility; `cargo tree -i rand@0.9.1` shows transitive users including `mockito`, `warp_managed_secrets`, and graphics/ML dependencies. The audit did not find a custom logger path that triggers the advisory. | Defer | The vulnerable package is present, but the upstream trigger is specific and the current audit has no Warper path that hits it. Promote only for a release gate such as `cargo audit`, not as runtime survival work. |
+| `ac091058` | PR `#10513` is a Dependabot update from `openssl 0.10.78` to `0.10.79`; release notes include OpenSSL binding fixes such as AES key-wrap output buffer handling. | `Cargo.lock` still contains `openssl`, but both `cargo tree -i openssl` and escalated `cargo tree --target=all --all-features -i openssl` report that no `openssl` package is resolved for the workspace. | Skip | A stale lockfile entry is not Warper code. There is no resolved OpenSSL package to port. |
+| `cc1ee636` | PR `#12090` updates `tar 0.4.45` to `0.4.46`; the release notes cite `GHSA-3cv2-h65g-fgmm`, another PAX header desync fix. | `cargo tree -i tar` shows `tar` only through `crates/node_runtime`; `crates/node_runtime/src/lib.rs:205-232` downloads Node.js from `nodejs.org` and extracts the `.tar.gz`; `:282-287` calls `Archive::unpack(dest_dir)` directly. | Defer | Warper has a real remote-archive extraction path, but the current path downloads a pinned Node distribution over HTTPS, not arbitrary user-supplied tarballs. This is release-gate work or downloader-hardening work, not proven current product death. |
+| `2f84587a` | PR `#9665` says `CTFontCollection::get_descriptors` leaked descriptor arrays; upstream calls out startup font enumeration, font picker usage, selected-font loading, and fallback chains for CJK/emoji. | `Cargo.toml:467-470` pins `core-foundation-rs` to the older rev; `crates/warpui/src/platform/mac/fonts.rs:82-88` calls `get_descriptors()` while loading all system fonts; `:336-358` calls it when resolving fallback descriptors. | Defer | The leak is real and the current macOS font paths are retained. The audit still has no current Warper memory-growth measurement, crash report, or release blocker showing the app dies without the bump. No implementation spec is justified from this evidence. |
 
 ## Port And Port-Manually Rows
 
@@ -57,12 +65,13 @@ This audit uses the repo skill `.agents/skills/upstream-change-analysis/SKILL.md
 
 | Commit(s) | Upstream why | Motive | Decision reason |
 | --- | --- | --- | --- |
-| `9d9972cb`, `64a0dfbe`, `ac091058`, `cc1ee636` | Dependency advisories. | Painkiller upstream | Present package is not proof of current Warper failure. Run targeted advisory/reachability work before implementation. |
-| `2f84587a` | CoreText font descriptor leak. | Painkiller upstream | No current crash/runaway memory evidence. |
+| `64a0dfbe` | Low-severity `rand 0.9.x` custom-logger advisory. | Painkiller upstream | Present transitive package, but no current custom-logger trigger. |
+| `cc1ee636` | `tar` PAX header desync. | Painkiller upstream | Real archive parser issue, but current Warper path is pinned Node download over HTTPS, not arbitrary tar input. |
+| `2f84587a` | CoreText font descriptor leak. | Painkiller upstream | Current font paths call the leaking function, but no current memory-growth measurement or crash evidence clears the XP bar. |
 | `88c344e2` | SSH command injection. | Painkiller upstream | Requires explicit retained-SSH product decision before remote-session work. |
 | `ae832ff6`, `0902e973`, `fb3cb0e9`, `fc1157e0`, `3ff78d29`, `ab081528`, `6d4201ba` | Terminal zsh/PATH/key/IME fixes. | Painkiller upstream | Real bugs, but not stop-ship without failing retained-platform smoke tests or user reports. |
 | `802a881e`, `89f61b63`, `48331870`, `5fa22831`, `9f459842`, `43828a6d`, `03ad9ea9`, `e8024b5a`, `0f97ef18`, `3497d184`, `21e70d56`, `5d8507e4`, `bd7202f3` | Local repo/file-tree scale and fidelity fixes. | Painkiller upstream | Useful, but not implementation work until a current OpenRouter workflow fails or corrupts state. |
-| `5146a5bf`, `b48ece2e`, `ac4225c1`, `92069590`, `51c380ce`, `65381be1` | Rule, skill, MCP, and selected-context fixes. | Painkiller upstream | Needs a failing WARPER-005 acceptance test; otherwise this is hygiene work. |
+| `5146a5bf`, `b48ece2e`, `ac4225c1`, `92069590`, `51c380ce`, `65381be1` | Rule, skill, MCP, and selected-context fixes. | Painkiller upstream | Needs a failing WARPER-005 acceptance test; otherwise it is not implementation work. |
 | `e91b5a21` | Missing Linux bootstrap deps for presubmit. | Painkiller upstream | Fresh Linux convenience, not current app/build survival. |
 | `09be9c1f`, `71edcac8`, `b7dd0ef8`, `5bee7a75`, `59e802ea`, `2fe9d43c`, `1175e82f`, `ffe93a5e`, `1d2775ac`, `cb4fe42a`, `163380dc`, `edfd4149`, `6289aec1`, `d2f26ae9`, `ee133f47`, `35cb40c3`, `c8d39088`, `912e4540`, `3aa6026c`, `56e8617c`, `606e1653`, `8da83b42` | Visual compatibility, ergonomics, Git UI, MCP expansion, Markdown/Mermaid polish, or optional customization. | Lip gloss or Churn | Not XP-critical. |
 
@@ -86,5 +95,5 @@ This audit uses the repo skill `.agents/skills/upstream-change-analysis/SKILL.md
 - `WARPER-006` must cover only unsafe-to-run local security rows from this audit.
 - `WARPER-007` must shrink to terminal crash/corruption, currently `388f5dc1`.
 - `WARPER-009` must shrink to local file-edit corruption, currently `a1b76c28`.
-- `WARPER-010` is a deferred record, not an implementation spec, unless a failing WARPER-005 acceptance test proves rule/skill/MCP hygiene is survival work.
+- Do not keep a WARPER spec for deferred rule/skill/MCP work. Rejected or deferred rows stay in this audit.
 - A new build/package spec is justified for `0446a507`, `6eefa4bb`, and `1244ffbe` because they block current local bundle/package paths.
