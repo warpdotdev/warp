@@ -145,6 +145,7 @@ fn other_user_error_is_failed_with_feature_not_available() {
     )
 }
 
+#[test]
 fn transient_network_error_is_error_with_internal_and_debug_details() {
     assert_update(
         classify_renderable_error(&RenderableAIError::transient_network_error(
@@ -276,6 +277,7 @@ fn map_conversation_status_error_ignores_will_attempt_resume() {
         error_message: "connection reset".into(),
         will_attempt_resume: true,
         waiting_for_network: false,
+        is_user_error: false,
     }));
     conversation.set_status_for_test(ConversationStatus::Error);
     assert_update(
