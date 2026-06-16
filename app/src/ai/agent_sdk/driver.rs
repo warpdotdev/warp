@@ -2962,7 +2962,6 @@ impl AgentDriver {
                         // An automatic recovery is in flight. Don't terminate yet, but bound
                         // the wait so the CLI doesn't hang if it never completes; a successful
                         // recovery returns to InProgress, which cancels this deadline.
-                        log::info!("Transient error; automatic recovery pending — waiting up to {AUTO_RESUME_TIMEOUT:?}");
                         log::info!(
                             "Ambient agent idle lifecycle: event=idle_timeout_scheduled task_id={:?} terminal_view_id={terminal_id:?} timeout={AUTO_RESUME_TIMEOUT:?} outcome=automatic_resume_pending",
                             me.task_id

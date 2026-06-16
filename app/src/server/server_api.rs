@@ -190,7 +190,7 @@ pub enum AIApiError {
     /// event: the server always sends one, but the transport can truncate the response
     /// between chunks, surfacing as a clean EOF.
     #[error("Response stream ended unexpectedly before completion.")]
-    StreamTruncated,
+    UnexpectedEof,
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -311,54 +311,26 @@ impl AIApiError {
         }
     }
 
-    /// Returns whether or not the error can be retried.
-    pub fn is_retryable(&self) -> bool {
-        // Don't retry client errors, except for timeouts and quota limits.
-        fn is_retryable_status(status: http::StatusCode) -> bool {
+    /// Whether the error is worth an automatic recovery attempt — a fresh request may
+    /// succeed. Gates both retry (pre-actions) and resume (post-actions).
+    pub fn is_recoverable(&self) -> bool {
+        // Don't recover from client errors, except timeouts and rate limits.
+        fn is_recoverable_status(status: http::StatusCode) -> bool {
             !status.is_client_error()
                 || status == http::StatusCode::REQUEST_TIMEOUT
                 || status == http::StatusCode::TOO_MANY_REQUESTS
         }
 
         match self {
-            AIApiError::ErrorStatus(status, _) => is_retryable_status(*status),
+            AIApiError::ErrorStatus(status, _) => is_recoverable_status(*status),
             AIApiError::Transport(e) => {
                 if let Some(status) = e.status() {
-                    return is_retryable_status(status);
+                    return is_recoverable_status(status);
                 }
                 true
             }
-            // By default, retry on error.
+            // By default, attempt recovery on error.
             _ => true,
-        }
-    }
-
-    /// Returns whether this is a transient network/server failure where a fresh
-    /// request is likely to succeed once connectivity or the service recovers.
-    ///
-    /// Gates automatic conversation resumes; intentionally narrower than
-    /// [`Self::is_retryable`]: auto-resuming on application-level failures (quota,
-    /// overload) would fail identically or add load the server just shed.
-    pub fn is_transient_failure(&self) -> bool {
-        fn is_transient_status(status: http::StatusCode) -> bool {
-            status.is_server_error()
-                || status == http::StatusCode::REQUEST_TIMEOUT
-                || status == http::StatusCode::TOO_MANY_REQUESTS
-        }
-
-        match self {
-            AIApiError::Transport(e)
-            | AIApiError::Deserialization(DeserializationError::Transport(e)) => {
-                e.status().is_none_or(is_transient_status)
-            }
-            AIApiError::ErrorStatus(status, _) => is_transient_status(*status),
-            AIApiError::StreamTruncated => true,
-            AIApiError::QuotaLimit { .. }
-            | AIApiError::ServerOverloaded
-            | AIApiError::Deserialization(DeserializationError::Json(_))
-            | AIApiError::NoContextFound
-            | AIApiError::Other(_)
-            | AIApiError::Stream { .. } => false,
         }
     }
 }
@@ -370,8 +342,8 @@ impl ErrorExt for AIApiError {
             AIApiError::Transport(error) => error.is_actionable(),
             AIApiError::Other(error) => error.is_actionable(),
             AIApiError::Stream { source, .. } => source.is_actionable(),
-            AIApiError::ErrorStatus(_, _) => self.is_retryable(),
-            AIApiError::StreamTruncated => true,
+            AIApiError::ErrorStatus(_, _) => self.is_recoverable(),
+            AIApiError::UnexpectedEof => true,
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::NoContextFound => false,
@@ -1714,7 +1686,3 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
-
-#[cfg(test)]
-#[path = "server_api_tests.rs"]
-mod tests;

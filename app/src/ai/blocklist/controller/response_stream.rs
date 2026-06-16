@@ -40,19 +40,18 @@ enum RecoveryAction {
 /// re-sending is unsafe, so recovery uses a fresh `ResumeConversation` request.
 fn recovery_action(
     has_received_client_actions: bool,
-    is_retryable: bool,
-    is_transient_failure: bool,
+    is_recoverable: bool,
     has_retry_budget: bool,
     can_attempt_resume_on_error: bool,
     is_online: bool,
 ) -> RecoveryAction {
-    if !has_received_client_actions && is_retryable && has_retry_budget {
+    if !has_received_client_actions && is_recoverable && has_retry_budget {
         if is_online {
             RecoveryAction::RetryNow
         } else {
             RecoveryAction::RetryWhenOnline
         }
-    } else if has_received_client_actions && is_transient_failure && can_attempt_resume_on_error {
+    } else if has_received_client_actions && is_recoverable && can_attempt_resume_on_error {
         RecoveryAction::Resume
     } else {
         RecoveryAction::Fail
@@ -270,7 +269,7 @@ impl ResponseStream {
                 }
                 // A request-conversion failure is a deterministic client-side error and
                 // no stream was ever created: retrying would fail identically, and
-                // letting completion synthesize `StreamTruncated` would misreport it as
+                // letting completion synthesize `UnexpectedEof` would misreport it as
                 // a transient network failure. Surface the original error and finish
                 // terminally. (HTTP send failures don't take this path — they arrive as
                 // in-stream error events.)
@@ -346,8 +345,7 @@ impl ResponseStream {
                 let is_online = NetworkStatus::as_ref(ctx).is_online();
                 match recovery_action(
                     self.has_received_client_actions,
-                    e.is_retryable(),
-                    e.is_transient_failure(),
+                    e.is_recoverable(),
                     self.retry_count < MAX_RETRIES,
                     self.can_attempt_resume_on_error,
                     is_online,
@@ -407,49 +405,54 @@ impl ResponseStream {
             log::warn!(
                 "generate_multi_agent_output stream ended without emitting StreamFinished event."
             );
-            let truncated = Arc::new(AIApiError::StreamTruncated);
+            let unexpected_eof = Arc::new(AIApiError::UnexpectedEof);
             let is_online = NetworkStatus::as_ref(ctx).is_online();
             match recovery_action(
                 self.has_received_client_actions,
-                truncated.is_retryable(),
-                truncated.is_transient_failure(),
+                unexpected_eof.is_recoverable(),
                 self.retry_count < MAX_RETRIES,
                 self.can_attempt_resume_on_error,
                 is_online,
             ) {
                 RecoveryAction::RetryNow => {
                     log::warn!(
-                        "MultiAgent request failed, retrying (attempt {}/{}) - Error: {truncated:?}",
+                        "MultiAgent request failed, retrying (attempt {}/{}) - Error: {unexpected_eof:?}",
                         self.retry_count + 1,
                         MAX_RETRIES
                     );
-                    self.emit_retryable_agent_mode_error_telemetry(format!("{truncated:?}"), ctx);
+                    self.emit_retryable_agent_mode_error_telemetry(
+                        format!("{unexpected_eof:?}"),
+                        ctx,
+                    );
                     self.retry(ctx);
                     return;
                 }
                 RecoveryAction::RetryWhenOnline => {
                     log::warn!(
-                        "MultiAgent request failed while offline; retrying (attempt {}/{}) once connectivity returns - Error: {truncated:?}",
+                        "MultiAgent request failed while offline; retrying (attempt {}/{}) once connectivity returns - Error: {unexpected_eof:?}",
                         self.retry_count + 1,
                         MAX_RETRIES
                     );
-                    self.emit_retryable_agent_mode_error_telemetry(format!("{truncated:?}"), ctx);
+                    self.emit_retryable_agent_mode_error_telemetry(
+                        format!("{unexpected_eof:?}"),
+                        ctx,
+                    );
                     self.defer_retry_until_online(ctx);
                     return;
                 }
                 RecoveryAction::Resume => {
                     self.should_resume_conversation_after_stream_finished = true;
                     self.error_event_emitted = true;
-                    self.report_request_failure(&truncated, is_online);
+                    self.report_request_failure(&unexpected_eof, is_online);
                     ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
-                        truncated,
+                        unexpected_eof,
                     ))));
                 }
                 RecoveryAction::Fail => {
                     self.error_event_emitted = true;
-                    self.report_request_failure(&truncated, is_online);
+                    self.report_request_failure(&unexpected_eof, is_online);
                     ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
-                        truncated,
+                        unexpected_eof,
                     ))));
                 }
             }
@@ -471,8 +474,7 @@ impl ResponseStream {
                     self.has_received_client_actions,
                 );
                 scope.set_tag("error", format!("{error:?}"));
-                scope.set_tag("is_retryable", error.is_retryable());
-                scope.set_tag("is_transient_failure", error.is_transient_failure());
+                scope.set_tag("is_recoverable", error.is_recoverable());
                 scope.set_tag(
                     "will_attempt_resume",
                     self.should_resume_conversation_after_stream_finished,
