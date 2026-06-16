@@ -1885,7 +1885,12 @@ impl CodeReviewView {
                 };
 
                 if let AttachedReviewCommentTarget::Line { line, .. } = &comment.target {
-                    self.scroll_to_line(editor_index, line, 0.0, ctx);
+                    // Bring the inline card itself into view — not just its bare line — so a jump
+                    // from the panel reveals the comment. Falls back to the line when no inline
+                    // block is anchored there (inline feature off, or the comment is outdated).
+                    if !self.scroll_inline_comment_into_view(editor_index, line, ctx) {
+                        self.scroll_to_line(editor_index, line, 0.0, ctx);
+                    }
                 } else {
                     self.viewported_list_state
                         .scroll_to_with_offset(editor_index, Pixels::new(0.0));
@@ -2178,6 +2183,62 @@ impl CodeReviewView {
                     - self.viewported_list_state.get_viewport_height(),
             );
         }
+    }
+
+    /// Scrolls the inline comment card anchored at `line` of the editor at `editor_index` into the
+    /// viewport, treating the card's full content-space range (not the bare line) as the target.
+    /// Returns `false` if no inline block is anchored there, so the caller can fall back to
+    /// scrolling the line.
+    fn scroll_inline_comment_into_view(
+        &mut self,
+        editor_index: usize,
+        line: &EditorLineLocation,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return false;
+        };
+        let Some(editor) = state
+            .file_states
+            .get_index(editor_index)
+            .and_then(|(_, file_state)| file_state.editor_state.as_ref())
+            .map(|editor_state| editor_state.editor.clone())
+        else {
+            return false;
+        };
+        let Some((block_top, block_height)) = editor
+            .as_ref(ctx)
+            .editor()
+            .read(ctx, |code_editor_view, ctx| {
+                code_editor_view.comment_block_content_bounds(line, ctx)
+            })
+        else {
+            return false;
+        };
+
+        let card_top = Pixels::new(FILE_HEADER_HEIGHT) + block_top;
+        let card_bottom = card_top + block_height;
+
+        // Leave the scroll alone if the whole card is already on-screen.
+        if self
+            .viewported_list_state
+            .is_vertical_range_visible(editor_index, card_top, card_bottom)
+        {
+            return true;
+        }
+
+        // Bring the card to the top of the viewport (keeping a small buffer above so the anchor line
+        // stays adjacent), which leaves the rest of the viewport below the card. This deliberately
+        // top-aligns rather than bottom-aligning to the viewport edge so small relayout drift can't
+        // push the card's bottom out of view.
+        self.viewported_list_state
+            .scroll_to_with_offset(editor_index, card_top - Pixels::new(EDITOR_GAP));
+
+        if let Some(context) = self.compute_scroll_context_for_index(editor_index, &editor, ctx) {
+            self.viewported_list_state.set_scroll_context(Some(context));
+        }
+        ctx.notify();
+        true
     }
 
     #[cfg(target_family = "wasm")]
