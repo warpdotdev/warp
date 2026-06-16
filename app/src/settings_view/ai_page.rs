@@ -2155,8 +2155,15 @@ impl AISettingsPageView {
         }
     }
 
-    /// Starts the xAI (Grok) subscription OAuth flow, exposing both the
-    /// loopback callback and pasted-code fallback for the same PKCE attempt.
+    /// Kicks off the xAI (Grok) subscription OAuth flow: opens the consent
+    /// screen in the browser, runs a loopback PKCE callback server, exchanges
+    /// the resulting authorization code for OAuth tokens, and persists them via
+    /// `ApiKeyManager` (which then proactively refreshes them before expiry).
+    ///
+    /// In parallel, this reveals the manual code-entry row so the user can
+    /// paste the code xAI displays when the browser can't reach the loopback
+    /// callback. Whichever path completes first connects the subscription; the
+    /// other completion is ignored once the view-owned attempt state is cleared.
     #[cfg(not(target_family = "wasm"))]
     fn start_grok_oauth(&mut self, ctx: &mut ViewContext<Self>) {
         use ::ai::grok_subscription::oauth;
@@ -2166,12 +2173,16 @@ impl AISettingsPageView {
         use crate::workspace::WorkspaceAction;
         use crate::ToastStack;
 
-        // Shared by connect-flow toasts so completion replaces progress.
+        /// Object id shared by the connect-flow toasts so the completion toast
+        /// (success or error) automatically replaces the in-progress one.
         const CONNECT_TOAST_OBJECT_ID: &str = "grok_oauth_connect_toast";
-        // Pair every terminal connect event, including bind failures, with an
-        // initiation event.
+        // Record attempt initiation on click (before we attempt to bind the
+        // loopback server). This ensures every terminal SuperGrokSubscriptionConnectFinished
+        // (including immediate bind failures) is paired with a preceding Initiated
+        // for funnel/drop-off analysis.
         send_telemetry_from_ctx!(TelemetryEvent::SuperGrokSubscriptionConnectInitiated, ctx);
-        // Bind before opening the browser so failures surface without a
+        // Starting the attempt binds the loopback callback server before the
+        // browser opens, so a bind failure surfaces immediately, without a
         // dangling browser tab.
         let attempt = match oauth::OauthAttempt::start() {
             Ok(attempt) => attempt,
@@ -2203,14 +2214,18 @@ impl AISettingsPageView {
             editor.set_buffer_text("", ctx);
         });
         ctx.notify();
+        // Open xAI's consent screen in the user's default browser.
 
         let authorize_url = attempt.authorize_url();
         ctx.open_url(&authorize_url);
 
         let window_id = ctx.window_id();
         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-            // Persistent so the copy-URL fallback remains available; completion
-            // replaces it via the shared object id.
+            // Persistent rather than ephemeral so the copy-URL fallback stays
+            // available when the browser fails to open. It can't linger
+            // forever: the completion toast below replaces it (shared object
+            // id), and the OAuth attempt itself times out when the callback
+            // never arrives.
             let toast = DismissibleToast::default(
                 "Opening your browser to connect your SuperGrok subscription…".to_string(),
             )
@@ -2238,6 +2253,9 @@ impl AISettingsPageView {
                         TelemetryEvent::SuperGrokSubscriptionConnectFinished { error: None },
                         ctx
                     );
+                    // Persist the tokens to secure storage and kick off the
+                    // proactive refresh loop so subsequent requests can
+                    // authenticate with the connected subscription.
                     ApiKeyManager::handle(ctx).update(ctx, move |manager, ctx| {
                         manager.store_grok_tokens(tokens, ctx);
                     });
@@ -7545,7 +7563,9 @@ struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
-
+    /// Buttons for the SuperGrok (xAI) subscription row; which one renders
+    /// depends on whether OAuth tokens are stored or a connect attempt is in
+    /// progress.
     grok_connect_button: ViewHandle<ActionButton>,
     grok_connecting_button: ViewHandle<ActionButton>,
     grok_disconnect_button: ViewHandle<ActionButton>,
@@ -8272,6 +8292,7 @@ impl SettingsWidget for ApiKeysWidget {
             }
         }
 
+        // Entrypoint for connecting a SuperGrok (xAI) subscription via OAuth.
         if FeatureFlag::SuperGrok.is_enabled() {
             #[cfg(not(target_family = "wasm"))]
             let grok_tokens = ApiKeyManager::as_ref(app).grok_tokens();

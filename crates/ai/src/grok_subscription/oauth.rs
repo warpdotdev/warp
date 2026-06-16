@@ -1,13 +1,26 @@
-//! OAuth flow for connecting an xAI / Grok subscription (e.g. SuperGrok).
+//! OAuth flow for connecting an xAI / Grok subscription (e.g. SuperGrok) to
+//! Warp, so users can "plug in" their subscription instead of pasting a
+//! pay-as-you-go API key.
 //!
-//! This mirrors Grok-CLI's desktop OAuth flow: Authorization Code + PKCE with a
-//! fixed loopback redirect URI. If the browser cannot reach the loopback
-//! callback, xAI displays a code that Warp can exchange with the same PKCE
-//! verifier via [`OauthAttempt::manual_code_exchange`].
+//! This mirrors the public Grok-CLI desktop OAuth flow: an OAuth 2.0
+//! Authorization Code grant with PKCE and a fixed loopback redirect URI. xAI's
+//! auth server only accepts the loopback redirect for an allowlisted
+//! `client_id` bound to a specific port, so we reuse the Grok-CLI client and
+//! bind the callback server to that exact port.
 //!
-//! This module owns the network/protocol side. Token storage, refresh
-//! scheduling, and request injection live in [`crate::api_keys::ApiKeyManager`]
-//! and the parent [`crate::grok_subscription`] module.
+//! Some browsers/networks can't reach the loopback callback (e.g. Private
+//! Network Access is blocked), in which case xAI's consent screen instead
+//! *displays* the authorization code for the user to paste back into the app.
+//! [`OauthAttempt::manual_code_exchange`] supports that fallback by capturing
+//! the attempt's PKCE verifier so a pasted code can be exchanged directly,
+//! without ever observing the loopback redirect.
+//!
+//! This module owns only the network/protocol side: building the authorize
+//! URL, running the loopback callback server, and exchanging/refreshing tokens
+//! at xAI's token endpoint. Persistence of the resulting tokens, proactive
+//! refresh scheduling, and injection into the request live in the parent
+//! [`crate::grok_subscription`] module (refresh orchestration) and
+//! [`crate::api_keys::ApiKeyManager`] (storage + request injection).
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -47,14 +60,23 @@ fn redirect_uri() -> String {
     format!("http://{REDIRECT_HOST}:{REDIRECT_PORT}/callback")
 }
 
-/// One in-flight OAuth login attempt: a loopback listener plus PKCE/CSRF secrets.
+/// One in-flight OAuth login attempt: the bound loopback callback listener
+/// plus the per-attempt PKCE/CSRF secrets, which never leave this module.
+///
+/// Construct with [`OauthAttempt::start`], open [`OauthAttempt::authorize_url`]
+/// in the browser, then await [`OauthAttempt::finish`] to obtain tokens. Tying
+/// the secrets to the attempt guarantees the same PKCE verifier and CSRF state
+/// are used for both the authorize URL and the code exchange.
 pub struct OauthAttempt {
     listener: TcpListener,
     pkce: PkceParams,
 }
 
 impl OauthAttempt {
-    /// Binds the loopback callback before the browser opens.
+    /// Binds the loopback callback server and generates fresh per-attempt
+    /// secrets. Call this before opening the browser so a bind failure (e.g.
+    /// another login already in progress, or Grok-CLI holding the port)
+    /// surfaces before a browser tab opens.
     pub fn start() -> anyhow::Result<Self> {
         Ok(Self {
             listener: bind_callback_listener()?,
@@ -67,7 +89,9 @@ impl OauthAttempt {
         authorize_url(&self.pkce)
     }
 
-    /// Completes the loopback PKCE flow and consumes the attempt secrets.
+    /// Runs the rest of the browser-based PKCE flow: waits for the loopback
+    /// callback, validates the CSRF state, and exchanges the authorization
+    /// code for tokens. Consumes the attempt so its secrets can't be reused.
     pub async fn finish(self) -> anyhow::Result<TokenResponse> {
         run_oauth_flow(self.listener, self.pkce).await
     }

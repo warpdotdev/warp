@@ -85,7 +85,12 @@ impl ApiKeys {
 }
 
 /// OAuth tokens for a connected xAI / Grok subscription (e.g. SuperGrok).
-/// Stored separately from BYO API keys because they have a refresh lifecycle.
+///
+/// Persisted to secure storage under [`GROK_SECURE_STORAGE_KEY`], separate from
+/// the BYO [`ApiKeys`] blob because these are OAuth tokens with a refresh
+/// lifecycle rather than a user-pasted static key. `crate::grok_subscription`
+/// owns refreshing them; this module is the storage and request-injection
+/// source of truth that [`ApiKeyManager::api_keys_for_request`] reads from.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct GrokTokens {
     pub access_token: String,
@@ -94,14 +99,21 @@ pub struct GrokTokens {
     /// Absolute time at which `access_token` expires, if the provider told us.
     #[serde(default)]
     pub expires_at: Option<SystemTime>,
-    /// Initial connection time, carried across token refreshes for the settings UI.
+    /// When the user originally connected the subscription (i.e. when the
+    /// browser OAuth flow completed). Carried over across token refreshes so
+    /// it keeps reflecting the initial connection, not the latest refresh;
+    /// surfaced in the settings UI as "Connected on ...". `None` for tokens
+    /// stored before this field existed.
     #[serde(default)]
     pub connected_at: Option<SystemTime>,
 }
 
 impl GrokTokens {
-    /// Returns the non-empty access token. The server remains the authority on
-    /// validity while background refresh keeps tokens fresh.
+    /// Returns the access token whenever it is non-empty, regardless of
+    /// expiry. Possibly-expired tokens are still sent so the server stays the
+    /// final authority on token validity (it rejects truly invalid tokens);
+    /// `crate::grok_subscription` refreshes (nearly) expired tokens in the
+    /// background.
     pub fn access_token_for_request(&self) -> Option<&str> {
         (!self.access_token.trim().is_empty()).then_some(self.access_token.as_str())
     }
@@ -136,12 +148,18 @@ pub enum AwsCredentialsRefreshStrategy {
 /// A structure that manages API keys for AI providers.
 pub struct ApiKeyManager {
     keys: ApiKeys,
-    /// OAuth tokens for a connected xAI/Grok subscription, if any.
+    /// OAuth tokens for a connected xAI/Grok subscription, if any. Persisted
+    /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`];
+    /// `crate::grok_subscription` keeps these fresh.
     grok_tokens: Option<GrokTokens>,
-    /// Whether background refresh is allowed under the app-layer BYO policy.
+    /// Whether background refresh of `grok_tokens` is currently allowed.
+    /// Mirrors the BYO API key policy, which lives in the app layer; wired in
+    /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_allowed: bool,
-    /// Guards against overlapping proactive and request-time token refreshes.
+    /// Guards against overlapping Grok token refreshes: the proactive refresh
+    /// timer and the request-time safety net
+    /// (`ApiKeyManager::refresh_grok_tokens_if_needed`) can otherwise race.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) grok_refresh_in_flight: bool,
     pub(crate) aws_credentials_state: AwsCredentialsState,
