@@ -8,6 +8,17 @@ Warper should port upstream repo/file-tool work only when it prevents local file
 
 OpenRouter exposes `apply_file_diffs`, and the request-file-edits executor applies those diffs to local files. If that path corrupts suffix content around multiline partial lines, it damages user files. That is a survival issue for the local-first agent. Large-repo performance and context fidelity improvements may be useful, but they are not implementation work until backed by a failing acceptance test or current user pain.
 
+## What goes wrong without this
+
+1. An OpenRouter model can propose an `apply_file_diffs` edit whose search block ends with a partial final line. This happens when the model includes enough trailing context to identify the target line but stops before the full line content, for example searching for `// socket_path:` while the actual file line is `// socket_path: ~/.warp[-channel]/remote-server/server.sock`.
+2. The diff matcher works on whole-line windows, so the partial final search line can match the entire file line. At that point Warper knows the target line contains an unmatched suffix that was not part of the model's search text.
+3. Current Warper only preserves that unmatched final-line suffix when the search block and replacement block have the same number of lines. The upstream regression is the case where the replacement removes one or more earlier lines while keeping the same partial final context line. That is exactly the kind of cleanup edit a model emits when deleting comments, blank lines, or obsolete setup while retaining the next meaningful line.
+4. In the broken case, Warper builds a replacement delta that covers the whole matched final file line but inserts only the model's partial replacement line. The untouched suffix is dropped from the insertion.
+5. The request-file-edits path then applies that delta to disk through Warper's normal local edit flow. The edit can look valid in the agent conversation because the search matched and the replacement was accepted; the lost suffix is not a failed match, it is silent data loss inside a successful match.
+6. The user-visible damage is a local file that compiles or behaves differently for reasons unrelated to the requested edit. A path, argument, expression tail, comment detail, string suffix, or closing syntax that lived after the partial context can disappear.
+7. This is worse than rejecting a diff. A rejected diff leaves the file untouched and lets the user or agent retry. A successful corrupt diff changes the user's working tree and can be mistaken for intentional model output during review.
+8. The failure is not limited to generated code. Any retained OpenRouter file edit can hit it: Rust source, shell scripts, config files, markdown, TOML, JSON, or project docs. The trigger is the shape of the search/replace block, not the file type.
+
 ## Source commits
 
 | Commit | Upstream why | Current Warper evidence | Resolution |
