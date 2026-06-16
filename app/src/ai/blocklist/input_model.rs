@@ -771,10 +771,10 @@ impl BlocklistAIInputModel {
                 .collect::<Vec<(String, Option<DateTime<Local>>)>>()
         });
 
-        // Gather agent prompt history
+        // Gather agent prompt history (ascending / oldest-first).
         let prompt_entries = FeatureFlag::NldPromptHistoryMatch
             .is_enabled()
-            .then(|| BlocklistAIHistoryModel::as_ref(ctx).nld_prompt_history());
+            .then(|| BlocklistAIHistoryModel::as_ref(ctx).prompt_history_candidates());
 
         let buffer_cloned = input.buffer_text.clone();
         let other_buffer_cloned = buffer_cloned.clone();
@@ -835,11 +835,13 @@ impl BlocklistAIInputModel {
                         futures_lite::future::yield_now().await;
 
                         if let Some(prompt_entries) = &prompt_entries {
-                            // `prompt_entries` is already newest-first.
+                            // `prompt_entries` is ascending (oldest-first); reverse it so the
+                            // matcher iterates newest-first and the first match is most-recent.
                             let prompt_match = most_recent_close_match(
                                 &buffer_cloned,
                                 prompt_entries
                                     .iter()
+                                    .rev()
                                     .map(|(text, start_ts)| (&**text, Some(*start_ts))),
                                 HISTORY_ENTRY_MATCH_CUTOFF,
                             )

@@ -250,12 +250,12 @@ pub struct BlocklistAIHistoryModel {
     /// history.
     persisted_queries: Vec<PersistedAIInput>,
 
-    /// Prompt-history candidates for NLD input classification, read once from `ai_queries` at
-    /// startup.
-    nld_persisted_prompts: Vec<(Arc<str>, DateTime<Local>)>,
-
-    /// User-query prompts submitted during the current session,
-    nld_session_prompts: Vec<(Arc<str>, DateTime<Local>)>,
+    /// Prompt-history candidates for NLD input classification, ordered oldest-first
+    /// (ascending by submission). Seeded once from `ai_queries` at startup via
+    /// [`Self::with_prompt_history`] and appended to as new user-query prompts are submitted
+    /// during the session (see [`Self::append_session_prompt`]). The matcher reverses this to
+    /// iterate newest-first.
+    prompt_history: Vec<(Arc<str>, DateTime<Local>)>,
 
     /// Metadata for both local and ambient agent conversations.
     /// Does not include the actual content of the conversations.
@@ -315,13 +315,14 @@ impl BlocklistAIHistoryModel {
         model
     }
 
-    /// Stores the NLD prompt-history snapshot ([`Self::nld_persisted_prompts`]) read from
-    /// `ai_queries` at startup, preserving its newest-first order.
-    pub(crate) fn with_nld_persisted_prompts(
+    /// Seeds [`Self::prompt_history`] with the NLD prompt-history snapshot read from
+    /// `ai_queries` at startup, preserving its oldest-first order. Session prompts are appended
+    /// after these via [`Self::append_session_prompt`].
+    pub(crate) fn with_prompt_history(
         mut self,
-        nld_persisted_prompts: Vec<(String, DateTime<Local>)>,
+        prompt_history: Vec<(String, DateTime<Local>)>,
     ) -> Self {
-        self.nld_persisted_prompts = nld_persisted_prompts
+        self.prompt_history = prompt_history
             .into_iter()
             .filter(|(text, _)| !text.trim().is_empty())
             .map(|(text, start_ts)| (Arc::from(text), start_ts))
@@ -1034,7 +1035,7 @@ impl BlocklistAIHistoryModel {
                 .contains(&terminal_view_id)
         {
             if let Some((text, start_ts)) = new_prompt {
-                self.append_session_nld_prompt(text, start_ts);
+                self.append_session_prompt(text, start_ts);
             }
         }
         Ok(())
@@ -2260,23 +2261,19 @@ impl BlocklistAIHistoryModel {
             .chain(live_queries_vec)
     }
 
-    /// Appends a single user-query prompt to the session NLD prompt history
-    /// ([`Self::nld_session_prompts`]), dropping whitespace-only prompts.
-    fn append_session_nld_prompt(&mut self, text: String, start_ts: DateTime<Local>) {
+    /// Appends a single user-query prompt to [`Self::prompt_history`], dropping whitespace-only
+    /// prompts. Session prompts arrive in submission order, so pushing keeps the vec ascending.
+    fn append_session_prompt(&mut self, text: String, start_ts: DateTime<Local>) {
         if text.trim().is_empty() {
             return;
         }
-        self.nld_session_prompts.push((Arc::from(text), start_ts));
+        self.prompt_history.push((Arc::from(text), start_ts));
     }
 
-    /// Returns the prompt-history candidates for NLD input classification, newest-first.
-    pub(crate) fn nld_prompt_history(&self) -> Vec<(Arc<str>, DateTime<Local>)> {
-        self.nld_session_prompts
-            .iter()
-            .rev()
-            .chain(self.nld_persisted_prompts.iter())
-            .map(|(text, start_ts)| (Arc::clone(text), *start_ts))
-            .collect()
+    /// Returns the prompt-history candidates for NLD input classification, oldest-first
+    /// (ascending). The matcher reverses this to iterate newest-first.
+    pub(crate) fn prompt_history_candidates(&self) -> Vec<(Arc<str>, DateTime<Local>)> {
+        self.prompt_history.clone()
     }
 
     /// Returns `Some` with the [`AIConversationId`] of the active conversation inside the
@@ -2686,8 +2683,7 @@ impl BlocklistAIHistoryModel {
         self.conversation_transcript_viewer_terminal_view_ids
             .clear();
         self.persisted_queries.clear();
-        self.nld_persisted_prompts.clear();
-        self.nld_session_prompts.clear();
+        self.prompt_history.clear();
         self.all_conversations_metadata.clear();
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();

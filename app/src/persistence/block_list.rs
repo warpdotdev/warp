@@ -111,22 +111,24 @@ pub(super) fn read_ai_queries(
 const MAX_AI_QUERIES_TO_READ_FOR_NLD: i64 = 2000;
 
 /// Reads recent AI query prompts (text and submission time) for NLD prompt-history
-/// matching, newest-first.
+/// matching, oldest-first.
 ///
 /// Rows with an empty serialized input (`[]`) are excluded in SQL before the limit is
 /// applied: rows written before empty inputs were skipped at write time remain in the
-/// table until FIFO eviction removes them. The result is intentionally not deduped;
-/// deduplication happens after these rows are combined with in-memory conversation
-/// queries in [`crate::ai::blocklist::BlocklistAIHistoryModel::nld_prompt_history`].
-pub(super) fn read_nld_prompts(
+/// table until FIFO eviction removes them. The newest `limit` rows are selected via
+/// `id DESC` and then reversed so the result is ascending by submission, matching
+/// [`read_ai_queries`]. The result is intentionally not deduped; deduplication happens
+/// after these rows are combined with in-memory conversation queries in
+/// [`crate::ai::blocklist::BlocklistAIHistoryModel::prompt_history_candidates`].
+pub(super) fn read_prompt_history(
     conn: &mut SqliteConnection,
 ) -> Result<Vec<(String, DateTime<Local>)>, diesel::result::Error> {
-    read_nld_prompts_with_limit(conn, MAX_AI_QUERIES_TO_READ_FOR_NLD)
+    read_prompt_history_with_limit(conn, MAX_AI_QUERIES_TO_READ_FOR_NLD)
 }
 
-/// Split out from [`read_nld_prompts`] so tests can exercise the read cap with a small
+/// Split out from [`read_prompt_history`] so tests can exercise the read cap with a small
 /// limit instead of inserting thousands of rows.
-fn read_nld_prompts_with_limit(
+fn read_prompt_history_with_limit(
     conn: &mut SqliteConnection,
     limit: i64,
 ) -> Result<Vec<(String, DateTime<Local>)>, diesel::result::Error> {
@@ -150,6 +152,9 @@ fn read_nld_prompts_with_limit(
             }
             Some((text, Local.from_utc_datetime(&start_ts)))
         })
+        // Selected newest-first (`id DESC`) to keep the newest `limit` rows; reverse to
+        // ascending by submission so callers can append session prompts and stay ordered.
+        .rev()
         .collect_vec())
 }
 

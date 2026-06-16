@@ -835,32 +835,32 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
 }
 
 #[test]
-fn nld_prompt_history_chains_session_prompts_then_persisted_snapshot() {
+fn prompt_history_candidates_seeds_from_snapshot_then_appends_session_prompts() {
     App::test((), |mut app| async move {
         let now = Local::now();
         let terminal_view_id = EntityId::new();
 
-        // Persisted snapshot as read from `ai_queries` (newest-first, i.e. `id` DESC), including a
+        // Persisted snapshot as read from `ai_queries` (oldest-first), including a
         // whitespace-only row that must be dropped.
-        let nld_prompts = vec![
-            ("deploy it".to_string(), now - chrono::Duration::seconds(10)),
-            (
-                "live query".to_string(),
-                now - chrono::Duration::seconds(20),
-            ),
+        let prompt_history = vec![
             (
                 "restored query".to_string(),
                 now - chrono::Duration::seconds(30),
             ),
-            ("   ".to_string(), now),
+            (
+                "live query".to_string(),
+                now - chrono::Duration::seconds(20),
+            ),
+            ("deploy it".to_string(), now - chrono::Duration::seconds(10)),
+            ("   ".to_string(), now - chrono::Duration::seconds(5)),
         ];
 
         let history_model = app.add_singleton_model(|_| {
-            BlocklistAIHistoryModel::new(vec![], &[]).with_nld_persisted_prompts(nld_prompts)
+            BlocklistAIHistoryModel::new(vec![], &[]).with_prompt_history(prompt_history)
         });
 
         // A new in-memory query submitted this session duplicates a persisted prompt. It is NOT
-        // deduped; it is appended as the newest session prompt.
+        // deduped; it is appended as the newest (last) session prompt.
         let conversation_id = history_model.update(&mut app, |history_model, ctx| {
             history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
@@ -893,18 +893,19 @@ fn nld_prompt_history_chains_session_prompts_then_persisted_snapshot() {
                 .unwrap();
         });
 
-        let prompts = history_model.read(&app, |model, _| model.nld_prompt_history());
+        let prompts = history_model.read(&app, |model, _| model.prompt_history_candidates());
         let texts: Vec<&str> = prompts.iter().map(|(text, _)| &**text).collect();
-        // The session prompt (newest-first) comes first, followed by the persisted snapshot in its
-        // stored order. Whitespace-only is dropped; the duplicate "live query" is intentionally
-        // NOT deduped.
+        // The persisted snapshot comes first in its oldest-first order, followed by the session
+        // prompt appended last. Whitespace-only is dropped; the duplicate "live query" is
+        // intentionally NOT deduped.
         assert_eq!(
             texts,
-            vec!["live query", "deploy it", "live query", "restored query"]
+            vec!["restored query", "live query", "deploy it", "live query"]
         );
         assert_eq!(
-            prompts[0].1, now,
-            "the session prompt keeps its submission timestamp",
+            prompts.last().unwrap().1,
+            now,
+            "the session prompt is appended last and keeps its submission timestamp",
         );
     });
 }

@@ -10,7 +10,7 @@ use diesel::sqlite::SqliteConnection;
 use diesel::{Connection, ExpressionMethods, QueryDsl, RunQueryDsl};
 use diesel_migrations::MigrationHarness;
 
-use super::{read_nld_prompts_with_limit, upsert_ai_query_with_limit};
+use super::{read_prompt_history_with_limit, upsert_ai_query_with_limit};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentExchangeId, AIAgentInput, UserQueryMode};
 use crate::ai::blocklist::{AIQueryHistoryOutputStatus, PersistedAIInput, PersistedAIInputType};
@@ -167,7 +167,7 @@ fn make_empty_input_query() -> Arc<PersistedAIInput> {
 }
 
 #[test]
-fn read_nld_prompts_filters_empty_and_whitespace_inputs_newest_first() {
+fn read_prompt_history_filters_empty_and_whitespace_inputs_oldest_first() {
     let mut conn = test_connection();
 
     for query in [
@@ -179,26 +179,27 @@ fn read_nld_prompts_filters_empty_and_whitespace_inputs_newest_first() {
         upsert_ai_query_with_limit(&mut conn, query, 10).expect("upsert should succeed");
     }
 
-    let prompts = read_nld_prompts_with_limit(&mut conn, 10).expect("read should succeed");
+    let prompts = read_prompt_history_with_limit(&mut conn, 10).expect("read should succeed");
     let texts: Vec<&str> = prompts.iter().map(|(text, _)| text.as_str()).collect();
-    // `[]` and whitespace-only rows are dropped; the rest come back newest-first.
-    assert_eq!(texts, vec!["newer prompt", "older prompt"]);
+    // `[]` and whitespace-only rows are dropped; the rest come back oldest-first.
+    assert_eq!(texts, vec!["older prompt", "newer prompt"]);
 }
 
 #[test]
-fn read_nld_prompts_filters_empty_inputs_before_applying_limit() {
+fn read_prompt_history_filters_empty_inputs_before_applying_limit() {
     let mut conn = test_connection();
 
     // The newest row has an empty input. If the limit were applied before the filter, the
     // two-row window would be (empty, q1) and only "q1" would survive; filtering in SQL
-    // before the limit returns the two newest query-bearing rows instead.
+    // before the limit returns the two newest query-bearing rows instead. The result is then
+    // reversed to oldest-first.
     for query in [make_query("q0"), make_query("q1"), make_empty_input_query()] {
         upsert_ai_query_with_limit(&mut conn, query, 10).expect("upsert should succeed");
     }
 
-    let prompts = read_nld_prompts_with_limit(&mut conn, 2).expect("read should succeed");
+    let prompts = read_prompt_history_with_limit(&mut conn, 2).expect("read should succeed");
     let texts: Vec<&str> = prompts.iter().map(|(text, _)| text.as_str()).collect();
-    assert_eq!(texts, vec!["q1", "q0"]);
+    assert_eq!(texts, vec!["q0", "q1"]);
 }
 
 #[test]

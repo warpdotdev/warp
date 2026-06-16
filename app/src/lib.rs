@@ -1819,10 +1819,10 @@ pub(crate) fn initialize_app(
         let conversations = &multi_agent_conversations;
         ctx.add_singleton_model(move |_| {
             let history_model = BlocklistAIHistoryModel::new(ai_queries, conversations);
-            // Only wire NLD persisted prompts when the feature is enabled; disabled
+            // Only wire NLD prompt history when the feature is enabled; disabled
             // (stable/preview) builds skip this so they don't retain the prompt snapshot.
             if FeatureFlag::NldPromptHistoryMatch.is_enabled() {
-                history_model.with_nld_persisted_prompts(nld_prompts)
+                history_model.with_prompt_history(nld_prompts)
             } else {
                 history_model
             }
