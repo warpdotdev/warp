@@ -107,7 +107,7 @@ fn flatten_pending_imported_thread(
         ));
     }
 
-    let origin = CommentOrigin::ImportedFromGitHub(root.github_details_without_parent());
+    let origin = CommentOrigin::ImportedFromGitHub(Box::new(root.github_details_without_parent()));
 
     AttachedReviewComment {
         id: CommentId::new(),
