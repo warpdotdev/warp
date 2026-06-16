@@ -2502,9 +2502,21 @@ impl AppContext {
                         // of the actual work later.
                         window.request_redraw();
 
-                        // In tests, however, there's no real event loop, so we need to do the work now.
-                        // While this _shouldn't_ be necessary in integration tests, it currently is.
-                        if ctx.is_unit_test || cfg!(feature = "integration_tests") {
+                        // In unit tests there's no real event loop, so build_scene must be
+                        // called eagerly here so rendering keeps up with state changes.
+                        //
+                        // Integration tests run with a real winit/X11 event loop, so we do NOT
+                        // call build_scene eagerly here. Doing so in integration_tests mode
+                        // creates a tight render loop when running under Xvfb (headless):
+                        //   on_window_invalidated → build_scene → synthetic MouseMoved →
+                        //   view notifications → flush_effects → update_windows →
+                        //   on_window_invalidated → build_scene → ...
+                        // This loop keeps the main thread at 100% CPU and prevents
+                        // CustomEvent::RunTask events from being processed, which starves the
+                        // async executor. Async action callbacks (e.g., ReadFiles completions)
+                        // never fire, causing agent conversations to hang indefinitely.
+                        // The winit RedrawRequested event will drive rendering naturally.
+                        if ctx.is_unit_test {
                             ctx.build_scene(window_id, window.as_ctx());
                         }
                     }
