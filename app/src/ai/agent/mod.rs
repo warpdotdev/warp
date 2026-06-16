@@ -49,7 +49,7 @@ use crate::code_review::comments::{
     AttachedReviewComment as CodeReviewComment, ReviewCommentBatch,
 };
 use crate::search::slash_command_menu::static_commands::commands;
-use crate::server::server_api::{AIApiError, ClientError, DeserializationError};
+use crate::server::server_api::{AIApiError, DeserializationError};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::block_onboarding::onboarding_agentic_suggestions_block::OnboardingChipType;
@@ -671,8 +671,6 @@ pub enum RenderableAIError {
         waiting_for_network: bool,
         /// True when the error originates from a user-side issue (e.g., model not allowed,
         /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
-        /// Defaults to false for backward compatibility with persisted data that predates this field.
-        #[serde(default)]
         is_user_error: bool,
     },
 }
@@ -692,7 +690,6 @@ impl RenderableAIError {
             kind,
             will_attempt_resume,
             waiting_for_network,
-            is_user_error: false,
         }
     }
 
@@ -748,7 +745,7 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
         // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
         // are user-originating — map them to a user error so the task reaches FAILED
         // state rather than ERROR state.
-        let is_user_error = !value.is_retryable();
+        let is_user_error = !value.is_recoverable();
         match value.as_ref() {
             AIApiError::QuotaLimit {
                 user_display_message,
@@ -771,6 +768,7 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                         error_message: format!("Request failed with error: {value:?}"),
                         will_attempt_resume: false,
                         waiting_for_network: false,
+                        is_user_error,
                     }
                 }
             }
