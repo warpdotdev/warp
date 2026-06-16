@@ -264,6 +264,7 @@ pub trait AnyView {
         app: &mut AppContext,
         view_id: EntityId,
     );
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId>;
     fn self_or_child_interacted_with(
         &self,
         app: &mut AppContext,
@@ -352,6 +353,10 @@ where
     ) {
         let mut ctx = ViewContext::new(app, target_window_id, view_id);
         View::on_window_transferred(self, source_window_id, target_window_id, &mut ctx);
+    }
+
+    fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        View::child_view_ids(self, app)
     }
 
     fn keymap_context(&self, app: &AppContext) -> keymap::Context {
