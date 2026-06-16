@@ -724,6 +724,21 @@ impl TerminalDriver {
                     let _ = tx.send(reason.clone());
                 }
             }
+            crate::terminal::view::Event::Exited => {
+                // The shell process exited. If bootstrap hasn't completed yet
+                // it never will — cancel the wait immediately rather than
+                // sitting out the full 60 s timeout.
+                if !self.session_bootstrapped.is_set() {
+                    if let Some(tx) = self.spawn_failure_tx.take() {
+                        let _ = tx.send(
+                            "The shell process exited before the Warp bootstrap script \
+                             completed. Check any environment variables or secrets \
+                             configured for this run."
+                            .to_string(),
+                        );
+                    }
+                }
+            }
             crate::terminal::view::Event::SlowBootstrap => {
                 ctx.emit(TerminalDriverEvent::SlowBootstrap);
             }
