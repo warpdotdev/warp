@@ -140,7 +140,7 @@ fn other_user_error_is_failed_with_feature_not_available() {
             is_user_error: true,
         }),
         AgentTaskState::Failed,
-        Some(PlatformErrorCode::FeatureNotAvailable),
+        Some(PlatformErrorCode::InvalidRequest),
         Some("Model not allowed"),
     )
 }
