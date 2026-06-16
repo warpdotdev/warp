@@ -350,6 +350,7 @@ pub struct Tab {
     pub custom_title: Option<String>,
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
+    pub pinned: bool,
 }
 
 #[derive(Insertable)]
@@ -359,6 +360,7 @@ pub struct NewTab {
     pub custom_title: Option<String>,
     pub color: Option<String>,
     pub tab_group_id: Option<i32>,
+    pub pinned: bool,
 }
 
 /// Persisted form of a tab group. `name` is optional — untitled groups omit
@@ -372,6 +374,7 @@ pub struct TabGroup {
     pub name: Option<String>,
     pub color: Option<String>,
     pub collapsed: bool,
+    pub pinned: bool,
 }
 
 #[derive(Insertable)]
@@ -381,6 +384,7 @@ pub struct NewTabGroup {
     pub name: Option<String>,
     pub color: Option<String>,
     pub collapsed: bool,
+    pub pinned: bool,
 }
 
 /// The panes data model includes pane_nodes, pane_leaves and pane_branches.
