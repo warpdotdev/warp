@@ -192,13 +192,17 @@ impl PtySpawner {
                 "Failed to spawn pty via terminal server; falling back to spawning locally...",
             );
             if let Err(err) = result {
-                // E2BIG means the combined environment + argument block passed to execve
-                // exceeds the kernel's ARG_MAX limit. This is deterministic — retrying from
-                // the main process with the same PtyOptions would hit the same limit — so
-                // fail immediately with a diagnostic message instead of silently falling back
-                // and then waiting for the bootstrap timeout.
+                // Log env var names + sizes for any terminal server failure.
+                // Large env vars are the most common cause (E2BIG on Linux,
+                // socket overflow on macOS), so logging them on every failure
+                // makes both cases diagnosable from the logs.
+                log_env_var_diagnostics(&options.env_vars);
+
+                // E2BIG is deterministic — retrying from the main process with
+                // the same PtyOptions would hit the same limit — so fail
+                // immediately rather than silently falling back and waiting for
+                // the bootstrap timeout.
                 if is_e2big(&err) {
-                    log_e2big_env_diagnostics(&options.env_vars);
                     return Err(err.context(
                         "Shell spawn failed. This can happen when env vars or secrets are \
                          too long — check your image for excessively long environment \
@@ -299,15 +303,12 @@ fn is_e2big(err: &anyhow::Error) -> bool {
     msg.contains("os error 7") || msg.contains("Argument list too long")
 }
 
-/// Logs the names and byte-lengths (not values) of the env vars that are
-/// likely contributing to an E2BIG failure, to help diagnose oversized
-/// environment configurations in cloud runs.
+/// Logs the names and byte-lengths (not values) of env vars passed to the
+/// shell. Called on any terminal server failure to aid diagnosis of oversized
+/// env var / secret configurations (E2BIG on Linux, socket overflow on macOS).
 #[cfg(unix)]
-fn log_e2big_env_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
-    log::error!(
-        "Oversized env var diagnostics: shell spawn failed due to a large \
-         environment variable (E2BIG on Linux, socket overflow on macOS)."
-    );
+fn log_env_var_diagnostics(extra_env_vars: &HashMap<OsString, OsString>) {
+    log::error!("Shell spawn env var diagnostics (names and sizes only, no values):");
 
     // Log the additional env vars supplied via PtyOptions.
     let mut extra: Vec<(&OsString, usize)> = extra_env_vars
