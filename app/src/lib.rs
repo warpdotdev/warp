@@ -1821,7 +1821,7 @@ pub(crate) fn initialize_app(
             let history_model = BlocklistAIHistoryModel::new(ai_queries, conversations);
             // Only wire NLD persisted prompts when the feature is enabled; disabled
             // (stable/preview) builds skip this so they don't retain the prompt snapshot.
-            if cfg!(feature = "nld_prompt_history_match") {
+            if FeatureFlag::NldPromptHistoryMatch.is_enabled() {
                 history_model.with_nld_persisted_prompts(nld_prompts)
             } else {
                 history_model

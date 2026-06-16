@@ -772,7 +772,8 @@ impl BlocklistAIInputModel {
         });
 
         // Gather agent prompt history
-        let prompt_entries = cfg!(feature = "nld_prompt_history_match")
+        let prompt_entries = FeatureFlag::NldPromptHistoryMatch
+            .is_enabled()
             .then(|| BlocklistAIHistoryModel::as_ref(ctx).nld_prompt_history());
 
         let buffer_cloned = input.buffer_text.clone();

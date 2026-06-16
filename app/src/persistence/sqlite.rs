@@ -42,6 +42,7 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use persistence::model::AMBIENT_AGENT_PANE_KIND;
 use uuid::Uuid;
+use warp_core::features::FeatureFlag;
 use warpui::platform::FullscreenState;
 use warpui::windowing::{MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH};
 use warpui::{AppContext, SingletonEntity};
@@ -2749,8 +2750,9 @@ fn read_sqlite_data(
     let time_of_next_force_object_refresh = read_time_of_next_force_object_refresh(conn)?;
 
     let ai_queries = read_ai_queries(conn)?;
-    // Only read NLD prompt-history candidates when nld_prompt_history_match is enabled, 
-    let nld_prompts = cfg!(feature = "nld_prompt_history_match")
+    // Only read NLD prompt-history candidates when the prompt-history match feature is enabled.
+    let nld_prompts = FeatureFlag::NldPromptHistoryMatch
+        .is_enabled()
         .then(|| read_nld_prompts(conn))
         .transpose()?
         .unwrap_or_default();

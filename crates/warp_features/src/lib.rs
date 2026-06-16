@@ -883,6 +883,11 @@ pub enum FeatureFlag {
     /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
     /// route eliglible models to GEAP instead of Warp-managed inference.
     GeminiEnterprise,
+
+    /// Gates NLD input classification matching the buffer against agent
+    /// prompt history (in addition to shell command history). Still in
+    /// development, so enabled only for dev/dogfood builds.
+    NldPromptHistoryMatch,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -950,6 +955,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::NldPromptHistoryMatch,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
