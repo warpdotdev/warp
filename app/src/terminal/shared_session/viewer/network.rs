@@ -293,10 +293,6 @@ impl Network {
             }
             HeartbeatEvent::Idle => {
                 log::info!("Viewer reconnecting: heartbeat idle timeout");
-                // Close the old connection before reconnecting so the server
-                // sees WebsocketClosed immediately rather than waiting for its
-                // own 30 s idle timer to fire on the now-silent connection.
-                self.close();
                 self.reconnect_websocket(ctx);
             }
         }
@@ -360,13 +356,13 @@ impl Network {
             },
             |network, ctx| {
                 log::info!("Websocket to session sharing server ended");
-                // Close our current websocket proxy, because we may try to reconnect and that will create a new websocket proxy.
-                // This must be done before trying to reconnect.
-                network.close();
                 if matches!(network.stage, Stage::JoinedSuccessfully) {
                     // The connection may have timed out or the server restarted.
                     log::info!("Viewer reconnecting: websocket closed by server");
                     network.reconnect_websocket(ctx);
+                } else if !matches!(network.stage, Stage::Reconnecting { .. }) {
+                    // Not reconnecting — clean up the proxy channel.
+                    network.close();
                 }
             },
         );
@@ -460,6 +456,11 @@ impl Network {
         if matches!(self.stage, Stage::Finished | Stage::Reconnecting { .. }) {
             return;
         }
+        // Close the old connection before reconnecting so the server sees
+        // WebsocketClosed immediately rather than waiting for its own idle
+        // timer. Stage is guaranteed not Reconnecting here, so close() will
+        // not abort any in-progress reconnect handle.
+        self.close();
         let Some(event_loop) = self.event_loop.clone() else {
             log::error!("Cannot reconnect to server as viewer when event loop does not exist");
             return;
