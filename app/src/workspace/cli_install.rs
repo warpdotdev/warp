@@ -19,8 +19,12 @@ fn warpctrl_install_target_path() -> PathBuf {
 
 /// Compute the source path of the warpctrl wrapper inside the current app bundle.
 ///
-/// Warp Control needs the wrapper as its symlink source because the wrapper adds
-/// the hidden `--warpctrl` flag. Oz can symlink directly to the current executable.
+/// Oz commands are part of the shared executable's normal argument parser, so
+/// Oz can symlink directly to the current executable. Warp Control has a
+/// separate parser selected by the hidden `--warpctrl` flag, so its installed
+/// symlink must target the bundled wrapper that injects that flag. Without it,
+/// Warp Control subcommands such as `tab` would reach the normal parser and be
+/// rejected as unknown.
 fn warpctrl_bundle_source_path() -> Result<PathBuf> {
     let current_binary =
         std::env::current_exe().context("Failed to get current executable path")?;
@@ -175,7 +179,11 @@ fn uninstall_symlink(target: &Path, command_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Install the Oz CLI by creating a symlink in /usr/local/bin
+/// Install the Oz CLI by symlinking the shared Warp executable into /usr/local/bin.
+///
+/// The normal argument parser dispatches Oz subcommands directly. It also uses
+/// the `oz`-prefixed invocation name to print CLI help rather than launch the
+/// GUI when no subcommand is provided.
 pub fn install_oz() -> Result<()> {
     let oz_path = oz_install_target_path();
     let current_binary =
@@ -188,7 +196,12 @@ pub fn uninstall_oz() -> Result<()> {
     uninstall_symlink(&oz_install_target_path(), "Oz command")
 }
 
-/// Install the Warp Control CLI by creating a symlink in /usr/local/bin
+/// Install Warp Control by symlinking its bundled wrapper into /usr/local/bin.
+///
+/// The wrapper contains no control implementation. It resolves this installed
+/// symlink back into the app bundle, launches the shared Warp executable, and
+/// injects `--warpctrl` so startup selects the separate Warp Control parser
+/// before normal parsing or GUI startup.
 pub fn install_warpctrl() -> Result<()> {
     let warpctrl_path = warpctrl_install_target_path();
     let warpctrl_source = warpctrl_bundle_source_path()?;
