@@ -256,12 +256,19 @@ pub fn jj_bookmark() -> ShellCommandGenerator {
 }
 
 /// Generator function that shows the number of uncommitted jj files.
+///
+/// Note: unlike `jj_bookmark`, this command intentionally omits `--ignore-working-copy`
+/// so that `jj diff` snapshots the current filesystem state before computing the diff.
+/// Without the snapshot, the dirty count would reflect only what was committed at the
+/// last `jj` invocation and would miss edits made since. Snapshotting on prompt render
+/// is acceptable because jj is designed for frequent snapshots and the operation log
+/// entries are cheap.
 pub fn jj_dirty_items() -> ShellCommandGenerator {
     const SH_DIRTY_CMD: &str =
-        "count=$(jj diff --summary --ignore-working-copy 2>/dev/null | wc -l) && [ \"$count\" -gt 0 ] && echo \"$count\"";
-    const FISH_DIRTY_CMD: &str = "set count (jj diff --summary --ignore-working-copy 2>/dev/null | wc -l) \
+        "count=$(jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') && [ \"$count\" -gt 0 ] && echo \"$count\"";
+    const FISH_DIRTY_CMD: &str = "set count (jj diff --summary 2>/dev/null | grep -cE '^[AMD] ') \
         && test $count -gt 0 && string trim $count";
-    const PWSH_DIRTY_CMD: &str = "jj diff --summary --ignore-working-copy 2>$null | Measure-Object -Line | Where-Object { $_.Lines -gt 0 } | ForEach-Object { $_.Lines }";
+    const PWSH_DIRTY_CMD: &str = "$count = (jj diff --summary 2>$null | Select-String -Pattern '^[AMD] ').Count; if ($count -gt 0) { $count }";
     let command = ShellCommand::shell_specific([
         (ShellType::Bash, SH_DIRTY_CMD.to_string()),
         (ShellType::Zsh, SH_DIRTY_CMD.to_string()),
