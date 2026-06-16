@@ -14,10 +14,6 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_in_flight: false,
-        #[cfg(not(target_family = "wasm"))]
-        grok_manual_code_exchange: None,
-        #[cfg(not(target_family = "wasm"))]
-        grok_loopback_in_progress: false,
         aws_credentials_state: AwsCredentialsState::Missing,
         aws_credentials_refresh_strategy: AwsCredentialsRefreshStrategy::default(),
         secure_storage_write_version: 0,

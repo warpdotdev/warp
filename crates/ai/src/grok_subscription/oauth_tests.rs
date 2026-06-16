@@ -44,8 +44,6 @@ fn manual_code_exchange_captures_attempt_verifier() {
     let exchange = ManualCodeExchange {
         verifier: pkce.verifier.clone(),
     };
-    // The fallback must reuse the originating attempt's verifier so the pasted
-    // code (bound to that attempt's PKCE challenge) can be exchanged.
     assert_eq!(exchange.verifier, pkce.verifier);
 }
 
@@ -54,8 +52,6 @@ fn manual_code_exchange_rejects_blank_code() {
     let exchange = ManualCodeExchange {
         verifier: "verifier".to_string(),
     };
-    // A blank/whitespace-only code is rejected before any network request, so
-    // this resolves without touching xAI's token endpoint.
     let result = warpui_core::r#async::block_on(exchange.exchange("   "));
     assert!(result.is_err());
 }
