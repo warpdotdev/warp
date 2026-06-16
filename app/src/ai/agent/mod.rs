@@ -638,10 +638,9 @@ impl AIAgentOutput {
 }
 
 /// Represents user visible errors.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub enum RenderableAIError {
     QuotaLimit {
-        #[serde(default)]
         user_display_message: Option<String>,
     },
     ServerOverloaded,
@@ -655,10 +654,10 @@ pub enum RenderableAIError {
         model_name: String,
     },
     /// A transient network failure (lost connection or truncated response stream). Carries its
-    /// own complete user-facing copy; `debug_details` preserves the raw underlying error so user
-    /// reports can disambiguate the different causes behind the shared message.
+    /// own complete user-facing copy; `kind` preserves the structured cause (including the raw
+    /// API error) so user reports can disambiguate the different causes behind the shared message.
     TransientNetworkError {
-        debug_details: String,
+        kind: TransientNetworkErrorKind,
         will_attempt_resume: bool,
         /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
         /// connectivity before attempting the resume.
@@ -676,16 +675,16 @@ pub enum RenderableAIError {
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
-    /// Creates a transient network error. `debug_details` is the raw underlying failure (e.g.
-    /// the transport error's debug representation), preserved so user reports can disambiguate
-    /// the different causes behind the shared user-facing copy.
+    /// Creates a transient network error. `kind` is the structured cause (including the raw API
+    /// error where one exists), preserved so user reports can disambiguate the different causes
+    /// behind the shared user-facing copy.
     pub fn transient_network_error(
         will_attempt_resume: bool,
         waiting_for_network: bool,
-        debug_details: impl Into<String>,
+        kind: TransientNetworkErrorKind,
     ) -> Self {
         Self::TransientNetworkError {
-            debug_details: debug_details.into(),
+            kind,
             will_attempt_resume,
             waiting_for_network,
         }
@@ -720,9 +719,38 @@ impl RenderableAIError {
     }
 }
 
-impl From<&AIApiError> for RenderableAIError {
-    fn from(value: &AIApiError) -> Self {
-        match value {
+/// The cause behind a [`RenderableAIError::TransientNetworkError`]. Kept structured (rather than
+/// collapsed to a free-form string) so user reports preserve the raw error; rendered to text only
+/// at display time.
+#[derive(Clone, Debug)]
+pub enum TransientNetworkErrorKind {
+    /// A lost connection or truncated response stream — the raw underlying API error.
+    Api(Arc<AIApiError>),
+    /// The response stream completed with an unfinished exchange and no error event.
+    UnfinishedExchange,
+    /// The conversation was left in a transient-error state but the last exchange carried no
+    /// structured error to surface.
+    MissingExchangeError,
+}
+
+impl Display for TransientNetworkErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Api(error) => write!(f, "{error:?}"),
+            Self::UnfinishedExchange => {
+                write!(
+                    f,
+                    "stream completed with an unfinished exchange and no error event"
+                )
+            }
+            Self::MissingExchangeError => write!(f, "no structured error on the last exchange"),
+        }
+    }
+}
+
+impl From<&Arc<AIApiError>> for RenderableAIError {
+    fn from(value: &Arc<AIApiError>) -> Self {
+        match value.as_ref() {
             AIApiError::QuotaLimit {
                 user_display_message,
             } => Self::QuotaLimit {
@@ -733,11 +761,17 @@ impl From<&AIApiError> for RenderableAIError {
             | AIApiError::Deserialization(DeserializationError::Transport(error))
                 if Self::is_transient_network_transport_error(error) =>
             {
-                Self::transient_network_error(false, false, format!("{value:?}"))
+                Self::transient_network_error(
+                    false,
+                    false,
+                    TransientNetworkErrorKind::Api(value.clone()),
+                )
             }
-            AIApiError::StreamTruncated => {
-                Self::transient_network_error(false, false, format!("{value:?}"))
-            }
+            AIApiError::StreamTruncated => Self::transient_network_error(
+                false,
+                false,
+                TransientNetworkErrorKind::Api(value.clone()),
+            ),
             _ => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
@@ -775,10 +809,10 @@ impl Display for RenderableAIError {
                     "AWS Bedrock credentials expired or invalid for {model_name}"
                 )
             }
-            Self::TransientNetworkError { debug_details, .. } => {
+            Self::TransientNetworkError { kind, .. } => {
                 write!(
                     f,
-                    "{}\n\nDebug info: {debug_details}",
+                    "{}\n\nDebug info: {kind}",
                     Self::TRANSIENT_NETWORK_ERROR_MESSAGE
                 )
             }

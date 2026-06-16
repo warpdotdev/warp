@@ -12,7 +12,7 @@ use super::{
     task_update_for_conversation_error, LocalAgentTaskSyncModel,
 };
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
-use crate::ai::agent::RenderableAIError;
+use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ai::{AIClient, MockAIClient, TaskStatusUpdate};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionStatus, CLIAgentSessionsModel};
@@ -131,11 +131,11 @@ fn transient_network_error_is_error_with_internal_and_debug_details() {
         classify_renderable_error(&RenderableAIError::transient_network_error(
             false,
             false,
-            "connection reset",
+            TransientNetworkErrorKind::UnfinishedExchange,
         )),
         AgentTaskState::Error,
         Some(PlatformErrorCode::InternalError),
-        Some("Debug info: connection reset"),
+        Some("Debug info: stream completed with an unfinished exchange"),
     );
 }
 

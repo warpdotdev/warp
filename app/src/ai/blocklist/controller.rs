@@ -49,7 +49,7 @@ use crate::ai::agent::{
     CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
     FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
     PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
-    StaticQueryType, UserQueryMode,
+    StaticQueryType, TransientNetworkErrorKind, UserQueryMode,
 };
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
@@ -2785,7 +2785,7 @@ impl BlocklistAIController {
                         let recovery_pending = response_stream
                             .as_ref(ctx)
                             .should_resume_conversation_after_stream_finished();
-                        let mut renderable_error: RenderableAIError = e.as_ref().into();
+                        let mut renderable_error: RenderableAIError = (&e).into();
                         if let RenderableAIError::Other {
                             will_attempt_resume,
                             waiting_for_network,
@@ -2929,7 +2929,7 @@ impl BlocklistAIController {
                             RenderableAIError::transient_network_error(
                                 false,
                                 false,
-                                "stream completed with an unfinished exchange and no error event",
+                                TransientNetworkErrorKind::UnfinishedExchange,
                             ),
                             /*recovery_pending*/ false,
                             &stream_id,
