@@ -8062,7 +8062,7 @@ impl ApiKeysWidget {
                     .finish(),
             )
             .with_child(
-                ConstrainedBox::new(Icon::XLogo.to_warpui_icon(text_color.into()).finish())
+                ConstrainedBox::new(Icon::XLogo.to_warpui_icon(text_color).finish())
                     .with_width(14.)
                     .with_height(14.)
                     .finish(),
