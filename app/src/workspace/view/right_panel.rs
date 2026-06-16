@@ -30,7 +30,7 @@ use crate::code_review::code_review_header::HEADER_BUTTON_PADDING;
 use crate::code_review::code_review_view::CodeReviewAction;
 use crate::code_review::code_review_view::{
     render_file_navigation_button, CodeReviewCommentDebugState, CodeReviewView,
-    CodeReviewViewEvent, CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN,
+    CodeReviewViewEvent, ReviewActionTargetProvider, CONTENT_LEFT_MARGIN, CONTENT_RIGHT_MARGIN,
 };
 use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::telemetry_event::CodeReviewContextDestination;
@@ -115,6 +115,64 @@ struct ReviewTerminalStatus {
 impl ReviewTerminalStatus {
     fn is_available(&self) -> bool {
         self.unavailable_reasons.is_empty()
+    }
+}
+
+/// `ReviewActionTargetProvider` backed by the right panel's active pane group,
+/// so code review actions resolve their target terminal at action time instead
+/// of using a handle captured when the review view was created.
+struct RightPanelReviewActionTargetProvider {
+    right_panel: WeakViewHandle<RightPanelView>,
+}
+
+impl ReviewActionTargetProvider for RightPanelReviewActionTargetProvider {
+    fn attach_terminal(
+        &self,
+        repo_path: &LocalOrRemotePath,
+        app: &AppContext,
+    ) -> Option<ViewHandle<TerminalView>> {
+        let right_panel = self.right_panel.upgrade(app)?;
+        right_panel.read(app, |panel, app| {
+            let pane_group = panel.active_pane_group.as_ref()?;
+            let ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+            panel
+                .find_review_terminal(pane_group, repo_path, ai_enabled, app)
+                .or_else(|| {
+                    // No terminal is available (e.g. all candidates are
+                    // executing). Fall back to the focused terminal when it is
+                    // inside the repo, so per-action handling for busy
+                    // terminals still targets the focused conversation.
+                    let focused = pane_group
+                        .read(app, |pane_group, app| pane_group.focused_session_view(app))?;
+                    let status = RightPanelView::review_terminal_status(
+                        &focused,
+                        Some(repo_path),
+                        ai_enabled,
+                        app,
+                    );
+                    let in_repo = !status.unavailable_reasons.iter().any(|reason| {
+                        matches!(
+                            reason,
+                            ReviewTerminalUnavailableReason::NoSelectedRepo
+                                | ReviewTerminalUnavailableReason::SessionPathUnavailable
+                                | ReviewTerminalUnavailableReason::SessionOutsideSelectedRepo
+                        )
+                    });
+                    in_repo.then_some(focused)
+                })
+        })
+    }
+
+    fn focused_terminal(&self, app: &AppContext) -> Option<ViewHandle<TerminalView>> {
+        let right_panel = self.right_panel.upgrade(app)?;
+        right_panel.read(app, |panel, app| {
+            let pane_group = panel.active_pane_group.as_ref()?;
+            pane_group.read(app, |pane_group, app| {
+                pane_group
+                    .focused_session_view(app)
+                    .or_else(|| pane_group.active_session_view(app))
+            })
+        })
     }
 }
 
@@ -650,7 +708,6 @@ impl RightPanelView {
         &mut self,
         repo_path: Option<LocalOrRemotePath>,
         diff_state_model: ModelHandle<DiffStateModel>,
-        terminal_view: WeakViewHandle<TerminalView>,
         ctx: &mut ViewContext<Self>,
     ) {
         let Some(repo_dropdown_state) = &mut self.code_review_state else {
@@ -675,17 +732,12 @@ impl RightPanelView {
             .get_code_review_view(pane_group_id, repo_path);
         if let Some(view) = existing_view {
             view.update(ctx, |view, ctx| {
-                view.set_terminal_view(terminal_view);
                 view.on_open(ctx);
             });
             self.recompute_terminal_availability(ctx);
-        } else if let Some(view) = self.create_code_review_view(
-            repo_path,
-            diff_state_model.clone(),
-            pane_group_id,
-            terminal_view.clone(),
-            ctx,
-        ) {
+        } else if let Some(view) =
+            self.create_code_review_view(repo_path, diff_state_model.clone(), pane_group_id, ctx)
+        {
             view.update(ctx, |view, ctx| {
                 view.on_open(ctx);
             });
@@ -1157,7 +1209,6 @@ impl RightPanelView {
         repo_path: &LocalOrRemotePath,
         diff_state_model: ModelHandle<DiffStateModel>,
         pane_group_id: EntityId,
-        terminal_view: WeakViewHandle<TerminalView>,
         ctx: &mut ViewContext<Self>,
     ) -> Option<ViewHandle<CodeReviewView>> {
         // Early check: if pane group has no active repositories, don't create a view.
@@ -1182,12 +1233,16 @@ impl RightPanelView {
                 .update(ctx, |working_directories, ctx| {
                     working_directories.get_or_create_code_review_comments(repo_path, ctx)
                 });
+        let action_target_provider: Box<dyn ReviewActionTargetProvider> =
+            Box::new(RightPanelReviewActionTargetProvider {
+                right_panel: ctx.handle(),
+            });
         let code_review_view = ctx.add_typed_action_view(|ctx| {
             CodeReviewView::new(
                 Some(repo_path.clone()),
                 diff_state_model_clone,
                 code_review_comment_batch,
-                Some(terminal_view),
+                Some(action_target_provider),
                 ctx,
             )
         });
@@ -1695,7 +1750,10 @@ impl RightPanelView {
                 .most_recent_repositories_for_pane_group(pane_group_id)
                 .is_some_and(|mut repos| repos.any(|r| &r == repo_path));
 
-            let terminal_view = if is_known_repo {
+            // Only create a view when a terminal exists for the repo. The view
+            // resolves its target terminal lazily via `ReviewActionTargetProvider`,
+            // so this is purely a creation gate.
+            let has_review_terminal = if is_known_repo {
                 let Some(terminal_view_id) = self
                     .working_directories_model
                     .as_ref(ctx)
@@ -1704,20 +1762,19 @@ impl RightPanelView {
                     return;
                 };
                 ctx.view_with_id::<TerminalView>(ctx.window_id(), terminal_view_id)
+                    .is_some()
             } else {
                 // For repos not yet tracked (e.g. remote repos from direct open),
                 // fall back to the active session.
-                pane_group.read(ctx, |pane_group, ctx| pane_group.active_session_view(ctx))
+                pane_group
+                    .read(ctx, |pane_group, ctx| pane_group.active_session_view(ctx))
+                    .is_some()
             };
 
-            if let Some(terminal_view) = terminal_view {
-                if let Some(view) = self.create_code_review_view(
-                    repo_path,
-                    diff_state_model,
-                    pane_group_id,
-                    terminal_view.downgrade(),
-                    ctx,
-                ) {
+            if has_review_terminal {
+                if let Some(view) =
+                    self.create_code_review_view(repo_path, diff_state_model, pane_group_id, ctx)
+                {
                     if is_panel_open {
                         view.update(ctx, |view, ctx| {
                             view.on_open(ctx);

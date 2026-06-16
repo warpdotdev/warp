@@ -13,7 +13,7 @@ use ai::agent::action::{
     RequestComputerUseRequest, SuggestPromptRequest, UploadArtifactRequest, UseComputerRequest,
 };
 use ai::agent::file_locations::group_file_contexts_for_display;
-use ai::skills::SkillReference;
+use ai::skills::{ParsedSkill, SkillReference};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
@@ -1723,6 +1723,21 @@ pub fn render_read_files_text<A: Action>(
     formatted_files
 }
 
+/// Returns the display text for a `read_skill` action.
+///
+/// When the skill is found in the manager, formats it as a slash command
+/// (e.g. `/hello-world`). When the skill is unknown, falls back to the
+/// raw reference string (e.g. the path) **without** prepending an extra
+/// `/`, which would otherwise produce paths like `//home/user/…`.
+fn read_skill_display_text(
+    skill: Option<&ParsedSkill>,
+    skill_reference: &SkillReference,
+) -> String {
+    skill
+        .map(|s| format!("/{}", s.name))
+        .unwrap_or_else(|| skill_reference.to_string())
+}
+
 fn render_read_skill(
     props: Props,
     id: &AIAgentActionId,
@@ -1732,12 +1747,8 @@ fn render_read_skill(
     let appearance = Appearance::as_ref(app);
     let skill = SkillManager::as_ref(app).skill_by_reference(skill_reference);
 
-    let display_name = skill
-        .map(|skill| skill.name.clone())
-        .unwrap_or_else(|| skill_reference.to_string());
-
     let formatted_text = render_requested_action_body_text(
-        format!("/{display_name}").into(),
+        read_skill_display_text(skill, skill_reference).into(),
         appearance.monospace_font_family(),
         app,
     );
@@ -1749,27 +1760,29 @@ fn render_read_skill(
     // Renders the 'open skill' button for known, non-bundled skills.
     if let Some(skill) = skill {
         if !skill.is_bundled() {
-            let source = CodeSource::Skill {
-                reference: skill_reference.clone(),
-                location: skill.path.clone(),
-                origin: SkillOpenOrigin::ReadSkill,
-            };
+            if let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
+                let source = CodeSource::Skill {
+                    reference: skill_reference.clone(),
+                    location: skill.path.clone(),
+                    origin: SkillOpenOrigin::ReadSkill,
+                };
 
-            let skill_icon_override = icon_override_for_skill_name(&skill.name);
-            let open_button = render_skill_button(
-                "Open skill",
-                props.state_handles.open_skill_button_handle.clone(),
-                appearance,
-                skill.provider,
-                skill_icon_override,
-                move |ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                        source: source.clone(),
-                    });
-                },
-            );
+                let skill_icon_override = icon_override_for_skill_name(&skill.name);
+                let open_button = render_skill_button(
+                    "Open skill",
+                    button_handle,
+                    appearance,
+                    skill.provider,
+                    skill_icon_override,
+                    move |ctx| {
+                        ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                            source: source.clone(),
+                        });
+                    },
+                );
 
-            renderable_action = renderable_action.with_action_button(open_button);
+                renderable_action = renderable_action.with_action_button(open_button);
+            }
         }
     }
 
@@ -1851,28 +1864,30 @@ fn render_read_files(
 
     // Renders the 'open skill' button if all files belong to the same skill directory.
     if let Some(skill) = parsed_skill {
-        let reference = SkillManager::handle(app)
-            .as_ref(app)
-            .reference_for_skill_path(&skill.path);
-        let source = CodeSource::Skill {
-            reference,
-            location: skill.path.clone(),
-            origin: SkillOpenOrigin::ReadFiles,
-        };
-        let skill_icon_override = icon_override_for_skill_name(&skill.name);
-        let open_button = render_skill_button(
-            &format!("/{}", skill.name),
-            props.state_handles.read_from_skill_button_handle.clone(),
-            appearance,
-            skill.provider,
-            skill_icon_override,
-            move |ctx| {
-                ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
-                    source: source.clone(),
-                });
-            },
-        );
-        renderable_action = renderable_action.with_action_button(open_button);
+        if let Some(button_handle) = props.state_handles.skill_button_handles.get(id).cloned() {
+            let reference = SkillManager::handle(app)
+                .as_ref(app)
+                .reference_for_skill_path(&skill.path);
+            let source = CodeSource::Skill {
+                reference,
+                location: skill.path.clone(),
+                origin: SkillOpenOrigin::ReadFiles,
+            };
+            let skill_icon_override = icon_override_for_skill_name(&skill.name);
+            let open_button = render_skill_button(
+                &format!("/{}", skill.name),
+                button_handle,
+                appearance,
+                skill.provider,
+                skill_icon_override,
+                move |ctx| {
+                    ctx.dispatch_typed_action(AIBlockAction::OpenCodeInWarp {
+                        source: source.clone(),
+                    });
+                },
+            );
+            renderable_action = renderable_action.with_action_button(open_button);
+        }
     }
 
     renderable_action.render(app).finish()

@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{ParsedSkill, SKILL_PROVIDER_DEFINITIONS};
 use anyhow::{anyhow, Context as _};
 use futures::channel::oneshot;
@@ -47,6 +48,7 @@ use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
     conversation_output_status_from_conversation, AmbientAgentTaskId, AmbientConversationStatus,
 };
+use crate::ai::bedrock_credentials;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
@@ -103,6 +105,50 @@ pub(crate) mod terminal;
 use environment::PrepareEnvironmentError;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;
+
+/// Races `run_future` against optional background credential refresh loops,
+/// dropping the loops automatically when `run_future` resolves.
+///
+/// Both refresh loops run forever when active; they are dropped when
+/// `futures::select!` picks the `run_future` arm. This consolidates the
+/// otherwise-repeated 4-arm `match (git, bedrock)` pattern that would
+/// otherwise appear once per harness type.
+async fn with_credential_refreshes<F, T>(
+    run_future: F,
+    git_task_id: Option<String>,
+    ai_client: Arc<dyn AIClient>,
+    oidc_strategy: Option<(String, String, String)>,
+    foreground: &ModelSpawner<AgentDriver>,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    let git_refresh = async move {
+        match git_task_id {
+            Some(task_id) => git_credentials::refresh_loop(task_id, ai_client).await,
+            None => future::pending::<()>().await,
+        }
+    }
+    .fuse();
+
+    let bedrock_refresh = async move {
+        match oidc_strategy {
+            Some((task_id, role_arn, region)) => {
+                bedrock_credentials::refresh_loop(task_id, role_arn, region, foreground).await
+            }
+            None => future::pending::<()>().await,
+        }
+    }
+    .fuse();
+
+    let run_future = run_future.fuse();
+    futures::pin_mut!(run_future, git_refresh, bedrock_refresh);
+    futures::select! {
+        result = run_future => result,
+        _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
+        _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+    }
+}
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
@@ -2071,7 +2117,7 @@ impl AgentDriver {
                 .await;
         }
 
-        let (task_id_for_refresh, ai_client_for_refresh) = foreground
+        let (task_id_for_refresh, ai_client_for_refresh, oidc_strategy_for_refresh) = foreground
             .spawn(|me, ctx| {
                 let task_id = if FeatureFlag::GitCredentialRefresh.is_enabled() {
                     me.task_id.map(|id| id.to_string())
@@ -2079,36 +2125,48 @@ impl AgentDriver {
                     None
                 };
                 let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
-                (task_id, ai_client)
+                // Capture OidcManaged strategy parameters for the proactive Bedrock credential
+                // refresh loop. Only populated when Bedrock OIDC inference is configured.
+                let oidc_strategy = match ApiKeyManager::handle(ctx)
+                    .as_ref(ctx)
+                    .aws_credentials_refresh_strategy()
+                {
+                    AwsCredentialsRefreshStrategy::OidcManaged {
+                        task_id,
+                        role_arn,
+                        region,
+                    } => task_id
+                        .as_ref()
+                        .map(|tid| (tid.clone(), role_arn.clone(), region.clone())),
+                    AwsCredentialsRefreshStrategy::LocalChain => None,
+                };
+                (task_id, ai_client, oidc_strategy)
             })
             .await?;
 
-        // Run the harness with a prompt, racing it against an infinite git-credentials
-        // refresh loop. The refresh future never resolves on its own — it is dropped
-        // automatically when `select!` resolves on the harness result.
+        // Run the harness with a prompt, racing it against optional background refresh
+        // loops for git credentials and Bedrock OIDC credentials via
+        // `with_credential_refreshes`. Refresh futures never resolve on their own —
+        // they are dropped automatically when the harness result resolves.
         match task.harness {
             HarnessKind::Oz => {
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
 
-                let conversation_status = if let Some(task_id) = task_id_for_refresh {
-                    let refresh =
-                        git_credentials::refresh_loop(task_id, ai_client_for_refresh).fuse();
-                    futures::pin_mut!(refresh);
-                    futures::select! {
-                        result = status_rx.fuse() => result.map_err(|_| {
+                let conversation_status = with_credential_refreshes(
+                    async move {
+                        status_rx.await.map_err(|_| {
                             log::error!("Subscription dropped before agent finished");
                             AgentDriverError::InvalidRuntimeState
-                        })?,
-                        _ = refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
-                    }
-                } else {
-                    status_rx.await.map_err(|_| {
-                        log::error!("Subscription dropped before agent finished");
-                        AgentDriverError::InvalidRuntimeState
-                    })?
-                };
+                        })
+                    },
+                    task_id_for_refresh,
+                    ai_client_for_refresh,
+                    oidc_strategy_for_refresh,
+                    &foreground,
+                )
+                .await?;
 
                 log::info!(
                     "Ambient agent Oz lifecycle: event=run_exit_received idle_on_complete_elapsed_or_not_configured=true next=terminal_teardown_after_flush"
@@ -2143,32 +2201,20 @@ impl AgentDriver {
                     .await?;
                 let runtime_error_patterns = harness.runtime_error_patterns();
 
-                if let Some(task_id) = task_id_for_refresh {
-                    let harness_fut = Self::run_harness(
-                        runner,
-                        runtime_error_patterns,
-                        &foreground,
-                        harness_exit_rx,
-                        &setup_events,
-                    )
-                    .fuse();
-                    let refresh =
-                        git_credentials::refresh_loop(task_id, ai_client_for_refresh).fuse();
-                    futures::pin_mut!(harness_fut, refresh);
-                    futures::select! {
-                        result = harness_fut => result,
-                        _ = refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
-                    }
-                } else {
+                with_credential_refreshes(
                     Self::run_harness(
                         runner,
                         runtime_error_patterns,
                         &foreground,
                         harness_exit_rx,
                         &setup_events,
-                    )
-                    .await
-                }
+                    ),
+                    task_id_for_refresh,
+                    ai_client_for_refresh,
+                    oidc_strategy_for_refresh,
+                    &foreground,
+                )
+                .await
             }
             HarnessKind::Unsupported(harness) => Err(AgentDriverError::HarnessSetupFailed {
                 harness: harness.to_string(),

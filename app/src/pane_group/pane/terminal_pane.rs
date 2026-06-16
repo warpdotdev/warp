@@ -2180,13 +2180,21 @@ fn handle_ai_history_event(
                 return;
             }
 
+            // Only query-bearing inputs (e.g. user queries) are persisted for
+            // up-arrow history. Early return and skip writing for exchanges that
+            // carry empty input.
+            let inputs: Vec<_> = exchange
+                .input
+                .iter()
+                .filter_map(|input| PersistedAIInputType::try_from(input).ok())
+                .collect();
+            if inputs.is_empty() {
+                return;
+            }
+
             let persisted_query = PersistedAIInput {
                 start_ts: exchange.start_time,
-                inputs: exchange
-                    .input
-                    .iter()
-                    .filter_map(|input| PersistedAIInputType::try_from(input).ok())
-                    .collect(),
+                inputs,
                 exchange_id: exchange.id,
                 conversation_id: *conversation_id,
                 output_status: AIQueryHistoryOutputStatus::from(&exchange.output_status),

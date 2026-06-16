@@ -14,7 +14,6 @@ pub(crate) mod prompt_suggestions;
 mod session_state;
 mod shared_sessions;
 mod shell_process_terminated;
-mod ssh;
 mod vim_mode;
 
 pub use agent_mode_setup::*;
@@ -30,7 +29,6 @@ use pathfinder_color::ColorU;
 pub use session_state::*;
 pub use shared_sessions::*;
 pub use shell_process_terminated::*;
-pub use ssh::*;
 pub use vim_mode::*;
 use warpui::elements::{
     Align, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Icon,
