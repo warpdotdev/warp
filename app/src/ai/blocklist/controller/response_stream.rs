@@ -555,6 +555,10 @@ pub enum ResponseStreamEvent {
     /// A retry is parked until connectivity returns (`waiting: true`) or has just
     /// fired (`waiting: false`). The controller mirrors this on the conversation
     /// status (`TransientError` ↔ `InProgress`).
+    ///
+    /// Only emitted from `defer_retry_until_online`, i.e. always after a recoverable
+    /// request failure while offline — never speculatively before an attempt. Consumers
+    /// can therefore treat `waiting: true` as a transient-error (reconnecting) state.
     WaitingForNetwork {
         waiting: bool,
     },

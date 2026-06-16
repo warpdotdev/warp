@@ -2827,6 +2827,9 @@ impl BlocklistAIController {
                 };
                 // Mirror the parked-retry state on the conversation: TransientError while
                 // waiting for connectivity, back to InProgress when the retry fires.
+                // This event is only emitted after a recoverable request failure parks a
+                // retry while offline (see `defer_retry_until_online`), so treating
+                // `waiting` as a transient-error state is always correct here.
                 let status = if *waiting {
                     ConversationStatus::TransientError
                 } else {
