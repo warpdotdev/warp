@@ -214,42 +214,6 @@ static NSView *get_titlebar_container_view(NSWindow *window) {
     return [titleBarView superview];
 }
 
-static NSButton *standard_window_button_at_event(NSWindow *window, NSEvent *event) {
-    NSWindowButton buttons[] = {
-        NSWindowCloseButton,
-        NSWindowMiniaturizeButton,
-        NSWindowZoomButton,
-    };
-
-    for (NSUInteger i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
-        NSButton *button = [window standardWindowButton:buttons[i]];
-        if (button && !button.hidden) {
-            NSPoint point = [button convertPoint:event.locationInWindow fromView:nil];
-            if (NSPointInRect(point, button.bounds)) {
-                return button;
-            }
-        }
-    }
-
-    return nil;
-}
-
-static BOOL event_is_over_resize_edge(NSWindow *window, NSEvent *event) {
-    if ((window.styleMask & NSWindowStyleMaskResizable) == 0 || !window.contentView) {
-        return NO;
-    }
-
-    NSPoint point = [window.contentView convertPoint:event.locationInWindow fromView:nil];
-    NSRect bounds = window.contentView.bounds;
-    if (!NSPointInRect(point, bounds)) {
-        return YES;
-    }
-
-    static const CGFloat RESIZE_EDGE_THICKNESS = 6.0;
-    return point.x <= RESIZE_EDGE_THICKNESS || point.y <= RESIZE_EDGE_THICKNESS ||
-           point.x >= NSMaxX(bounds) - RESIZE_EDGE_THICKNESS ||
-           point.y >= NSMaxY(bounds) - RESIZE_EDGE_THICKNESS;
-}
 
 // Configures titlebar height and traffic light button constraints for a window.
 // Returns the height constraint if newly created, or NULL if just updating.
@@ -353,6 +317,15 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     }
 }
 
+@interface NSWindow (PrivateAPI)
+- (NSInteger)_resizeDirectionForMouseLocation:(NSPoint)location;
+@end
+
+@interface WarpWindow ()
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event;
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event;
+@end
+
 @implementation WarpWindow {
     // The windowState is managed on the Rust side.
     void *windowState;
@@ -439,16 +412,46 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     return [super constrainFrameRect:frameRect toScreen:screen];
 }
 
+- (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event {
+    NSWindowButton buttons[] = {
+        NSWindowCloseButton,
+        NSWindowMiniaturizeButton,
+        NSWindowZoomButton,
+    };
+
+    for (NSUInteger i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
+        NSButton *button = [self standardWindowButton:buttons[i]];
+        if (button && !button.hidden) {
+            NSPoint point = [button convertPoint:event.locationInWindow fromView:nil];
+            if (NSPointInRect(point, button.bounds)) {
+                return button;
+            }
+        }
+    }
+
+    return nil;
+}
+
+- (BOOL)eventIsOverResizeEdge:(NSEvent *)event {
+    if ((self.styleMask & NSWindowStyleMaskResizable) == 0) {
+        return NO;
+    }
+    if ([self respondsToSelector:@selector(_resizeDirectionForMouseLocation:)]) {
+        return [self _resizeDirectionForMouseLocation:event.locationInWindow] != -1;
+    }
+    return NO;
+}
+
 - (void)sendEvent:(NSEvent *)event {
     switch (event.type) {
         case NSEventTypeLeftMouseDown: {
-            NSButton *windowButton = standard_window_button_at_event(self, event);
+            NSButton *windowButton = [self standardWindowButtonAtEvent:event];
             if (windowButton) {
                 _leftMouseDownStartedInNativeWindowChrome = NO;
                 [windowButton mouseDown:event];
                 break;
             }
-            _leftMouseDownStartedInNativeWindowChrome = event_is_over_resize_edge(self, event);
+            _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
             [super sendEvent:event];
             break;
         }
@@ -462,7 +465,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
         // custom dispatching.
         case NSEventTypeLeftMouseUp:
-            if (_leftMouseDownStartedInNativeWindowChrome) {
+            if (_leftMouseDownStartedInNativeWindowChrome && @available(macOS 27, *)) {
                 [super sendEvent:event];
             } else {
                 [self.contentView mouseUp:event];
@@ -470,7 +473,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
             _leftMouseDownStartedInNativeWindowChrome = NO;
             break;
         case NSEventTypeLeftMouseDragged:
-            if (_leftMouseDownStartedInNativeWindowChrome) {
+            if (_leftMouseDownStartedInNativeWindowChrome && @available(macOS 27, *)) {
                 [super sendEvent:event];
             } else {
                 [self.contentView mouseDragged:event];
