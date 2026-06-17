@@ -2,8 +2,9 @@ use prost::Message;
 
 use super::*;
 use crate::proto::{
-    client_message, server_message, session_scoped_request, BundledSkillProto,
-    BundledSkillsSnapshot, ClientMessage, Initialize, InitializeResponse, ServerMessage,
+    client_message, remote_skill_proto, server_message, session_scoped_request,
+    BundledSkillMetadata, ClientMessage, HomeSkillMetadata, Initialize, InitializeResponse,
+    RemoteAgentContextSnapshot, RemoteContextFileProto, RemoteSkillProto, ServerMessage,
 };
 
 #[tokio::test]
@@ -33,6 +34,73 @@ async fn round_trip_client_message() {
 }
 
 #[tokio::test]
+async fn round_trip_remote_agent_context_snapshot() {
+    let mut buf = Vec::new();
+    write_server_message(
+        &mut buf,
+        &ServerMessage {
+            request_id: String::new(),
+            message: Some(server_message::Message::RemoteAgentContextSnapshot(
+                RemoteAgentContextSnapshot {
+                    revision: 7,
+                    home_dir: "/home/user".to_string(),
+                    skills: vec![
+                        RemoteSkillProto {
+                            path: "/bundled/pr-comments/SKILL.md".to_string(),
+                            content: "bundled content".to_string(),
+                            source: Some(remote_skill_proto::Source::Bundled(
+                                BundledSkillMetadata {
+                                    id: "pr-comments".to_string(),
+                                    requires_mcp: Some("figma".to_string()),
+                                },
+                            )),
+                        },
+                        RemoteSkillProto {
+                            path: "/home/user/.agents/skills/test/SKILL.md".to_string(),
+                            content: "home skill content".to_string(),
+                            source: Some(remote_skill_proto::Source::Home(HomeSkillMetadata {})),
+                        },
+                    ],
+                    global_rules: vec![RemoteContextFileProto {
+                        path: "/home/user/.agents/AGENTS.md".to_string(),
+                        content: "rule content".to_string(),
+                    }],
+                },
+            )),
+        },
+    )
+    .await
+    .unwrap();
+
+    let decoded = read_server_message(&mut &buf[..]).await.unwrap();
+    match decoded.message {
+        Some(server_message::Message::RemoteAgentContextSnapshot(snapshot)) => {
+            assert_eq!(snapshot.revision, 7);
+            assert_eq!(snapshot.home_dir, "/home/user");
+            assert_eq!(snapshot.skills.len(), 2);
+            let Some(remote_skill_proto::Source::Bundled(bundled)) =
+                snapshot.skills[0].source.as_ref()
+            else {
+                panic!("expected bundled skill source");
+            };
+            assert_eq!(bundled.id, "pr-comments");
+            assert_eq!(bundled.requires_mcp.as_deref(), Some("figma"));
+            assert!(matches!(
+                snapshot.skills[1].source,
+                Some(remote_skill_proto::Source::Home(_))
+            ));
+            assert_eq!(snapshot.skills[1].content, "home skill content");
+            assert_eq!(
+                snapshot.global_rules[0].path,
+                "/home/user/.agents/AGENTS.md"
+            );
+            assert_eq!(snapshot.global_rules[0].content, "rule content");
+        }
+        other => panic!("unexpected message variant: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn round_trip_server_message() {
     let msg = ServerMessage {
         request_id: "resp-456".to_string(),
@@ -55,48 +123,6 @@ async fn round_trip_server_message() {
         Some(server_message::Message::InitializeResponse(resp)) => {
             assert_eq!(resp.server_version, "0.1.0");
             assert_eq!(resp.host_id, "test-host");
-        }
-        other => panic!("unexpected message variant: {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn round_trip_bundled_skills_snapshot() {
-    let msg = ServerMessage {
-        request_id: String::new(),
-        message: Some(server_message::Message::BundledSkillsSnapshot(
-            BundledSkillsSnapshot {
-                skills: vec![BundledSkillProto {
-                    id: "pr-comments".to_string(),
-                    name: "pr-comments".to_string(),
-                    description: "Fetch PR comments".to_string(),
-                    path: "/home/user/.warp/remote-server/bundled_resources/bundled/skills/pr-comments/SKILL.md".to_string(),
-                    content: "---\nname: pr-comments\n---\nbody".to_string(),
-                    requires_mcp: None,
-                }, BundledSkillProto {
-                    id: "figma-skill".to_string(),
-                    name: "figma-skill".to_string(),
-                    description: "Figma helper".to_string(),
-                    path: "/path/SKILL.md".to_string(),
-                    content: "body".to_string(),
-                    requires_mcp: Some("figma".to_string()),
-                }],
-            },
-        )),
-    };
-
-    let mut buf = Vec::new();
-    write_server_message(&mut buf, &msg).await.unwrap();
-
-    let mut cursor = &buf[..];
-    let decoded: ServerMessage = read_server_message(&mut cursor).await.unwrap();
-
-    match decoded.message {
-        Some(server_message::Message::BundledSkillsSnapshot(snapshot)) => {
-            assert_eq!(snapshot.skills.len(), 2);
-            assert_eq!(snapshot.skills[0].id, "pr-comments");
-            assert_eq!(snapshot.skills[0].requires_mcp, None);
-            assert_eq!(snapshot.skills[1].requires_mcp, Some("figma".to_string()));
         }
         other => panic!("unexpected message variant: {other:?}"),
     }

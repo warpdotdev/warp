@@ -308,7 +308,7 @@ impl BundledSkill {
 
     /// Iterates the catalog's definitions as `(id, skill, activation)`.
     /// Used by the daemon to serialize its catalog for the
-    /// `BundledSkillsSnapshot` push.
+    /// aggregate remote Agent Mode context snapshot.
     pub(crate) fn iter_definitions(
         &self,
     ) -> impl Iterator<Item = (&str, &ParsedSkill, &BundledSkillActivation)> {
