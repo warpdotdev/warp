@@ -227,8 +227,11 @@ impl BlocklistAIContextModel {
                 BlocklistAIHistoryEvent::ClearedConversationsInTerminalView { .. } => {
                     me.set_pending_query_state(PendingQueryState::default(), ctx);
                     if FeatureFlag::AgentView.is_enabled() {
+                        // Use force-exit (no confirmation) because cmd-k is an explicit
+                        // "clear everything" action. The confirmation-before-exit UX is
+                        // intended for ESC/Ctrl-C
                         me.agent_view_controller.update(ctx, |controller, ctx| {
-                            controller.exit_agent_view(ctx);
+                            controller.exit_agent_view_without_confirmation(ctx);
                         });
                     }
                 }

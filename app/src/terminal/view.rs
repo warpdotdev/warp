@@ -18632,12 +18632,6 @@ impl TerminalView {
             true
         } else {
             // Otherwise, there are some visible blocks and we need to clear stuff.
-            let active_block_is_long_running = self
-                .model
-                .lock()
-                .block_list()
-                .active_block()
-                .is_active_and_long_running();
             let is_agent_monitoring = self
                 .model
                 .lock()
@@ -18645,16 +18639,8 @@ impl TerminalView {
                 .active_block()
                 .is_agent_monitoring();
 
-            // If there isn't an active long running block, then "clear buffer" just starts a new convo.
-            if !active_block_is_long_running {
-                self.enter_agent_view_for_new_conversation(
-                    None,
-                    AgentViewEntryOrigin::ClearBuffer,
-                    ctx,
-                );
-                true
-            } else if is_agent_monitoring {
-                // Otherwise, if the agent is monitoring this long-running block,
+            if is_agent_monitoring {
+                // If the agent is monitoring this long-running block,
                 // then clear just that block and leave the rest of the blocklist in tact.
                 self.model.lock().clear_screen(ClearMode::ActiveBlock);
                 self.find_model.update(ctx, |find_model, ctx| {
@@ -18663,9 +18649,25 @@ impl TerminalView {
                 self.update_find_selection(ctx);
                 true
             } else {
-                // Otherwise, if this is a long-running command that is not agent-monitored,
-                // just clear the buffer normally.
-                false
+                // Otherwise, cancel any in-flight stream before entering the new conversation.
+                // The ExitedAgentView handler skips cancellation when
+                // is_exit_before_new_entrance=true (to preserve background streams during
+                // conversation navigation), but cmd-k is an explicit "start fresh" action.
+                let active_conversation_id = self
+                    .agent_view_controller
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .active_conversation_id();
+                if let Some(conversation_id) = active_conversation_id {
+                    self.stop_local_agent_conversation(conversation_id, ctx);
+                }
+
+                self.enter_agent_view_for_new_conversation(
+                    None,
+                    AgentViewEntryOrigin::ClearBuffer,
+                    ctx,
+                );
+                true
             }
         }
     }
