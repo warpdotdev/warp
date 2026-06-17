@@ -374,6 +374,13 @@ impl ResponseStream {
                         return;
                     }
                     RecoveryAction::Resume => {
+                        // Recoverable failure after client actions: we'll resume the
+                        // conversation once the stream finishes rather than surface the
+                        // error, so the UI suppresses the banner. Log it so the
+                        // auto-recovery isn't completely silent.
+                        log::warn!(
+                            "MultiAgent request failed after client actions; resuming conversation after stream finishes - Error: {e:?}"
+                        );
                         // The resume spawn itself waits for connectivity.
                         self.should_resume_conversation_after_stream_finished = true;
                     }
@@ -441,6 +448,13 @@ impl ResponseStream {
                     return;
                 }
                 RecoveryAction::Resume => {
+                    // Recoverable truncation after client actions: we'll resume the
+                    // conversation once the stream finishes rather than surface the
+                    // error, so the UI suppresses the banner. Log it so the
+                    // auto-recovery isn't completely silent.
+                    log::warn!(
+                        "MultiAgent request truncated after client actions; resuming conversation after stream finishes - Error: {unexpected_eof:?}"
+                    );
                     self.should_resume_conversation_after_stream_finished = true;
                     self.error_event_emitted = true;
                     self.report_request_failure(&unexpected_eof, is_online);
