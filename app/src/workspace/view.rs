@@ -26915,7 +26915,6 @@ impl Workspace {
                     ..
                 } => {
                     if let Some(container_rect) = group_container_rect(window_id, group_id, ctx) {
-        
                         if container_rect.width() > MIN_VISIBLE_TAB_WIDTH
                             && rect_is_within_tab_bar(container_rect, &tab_bar_rects)
                         {
