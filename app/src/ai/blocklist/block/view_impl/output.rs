@@ -173,6 +173,7 @@ pub(crate) struct Props<'a> {
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
     pub(super) is_conversation_transcript_viewer: bool,
+    pub(super) is_not_cloud_agent_context: bool,
     pub(super) aws_bedrock_credentials_error_view:
         Option<&'a ViewHandle<AwsBedrockCredentialsErrorView>>,
     pub(super) imported_comments: &'a HashMap<AIAgentActionId, ImportedCommentGroup>,
@@ -3228,7 +3229,12 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
 
     #[cfg(not(target_family = "wasm"))]
     if !props.is_conversation_transcript_viewer {
-        let fork_button_tooltip = fork_button_action(props.model.conversation_id(app), app).tooltip;
+        let fork_button_tooltip = fork_button_action(
+            props.model.conversation_id(app),
+            props.is_not_cloud_agent_context,
+            app,
+        )
+        .tooltip;
 
         let ui_builder = appearance.ui_builder().clone();
         let fork_button = icon_button(

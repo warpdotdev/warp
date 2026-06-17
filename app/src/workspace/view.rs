@@ -24641,13 +24641,20 @@ impl TypedActionView for Workspace {
 
                             #[cfg(not(target_family = "wasm"))]
                             let command_name = {
+                                let is_not_cloud_agent_context = !(terminal
+                                    .is_ambient_agent_session(ctx)
+                                    || terminal
+                                        .input()
+                                        .as_ref(ctx)
+                                        .is_cloud_mode_input_v2_composing(ctx));
                                 let conversation_id =
                                     terminal.active_conversation_id(ctx).or_else(|| {
                                         BlocklistAIHistoryModel::as_ref(ctx)
                                             .active_conversation(terminal.id())
                                             .map(|conv| conv.id())
                                     });
-                                fork_button_action(conversation_id, ctx).command_name
+                                fork_button_action(conversation_id, is_not_cloud_agent_context, ctx)
+                                    .command_name
                             };
 
                             terminal.input().update(ctx, |input, ctx| {

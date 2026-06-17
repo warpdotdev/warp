@@ -329,12 +329,15 @@ impl SlashCommandDataSource {
         if command.name == commands::MOVE_TO_CLOUD.name && !context.is_cloud_handoff_enabled {
             return false;
         }
-        // /continue-locally only applies to cloud Oz conversations. Local conversations
-        // and non-Oz cloud runs (Claude, Gemini) are filtered out so the slash menu
-        // doesn't surface a no-op command.
+        // /continue-locally replaces /fork only when /fork is unavailable in cloud-agent
+        // contexts. Local conversations and non-Oz cloud runs (Claude, Gemini) are filtered
+        // out so the slash menu doesn't surface a no-op command.
         #[cfg(not(target_family = "wasm"))]
         if command.name == commands::CONTINUE_LOCALLY.name
-            && !context.active_conversation_is_cloud_oz
+            && (!context.active_conversation_is_cloud_oz
+                || context
+                    .session_context
+                    .contains(Availability::NOT_CLOUD_AGENT))
         {
             return false;
         }

@@ -1396,10 +1396,9 @@ impl Input {
     }
 }
 
-/// Returns true when the conversation with `conversation_id` is associated with a cloud Oz
-/// `AmbientAgentTask`. Used as the defensive runtime gate for `/continue-locally` so a
-/// keybinding-triggered execution can't fall through onto a non-cloud-Oz conversation after
-/// the menu has been recomputed. Mirrors `SlashCommandDataSource::active_conversation_is_cloud_oz`.
+/// Returns true when the conversation with `conversation_id` is associated with an Oz
+/// `AmbientAgentTask`. Callers deciding between `/fork` and `/continue-locally` should also
+/// check the same `NOT_CLOUD_AGENT` context that gates `/fork`.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn conversation_is_cloud_oz_for_slash_command(
     conversation_id: AIConversationId,
@@ -1438,14 +1437,17 @@ pub(crate) struct ForkButtonAction {
 }
 
 /// Returns the tooltip and slash command for the fork button given an optional
-/// conversation ID. Uses `/continue-locally` for cloud Oz conversations where
-/// `/fork` is unavailable, and `/fork` otherwise.
+/// conversation ID. Uses `/continue-locally` for Oz conversations when `/fork`
+/// is unavailable in the current cloud-agent context, and `/fork` otherwise.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn fork_button_action(
     conversation_id: Option<AIConversationId>,
+    is_not_cloud_agent_context: bool,
     ctx: &AppContext,
 ) -> ForkButtonAction {
-    if conversation_id.is_some_and(|id| conversation_is_cloud_oz_for_slash_command(id, ctx)) {
+    if !is_not_cloud_agent_context
+        && conversation_id.is_some_and(|id| conversation_is_cloud_oz_for_slash_command(id, ctx))
+    {
         ForkButtonAction {
             tooltip: "Continue locally",
             command_name: commands::CONTINUE_LOCALLY.name,

@@ -460,7 +460,7 @@ pub const FORK_FROM: StaticCommand = StaticCommand {
 };
 
 pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
-    let hint_text = "<optional prompt to send in forked conversation>";
+    let hint_text = "<optional prompt to send in local conversation>";
     StaticCommand {
         name: "/continue-locally",
         description: "Continue this cloud conversation locally",

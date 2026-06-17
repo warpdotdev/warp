@@ -1060,6 +1060,11 @@ impl View for AIBlock {
             app,
         );
         drop(terminal_model);
+        let is_not_cloud_agent_context = !(FeatureFlag::CloudMode.is_enabled()
+            && self
+                .ambient_agent_view_model
+                .as_ref()
+                .is_some_and(|model| model.as_ref(app).is_ambient_agent()));
 
         contents.add_child(output::render(
             output::Props {
@@ -1114,6 +1119,7 @@ impl View for AIBlock {
                 shared_session_status: &shared_session_status,
                 terminal_view_id: self.terminal_view_id,
                 is_conversation_transcript_viewer,
+                is_not_cloud_agent_context,
                 aws_bedrock_credentials_error_view: self
                     .aws_bedrock_credentials_error_view
                     .as_ref(),
