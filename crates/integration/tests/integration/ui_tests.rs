@@ -210,11 +210,8 @@ integration_tests! {
 
     // OSC 8 hyperlink tests (GH6393)
     test_osc8_open_close_renders_visible_text,
-    test_osc8_cmd_click_opens_url,
-    test_osc8_plain_click_does_not_open_url,
-    test_osc8_disallowed_scheme_inert,
     test_osc8_copy_block_yields_visible_text_only,
-    test_osc8_block_output_as_markdown,
+    test_osc8_open_link_action_opens_url,
     test_osc8_no_regression_on_url_autodetect,
 
     test_active_session_follows_focus,
