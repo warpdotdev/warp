@@ -793,7 +793,7 @@ impl Input {
             harness if command.name == commands::HARNESS.name => {
                 if !self.is_cloud_mode_input_v2_composing(ctx) {
                     // Defensive: the command is registered only when the V2 flag is on and its
-                    // availability requires CLOUD_AGENT_V2, so this branch should be unreachable.
+                    // availability requires CLOUD_MODE_V2_COMPOSER, so this branch should be unreachable.
                     return false;
                 }
                 self.suggestions_mode_model.update(ctx, |model, ctx| {
@@ -1398,7 +1398,7 @@ impl Input {
 
 /// Returns true when the conversation with `conversation_id` is associated with an Oz
 /// `AmbientAgentTask`. Callers deciding between `/fork` and `/continue-locally` should also
-/// check the same `NOT_CLOUD_AGENT` context that gates `/fork`.
+/// check the same `CLOUD_AGENT` context that gates `/continue-locally`.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn conversation_is_cloud_oz_for_slash_command(
     conversation_id: AIConversationId,
@@ -1442,10 +1442,10 @@ pub(crate) struct ForkButtonAction {
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn fork_button_action(
     conversation_id: Option<AIConversationId>,
-    is_not_cloud_agent_context: bool,
+    is_cloud_agent_context: bool,
     ctx: &AppContext,
 ) -> ForkButtonAction {
-    if !is_not_cloud_agent_context
+    if is_cloud_agent_context
         && conversation_id.is_some_and(|id| conversation_is_cloud_oz_for_slash_command(id, ctx))
     {
         ForkButtonAction {
