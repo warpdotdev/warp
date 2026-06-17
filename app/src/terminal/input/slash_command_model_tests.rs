@@ -111,6 +111,47 @@ fn test_parse_rename_tab_slash_command_arguments() {
 }
 
 #[test]
+fn test_parse_slash_command_detects_command_on_multiline_input() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let slash_command_data_source =
+            input.read(&app, |input, _| input.slash_command_data_source.clone());
+
+        slash_command_data_source.read(&app, |data_source, _| {
+            let optional_argument_command_name = data_source
+                .active_commands()
+                .find_map(|(_, command)| {
+                    (command.argument.is_some()
+                        && data_source.parse_slash_command(command.name).is_some())
+                    .then_some(command.name)
+                })
+                .expect("expected at least one slash command that accepts optional arguments");
+
+            // The command sits on its own line, followed by a multi-line prompt. The
+            // newline must be treated as the command/argument boundary so the command is
+            // still detected (e.g. after editing the leading line of a multi-line input).
+            let multiline = format!("{optional_argument_command_name}\nfirst line\nsecond line");
+            let detected = data_source.parse_slash_command(&multiline).expect(
+                "command on its own line should be detected when followed by a multi-line argument",
+            );
+            assert_eq!(detected.command.name, optional_argument_command_name);
+            assert_eq!(
+                detected.argument.as_deref(),
+                Some("first line\nsecond line"),
+                "the remainder of the multi-line input should be preserved as the argument"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_non_ai_commands_remain_active_when_ai_is_disabled() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

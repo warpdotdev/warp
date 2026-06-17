@@ -239,8 +239,10 @@ impl SlashCommandModel {
     /// Detects whether `buffer` matches a known skill command.
     /// Accepts `&AppContext` so it can be called outside a model update.
     fn detect_skill_command(&self, buffer: &str, ctx: &AppContext) -> Option<DetectedSkillCommand> {
+        // Split on the first whitespace character so the skill token is isolated even
+        // when the argument spans multiple lines (see `parse_slash_command`).
         let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(" ") {
+            if let Some((command, argument)) = buffer.split_once(char::is_whitespace) {
                 (command, Some(argument.to_owned()))
             } else {
                 (buffer, None)
@@ -432,8 +434,14 @@ impl SlashCommandDataSource {
     // If the slash command has an argument, it matches only if its an exact match, or if the argument
     // is space-delimited.
     fn parse_slash_command(&self, buffer: &str) -> Option<DetectedCommand> {
+        // Split on the first whitespace character (space, tab, or newline) so the
+        // command token is isolated even when the argument is a multi-line prompt
+        // (e.g. `/plan\nfirst line\nsecond line`). Splitting on a literal space only
+        // would fold the newline and following text into the command token, so a
+        // command placed on its own line — including after editing the leading line
+        // of a multi-line input — would fail to be detected.
         let (possible_command, possible_argument) =
-            if let Some((command, argument)) = buffer.split_once(" ") {
+            if let Some((command, argument)) = buffer.split_once(char::is_whitespace) {
                 (command, Some(argument.to_owned()))
             } else {
                 (buffer, None)
