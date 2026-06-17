@@ -438,8 +438,8 @@ NSUInteger activeScreenId() {
 }
 
 - (BOOL)setDockIconVisible:(BOOL)visible {
-    NSApplicationActivationPolicy policy = visible ? NSApplicationActivationPolicyRegular
-                                                     : NSApplicationActivationPolicyAccessory;
+    NSApplicationActivationPolicy policy =
+        visible ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory;
     return [NSApp setActivationPolicy:policy];
 }
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
