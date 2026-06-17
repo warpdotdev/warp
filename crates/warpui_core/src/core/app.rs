@@ -2362,8 +2362,20 @@ impl AppContext {
         T: View + TypedActionView,
         F: FnOnce(&mut ViewContext<T>) -> T,
     {
+        self.insert_window(options, build_root_view)
+    }
+
+    fn insert_window<T, F>(
+        &mut self,
+        add_window_options: AddWindowOptions,
+        build_root_view: F,
+    ) -> (WindowId, ViewHandle<T>)
+    where
+        T: View + TypedActionView,
+        F: FnOnce(&mut ViewContext<T>) -> T,
+    {
         let (window_id, _root_view_id) =
-            self.insert_window_internal(None, options, |window_id, ctx| {
+            self.insert_window_internal(None, add_window_options, |window_id, ctx| {
                 ctx.windows.insert(window_id, Window::default());
                 let root_handle = ctx.add_typed_action_view(window_id, build_root_view);
                 let root_view_id = root_handle.id();
@@ -2380,11 +2392,7 @@ impl AppContext {
         )
     }
 
-    /// GUI window creation: allocate the window id + bounds bookkeeping, create
-    /// the [`Presenter`], open the platform window and wire its
-    /// [`WindowCallbacks`] (event/scene/resize loop), build the root view, focus
-    /// it, and register the redraw invalidation callback.
-    pub(super) fn insert_window_internal<F>(
+    fn insert_window_internal<F>(
         &mut self,
         window_id: Option<WindowId>,
         add_window_options: AddWindowOptions,
@@ -3048,6 +3056,17 @@ impl AppContext {
             return false;
         };
 
+        let Some(target_window) = self.windows.get_mut(&target_window_id) else {
+            // Target window doesn't exist - roll back by putting the view back in source window
+            if let Some(source_window) = self.windows.get_mut(&source_window_id) {
+                source_window.views.insert(view_id, view);
+            }
+            return false;
+        };
+
+        target_window.views.insert(view_id, view);
+        self.view_to_window.insert(view_id, target_window_id);
+
         // Mark the view as removed from the source window's invalidation set.
         // This tells the renderer to stop tracking this view in the source window.
         self.window_invalidations
@@ -3061,17 +3080,6 @@ impl AppContext {
         if let Some(parents) = self.view_parents.get_mut(&source_window_id) {
             parents.remove(&view_id);
         }
-
-        let Some(target_window) = self.windows.get_mut(&target_window_id) else {
-            // Target window doesn't exist - roll back by putting the view back in source window
-            if let Some(source_window) = self.windows.get_mut(&source_window_id) {
-                source_window.views.insert(view_id, view);
-            }
-            return false;
-        };
-
-        target_window.views.insert(view_id, view);
-        self.view_to_window.insert(view_id, target_window_id);
 
         self.window_invalidations
             .entry(target_window_id)
@@ -3101,7 +3109,7 @@ impl AppContext {
     /// Transfers a view and all its descendant views from one window to another.
     ///
     /// This is useful when transferring a component like a tab that contains
-    /// multiple nested views. The view tree is determined by the neutral view
+    /// multiple nested views. The view tree is determined by the view
     /// hierarchy's parent-child relationships.
     ///
     /// Returns the list of view IDs that were transferred.
@@ -3294,9 +3302,6 @@ impl AppContext {
     ///
     /// This operation is destructive: It will clear the caches for both manual and autotracked
     /// invalidations.
-    ///
-    /// GUI-only for now; the M8 TUI runtime may move this back into shared code
-    /// once it drives its own draw loop.
     pub(super) fn take_all_invalidations_for_window(
         &mut self,
         window_id: WindowId,
