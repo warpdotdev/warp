@@ -1671,6 +1671,7 @@ impl ServerApiProvider {
         self.server_api.clone()
     }
 
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub fn get_managed_mcp_client(&self) -> Arc<dyn ManagedMcpClient> {
         self.server_api.clone()
     }

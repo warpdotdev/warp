@@ -190,6 +190,7 @@ pub(crate) fn normalize_codex_toml_to_json(file_contents: &str) -> Result<String
 pub struct ParsedTemplatableMCPServerResult {
     pub templatable_mcp_server: TemplatableMCPServer,
     pub templatable_mcp_server_installation: Option<TemplatableMCPServerInstallation>,
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
     pub variable_values: HashMap<String, VariableValue>,
 }
 
