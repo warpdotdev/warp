@@ -195,9 +195,10 @@ impl PtySpawner {
                 // the same PtyOptions would hit the same limit — so fail
                 // immediately rather than falling back.
                 if is_e2big(&err) {
+                    // err already contains the original message. We add some context on how to fix.
                     return Err(err.context(
-                        "Shell spawn failed. This can happen when env vars in the image or Oz secrets are \
-                         too long. Check the Warp logs for details.",
+                        "This can happen when env vars in the image or Oz secrets are \
+                         too long.",
                     ));
                 }
                 report_error!(err.context(

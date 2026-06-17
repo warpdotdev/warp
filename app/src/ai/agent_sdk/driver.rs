@@ -436,8 +436,11 @@ pub enum AgentDriverError {
     NotLoggedIn,
     #[error("Saved prompt not found for id {0}")]
     AIWorkflowNotFound(String),
-    #[error("Terminal bootstrap failed: {reason}")]
-    BootstrapFailed { reason: String },
+    #[error("Terminal bootstrap failed: {error}")]
+    BootstrapFailed {
+        #[source]
+        error: terminal::BootstrapError,
+    },
     #[error("Unable to share agent session")]
     ShareSessionFailed {
         #[source]
@@ -1835,6 +1838,7 @@ impl AgentDriver {
                     })
                     .await?
                     .await
+                    .map_err(|error| AgentDriverError::BootstrapFailed { error })
             })
             .await?;
 
