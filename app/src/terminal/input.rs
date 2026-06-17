@@ -480,6 +480,7 @@ const HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT: f32 = 1100.;
 const MIN_BUFFER_LEN_TO_SHOW_COMPLETIONS_WHILE_TYPING: usize = 2;
 
 const AI_COMMAND_SEARCH_TRIGGER: &str = "#";
+const QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT: &str = "QueuedPromptInlineEditorOpen";
 
 /// If the editor buffer matches this prefix, AI input is enabled.
 const AI_INPUT_PREFIX: &str = "* ";
@@ -1843,6 +1844,7 @@ pub fn init(app: &mut AppContext) {
                 & !id!("WorkflowInfoBox")
                 & !id!("ProfileModelSelectorOpen")
                 & !id!("PromptChipMenuOpen")
+                & !id!(QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT)
                 & !id!("AIContextMenuOpen")
                 & !id!("BuyCreditsBannerOpen"),
         ),
@@ -3843,6 +3845,18 @@ impl Input {
     /// The queued prompts panel, when [`FeatureFlag::QueueSlashCommand`] is enabled.
     pub(crate) fn queued_prompts_panel(&self) -> Option<&ViewHandle<QueuedPromptsPanelView>> {
         self.queued_prompts_panel.as_ref()
+    }
+
+    /// Returns whether the active queued prompt is being edited inline.
+    fn is_editing_queued_prompt(&self, ctx: &AppContext) -> bool {
+        let Some(conversation_id) =
+            BlocklistAIHistoryModel::as_ref(ctx).active_conversation_id(self.terminal_view_id)
+        else {
+            return false;
+        };
+        QueuedQueryModel::as_ref(ctx)
+            .editing_row(conversation_id)
+            .is_some()
     }
 
     pub fn agent_input_footer(&self) -> &ViewHandle<AgentInputFooter> {
@@ -8694,6 +8708,10 @@ impl Input {
                 });
                 return;
             }
+        }
+
+        if self.is_editing_queued_prompt(ctx) {
+            return;
         }
 
         // History and input suggestions are not available for
@@ -15970,6 +15988,9 @@ impl View for Input {
             ctx.set.insert("BuyCreditsBannerOpen");
         }
 
+        if self.is_editing_queued_prompt(app) {
+            ctx.set.insert(QUEUED_PROMPT_INLINE_EDITOR_OPEN_CONTEXT);
+        }
         let model_lock = self.model.lock();
         ctx.set
             .insert(model_lock.shared_session_status().as_keymap_context());
