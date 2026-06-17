@@ -29,7 +29,6 @@ use super::codebase_index_status::{
     not_enabled_codebase_index_status, queued_codebase_index_status,
     unavailable_codebase_index_status,
 };
-use super::diff_state_proto;
 use super::diff_state_tracker::{
     DiffModelKey, DiffStateUpdate, RemoteDiffStateManager, SubscribeOutcome,
 };
@@ -58,12 +57,13 @@ use super::proto::{
     InitializeResponse, MissingFragmentMetadata, NavigatedToDirectory,
     NavigatedToDirectoryResponse, OpenBuffer, OpenBufferResponse, ReadFileContextResponse,
     ResolveConflict, ResolveConflictResponse, ResolveConflictSuccess, ResyncCodebase,
-    RunCommandError, RunCommandErrorCode, RunCommandRequest, RunCommandResponse, RunCommandSuccess,
-    SaveBuffer, SaveBufferResponse, SaveBufferSuccess, ServerMessage, SessionBootstrapped,
-    TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo, UpdateGitStatus, UploadHandoffSnapshot,
-    WriteFile, WriteFileResponse, WriteFileSuccess,
+    RipgrepSearchRequest, RunCommandError, RunCommandErrorCode, RunCommandRequest,
+    RunCommandResponse, RunCommandSuccess, SaveBuffer, SaveBufferResponse, SaveBufferSuccess,
+    ServerMessage, SessionBootstrapped, TextEdit, UpdateGitHubPrInfo, UpdateGitHubRepoInfo,
+    UpdateGitStatus, UploadHandoffSnapshot, WriteFile, WriteFileResponse, WriteFileSuccess,
 };
 use super::server_buffer_tracker::{PendingBufferRequestKind, ServerBufferTracker};
+use super::{diff_state_proto, ripgrep_search};
 use crate::code::global_buffer_model::{GlobalBufferModel, GlobalBufferModelEvent};
 use crate::code_review::diff_state::{CommitChainMode, DiffMode, FileStatusInfo};
 use crate::code_review::git_repo_model::{GitRepoModels, GitRepoStatusModel};
@@ -255,6 +255,12 @@ pub struct ServerModel {
     /// `BundledSkillsSnapshot` push. `None` until startup parsing completes
     /// (or forever, when the global resources directory is absent).
     bundled_skills: Option<Vec<BundledSkillProto>>,
+    /// Connections that have already received the `BundledSkillsSnapshot`
+    /// push, either from the parse-completion broadcast or during their
+    /// `Initialize` handshake. Prevents a duplicate push when parsing
+    /// completes between a connection registering its sender and its
+    /// `Initialize` being handled.
+    bundled_skills_sent: HashSet<ConnectionId>,
     /// Per-session command executors created from `SessionBootstrapped` notifications.
     executors: HashMap<SessionId, Arc<LocalCommandExecutor>>,
     /// Tracks in-flight file write/delete operations and handles cleanup.
@@ -312,6 +318,7 @@ impl ServerModel {
             in_progress: HashMap::new(),
             host_id,
             bundled_skills: None,
+            bundled_skills_sent: HashSet::new(),
             executors: HashMap::new(),
             pending_file_ops: PendingFileOps::new(),
             auth_state: AuthStateProvider::as_ref(ctx).get().clone(),
@@ -692,6 +699,27 @@ impl ServerModel {
             None,
             server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
         );
+        self.bundled_skills_sent
+            .extend(self.connection_senders.keys().copied());
+    }
+
+    /// Pushes the parsed bundled skill catalog to a single connection.
+    /// No-op until startup parsing has completed, or when the catalog was
+    /// already delivered to this connection (e.g. it registered before the
+    /// parse-completion broadcast fired).
+    fn send_bundled_skills_snapshot_to_connection(&mut self, conn_id: ConnectionId) {
+        if self.bundled_skills_sent.contains(&conn_id) {
+            return;
+        }
+        let Some(skills) = self.bundled_skills.clone() else {
+            return;
+        };
+        self.send_server_message(
+            Some(conn_id),
+            None,
+            server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
+        );
+        self.bundled_skills_sent.insert(conn_id);
     }
 
     /// Called when a proxy connects.  Inserts `conn_tx` into the connection
@@ -721,6 +749,7 @@ impl ServerModel {
     /// and starts the grace timer if no connections remain.
     pub fn deregister_connection(&mut self, conn_id: ConnectionId, ctx: &mut ModelContext<Self>) {
         self.snapshot_sent_roots_by_connection.remove(&conn_id);
+        self.bundled_skills_sent.remove(&conn_id);
         // Guard against double-deregister (reader and writer tasks both call
         // this on connection close; the second call must be a safe no-op).
         if self.connection_senders.remove(&conn_id).is_none() {
@@ -858,6 +887,9 @@ impl ServerModel {
                     }
                     Some(host_scoped_request::Message::GitGetCommittedBranchFiles(m)) => {
                         self.handle_get_committed_branch_files(m, &request_id, conn_id, ctx)
+                    }
+                    Some(host_scoped_request::Message::RipgrepSearch(m)) => {
+                        self.handle_ripgrep_search(m, &request_id, conn_id, ctx)
                     }
                     None => {
                         log::warn!(
@@ -1562,15 +1594,12 @@ impl ServerModel {
         }
 
         // Push the bundled skill catalog to this connection if it is already
-        // parsed. Enqueued on the same channel as the response below, so the
-        // client buffers it as a push event during the handshake.
-        if let Some(skills) = self.bundled_skills.clone() {
-            self.send_server_message(
-                Some(conn_id),
-                None,
-                server_message::Message::BundledSkillsSnapshot(BundledSkillsSnapshot { skills }),
-            );
-        }
+        // parsed and the parse-completion broadcast didn't already deliver it
+        // (parsing can complete between this connection registering its
+        // sender and its `Initialize` being handled). Enqueued on the same
+        // channel as the response below, so the client buffers it as a push
+        // event during the handshake.
+        self.send_bundled_skills_snapshot_to_connection(conn_id);
 
         let server_version = ChannelState::app_version().unwrap_or("").to_string();
         HandlerOutcome::Sync(server_message::Message::InitializeResponse(
@@ -2875,6 +2904,52 @@ impl ServerModel {
                 },
                 ctx,
             );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    /// Handles `RipgrepSearch` — request/response backing global search in
+    /// remote sessions.
+    ///
+    /// Runs the same ripgrep subprocess used by local global search (the
+    /// daemon binary includes the `ripgrep-search` worker subcommand) over
+    /// the requested roots and responds with all matches once the search
+    /// completes, capped to bound response size. Cancellable via `Abort`
+    /// like other async handlers.
+    fn handle_ripgrep_search(
+        &mut self,
+        msg: RipgrepSearchRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        log::info!(
+            "Handling RipgrepSearch ({} roots, request_id={request_id})",
+            msg.roots.len()
+        );
+
+        let params = match ripgrep_search::validate_request(msg) {
+            Ok(params) => params,
+            Err(message) => {
+                return HandlerOutcome::Sync(server_message::Message::RipgrepSearchResponse(
+                    ripgrep_search::error_response(message),
+                ));
+            }
+        };
+
+        let request_id_for_response = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            async move { ripgrep_search::run_search(params).await },
+            move |me, result, _ctx| {
+                let response = ripgrep_search::search_result_to_response(result);
+                me.send_server_message(
+                    Some(conn_id),
+                    Some(&request_id_for_response),
+                    server_message::Message::RipgrepSearchResponse(response),
+                );
+            },
+            ctx,
+        );
         HandlerOutcome::Async(Some(handle))
     }
 

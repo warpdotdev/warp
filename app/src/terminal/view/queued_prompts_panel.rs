@@ -913,7 +913,8 @@ fn build_edit_editor(ctx: &mut ViewContext<QueuedPromptsPanelView>) -> ViewHandl
             soft_wrap: true,
             text: text_options,
             propagate_and_no_op_escape_key: PropagateAndNoOpEscapeKey::PropagateFirst,
-            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Always,
+            // Keep up/down inside the inline editor so they move the cursor between lines.
+            propagate_and_no_op_vertical_navigation_keys: PropagateAndNoOpNavigationKeys::Never,
             propagate_horizontal_navigation_keys: PropagateHorizontalNavigationKeys::AtBoundary,
             ..Default::default()
         };
