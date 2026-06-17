@@ -436,7 +436,7 @@ pub enum AgentDriverError {
     NotLoggedIn,
     #[error("Saved prompt not found for id {0}")]
     AIWorkflowNotFound(String),
-    #[error("Terminal bootstrap failed: {error}")]
+    #[error("Terminal bootstrap failed")]
     BootstrapFailed {
         #[source]
         error: terminal::BootstrapError,
