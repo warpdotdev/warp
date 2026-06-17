@@ -55,14 +55,6 @@ const AMP_COLOR: ColorU = ColorU {
     a: 255,
 };
 
-/// Antigravity brand color (white)
-const ANTIGRAVITY_WHITE: ColorU = ColorU {
-    r: 255,
-    g: 255,
-    b: 255,
-    a: 255,
-};
-
 /// Droid brand color (white)
 const DROID_COLOR: ColorU = ColorU {
     r: 255,
@@ -320,7 +312,7 @@ impl CLIAgent {
             CLIAgent::Goose => Some(GOOSE_COLOR),
             CLIAgent::Hermes => Some(HERMES_PURPLE),
             CLIAgent::Vibe => Some(MISTRAL_ORANGE),
-            CLIAgent::Antigravity => Some(ANTIGRAVITY_WHITE),
+            CLIAgent::Antigravity => None,
             CLIAgent::Unknown => None,
         }
     }
