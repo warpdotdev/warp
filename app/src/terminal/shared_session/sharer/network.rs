@@ -1,7 +1,10 @@
 //! The "sender" of a shared session represents the sharer's end.
 //!
 //! Currently there is no way to share a session from wasm.
-#![cfg_attr(any(test, feature = "integration_tests", target_family = "wasm"), allow(dead_code))]
+#![cfg_attr(
+    any(test, feature = "integration_tests", target_family = "wasm"),
+    allow(dead_code)
+)]
 
 use std::collections::HashMap;
 use std::pin::pin;
