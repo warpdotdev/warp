@@ -50,6 +50,10 @@ pub(crate) fn terminal_view_agent_icon_variant(
     let task_data = ambient_task_id
         .and_then(|task_id| AgentConversationsModel::as_ref(app).get_task_data(&task_id));
 
+    // Local orchestration children are dispatched as server tasks (so they carry an ambient
+    // task id) but execute on the user's machine, so they must not get the cloud treatment.
+    let is_local_child = terminal_view.selected_conversation_is_local_child(app);
+
     // Defer to the card helper when we have task data and no CLI session takes precedence.
     if cli_agent_session.is_none() {
         if let Some(task) = task_data.as_ref() {
@@ -60,11 +64,12 @@ pub(crate) fn terminal_view_agent_icon_variant(
                 .and_then(|config| config.harness.as_ref())
                 .map(|harness| harness.harness_type)
                 .unwrap_or(Harness::Oz);
-            return Some(agent_icon_variant_for_run(harness, status, true));
+            return Some(agent_icon_variant_for_run(harness, status, !is_local_child));
         }
     }
 
-    let is_ambient = terminal_view.is_ambient_agent_session(app) || ambient_task_id.is_some();
+    let is_ambient = terminal_view.is_ambient_agent_session(app)
+        || (ambient_task_id.is_some() && !is_local_child);
     let inputs = TerminalIconInputs {
         is_ambient,
         cli_session: cli_agent_session.map(|session| CLISessionInputs {

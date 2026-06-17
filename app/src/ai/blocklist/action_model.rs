@@ -866,18 +866,25 @@ impl BlocklistAIActionModel {
 
         let action_id = action.id.clone();
         let phase = self.action_phase_for_action(&action, ctx);
+        // WaitForEvents owns its own status transition; skip the default
+        // in-progress update.
+        let is_wait_for_events = matches!(action.action, AIAgentActionType::WaitForEvents { .. });
         let execute_result = self.executor.update(ctx, |executor, ctx| {
             executor.try_to_execute_action(action, conversation_id, is_user_initiated, ctx)
         });
 
         match execute_result {
             TryExecuteResult::ExecutedAsync => {
-                self.update_conversation_in_progress_status(conversation_id, ctx);
+                if !is_wait_for_events {
+                    self.update_conversation_in_progress_status(conversation_id, ctx);
+                }
                 self.add_running_action(conversation_id, action_id, phase);
                 Some(StartedAction::Async { phase })
             }
             TryExecuteResult::ExecutedSync => {
-                self.update_conversation_in_progress_status(conversation_id, ctx);
+                if !is_wait_for_events {
+                    self.update_conversation_in_progress_status(conversation_id, ctx);
+                }
                 Some(StartedAction::Sync)
             }
             TryExecuteResult::NotExecuted { reason, action } => {
@@ -1044,6 +1051,27 @@ impl BlocklistAIActionModel {
                     self.cancel_pending_action(conversation_id, action, Some(reason), ctx);
                 }
             }
+        }
+    }
+
+    /// Cancels any in-flight WaitForEvents action for the given conversation.
+    pub fn cancel_wait_for_events_for_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let action_id = self.executor.update(ctx, |executor, _| {
+            executor.find_running_wait_for_events(conversation_id)
+        });
+        if let Some(action_id) = action_id {
+            self.cancel_action_with_id(
+                conversation_id,
+                &action_id,
+                CancellationReason::FollowUpSubmitted {
+                    is_for_same_conversation: true,
+                },
+                ctx,
+            );
         }
     }
 

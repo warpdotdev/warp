@@ -137,6 +137,17 @@ pub static RENAME_TAB: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand 
     argument: Some(Argument::required().with_hint_text("<tab name>")),
 });
 
+pub static RENAME_CONVERSATION: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/rename-conversation",
+    description: "Rename the current conversation",
+    icon_path: "bundled/svg/pencil-line.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED,
+    auto_enter_ai_mode: false,
+    argument: Some(Argument::required().with_hint_text("<new title>")),
+});
+
 static SET_TAB_COLOR_HINT: LazyLock<String> = LazyLock::new(|| {
     let mut hint = String::from("<");
     for color in color_dot::TAB_COLOR_OPTIONS {
@@ -626,6 +637,7 @@ fn all_commands() -> Vec<StaticCommand> {
         AGENT.clone(),
         NEW.clone(),
         PLAN.clone(),
+        RENAME_CONVERSATION.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
         USAGE,

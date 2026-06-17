@@ -832,3 +832,45 @@ fn clear_conversations_in_terminal_view_drops_every_listed_conversation() {
         });
     });
 }
+
+#[test]
+fn has_autofireable_prompt_is_false_for_an_empty_queue() {
+    with_model(|app, model, _events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |m, _| assert!(!m.has_autofireable_prompt(conv)));
+    });
+}
+
+#[test]
+fn has_autofireable_prompt_is_true_for_a_queued_prompt() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        append_user(&model, &mut app, conv, "follow up");
+        model.read(&app, |m, _| assert!(m.has_autofireable_prompt(conv)));
+    });
+}
+
+#[test]
+fn has_autofireable_prompt_is_false_when_only_a_locked_head_is_queued() {
+    // A locked initial Cloud Mode head never auto-fires on finish, so it must not count.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        model.read(&app, |m, _| assert!(!m.has_autofireable_prompt(conv)));
+    });
+}
+
+#[test]
+fn has_autofireable_prompt_is_false_when_a_locked_head_precedes_a_prompt() {
+    // The head row gates auto-fire; a locked head blocks the trailing prompt from firing.
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.update(&mut app, |m, ctx| {
+            m.append(conv, initial_cloud_mode_query("initial"), ctx)
+        });
+        append_user(&model, &mut app, conv, "follow up");
+        model.read(&app, |m, _| assert!(!m.has_autofireable_prompt(conv)));
+    });
+}

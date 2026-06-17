@@ -764,13 +764,30 @@ pub async fn get_repository_info(
     repo_path: &Path,
     path_env: Option<&str>,
 ) -> Result<Option<RepositoryInfo>> {
-    let stdout = run_gh_command(
+    if run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(None);
+    }
+
+    match run_gh_command(
         repo_path,
         &["repo", "view", "--json", "name,owner"],
         path_env,
     )
-    .await?;
-    repository_info_from_gh_output(&stdout).map(Some)
+    .await
+    {
+        Ok(stdout) => repository_info_from_gh_output(&stdout).map(Some),
+        Err(e) => {
+            let msg = e.to_string();
+            if is_repository_lookup_not_applicable_error(&msg) {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(not(feature = "local_fs"))]
@@ -914,6 +931,19 @@ fn is_pr_lookup_not_applicable_error(error_msg: &str) -> bool {
             "none of the git remotes configured for this repository point to a known github host",
         )
         || lower.contains("no github remotes")
+        || lower.contains("not a github repository")
+        || lower.contains("could not determine base repo")
+}
+
+/// Classifies `gh repo view` failures that authoritatively mean the current
+/// repository has no GitHub repository info, rather than a transient fetch
+/// failure.
+#[cfg(feature = "local_fs")]
+fn is_repository_lookup_not_applicable_error(error_msg: &str) -> bool {
+    let lower = error_msg.to_lowercase();
+    lower.contains(
+        "none of the git remotes configured for this repository point to a known github host",
+    ) || lower.contains("no github remotes")
         || lower.contains("not a github repository")
         || lower.contains("could not determine base repo")
 }

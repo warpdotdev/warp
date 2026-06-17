@@ -6,7 +6,7 @@ body:
     attributes:
       label: "Pre-submit Checks"
       options:
-        - label: "I have [searched Warp feature requests](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+label%3AFEATURE) and there are no duplicates"
+        - label: "I have [searched Warp feature requests](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+label%3Aenhancement) and there are no duplicates"
           required: true
         - label: "I have [searched Warp docs](https://docs.warp.dev) and my feature is not there"
           required: true

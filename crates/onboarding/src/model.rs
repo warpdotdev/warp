@@ -144,13 +144,6 @@ pub(crate) struct OnboardingStateModel {
     workspace_enforces_autonomy: bool,
     /// Whether the AgentView feature flag is enabled.
     agent_modality_enabled: bool,
-    /// Whether the user is in the FreeUserNoAi experiment group (and is free tier).
-    /// When true, the Agent Driven Development option on the intention slide is locked
-    /// behind an upgrade CTA.
-    free_user_no_ai_experiment: bool,
-    /// Yearly price per month in USD cents for the agent plan badge.
-    /// When `None`, falls back to a hardcoded default ($18/mo).
-    agent_price_cents: Option<i32>,
     /// Auth / billing state of the user.
     auth_state: OnboardingAuthState,
 }
@@ -162,8 +155,6 @@ impl OnboardingStateModel {
         default_model_id: LLMId,
         workspace_enforces_autonomy: bool,
         agent_modality_enabled: bool,
-        free_user_no_ai_experiment: bool,
-        agent_price_cents: Option<i32>,
         auth_state: OnboardingAuthState,
     ) -> Self {
         Self {
@@ -175,8 +166,6 @@ impl OnboardingStateModel {
             models,
             workspace_enforces_autonomy,
             agent_modality_enabled,
-            free_user_no_ai_experiment,
-            agent_price_cents,
             auth_state,
         }
     }
@@ -288,28 +277,6 @@ impl OnboardingStateModel {
         self.ui_customization.show_project_explorer = enabled;
         self.ui_customization.show_global_search = enabled;
         self.ui_customization.show_warp_drive = enabled;
-        ctx.notify();
-    }
-
-    pub(crate) fn free_user_no_ai_experiment(&self) -> bool {
-        self.free_user_no_ai_experiment
-    }
-
-    pub(crate) fn agent_price_badge(&self) -> String {
-        const DEFAULT_AGENT_PRICE_CENTS: i32 = 1800;
-        let cents = self.agent_price_cents.unwrap_or(DEFAULT_AGENT_PRICE_CENTS);
-        format!("Starting at ${}/mo", cents / 100)
-    }
-
-    pub(crate) fn set_agent_price_cents(
-        &mut self,
-        cents: Option<i32>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.agent_price_cents == cents {
-            return;
-        }
-        self.agent_price_cents = cents;
         ctx.notify();
     }
 
@@ -446,18 +413,6 @@ impl OnboardingStateModel {
             ctx
         );
         self.agent_settings.disable_oz = value;
-        ctx.notify();
-    }
-
-    pub(crate) fn set_free_user_no_ai_experiment(
-        &mut self,
-        value: bool,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.free_user_no_ai_experiment == value {
-            return;
-        }
-        self.free_user_no_ai_experiment = value;
         ctx.notify();
     }
 

@@ -194,6 +194,43 @@ fn range_truncated_at_byte_limit() {
 }
 
 #[test]
+fn whole_file_truncated_on_first_line_yields_empty_range() {
+    // Budget smaller than the very first line, so nothing is ever buffered.
+    // The truncated range must be a valid empty `1..1`, not a reversed `1..0`.
+    let mut acc = make_accumulator(&[], 4);
+    push(&mut acc, "hello"); // 5 bytes > 4 → truncated, nothing buffered
+    push(&mut acc, "world");
+    let (segments, bytes_read) = acc.finalize();
+
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].content, "");
+    assert_eq!(segments[0].line_range, Some(1..1));
+    assert_eq!(segments[0].line_count, 2);
+    assert_eq!(bytes_read, 0);
+}
+
+#[test]
+fn range_truncated_on_first_in_range_line_yields_empty_range() {
+    // The first line that falls inside the requested range already exceeds the
+    // budget, so nothing is buffered for this range. The range must be the
+    // empty `2..2`, not a reversed `2..0`.
+    let mut acc = make_accumulator(&[2..6], 4);
+    push(&mut acc, "skip"); // line 1, outside range
+    push(&mut acc, "hello"); // line 2, 5 bytes > 4 → truncated, nothing buffered
+    push(&mut acc, "world"); // line 3
+    let (segments, bytes_read) = acc.finalize();
+
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].content, "");
+    assert_eq!(segments[0].line_range, Some(2..2));
+    let Some(range) = &segments[0].line_range else {
+        panic!("expected a line range");
+    };
+    assert!(range.start <= range.end, "range must not be reversed");
+    assert_eq!(bytes_read, 0);
+}
+
+#[test]
 fn global_budget_shared_across_ranges() {
     // Budget of 12 bytes. First range uses 5, leaving 7 for the second.
     let mut acc = make_accumulator(&[1..2, 3..5], 12);

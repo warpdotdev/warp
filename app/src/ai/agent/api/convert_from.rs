@@ -884,6 +884,12 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::Server(_) => {
                 Ok(MaybeAIAgentAction::NoClientRepresentation)
             }
+            api::message::tool_call::Tool::WaitForEvents(payload) => {
+                create_standard_action(AIAgentActionType::WaitForEvents {
+                    tool_call_id: self.tool_call_id.clone(),
+                    idle_timeout_seconds: payload.idle_timeout_seconds,
+                })
+            }
             _ => Err(ToolToAIAgentActionError::UnexpectedTool),
         }
     }

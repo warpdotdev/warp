@@ -638,10 +638,9 @@ impl AIAgentOutput {
 }
 
 /// Represents user visible errors.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub enum RenderableAIError {
     QuotaLimit {
-        #[serde(default)]
         user_display_message: Option<String>,
     },
     ServerOverloaded,
@@ -654,21 +653,41 @@ pub enum RenderableAIError {
     AwsBedrockCredentialsExpiredOrInvalid {
         model_name: String,
     },
+    /// A transient network failure (lost connection or truncated response stream). Carries its
+    /// own complete user-facing copy; `kind` preserves the structured cause (including the raw
+    /// API error) so user reports can disambiguate the different causes behind the shared message.
+    TransientNetworkError {
+        kind: TransientNetworkErrorKind,
+        will_attempt_resume: bool,
+        /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
+        /// connectivity before attempting the resume.
+        waiting_for_network: bool,
+    },
     Other {
         error_message: String,
         will_attempt_resume: bool,
         /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
+        /// True when the error originates from a user-side issue (e.g., model not allowed,
+        /// blocked due to fraud, plan restriction). Maps the task to FAILED state instead of ERROR.
+        is_user_error: bool,
     },
 }
 
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
         "Warp lost connection while receiving the agent response. This is usually temporary.";
-    pub fn transient_network_error(will_attempt_resume: bool, waiting_for_network: bool) -> Self {
-        Self::Other {
-            error_message: Self::TRANSIENT_NETWORK_ERROR_MESSAGE.to_string(),
+    /// Creates a transient network error. `kind` is the structured cause (including the raw API
+    /// error where one exists), preserved so user reports can disambiguate the different causes
+    /// behind the shared user-facing copy.
+    pub fn transient_network_error(
+        will_attempt_resume: bool,
+        waiting_for_network: bool,
+        kind: TransientNetworkErrorKind,
+    ) -> Self {
+        Self::TransientNetworkError {
+            kind,
             will_attempt_resume,
             waiting_for_network,
         }
@@ -695,14 +714,39 @@ impl RenderableAIError {
             Self::Other {
                 will_attempt_resume: true,
                 ..
+            } | Self::TransientNetworkError {
+                will_attempt_resume: true,
+                ..
             }
         )
     }
 }
 
-impl From<&AIApiError> for RenderableAIError {
-    fn from(value: &AIApiError) -> Self {
-        match value {
+/// The cause behind a [`RenderableAIError::TransientNetworkError`]. Kept structured (rather than
+/// collapsed to a free-form string) so user reports preserve the raw error; rendered to text only
+/// at display time.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum TransientNetworkErrorKind {
+    /// A lost connection or truncated response stream — the raw underlying API error. Rendered via
+    /// `Debug` so reports preserve the full structured error rather than its terse `Display`.
+    #[error("{0:?}")]
+    Api(Arc<AIApiError>),
+    /// The response stream completed with an unfinished exchange and no error event.
+    #[error("stream completed with an unfinished exchange and no error event")]
+    UnfinishedExchange,
+    /// The conversation was left in a transient-error state but the last exchange carried no
+    /// structured error to surface.
+    #[error("no structured error on the last exchange")]
+    MissingExchangeError,
+}
+
+impl From<&Arc<AIApiError>> for RenderableAIError {
+    fn from(value: &Arc<AIApiError>) -> Self {
+        // Non-retryable 4xx errors (403 fraud block, 400 model/plan restriction, etc.)
+        // are user-originating — map them to a user error so the task reaches FAILED
+        // state rather than ERROR state.
+        let is_user_error = !value.is_recoverable();
+        match value.as_ref() {
             AIApiError::QuotaLimit {
                 user_display_message,
             } => Self::QuotaLimit {
@@ -710,15 +754,38 @@ impl From<&AIApiError> for RenderableAIError {
             },
             AIApiError::ServerOverloaded => Self::ServerOverloaded,
             AIApiError::Transport(error)
-            | AIApiError::Deserialization(DeserializationError::Transport(error))
-                if Self::is_transient_network_transport_error(error) =>
-            {
-                Self::transient_network_error(false, false)
+            | AIApiError::Deserialization(DeserializationError::Transport(error)) => {
+                // A transport error with no HTTP status is a lost-connection failure; one that
+                // carries a status means the server responded, so it gets generic rendering.
+                if Self::is_transient_network_transport_error(error) {
+                    Self::transient_network_error(
+                        false,
+                        false,
+                        TransientNetworkErrorKind::Api(value.clone()),
+                    )
+                } else {
+                    Self::Other {
+                        error_message: format!("Request failed with error: {value:?}"),
+                        will_attempt_resume: false,
+                        waiting_for_network: false,
+                        is_user_error,
+                    }
+                }
             }
-            _ => Self::Other {
+            AIApiError::UnexpectedEof => Self::transient_network_error(
+                false,
+                false,
+                TransientNetworkErrorKind::Api(value.clone()),
+            ),
+            AIApiError::Deserialization(DeserializationError::Json(_))
+            | AIApiError::NoContextFound
+            | AIApiError::ErrorStatus(_, _)
+            | AIApiError::Other(_)
+            | AIApiError::Stream { .. } => Self::Other {
                 error_message: format!("Request failed with error: {value:?}"),
                 will_attempt_resume: false,
                 waiting_for_network: false,
+                is_user_error,
             },
         }
     }
@@ -750,6 +817,13 @@ impl Display for RenderableAIError {
                 write!(
                     f,
                     "AWS Bedrock credentials expired or invalid for {model_name}"
+                )
+            }
+            Self::TransientNetworkError { kind, .. } => {
+                write!(
+                    f,
+                    "{}\n\nDebug info: {kind}",
+                    Self::TRANSIENT_NETWORK_ERROR_MESSAGE
                 )
             }
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
@@ -2686,7 +2760,7 @@ impl Display for AIAgentInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserQuery { .. } => {
-                write!(f, "UserQuery: {}", self.user_query().unwrap_or_default())
+                write!(f, "UserQuery: {}", self.display_query().unwrap_or_default())
             }
             Self::AutoCodeDiffQuery { query, .. } => {
                 write!(f, "AutoCodeDiffQuery: {query}")
@@ -2728,7 +2802,11 @@ impl Display for AIAgentInput {
 }
 
 impl AIAgentInput {
-    pub fn user_query(&self) -> Option<String> {
+    /// Display text for any input that surfaces a prompt-like query in the UI
+    /// (typed queries, slash commands, skill invocations, etc.). Unlike
+    /// [`Self::is_user_query`], which strictly matches the `UserQuery` variant,
+    /// this returns `Some` for several input variants.
+    pub fn display_query(&self) -> Option<String> {
         match self {
             Self::UserQuery {
                 query,
@@ -2791,7 +2869,7 @@ impl AIAgentInput {
         &self,
         initial_conversation_query: Option<&String>,
     ) -> Option<String> {
-        let mut query = self.user_query()?;
+        let mut query = self.display_query()?;
         if self
             .user_query_mode()
             .is_none_or(|mode| matches!(mode, UserQueryMode::Normal))
@@ -3018,7 +3096,7 @@ impl AIAgentExchange {
         let user_queries: Vec<String> = self
             .input
             .iter()
-            .filter_map(|input| input.user_query())
+            .filter_map(|input| input.display_query())
             .collect();
         user_queries.join("\n")
     }
@@ -3068,7 +3146,9 @@ impl AIAgentExchange {
     }
 
     pub fn has_user_query(&self) -> bool {
-        self.input.iter().any(|input| input.user_query().is_some())
+        self.input
+            .iter()
+            .any(|input| input.display_query().is_some())
     }
 
     pub fn has_accepted_file_edit(&self) -> bool {

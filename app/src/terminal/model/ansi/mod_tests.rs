@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::io;
-use std::io::Write;
 use std::path::PathBuf;
 
 use hex;
@@ -228,10 +227,6 @@ impl Handler for MockHandler {
     fn init_subshell(&mut self, data: InitSubshellValue) {
         self.d_proto_hooks
             .push(DProtoHook::InitSubshell { value: data })
-    }
-
-    fn init_ssh(&mut self, data: InitSshValue) {
-        self.d_proto_hooks.push(DProtoHook::InitSsh { value: data })
     }
 
     fn sourced_rc_file(&mut self, data: SourcedRcFileForWarpValue) {
@@ -534,6 +529,39 @@ fn parse_dcs_ssh() {
                 remote_shell: "zsh".to_string(),
                 session_id: Some(167303092612201),
                 remote_session_id: Some(167303092612202),
+                external_control_master: false,
+            }
+        ),
+        _ => panic!("incorrect dcs value"),
+    };
+}
+
+#[test]
+fn parse_dcs_ssh_with_external_control_master() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "SSH",
+                "value": {
+                    "socket_path": "/home/user/.ssh/cm-user@host:22",
+                    "remote_shell": "zsh",
+                    "session_id": 167303092612201,
+                    "remote_session_id": 167303092612202,
+                    "external_control_master": true
+                }
+            }"#,
+    );
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::SSH { value } => assert_eq!(
+            *value,
+            SSHValue {
+                socket_path: PathBuf::from("/home/user/.ssh/cm-user@host:22"),
+                remote_shell: "zsh".to_string(),
+                session_id: Some(167303092612201),
+                remote_session_id: Some(167303092612202),
+                external_control_master: true,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -829,7 +857,6 @@ fn parse_sourced_rc_file_hook() {
             SourcedRcFileForWarpValue {
                 shell: "zsh".to_owned(),
                 uname: None,
-                tmux: None,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -856,7 +883,6 @@ fn parse_sourced_rc_file_hook_with_uname() {
             SourcedRcFileForWarpValue {
                 shell: "zsh".to_owned(),
                 uname: Some("Darwin".to_owned()),
-                tmux: None,
             }
         ),
         _ => panic!("incorrect dcs value"),
@@ -1020,7 +1046,7 @@ fn parse_osc7_path_with_unescaped_semicolons_preserved() {
 #[test]
 fn parse_osc7_empty_host_ignored() {
     // Hostless payload (`file:///path`) is terminal-controlled and a remote
-    // shell over legacy SSH can emit it just as easily as a local one; reject.
+    // shell over a wrapper SSH session can emit it just as easily as a local one; reject.
     let bytes: &[u8] = b"\x1b]7;file:///Users/foo/bar\x07";
     let (_, handler) = parse_bytes(bytes);
 
@@ -1104,45 +1130,4 @@ fn parse_osc7_empty_payload_ignored() {
     let (_, handler) = parse_bytes(bytes);
 
     assert!(handler.cwd_updates.is_empty());
-}
-
-#[test]
-fn tmux_pane_writer_formats_bytes_as_send_keys() {
-    // Test that TmuxPaneWriter correctly converts writes to tmux send-keys format
-    let mut output = Vec::new();
-    {
-        let mut writer = super::TmuxPaneWriter::new(&mut output, 123);
-        // Write a cursor position response (ESC[1;1R)
-        writer.write_all(b"\x1b[1;1R").unwrap();
-    }
-
-    let output_str = String::from_utf8(output).unwrap();
-    // The output should be a send-keys command with hex bytes
-    // Format: send-keys -Ht %{pane_id} {hex} {hex}...\n
-    assert!(output_str.starts_with("send-keys -Ht %123"));
-    assert!(output_str.contains("1B")); // ESC = 0x1B
-    assert!(output_str.ends_with('\n'));
-}
-
-#[test]
-fn tmux_pane_writer_empty_write_returns_zero() {
-    let mut output = Vec::new();
-    let mut writer = super::TmuxPaneWriter::new(&mut output, 42);
-    let result = writer.write(&[]).unwrap();
-
-    assert_eq!(result, 0);
-    assert!(output.is_empty());
-}
-
-#[test]
-fn tmux_pane_writer_returns_original_byte_count() {
-    let mut output = Vec::new();
-    let mut writer = super::TmuxPaneWriter::new(&mut output, 42);
-    let input = b"test";
-    let result = writer.write(input).unwrap();
-
-    assert_eq!(result, 4);
-    let output_str = String::from_utf8(output).unwrap();
-    assert!(output_str.starts_with("send-keys -Ht %42"));
-    assert!(output_str.ends_with('\n'));
 }

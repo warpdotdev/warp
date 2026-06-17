@@ -224,6 +224,7 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         Ok(())
     }
+
     /// Update the Oz platform plugin for this CLI agent, if one exists.
     /// Default reuses the install path because most agents do not have a
     /// platform plugin or need distinct update behavior.

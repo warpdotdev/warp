@@ -17,8 +17,8 @@
 //! Before following a record, clients require the endpoint host to be exactly
 //! `127.0.0.1` and the broker filename to be derived from the instance ID. A
 //! discovery scan also rejects incompatible records, prunes dead PIDs, and
-//! performs an authenticated `app.ping` probe. When outside-Warp control is
-//! disabled, records contain neither an endpoint nor a broker reference.
+//! performs an authenticated `app.ping` probe. When Scripting is disabled,
+//! records contain neither an endpoint nor a broker reference.
 //!
 //! The owner-only directory, records, and broker sockets protect against other
 //! OS users. The broker's kernel-reported peer-UID check is the authoritative
@@ -108,7 +108,6 @@ pub struct InstanceRecord {
     pub executable_path: Option<PathBuf>,
     pub endpoint: Option<ControlEndpoint>,
     pub credential_broker: Option<CredentialBrokerReference>,
-    pub outside_warp_control_enabled: bool,
     pub actions: Vec<ActionMetadata>,
 }
 
@@ -133,7 +132,6 @@ impl InstanceRecord {
             app_version,
             started_at: Utc::now(),
             executable_path: std::env::current_exe().ok(),
-            outside_warp_control_enabled: endpoint.is_some(),
             credential_broker,
             endpoint,
             actions,
@@ -147,13 +145,9 @@ impl InstanceRecord {
     /// from its instance ID. The broker and app bridge still authenticate and
     /// authorize the eventual request.
     pub fn validate_local_control_authority(&self) -> Result<(), ControlError> {
-        match (
-            self.outside_warp_control_enabled,
-            &self.endpoint,
-            &self.credential_broker,
-        ) {
-            (false, None, None) => Ok(()),
-            (true, Some(endpoint), Some(credential_broker))
+        match (&self.endpoint, &self.credential_broker) {
+            (None, None) => Ok(()),
+            (Some(endpoint), Some(credential_broker))
                 if endpoint.host == "127.0.0.1"
                     && credential_broker.socket_path
                         == broker_socket_filename(&self.instance_id) =>
@@ -173,7 +167,7 @@ impl InstanceRecord {
         let credential_broker = self.credential_broker.as_ref().ok_or_else(|| {
             ControlError::new(
                 ErrorCode::LocalControlDisabled,
-                "outside-Warp local control credential broker is disabled for this instance",
+                "local-control credential broker is disabled for this instance",
             )
         })?;
         Ok(discovery_dir().join(&credential_broker.socket_path))

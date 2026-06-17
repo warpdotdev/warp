@@ -56,6 +56,7 @@ test = false
 [dependencies]
 addr = "0.15.6"
 ai.workspace = true
+alphanumeric-sort = "1.5.7"
 anyhow.workspace = true
 arrayvec.workspace = true
 asset_cache.workspace = true
@@ -214,6 +215,7 @@ tikv-jemallocator = { version = "0.6", optional = true, features = [
 toml = "0.8.13"
 toml_edit.workspace = true
 tracing.workspace = true
+tracing-futures = { workspace = true, features = ["futures-03"] }
 ui_components.workspace = true
 unicase = "2.7.0"
 unicode-general-category.workspace = true
@@ -317,8 +319,14 @@ http_server.workspace = true
 hyper.workspace = true
 libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
 mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
+opentelemetry.workspace = true
+opentelemetry-http.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
 
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.16", features = ["credentials-login"] }
@@ -458,6 +466,8 @@ ai_resume_button = []
 autoupdate = []
 figma_detection = []
 bundled_skills = []
+supergrok = []
+gemini_enterprise = []
 agent_mode = []
 agent_mode_computer_use = []
 agent_mode_debug = []
@@ -675,6 +685,7 @@ default = [
     "remote_codebase_indexing",
     "solo_user_byok",
     "custom_inference_endpoints",
+    "supergrok",
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
@@ -693,7 +704,6 @@ interactive_conversation_management_view = []
 default_waterfall_mode = []
 enforce_revisions_to_cloud_objects = []
 suggested_agent_mode_workflows = []
-ssh_tmux_wrapper = []
 ssh_enable_host_denylist_in_settings = []
 extern_plist = []
 fast_dev = ["skip_login"]
@@ -715,7 +725,6 @@ nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
 msys2_shells = []
 file_retrieval_tools = []
-welcome_tab = []
 get_started_tab = []
 code_mode_chip = []
 github_pr_prompt_chip = []
@@ -977,6 +986,7 @@ vertical_tabs = []
 vertical_tabs_summary_mode = []
 tab_configs = []
 grouped_tabs = []
+pinned_tabs = []
 warp_control_cli = []
 agent_harness = []
 oz_handoff = []

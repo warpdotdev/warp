@@ -706,6 +706,9 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::RunAgents(orchestrate_result) => {
                 Some(orchestrate_result.try_into()?)
             }
+            AIAgentActionResultType::WaitForEvents(wait_for_events_result) => {
+                Some(wait_for_events_result.try_into()?)
+            }
         };
         Ok(
             api::request::input::user_inputs::user_input::Input::ToolCallResult(

@@ -134,9 +134,6 @@ pub enum FeatureFlag {
     /// Enables AI rules for use with Agent Mode.
     AIRules,
 
-    /// Routes SSH sessions through the tmux-backed SSH wrapper.
-    SSHTmuxWrapper,
-
     /// Enables the shell selector, allowing us to open a new tab in
     /// a shell other than the default shell.
     ShellSelector,
@@ -372,10 +369,6 @@ pub enum FeatureFlag {
 
     /// Gates the bundled skill-based implementation of PR comment fetching.
     PRCommentsSkill,
-
-    /// An entrypoint pane type to launch other pane types from a search palette. The default view
-    /// when creating a tab.
-    WelcomeTab,
 
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStartedTab,
@@ -797,9 +790,6 @@ pub enum FeatureFlag {
     /// Enables Warp local control through the standalone warpctrl CLI.
     WarpControlCli,
 
-    /// When enabled, free-tier users are blocked from AI features (no-AI experiment arm).
-    FreeUserNoAi,
-
     /// Enables the ask_user_question tool allowing the agent to ask clarifying questions.
     AskUserQuestion,
 
@@ -877,6 +867,19 @@ pub enum FeatureFlag {
 
     /// Gates the Grouped Tabs feature.
     GroupedTabs,
+
+    /// Gates the Pinned Tabs feature, which lets users pin individual tabs
+    /// and whole tab groups so they stay at the front of the tab list and
+    /// are protected from reordering.
+    PinnedTabs,
+
+    /// Gates the SuperGrok feature, which lets users
+    /// connect a Grok subscription instead of pasting an API key.
+    SuperGrok,
+
+    /// Gates Gemini Enterprise (GEAP) BYOLLM, which lets users
+    /// route eliglible models to GEAP instead of Warp-managed inference.
+    GeminiEnterprise,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -907,8 +910,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RemoveAutosuggestionDuringTabCompletions,
     FeatureFlag::ResizeFix,
     FeatureFlag::AgentModeWorkflows,
-    #[cfg(not(windows))]
-    FeatureFlag::SSHTmuxWrapper,
     FeatureFlag::AgentModeAnalytics,
     FeatureFlag::LazySceneBuilding,
     FeatureFlag::SshDragAndDrop,
@@ -945,6 +946,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::AsyncFind,
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
+    FeatureFlag::WarpControlCli,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).

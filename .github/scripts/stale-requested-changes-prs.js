@@ -21,10 +21,12 @@ module.exports = async ({ github, context }) => {
   const now = Date.now();
   const ts = (value) => (value ? new Date(value).getTime() : 0);
 
-  // A PR has active requested changes when any reviewer's latest *decisive*
-  // review (APPROVED / CHANGES_REQUESTED / DISMISSED, tracked separately from
-  // COMMENTED so a later comment-reply doesn't flip state) is CHANGES_REQUESTED.
-  const hasActiveChangesRequested = (reviews) => {
+  // Returns the submitted_at (ms) of the most recent active requested-changes
+  // review, or 0 when no reviewer currently has changes requested. A reviewer's
+  // latest *decisive* review (APPROVED / CHANGES_REQUESTED / DISMISSED, tracked
+  // separately from COMMENTED so a later comment-reply doesn't flip state)
+  // determines their effective state.
+  const latestActiveChangesRequestedAt = (reviews) => {
     const decisive = new Map();
     const latest = new Map();
     for (const r of reviews) {
@@ -40,11 +42,12 @@ module.exports = async ({ github, context }) => {
         }
       }
     }
+    let latestAt = 0;
     for (const login of latest.keys()) {
       const eff = decisive.get(login) || latest.get(login);
-      if (eff.state === 'CHANGES_REQUESTED') return true;
+      if (eff.state === 'CHANGES_REQUESTED') latestAt = Math.max(latestAt, eff.at);
     }
-    return false;
+    return latestAt;
   };
 
   const openPRs = await github.paginate(github.rest.pulls.list, {
@@ -71,7 +74,8 @@ module.exports = async ({ github, context }) => {
       pull_number: pr.number,
       per_page: 100,
     });
-    if (!hasActiveChangesRequested(reviews)) continue;
+    const changesRequestedAt = latestActiveChangesRequestedAt(reviews);
+    if (!changesRequestedAt) continue;
 
     const [issueComments, reviewComments] = await Promise.all([
       github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: pr.number, per_page: 100 }),
@@ -98,9 +102,13 @@ module.exports = async ({ github, context }) => {
     const prGraph = pushData.repository.pullRequest;
     const headCommit = (prGraph.commits.nodes[0] || {}).commit || {};
 
-    // Author-driven last activity: PR creation, head-branch push, and comments
-    // by the PR author. Maintainer/third-party/bot activity is ignored.
-    let lastActivity = ts(pr.created_at);
+    // Staleness anchor: the most recent active requested-changes review, plus
+    // author-driven events that reset the timer (PR creation, head-branch push,
+    // and comments by the PR author). Anchoring on the latest review ensures a
+    // subsequent requested-changes review restarts the window instead of
+    // measuring from stale, pre-review author activity. Maintainer/third-party/
+    // bot activity is otherwise ignored.
+    let lastActivity = Math.max(ts(pr.created_at), changesRequestedAt);
     lastActivity = Math.max(lastActivity, ts(headCommit.pushedDate || headCommit.committedDate));
     for (const ev of prGraph.timelineItems.nodes) {
       lastActivity = Math.max(lastActivity, ts(ev.createdAt));

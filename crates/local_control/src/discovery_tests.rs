@@ -153,7 +153,7 @@ fn serialized_discovery_record_does_not_contain_raw_credential_material() {
 }
 
 #[test]
-fn disabled_outside_warp_record_does_not_expose_actionable_authority() {
+fn disabled_record_does_not_expose_actionable_authority() {
     let record = InstanceRecord::for_current_process(
         None,
         "local",
@@ -161,7 +161,6 @@ fn disabled_outside_warp_record_does_not_expose_actionable_authority() {
         Some("test".to_owned()),
         crate::protocol::ActionKind::implemented_metadata(),
     );
-    assert!(!record.outside_warp_control_enabled);
     assert!(record.endpoint.is_none());
     assert!(record.credential_broker.is_none());
 }
