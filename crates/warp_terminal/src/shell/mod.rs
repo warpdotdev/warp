@@ -740,6 +740,22 @@ impl ShellType {
         }
     }
 
+    /// Returns the shell command used to asynchronously collect all function names after bootstrap,
+    /// for shells where the sync bootstrap collects only a core subset. Returns `None` for shells
+    /// that already collect all functions synchronously.
+    pub fn shell_command_to_get_all_functions(&self) -> Option<&'static str> {
+        match self {
+            // Other shells collect all functions synchronously at bootstrap; only PowerShell
+            // restricts its sync collection to core modules to avoid blocking on large
+            // third-party modules like Microsoft.Graph.
+            ShellType::Bash | ShellType::Zsh | ShellType::Fish => None,
+            ShellType::PowerShell => {
+                // Write as explicit UTF-8 bytes, matching the executables command pattern.
+                Some(r#"$names = Get-Command -CommandType Function | Where-Object { -not $_.Name.StartsWith('Warp') } | Select-Object -ExpandProperty Name; $text = [string]::Join([Environment]::NewLine, $names); $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($text); [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)"#)
+            }
+        }
+    }
+
     pub fn force_in_band_command_executor(&self) -> bool {
         // TODO: Remove this function once we have confidence in using a local executor in
         // powershell.
