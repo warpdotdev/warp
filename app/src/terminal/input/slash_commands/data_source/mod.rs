@@ -331,6 +331,13 @@ impl SlashCommandDataSource {
         if command.name == commands::MOVE_TO_CLOUD.name && !context.is_cloud_handoff_enabled {
             return false;
         }
+        if command.name == commands::FORK.name
+            && context
+                .session_context
+                .contains(Availability::CLOUD_MODE_V2_COMPOSER)
+        {
+            return false;
+        }
         // /continue-locally only applies to cloud Oz conversations. Non-Oz cloud runs
         // (Claude, Gemini) are filtered out so the slash menu doesn't surface a no-op command.
         #[cfg(not(target_family = "wasm"))]
