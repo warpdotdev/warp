@@ -131,7 +131,7 @@ fn other_error_is_error_with_internal() {
 }
 
 #[test]
-fn other_user_error_is_failed_with_feature_not_available() {
+fn other_user_error_is_failed_with_invalid_request() {
     assert_update(
         classify_renderable_error(&RenderableAIError::Other {
             error_message: "Model not allowed for your current plan.".into(),
