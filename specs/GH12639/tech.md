@@ -78,6 +78,13 @@ first structured notification. Those command-detected sessions are currently
 event. A setup-only Droid `SessionStart` must clear that false running state
 rather than preserve it.
 
+A second eventing detail matters: `CLIAgentSessionsModelEvent::StatusChanged`
+is consumed as a lifecycle status, not as a generic refresh signal. Current
+consumers update conversation status, auto-toggle rich input, create or clear
+agent notifications, drive ambient CLI harness completion, and sync local task
+state from `StatusChanged`. `CLIAgentSessionsModelEvent::SessionUpdated` is the
+existing non-status session refresh/save signal.
+
 ## Proposed changes
 
 ### 1. Enable Droid in the session listener
@@ -140,14 +147,22 @@ Required behavior:
   `ConversationStatus::InProgress`.
 - If a setup-only `SessionStart` changes an existing command-detected session
   from `InProgress` to `Idle`, the model must notify status surfaces so the
-  running spinner is cleared. This can be done with `StatusChanged(Idle)` or an
-  equivalent `SessionUpdated` notification, but the UI projection for `Idle`
-  must be no conversation status (`None`), not
-  `ConversationStatus::InProgress`.
-- Update the projection used by status surfaces, such as
-  `CLIAgentSessionStatus::to_conversation_status` or a wrapper around it, so
-  `Idle` returns `None`. Do not map `Idle` to `InProgress`, `Blocked`, or
-  `Success`.
+  running spinner is cleared. This must use `SessionUpdated` or another
+  explicitly non-status update event, not `StatusChanged(Idle)`.
+- Keep `StatusChanged` reserved for status-bearing session transitions that
+  lifecycle consumers should process: `InProgress`, `Blocked`, and `Success`.
+  Setup-only `SessionStart` must not trigger conversation-status updates,
+  rich-input auto-toggle, desktop notifications, agent notifications, ambient
+  harness completion, or local task lifecycle sync.
+- Update the projection used by status surfaces so `Idle` returns no
+  conversation status (`None`). This can be an `Option<ConversationStatus>`
+  replacement for `CLIAgentSessionStatus::to_conversation_status` or a wrapper
+  used by vertical tabs and detail sidecars. Do not map `Idle` to
+  `InProgress`, `Blocked`, or `Success`.
+- If `Idle` is added as a `CLIAgentSessionStatus` variant, every direct match on
+  `CLIAgentSessionStatus` in lifecycle consumers must handle `Idle` as a no-op
+  or unreachable non-status case. It must not fall through to the existing
+  success/completed or blocked/attention-needed behavior.
 - `PromptSubmit`, `ToolComplete` after blocked, `PermissionReplied` after
   blocked, `PermissionRequest`, `QuestionAsked`, and `Stop` remain
   status-bearing and move the session out of `Idle`. The status-bearing marker
@@ -346,15 +361,16 @@ Implementation tests should include:
      session in `Idle`, not `InProgress`.
    - If command detection already created an `InProgress` Droid session with no
      status-bearing rich event, registering from Droid `SessionStart` changes it
-     to `Idle` and notifies status surfaces so the running spinner clears.
+     to `Idle` and emits `SessionUpdated` or another non-status refresh event so
+     the running spinner clears.
    - If the stored session has already applied a status-bearing rich event with
      the same non-empty `session_id`, a later duplicate Droid `SessionStart`
      keeps that status for that same session.
    - If a Droid `SessionStart` has a different `session_id` from the stored
      session, the status-bearing marker resets and the session becomes `Idle`.
    - Applying that same `SessionStart` seeds context/plugin version but emits no
-     `InProgress`, `Blocked`, or `Success` status and does not project to
-     `ConversationStatus::InProgress`.
+     `StatusChanged`, emits no `InProgress`, `Blocked`, or `Success` lifecycle
+     status, and does not project to any `ConversationStatus`.
    - A later `PromptSubmit` moves the session from `Idle` to `InProgress`.
    - A later `PermissionRequest` or `QuestionAsked` moves the session from
      `Idle` or `InProgress` to `Blocked`.
@@ -367,16 +383,29 @@ Implementation tests should include:
      spinner.
    - A command-detected Droid session that was showing an in-progress spinner
      clears that spinner when the first rich event is setup-only `SessionStart`.
+   - That setup-only `SessionStart` does not call
+     `BlocklistAIHistoryModel::update_conversation_status`, does not auto-open or
+     auto-close rich input, and does not send a desktop notification.
    - A later Droid `prompt_submit` shows the in-progress spinner.
 
-4. `app/src/terminal/cli_agent_sessions/plugin_manager/mod_tests.rs`
+4. Lifecycle consumer coverage, in the most local existing test suites:
+   - `app/src/ai/agent_management/agent_management_model.rs` treats `Idle` or a
+     setup-only non-status update as no-op: no complete/request notification is
+     added and no existing notification is cleared as resumed work.
+   - `app/src/ai/agent_sdk/driver.rs` does not schedule ambient CLI harness
+     completion or cancel an idle timeout for `Idle`.
+   - `app/src/ai/blocklist/local_agent_task_sync_model.rs` does not map `Idle` to
+     `Succeeded`, `Blocked`, or `InProgress` and does not emit a local task
+     lifecycle update for setup-only `SessionStart`.
+
+5. `app/src/terminal/cli_agent_sessions/plugin_manager/mod_tests.rs`
    - `plugin_manager_for(CLIAgent::Droid)` returns `Some` when
      `FeatureFlag::HOANotifications` is enabled.
    - `plugin_manager_for(CLIAgent::Droid)` returns `None` when
      `FeatureFlag::HOANotifications` is disabled.
    - Droid is removed from the unsupported-agents assertion.
 
-5. `app/src/terminal/cli_agent_sessions/plugin_manager/droid_tests.rs`
+6. `app/src/terminal/cli_agent_sessions/plugin_manager/droid_tests.rs`
    - `can_auto_install()` is false.
    - `supports_update()` is false.
    - minimum version is stable and explicit.
@@ -404,7 +433,7 @@ Implementation tests should include:
      tool input, then assert the final bytes written to `/dev/tty` contain no raw
      terminal control bytes except the required OSC wrapper delimiters.
 
-6. Parser coverage, if not already covered elsewhere:
+7. Parser coverage, if not already covered elsewhere:
    - A structured v1 payload with `agent: "droid"` resolves to
      `CLIAgent::Droid`.
    - A malformed or unsupported Droid payload is ignored or treated as unknown
@@ -459,8 +488,16 @@ Manual validation:
 - Risk: a setup-only `SessionStart` could make Warp display Droid as running.
   Mitigation: add an explicit idle registration state, track whether a
   status-bearing rich event has actually applied to the current Droid
-  `session_id`, and test both new sessions and command-detected `InProgress`
-  sessions being reset to `Idle` by setup-only `SessionStart`.
+  `session_id`, clear command-detected `InProgress` with a non-status
+  `SessionUpdated` refresh, and test that setup-only `SessionStart` does not
+  enter `StatusChanged` lifecycle consumers.
+
+- Risk: an `Idle` status could be treated as completed, blocked, or resumed work
+  by existing `StatusChanged` consumers. Mitigation: do not emit
+  `StatusChanged(Idle)` for setup-only `SessionStart`; require no-op handling in
+  any direct `CLIAgentSessionStatus` matches that must compile after adding
+  `Idle`; and add tests for conversation status, rich input auto-toggle,
+  desktop/agent notifications, ambient harness completion, and local task sync.
 
 - Risk: adding Droid to the default listener forwards unexpected event types.
   Mitigation: the event parser already normalizes known event names, and the

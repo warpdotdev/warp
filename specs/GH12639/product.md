@@ -100,6 +100,8 @@ work to advertise whether it is still active, done, or waiting.
     the false running state and leaves the session neutral/idle. The existing
     state is preserved only after a status-bearing rich Droid event has already
     updated the same non-empty Droid `session_id`.
+    Clearing this false running state is a UI/session refresh only: it must not
+    behave like completion, attention-needed, or resumed-work status.
 
 12. Event payloads that declare `agent: "droid"` and use Warp's existing
     `warp://cli-agent` OSC 777 payload format are parsed as Droid events, not as
@@ -161,7 +163,9 @@ a safe attention-needed state rather than reporting completion.
    running/completed/blocked status on its own.
 7. If command detection created a Droid session as in-progress before the first
    Droid `SessionStart`, that setup-only `SessionStart` changes the session to
-   neutral/idle and removes any running indicator.
+   neutral/idle and removes any running indicator without creating completed,
+   attention-needed, rich-input auto-toggle, desktop notification, or agent task
+   lifecycle side effects.
 8. A valid structured OSC 777 `warp://cli-agent` payload with `agent: "droid"`
    is parsed as `CLIAgent::Droid`.
 9. Existing Claude Code, OpenCode, Codex, Gemini, Auggie, and Pi session-status
@@ -185,6 +189,10 @@ a safe attention-needed state rather than reporting completion.
   gating, neutral `session_start` registration for new and command-detected
   sessions, and default forwarding behavior for `stop`, `permission_request`,
   and other status events.
+- Unit or integration tests cover the command-detected `session_start` reset as a
+  non-status update: the running indicator clears, but no completed/blocked
+  conversation status, rich-input auto-toggle, desktop notification, agent
+  notification, or local task lifecycle update is produced.
 - Unit tests cover the Droid plugin manager or instructions provider, including
   rollout gating, manual-only install behavior, and presence of the required
   Droid hook events.
