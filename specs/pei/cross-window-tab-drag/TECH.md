@@ -224,9 +224,9 @@ Cross-window drag must work for both the horizontal tab bar and the vertical tab
 
 ### 7.1 `tab_bar_rects_for_window`
 
-Lives in `view.rs`. Returns a `Vec<RectF>` containing the rect for the window's **active** tab presentation only — the horizontal `TAB_BAR_POSITION_ID` rect in horizontal-tabs mode, or the vertical `VERTICAL_TABS_PANEL_POSITION_ID` rect in vertical-tabs mode (0 or 1 rects per window). The layout is selected by `active_tab_bar_position_id`, which reuses the same `FeatureFlag::VerticalTabs` + `use_vertical_tabs` check the tab bar uses to decide what to render, so the rect always matches where the tab strip is actually shown. The inactive presentation is deliberately excluded: in vertical-tabs mode the horizontal bar still renders at the top but holds only toolbar controls (no tab strip), so treating it as a drop zone would light up a spurious insertion placeholder when a tab is dragged over it — and the reverse holds in horizontal-tabs mode.
+Lives in `view.rs`. Returns a `Vec<RectF>` containing whichever of the horizontal `TAB_BAR_POSITION_ID` and vertical `VERTICAL_TABS_PANEL_POSITION_ID` rects are currently laid out — 0, 1, or 2 rects per window. Both must be considered because a window with the vertical tabs panel open still renders the horizontal bar at the top.
 
-`Workspace::on_tab_drag` uses this to decide "is the drag still inside the active tab presentation on its perpendicular axis?" `cross_window_attach_target` and the target-side stay-check use the same helper to hit-test the active presentation.
+`Workspace::on_tab_drag` uses this to decide "is the drag still inside any tab presentation on its perpendicular axis?" — the drag is treated as outside the tab bar only when **every** rendered presentation says it's outside its own perpendicular axis. `cross_window_attach_target` and the target-side stay-check use the same helper to hit-test all candidate presentations.
 
 ### 7.2 `TAB_BAR_HIT_MARGIN` is shared between entry and stay checks
 

@@ -12,12 +12,14 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 /// # Overview
 ///
 /// When a user drags a tab out of a window (or drags a single-tab window), this
-/// model tracks the drag lifecycle through three phases (see [`DragPhase`]):
-/// `Floating` (preview follows the cursor), `InsertedInTarget` (tab has been
-/// handed off into another window's tab bar), and `Transitioning` (a view-tree
-/// transfer is in progress). The `Transitioning` phase blocks `on_drag` from
-/// re-entering the drag handler while views are being moved between windows,
-/// which the WarpUI framework does not support within a single event cycle.
+/// model tracks the drag lifecycle. The primary user-visible phases are `Floating`
+/// (preview follows the cursor) and `GhostInTarget` (cursor is over a target
+/// window's tab bar; a lightweight ghost visual is shown but no view-tree transfer
+/// has occurred yet). At drop time the model briefly enters `InsertedInTarget`
+/// while the real view-tree transfer runs, then immediately finalizes.
+/// `Transitioning` guards `on_drag` against re-entrant processing during a
+/// `reverse_handoff` (the escape path when a drag event races in while
+/// `InsertedInTarget` before `finalize` completes).
 ///
 /// # Relationship with Workspace views
 ///
@@ -40,16 +42,15 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 ///   Floating ◄──────────────────┐
 ///       │                       │
 ///       │ cursor enters a       │ cursor leaves target tab bar
-///       │ target tab bar        │ (reverse_handoff moves tab back
-///       │                       │  to the preview window)
+///       │ target tab bar        │ (ghost cleared; no view transfer)
 ///       ▼                       │
-///   Transitioning ──► InsertedInTarget
-///       │                       │
-///       │                       │ on_drop while inserted
-///       │                       ▼
-///       │                  FinalizeHandoff
+///   GhostInTarget───────────────┘
 ///       │
-///       │ on_drop while floating
+///       │ on_drop → view-tree transfer → finalize
+///       ▼
+///   FinalizeHandoff  (source window closes; tab lands in target)
+///
+///       on_drop while Floating (no target)
 ///       └──────────────────► FinalizeFloatingWindow  (no target; keep window at drop position)
 /// ```
 ///
@@ -62,20 +63,25 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity, WindowId};
 /// [begin_multi_tab_drag]  (creates a dedicated preview window)
 ///       │
 ///       ▼
-///   Floating ◄──────────────────┐
-///       │                       │
-///       │ cursor enters a       │ cursor leaves target tab bar
-///       │ target tab bar        │ (reverse_handoff transfers tab
-///       │                       │  back into the preview window)
-///       ▼                       │
-///   Transitioning ──► InsertedInTarget
-///       │                       │
-///       │                       │ on_drop while inserted
-///       │                       ▼
-///       │                  FinalizeHandoff
-///       │                  (closes preview, removes source tab)
+///   Floating ◄──────────────────────────────────────────────────────┐
+///       │  │                                                         │
+///       │  │ cursor enters source's own tab bar                      │ cursor leaves cross-window
+///       │  │ (stays Floating; reordering_in_source=true)             │ target tab bar
+///       │  ▼                                                         │ (ghost cleared;
+///       │  DragResult::ReorderInSource (caller reorders placeholder) │  no view transfer)
+///       │  on_drop → DropInto(source) → view-tree transfer → finalize│
+///       │  ▼                                                         │
+///       │  FinalizeHandoff  (put-back; preview closes)               │
+///       │                                                            │
+///       │ cursor enters a cross-window tab bar                       │
+///       ▼                                                            │
+///   GhostInTarget───────────────────────────────────────────────────┘
 ///       │
-///       │ on_drop while floating
+///       │ on_drop → view-tree transfer → finalize
+///       ▼
+///   FinalizeHandoff  (preview closes; source loses one tab; tab lands in target)
+///
+///       on_drop while Floating (no target; not reordering_in_source)
 ///       └──────────────────► FinalizePreviewAsNewWindow  (no target; promote preview to permanent
 ///                                                        window, remove source tab)
 /// ```
@@ -233,17 +239,22 @@ enum DragPhase {
         target_insertion_index: usize,
         ghost_cursor_in_target: Vector2F,
     },
-    /// The tab has been transferred into another window's tab list and is being
-    /// dragged within that window's tab bar. Used only for the back-to-caller
-    /// path (multi-tab drag returning to the source window). The preview window
-    /// stays alive so a reverse-handoff can move the tab back if needed.
+    /// The tab has been transferred into another window's tab list. Entered
+    /// transiently during drop processing — between `perform_handoff` and the
+    /// subsequent `finalize` call — rather than as a long-lived drag-hover
+    /// state. `on_drag_while_inserted` and `reverse_handoff` provide an escape
+    /// hatch if a drag event arrives before `finalize` completes.
     InsertedInTarget {
         target_window_id: WindowId,
         target_insertion_index: usize,
     },
-    /// A handoff (transferring the tab into a target window) or reverse-handoff
-    /// (transferring it back to the preview window) is in progress. Set immediately
-    /// before views are moved between windows to prevent re-entrant drag processing.
+    /// A reverse-handoff is in progress: the tab is being moved back out of a
+    /// target window and into the preview window. Set by `on_drag_while_inserted`
+    /// immediately before the view-tree transfer to block re-entrant `on_drag`
+    /// processing (the WarpUI framework does not support view transfers within a
+    /// single event cycle). In the primary flow `InsertedInTarget` is held only
+    /// briefly between `perform_handoff` and `finalize`, so this state is rarely
+    /// reached.
     Transitioning,
 }
 
