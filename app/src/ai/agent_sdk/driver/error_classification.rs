@@ -100,6 +100,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::ManagedMcpResolutionFailed { uid, message } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!("Managed MCP server {uid} could not be resolved: {message}"),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::MCPStartupFailed { details } => {
             let server_lines = details
                 .iter()
