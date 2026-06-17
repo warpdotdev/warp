@@ -1944,8 +1944,6 @@ pub(crate) fn initialize_app(
 
     // SkillManager is used to cache SKILL.md files for all active terminal views and their working directories
     ctx.add_singleton_model(SkillManager::new);
-    #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
-    ai::skills::wire_remote_bundled_skills(ctx);
 
     // CloudViewModel subscribes to UpdateManager so that it can be notified when objects are
     // created on the server.
@@ -2105,6 +2103,10 @@ pub(crate) fn initialize_app(
     // Index global rules (e.g. ~/.agents/AGENTS.md) on a background task so
     // they are available to subsequent agent queries.
     ProjectContextModel::handle(ctx).update(ctx, |me, ctx| me.index_global_rules(ctx));
+    #[cfg(all(not(target_family = "wasm"), feature = "local_fs"))]
+    {
+        ctx.add_singleton_model(ai::remote_agent_context::RemoteAgentContext::new);
+    }
 
     ctx.add_singleton_model(|ctx| {
         PersistedWorkspace::new(

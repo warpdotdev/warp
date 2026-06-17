@@ -1,5 +1,6 @@
 use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use tempfile::TempDir;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
 use super::*;
 
@@ -22,21 +23,6 @@ fn bundled_metadata(proto: &RemoteSkillProto) -> &BundledSkillMetadata {
     metadata
 }
 
-fn bundled_skill_proto(
-    id: &str,
-    path: &str,
-    content: &str,
-    requires_mcp: Option<&str>,
-) -> RemoteSkillProto {
-    RemoteSkillProto {
-        path: path.to_string(),
-        content: content.to_string(),
-        source: Some(remote_skill_proto::Source::Bundled(BundledSkillMetadata {
-            id: id.to_string(),
-            requires_mcp: requires_mcp.map(str::to_string),
-        })),
-    }
-}
 #[test]
 fn snapshot_protos_serialize_activation_conditions() {
     let temp_dir = TempDir::new().unwrap();
@@ -99,53 +85,4 @@ fn snapshot_protos_serialize_activation_conditions() {
         .unwrap();
     assert_eq!(always.path, "/daemon/bundled/skills/always-skill/SKILL.md");
     assert_eq!(always.content, "# always");
-}
-
-#[test]
-fn bundled_skill_from_protos_builds_host_scoped_catalog() {
-    let host_id = HostId::new("remote-host".to_string());
-    let protos = vec![
-        bundled_skill_proto(
-            "test-skill",
-            "/remote/bundled/skills/test-skill/SKILL.md",
-            "---\nname: test-skill\ndescription: A test skill\n---\nbody",
-            None,
-        ),
-        bundled_skill_proto(
-            "figma-skill",
-            "/remote/bundled/skills/figma-skill/SKILL.md",
-            "# figma",
-            Some("figma"),
-        ),
-        // Unknown integration (e.g. a newer daemon): the client cannot
-        // evaluate the condition, so the skill is skipped.
-        bundled_skill_proto(
-            "unknown-mcp-skill",
-            "/remote/bundled/skills/unknown-mcp-skill/SKILL.md",
-            "# unknown",
-            Some("not-a-real-integration"),
-        ),
-        // Invalid (relative) path: skipped.
-        bundled_skill_proto("bad-path-skill", "relative/SKILL.md", "# bad", None),
-    ];
-
-    let catalog = bundled_skill_from_protos(&host_id, &protos);
-
-    let skill = catalog.skill("test-skill").expect("test-skill present");
-    // The skill's identity is re-parsed from the daemon-rendered content.
-    assert_eq!(skill.name, "test-skill");
-    assert_eq!(skill.description, "A test skill");
-    assert_eq!(
-        skill.path,
-        LocalOrRemotePath::Remote(RemotePath::new(
-            host_id.clone(),
-            StandardizedPath::try_new("/remote/bundled/skills/test-skill/SKILL.md").unwrap(),
-        ))
-    );
-    assert_eq!(skill.scope, SkillScope::Bundled);
-    assert_eq!(skill.provider, SkillProvider::Warp);
-
-    assert!(catalog.skill("figma-skill").is_some());
-    assert!(catalog.skill("unknown-mcp-skill").is_none());
-    assert!(catalog.skill("bad-path-skill").is_none());
 }
