@@ -4,16 +4,16 @@ use std::rc::Rc;
 
 use super::TuiColumn;
 use crate::elements::tui::{
-    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventContext, TuiEventHandler,
-    TuiParentElement, TuiPresentationContext, TuiRect, TuiSize, TuiText,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
+    TuiEventHandler, TuiParentElement, TuiPresentationContext, TuiRect, TuiSize, TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, Event};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
-    let mut buffer = TuiBuffer::new(size);
-    element.render(TuiRect::from_size(size), &mut buffer);
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
+    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer);
     buffer.to_lines()
 }
 

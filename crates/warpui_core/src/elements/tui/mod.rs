@@ -35,13 +35,13 @@ mod geometry;
 mod parent;
 mod text;
 
-pub use buffer::{Cell, TuiBuffer, TuiStyle};
+pub use buffer::{Cell, TuiBuffer, TuiBufferExt, TuiStyle};
 pub use child_view::TuiChildView;
 pub use column::TuiColumn;
 pub use container::TuiContainer;
 pub use event::{TuiDispatchEventResult, TuiEventContext, TuiEventDispatchResult};
 pub use event_handler::TuiEventHandler;
-pub use geometry::{TuiConstraint, TuiRect, TuiSize};
+pub use geometry::{TuiConstraint, TuiRect, TuiRectExt, TuiSize};
 pub use parent::TuiParentElement;
 pub use text::TuiText;
 

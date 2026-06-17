@@ -2,20 +2,20 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crossterm::style::Color;
+use ratatui::style::Color;
 
 use super::TuiContainer;
 use crate::elements::tui::{
-    TuiBuffer, TuiChildView, TuiConstraint, TuiElement, TuiEventContext, TuiEventHandler,
-    TuiPresentationContext, TuiRect, TuiSize, TuiText,
+    TuiBuffer, TuiBufferExt, TuiChildView, TuiConstraint, TuiElement, TuiEventContext,
+    TuiEventHandler, TuiPresentationContext, TuiRect, TuiSize, TuiText,
 };
 use crate::event::KeyEventDetails;
 use crate::keymap::Keystroke;
 use crate::{App, EntityId, Event};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
-    let mut buffer = TuiBuffer::new(size);
-    element.render(TuiRect::from_size(size), &mut buffer);
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
+    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer);
     buffer.to_lines()
 }
 
@@ -60,16 +60,13 @@ fn background_fills_the_padding_area() {
         .with_padding(1)
         .with_background(Color::Blue);
 
-    let mut buffer = TuiBuffer::new(TuiSize::new(3, 3));
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 3, 3));
     container.render(TuiRect::new(0, 0, 3, 3), &mut buffer);
 
     // A padding cell carries the background fill...
-    assert_eq!(
-        buffer.get(0, 0).expect("cell in bounds").style().background,
-        Some(Color::Blue),
-    );
+    assert_eq!(buffer[(0, 0)].bg, Color::Blue);
     // ...and the child glyph lands in the center.
-    assert_eq!(buffer.get(1, 1).expect("cell in bounds").symbol(), "X");
+    assert_eq!(buffer[(1, 1)].symbol(), "X");
 }
 
 #[test]

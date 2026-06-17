@@ -17,11 +17,11 @@
 //! to the constraint), so the child occupies exactly the area left inside the
 //! frame and padding.
 
-use crossterm::style::Color;
+use ratatui::style::Color;
 
 use super::{
-    Cell, TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect,
-    TuiSize, TuiStyle,
+    TuiBuffer, TuiConstraint, TuiElement, TuiEventContext, TuiPresentationContext, TuiRect,
+    TuiRectExt, TuiSize, TuiStyle,
 };
 use crate::{AppContext, Event};
 
@@ -74,8 +74,8 @@ impl TuiContainer {
     /// the frame sits seamlessly on the filled area.
     fn painted_border_style(&self) -> TuiStyle {
         let mut style = self.border_style;
-        if style.background.is_none() {
-            style.background = self.background;
+        if style.bg.is_none() {
+            style.bg = self.background;
         }
         style
     }
@@ -102,10 +102,7 @@ impl TuiElement for TuiContainer {
         }
 
         if let Some(background) = self.background {
-            buffer.fill(
-                area,
-                Cell::new(" ", TuiStyle::default().with_background(background)),
-            );
+            buffer.set_style(area, TuiStyle::default().bg(background));
         }
 
         if self.border {
@@ -148,27 +145,34 @@ fn draw_border(area: TuiRect, buffer: &mut TuiBuffer, style: TuiStyle) {
     let multi_row = area.height > 1;
 
     for x in area.x..area.right() {
-        buffer.set_cell(x, area.y, Cell::new("─", style));
+        put(buffer, x, area.y, "─", style);
         if multi_row {
-            buffer.set_cell(x, bottom, Cell::new("─", style));
+            put(buffer, x, bottom, "─", style);
         }
     }
     for y in area.y..area.bottom() {
-        buffer.set_cell(area.x, y, Cell::new("│", style));
+        put(buffer, area.x, y, "│", style);
         if multi_column {
-            buffer.set_cell(right, y, Cell::new("│", style));
+            put(buffer, right, y, "│", style);
         }
     }
 
-    buffer.set_cell(area.x, area.y, Cell::new("┌", style));
+    put(buffer, area.x, area.y, "┌", style);
     if multi_column {
-        buffer.set_cell(right, area.y, Cell::new("┐", style));
+        put(buffer, right, area.y, "┐", style);
     }
     if multi_row {
-        buffer.set_cell(area.x, bottom, Cell::new("└", style));
+        put(buffer, area.x, bottom, "└", style);
     }
     if multi_column && multi_row {
-        buffer.set_cell(right, bottom, Cell::new("┘", style));
+        put(buffer, right, bottom, "┘", style);
+    }
+}
+
+/// Writes a single styled glyph at `(x, y)`, ignoring out-of-bounds positions.
+fn put(buffer: &mut TuiBuffer, x: u16, y: u16, symbol: &str, style: TuiStyle) {
+    if let Some(cell) = buffer.cell_mut((x, y)) {
+        cell.set_symbol(symbol).set_style(style);
     }
 }
 

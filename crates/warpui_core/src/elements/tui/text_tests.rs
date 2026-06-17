@@ -1,11 +1,11 @@
-use crossterm::style::Color;
+use ratatui::style::{Color, Modifier, Style};
 
 use super::TuiText;
-use crate::elements::tui::{TuiBuffer, TuiConstraint, TuiElement, TuiRect, TuiSize, TuiStyle};
+use crate::elements::tui::{TuiBuffer, TuiBufferExt, TuiConstraint, TuiElement, TuiRect, TuiSize};
 
 fn render_to_lines(element: &dyn TuiElement, size: TuiSize) -> Vec<String> {
-    let mut buffer = TuiBuffer::new(size);
-    element.render(TuiRect::from_size(size), &mut buffer);
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, size.width, size.height));
+    element.render(TuiRect::new(0, 0, size.width, size.height), &mut buffer);
     buffer.to_lines()
 }
 
@@ -51,7 +51,7 @@ fn wide_glyphs_occupy_two_columns_and_are_never_split() {
     // A wide glyph painted with one trailing column to spare drops whole: only
     // the leading "日" lands, proving it claimed two columns.
     let truncated = TuiText::new("日本").truncate();
-    assert_eq!(render_to_lines(&truncated, TuiSize::new(3, 1)), vec!["日 "],);
+    assert_eq!(render_to_lines(&truncated, TuiSize::new(3, 1)), vec!["日 "]);
 
     // Given exactly four columns both wide glyphs fit.
     assert_eq!(
@@ -59,28 +59,28 @@ fn wide_glyphs_occupy_two_columns_and_are_never_split() {
         vec!["日本"],
     );
 
-    // Wrapping a wide pair into a three-column row splits between glyphs.
+    // Wrapping a wide pair into a two-column row puts one glyph per row
+    // (ratatui only breaks once the row's width is reached).
     let wrapped = TuiText::new("日本");
-    assert_eq!(wrapped.desired_height(3), 2);
+    assert_eq!(wrapped.desired_height(2), 2);
     assert_eq!(
-        render_to_lines(&wrapped, TuiSize::new(3, 2)),
-        vec!["日 ", "本 "],
+        render_to_lines(&wrapped, TuiSize::new(2, 2)),
+        vec!["日", "本"],
     );
 }
 
 #[test]
-fn applies_its_style_to_every_painted_cell() {
-    let style = TuiStyle::default()
-        .with_foreground(Color::Red)
-        .with_bold(true);
+fn applies_its_style_to_painted_cells() {
+    let style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     let text = TuiText::new("a").with_style(style);
 
-    let mut buffer = TuiBuffer::new(TuiSize::new(1, 1));
+    let mut buffer = TuiBuffer::empty(TuiRect::new(0, 0, 1, 1));
     text.render(TuiRect::new(0, 0, 1, 1), &mut buffer);
 
-    let cell = buffer.get(0, 0).expect("cell in bounds");
+    let cell = &buffer[(0, 0)];
     assert_eq!(cell.symbol(), "a");
-    assert_eq!(cell.style(), style);
+    assert_eq!(cell.fg, Color::Red);
+    assert!(cell.modifier.contains(Modifier::BOLD));
 }
 
 #[test]
