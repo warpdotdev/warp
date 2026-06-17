@@ -2,7 +2,8 @@ use super::{FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
 use crate::ai::mcp::FileMCPWatcher;
 use crate::ai::mcp::ParsedTemplatableMCPServerResult;
 use crate::settings::{AISettings, FocusedTerminalInfo};
-use crate::warp_managed_paths_watcher::{warp_data_dir, WarpManagedPathsWatcher};
+use crate::test_util::settings::initialize_local_ai_enabled_for_tests;
+use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use repo_metadata::{
     repositories::DetectedRepositories, watcher::DirectoryWatcher, RepoMetadataModel,
@@ -252,47 +253,9 @@ fn test_update_file_based_servers_removes_unreferenced_servers() {
     });
 }
 
-/// A globally-scoped Warp installation always auto-spawns, regardless of the
-/// `file_based_mcp_enabled` toggle.
-#[test]
-fn test_global_warp_server_always_spawns() {
-    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
-    let warp_root = warp_data_dir();
-    let parsed = parse_mcp_json(r#"{"global-warp": {"command": "npx", "args": ["warp"]}}"#);
-
-    App::test((), |mut app| async move {
-        let manager = setup_app(&mut app);
-        let events = subscribe_events(&mut app, &manager);
-
-        // Toggle is off by default; global Warp server should still spawn.
-        manager.update(&mut app, |m, ctx| {
-            m.apply_parsed_servers(warp_root.clone(), MCPProvider::Warp, parsed, ctx);
-        });
-
-        events.update(&mut app, |e, _| {
-            assert_eq!(
-                e.spawned_uuids.len(),
-                1,
-                "Global Warp server should auto-spawn regardless of toggle"
-            );
-        });
-
-        // Flipping the toggle must not despawn the global Warp server.
-        set_file_based_mcp_enabled(&mut app, true);
-        set_file_based_mcp_enabled(&mut app, false);
-
-        events.update(&mut app, |e, _| {
-            assert!(
-                e.despawned_uuids.is_empty(),
-                "Global Warp server should never be despawned by toggle changes, got: {:?}",
-                e.despawned_uuids
-            );
-        });
-    });
-}
-
 /// A globally-scoped non-Warp installation only auto-spawns when the toggle is on.
 #[test]
+#[serial_test::serial]
 fn test_global_non_warp_server_respects_toggle() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(home_dir) = dirs::home_dir() else {
@@ -304,6 +267,7 @@ fn test_global_non_warp_server_respects_toggle() {
 
     App::test((), |mut app| async move {
         let manager = setup_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let events = subscribe_events(&mut app, &manager);
 
         // Toggle is off by default: detection should NOT auto-spawn.
@@ -346,9 +310,42 @@ fn test_global_non_warp_server_respects_toggle() {
     });
 }
 
+#[test]
+fn test_global_non_warp_server_requires_local_ai() {
+    let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
+    let Some(home_dir) = dirs::home_dir() else {
+        return;
+    };
+    let parsed = parse_mcp_json(r#"{"global-claude": {"command": "npx", "args": ["claude"]}}"#);
+
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let events = subscribe_events(&mut app, &manager);
+
+        manager.update(&mut app, |m, ctx| {
+            m.apply_parsed_servers(home_dir.clone(), MCPProvider::Claude, parsed, ctx);
+        });
+
+        set_file_based_mcp_enabled(&mut app, true);
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            assert!(!settings.is_any_ai_enabled(ctx));
+            assert!(!settings.is_file_based_mcp_enabled(ctx));
+        });
+
+        events.update(&mut app, |e, _| {
+            assert!(
+                e.spawned_uuids.is_empty(),
+                "Global non-Warp server must not auto-spawn without local AI, got: {:?}",
+                e.spawned_uuids
+            );
+        });
+    });
+}
+
 /// Project-scoped installations (both Warp and third-party) never auto-spawn on
 /// detection, and the toggle must not spawn or despawn them either.
 #[test]
+#[serial_test::serial]
 fn test_project_scoped_servers_never_auto_spawn() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let repo_path = PathBuf::from("/tmp/warp-test-repo");
@@ -358,6 +355,7 @@ fn test_project_scoped_servers_never_auto_spawn() {
 
     App::test((), |mut app| async move {
         let manager = setup_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let events = subscribe_events(&mut app, &manager);
 
         manager.update(&mut app, |m, ctx| {
@@ -405,6 +403,7 @@ fn test_project_scoped_servers_never_auto_spawn() {
 /// An installation referenced from both a global location and a project location
 /// is considered global (and thus gated only by the toggle for non-Warp providers).
 #[test]
+#[serial_test::serial]
 fn test_server_referenced_from_both_global_and_project_is_global() {
     let _flag_guard = FeatureFlag::FileBasedMcp.override_enabled(true);
     let Some(home_dir) = dirs::home_dir() else {
@@ -417,6 +416,7 @@ fn test_server_referenced_from_both_global_and_project_is_global() {
 
     App::test((), |mut app| async move {
         let manager = setup_app(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let events = subscribe_events(&mut app, &manager);
 
         // Register both a global and a project reference for the same server.

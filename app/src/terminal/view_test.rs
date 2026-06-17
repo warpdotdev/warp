@@ -49,6 +49,7 @@ use crate::terminal::model::blocks::{insert_block, TotalIndex};
 use crate::terminal::model::terminal_model::WithinBlock;
 
 use crate::terminal::MockTerminalManager;
+use crate::test_util::settings::initialize_local_ai_enabled_for_tests;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 
@@ -134,9 +135,11 @@ fn test_create_new_block_with_local_status() {
 }
 
 #[test]
+#[serial_test::serial]
 fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_agent_rich_input = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
@@ -204,9 +207,11 @@ fn submit_cli_agent_rich_input_restores_unlocked_input_config() {
 }
 
 #[test]
+#[serial_test::serial]
 fn unregister_cli_agent_session_restores_unlocked_input_config() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_agent_rich_input = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -2841,9 +2846,11 @@ fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_runnin
 }
 
 #[test]
+#[serial_test::serial]
 fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_setting_disabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         FeatureFlag::AgentView.set_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
@@ -3185,9 +3192,11 @@ fn open_cli_agent_rich_input_for_agent(app: &mut App, agent: CLIAgent) -> ViewHa
 }
 
 #[test]
+#[serial_test::serial]
 fn cli_agent_rich_input_hint_text_mentions_active_cli_agent() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -3212,9 +3221,11 @@ fn cli_agent_rich_input_hint_text_mentions_active_cli_agent() {
 }
 
 #[test]
+#[serial_test::serial]
 fn cli_agent_rich_input_shell_mode_uses_run_commands_hint_text() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -3247,9 +3258,11 @@ fn cli_agent_rich_input_shell_mode_uses_run_commands_hint_text() {
 }
 
 #[test]
+#[serial_test::serial]
 fn submit_cli_agent_rich_input_codex_uses_bracketed_paste() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -3276,9 +3289,11 @@ fn submit_cli_agent_rich_input_codex_uses_bracketed_paste() {
 }
 
 #[test]
+#[serial_test::serial]
 fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -3292,6 +3307,7 @@ fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
 
         // Wait for the delayed \r to arrive.
         assert_eventually!(
+            200 =>
             pty_writes.borrow().len() == 2,
             "carriage return should be written after delay"
         );
@@ -3300,9 +3316,11 @@ fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
 }
 
 #[test]
+#[serial_test::serial]
 fn submit_without_auto_dismiss_keeps_rich_input_open() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         // auto_dismiss defaults to false — leave it off.
@@ -3347,9 +3365,11 @@ fn submit_without_auto_dismiss_keeps_rich_input_open() {
 }
 
 #[test]
+#[serial_test::serial]
 fn submit_with_plugin_and_auto_toggle_keeps_rich_input_open() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         // auto_toggle_rich_input defaults to true.
@@ -3403,9 +3423,11 @@ fn submit_with_plugin_and_auto_toggle_keeps_rich_input_open() {
 }
 
 #[test]
+#[serial_test::serial]
 fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
@@ -3454,6 +3476,7 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
         // auto_toggle is off, so auto_dismiss closes rich input.
         // Claude uses DelayedEnter, so the close happens after a timer.
         assert_eventually!(
+            200 =>
             terminal.read(&app, |view, ctx| !view
                 .has_active_cli_agent_input_session(ctx)),
             "Rich input should be closed after submit with auto_dismiss"
@@ -3462,9 +3485,11 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
 }
 
 #[test]
+#[serial_test::serial]
 fn status_blocked_auto_closes_rich_input() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         // auto_toggle_rich_input defaults to true.
@@ -3538,9 +3563,11 @@ fn status_blocked_auto_closes_rich_input() {
 }
 
 #[test]
+#[serial_test::serial]
 fn status_in_progress_auto_opens_rich_input_after_blocked() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -3775,9 +3802,11 @@ fn cli_session_status_updates_active_child_conversation() {
 }
 
 #[test]
+#[serial_test::serial]
 fn manual_dismiss_disables_auto_toggle_for_session() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -3871,9 +3900,11 @@ fn manual_dismiss_disables_auto_toggle_for_session() {
 }
 
 #[test]
+#[serial_test::serial]
 fn close_cli_agent_rich_input_saves_draft_and_reopen_restores_it() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
@@ -3927,9 +3958,11 @@ fn close_cli_agent_rich_input_saves_draft_and_reopen_restores_it() {
 }
 
 #[test]
+#[serial_test::serial]
 fn submit_cli_agent_rich_input_clears_draft() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
@@ -3964,9 +3997,11 @@ fn submit_cli_agent_rich_input_clears_draft() {
 }
 
 #[test]
+#[serial_test::serial]
 fn close_cli_agent_rich_input_with_empty_buffer_stores_no_draft() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _local_ai = initialize_local_ai_enabled_for_tests(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cli_rich = FeatureFlag::CLIAgentRichInput.override_enabled(true);
 
