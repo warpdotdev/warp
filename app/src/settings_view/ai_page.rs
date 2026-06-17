@@ -6145,9 +6145,9 @@ impl SettingsWidget for AIInputWidget {
                         appearance,
                         "Default long-running command submission mode",
                         Some(
-                            "What happens when you submit a prompt while an agent is driving a \
-                             long-running command. Queued prompts are sent to the agent when the \
-                             command finishes.",
+                            "What happens when you submit a prompt while an agent is driving an \
+                             agent-requested long-running command. Queued prompts are sent to the \
+                             agent when the command finishes.",
                         ),
                         None,
                         LocalOnlyIconState::for_setting(

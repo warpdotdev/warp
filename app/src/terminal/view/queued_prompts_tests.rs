@@ -928,7 +928,10 @@ fn commit_edit_saves_current_editor_text_for_lrc_row() {
         let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.append(
                 conversation_id,
-                QueuedQuery::new("stale committed".to_owned(), QueuedQueryOrigin::LrcAutoQueue),
+                QueuedQuery::new(
+                    "stale committed".to_owned(),
+                    QueuedQueryOrigin::LrcAutoQueue,
+                ),
                 ctx,
             )
         });
@@ -974,7 +977,10 @@ fn lrc_finish_commits_edited_lrc_row_before_sending() {
         let query_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
             model.append(
                 conversation_id,
-                QueuedQuery::new("stale committed".to_owned(), QueuedQueryOrigin::LrcAutoQueue),
+                QueuedQuery::new(
+                    "stale committed".to_owned(),
+                    QueuedQueryOrigin::LrcAutoQueue,
+                ),
                 ctx,
             )
         });

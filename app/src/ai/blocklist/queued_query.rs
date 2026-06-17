@@ -32,7 +32,7 @@ pub enum QueuedQueryOrigin {
     QueueSlashCommand,
     /// Filed via the auto-queue toggle in the warping indicator.
     AutoQueueToggle,
-    /// Filed because auto-queue was in effect while an agent controlled a long-running command.
+    /// Filed because auto-queue was in effect during an agent-requested long-running command.
     LrcAutoQueue,
     /// Filed as the follow-up prompt of a `/compact-and <prompt>` slash command, waiting for
     /// the summarize to finish.
@@ -167,7 +167,7 @@ struct ConversationQueueState {
     /// dispatched and cleared when it finishes; keeps the queue accepting new rows while the
     /// agent is idle and gates the next drain until the command completes.
     command_in_flight: bool,
-    /// Manual queue toggle made while an agent controls a long-running command. Cleared when
+    /// Manual queue toggle made during an agent-requested long-running command. Cleared when
     /// the command ends; never touches `queue_next_prompt_override`.
     queue_next_lrc_prompt_override: Option<bool>,
 }
@@ -394,7 +394,7 @@ impl QueuedQueryModel {
         app: &AppContext,
     ) -> bool {
         if is_lrc_auto_queue_active(active_block, conversation_id, app) {
-            // While an agent controls the active long-running command, the command-scoped
+            // While an agent controls the active agent-requested command, the command-scoped
             // toggle governs queueing.
             self.is_queue_next_prompt_enabled_during_lrc(conversation_id)
         } else {
@@ -403,7 +403,7 @@ impl QueuedQueryModel {
         }
     }
 
-    /// Auto-queue state while an agent-controlled long-running command is active: on unless
+    /// Auto-queue state while an eligible agent-requested long-running command is active: on unless
     /// toggled off for the duration of the command.
     fn is_queue_next_prompt_enabled_during_lrc(&self, conversation_id: AIConversationId) -> bool {
         self.queues
@@ -439,7 +439,7 @@ impl QueuedQueryModel {
         ctx.emit(QueuedQueryEvent::QueueNextPromptToggled { conversation_id });
     }
 
-    /// Toggles the auto-queue state for the duration of the agent-controlled long-running command.
+    /// Toggles the auto-queue state for the duration of the eligible long-running command.
     pub fn toggle_queue_next_prompt_during_lrc(
         &mut self,
         conversation_id: AIConversationId,
@@ -761,8 +761,8 @@ impl QueuedQueryModel {
 }
 
 /// Returns true when queue mode is auto-enabled for `conversation_id`: an agent controls
-/// `active_block`'s long-running command on the conversation's behalf, and the user's
-/// settings opt into queueing prompts for the duration of such commands.
+/// `active_block`'s agent-requested long-running command, and the user's settings opt into
+/// queueing prompts for the duration of such commands.
 pub(crate) fn is_lrc_auto_queue_active(
     active_block: &Block,
     conversation_id: AIConversationId,
@@ -774,6 +774,7 @@ pub(crate) fn is_lrc_auto_queue_active(
         && ai_settings.long_running_command_submission_mode
             == LongRunningCommandSubmissionMode::QueueUntilCommandCompletes
         && active_block.is_agent_in_control()
+        && active_block.is_agent_requested_command()
         && active_block.ai_conversation_id() == Some(conversation_id)
 }
 

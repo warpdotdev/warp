@@ -256,7 +256,7 @@ fn toggle_state_is_isolated_per_conversation() {
 
 #[test]
 fn lrc_auto_queue_enables_queueing_by_default() {
-    // While an agent-controlled LRC is active, queueing is on even though the conversation
+    // While an eligible LRC is active, queueing is on even though the conversation
     // has no persistent override; outside the LRC it is off.
     with_model(|app, model, _events| {
         let conv = AIConversationId::new();
@@ -301,7 +301,7 @@ fn lrc_toggle_flips_only_the_lrc_override() {
 
 #[test]
 fn clearing_lrc_override_restores_auto_queue_for_the_next_command() {
-    // The LRC override is cleared when the command ends, so the next agent-controlled LRC
+    // The LRC override is cleared when the command ends, so the next eligible LRC
     // auto-enables again. Clearing an existing override emits a toggle event; clearing
     // when none exists does not.
     with_model(|mut app, model, events| {

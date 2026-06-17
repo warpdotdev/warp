@@ -59,7 +59,7 @@ const SEND_NOW_DURING_CLOUD_SETUP_TOOLTIP: &str =
     "Prompts cannot be sent until environment setup is complete.";
 const SEND_NOW_TO_FULL_TERMINAL_USE_AGENT_TOOLTIP: &str = "Send to full terminal use agent";
 const SEND_NOW_AS_READ_ONLY_VIEWER_TOOLTIP: &str = "Read-only viewers cannot send prompts.";
-/// Suffix on rows auto-queued during an agent-controlled long-running command, which fire
+/// Suffix on rows auto-queued during an agent-requested long-running command, which fire
 /// when that command completes rather than at the end of the full response.
 const LRC_AUTO_QUEUE_ROW_SUFFIX: &str = "(queued until the command finishes)";
 
@@ -1155,7 +1155,7 @@ fn render_row(props: RenderRowProps<'_>, app: &AppContext) -> Box<dyn Element> {
             .with_clip(ClipConfig::ellipsis())
             .finish();
             // Command rows are prefaced with a blue `!` so they read as shell commands; prompt
-            // rows render their text directly. Rows auto-queued during an agent-controlled
+            // rows render their text directly. Rows auto-queued during an agent-requested
             // long-running command carry an italic suffix explaining when they will fire.
             if is_command {
                 Flex::row()

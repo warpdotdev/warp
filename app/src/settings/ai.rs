@@ -532,8 +532,8 @@ impl PromptSubmissionMode {
     }
 }
 
-/// What happens when a prompt is submitted while an agent controls a long-running
-/// command (LRC).
+/// What happens when a prompt is submitted while an agent controls an agent-requested
+/// long-running command (LRC).
 ///
 /// Only consulted when [`PromptSubmissionMode`] is `Interrupt`: in `Queue` mode
 /// prompts always queue until the full response finishes, so this setting is
@@ -551,7 +551,7 @@ impl PromptSubmissionMode {
     settings_value::SettingsValue,
 )]
 #[schemars(
-    description = "What happens when a prompt is submitted while an agent controls a long-running command.",
+    description = "What happens when a prompt is submitted while an agent controls an agent-requested long-running command.",
     rename_all = "snake_case"
 )]
 pub enum LongRunningCommandSubmissionMode {
@@ -570,7 +570,7 @@ settings::macros::implement_setting_for_enum!(
     SyncToCloud::Globally(RespectUserSyncSetting::Yes),
     private: false,
     toml_path: "agents.warp_agent.other.long_running_command_submission_mode",
-    description: "What happens when a prompt is submitted while an agent controls a long-running command.",
+    description: "What happens when a prompt is submitted while an agent controls an agent-requested long-running command.",
     feature_flag: FeatureFlag::QueueSlashCommand,
 );
 
@@ -1485,8 +1485,8 @@ define_settings_group!(AISettings, settings: [
     // setting is the fallback used when a conversation has no explicit override.
     default_prompt_submission_mode: PromptSubmissionMode,
 
-    // What happens when a prompt is submitted while an agent controls a long-running
-    // command. Only consulted when `default_prompt_submission_mode` is `Interrupt`;
+    // What happens when a prompt is submitted while an agent controls an agent-requested
+    // long-running command. Only consulted when `default_prompt_submission_mode` is `Interrupt`;
     // per-LRC manual overrides live on `QueuedQueryModel`.
     long_running_command_submission_mode: LongRunningCommandSubmissionMode,
 

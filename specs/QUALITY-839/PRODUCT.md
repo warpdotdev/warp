@@ -1,23 +1,23 @@
-# Auto-queue prompts during agent-controlled long-running commands
+# Auto-queue prompts during agent-requested long-running commands
 
 Linear: [QUALITY-839](https://linear.app/warpdotdev/issue/QUALITY-839/auto-enable-prompt-queueing-during-lrc)
 
 ## Summary
 
-While an agent is in control of a long-running command (LRC), submitting a prompt auto-queues it instead of immediately sending it to the agent driving the command. Auto-queued prompts are delivered to the agent when the command finishes; the user can also press Enter on an empty input to fire the next queued prompt earlier. A new cloud-synced dropdown setting, "Default long-running command submission mode", controls whether prompts are queued or sent immediately during LRCs. It only applies — and is only shown — when the default prompt submission mode is Interrupt.
+While an agent is in control of a long-running command (LRC) that the agent requested as part of a conversation, submitting a prompt auto-queues it instead of immediately sending it to the agent driving the command. Auto-queued prompts are delivered to the agent when the command finishes; the user can also press Enter on an empty input to fire the next queued prompt earlier. A new cloud-synced dropdown setting, "Default long-running command submission mode", controls whether prompts are queued or sent immediately during eligible LRCs. It only applies — and is only shown — when the default prompt submission mode is Interrupt.
 
 Figma: none provided.
 
 ## Problem
 
-Today, a prompt submitted while an agent controls an LRC is delivered to that agent immediately, steering it mid-command. Users often type thoughts ahead of time and don't want them injected into the running command the instant they hit Enter; they want them held until they deliberately release them or until the exchange finishes.
+Today, a prompt submitted while an agent controls an agent-requested LRC is delivered to that agent immediately, steering it mid-command. Users often type thoughts ahead of time and don't want them injected into the running command the instant they hit Enter; they want them held until they deliberately release them or until the exchange finishes.
 
 ## Behavior
 
 ### Trigger and scope
 
-1. Auto-queue activates for a conversation exactly when the agent holds control of an active long-running command in that conversation and the settings call for it: the default prompt submission mode is Interrupt and the LRC submission mode is "Queue until command finishes" (see 17). This includes the state where the agent is blocked on user approval to interact with the command.
-2. Auto-queue does not activate when the user is in control of the LRC — e.g. before the agent has taken control, or after a manual takeover, stop, or agent-initiated transfer of control back to the user.
+1. Auto-queue activates for a conversation exactly when the agent holds control of an active long-running command that the agent requested in that conversation and the settings call for it: the default prompt submission mode is Interrupt and the LRC submission mode is "Queue until command finishes" (see 17). This includes the state where the agent is blocked on user approval to interact with the command.
+2. Auto-queue does not activate for user-started LRCs where the user explicitly tagged in the agent, or when the user is in control of the LRC — e.g. before the agent has taken control, or after a manual takeover, stop, or agent-initiated transfer of control back to the user.
 3. Auto-queue activation is per-conversation: it affects only the conversation whose agent controls the LRC. Other conversations' queue toggle states are untouched.
 4. The behavior is gated on the same feature availability as the existing prompt-queue feature (the queue chip / `/queue` surface). Where the queue feature is unavailable, behavior is unchanged from today.
 5. When the default prompt submission mode is Queue, the LRC machinery is entirely inert: prompts queue until the end of the full response per existing queue-mode behavior, the chip toggle behaves persistently, and the LRC setting is hidden (see 18).
@@ -38,7 +38,7 @@ Today, a prompt submitted while an agent controls an LRC is delivered to that ag
 ### Reverting and manual override
 
 13. Auto-queue is a derived state, not a sticky toggle: when the LRC ends (command finishes, or control transfers to the user for any reason), the conversation's queue mode reverts to whatever it was before the LRC — the user's per-conversation toggle state, or the default from the queue-vs-interrupt setting. Rows that did not fire per (9) remain queued.
-14. If the user manually toggles queue mode off (chip click or its keybinding) while the agent still controls the LRC, the override is respected for the remainder of that LRC: prompts submit immediately to the agent, as today. The override is scoped to that LRC only — it does not change the conversation's persistent toggle state, and the next agent-controlled LRC in the conversation auto-enables again.
+14. If the user manually toggles queue mode off (chip click or its keybinding) while the agent still controls the LRC, the override is respected for the remainder of that LRC: prompts submit immediately to the agent, as today. The override is scoped to that LRC only — it does not change the conversation's persistent toggle state, and the next eligible agent-requested LRC in the conversation auto-enables again.
 15. Toggling queue mode back on after such an override re-enables queuing for the remainder of the LRC; reverting at LRC end still applies per (13).
 16. If the conversation was already in queue mode before the LRC (via a per-conversation toggle), entering and exiting the LRC produces no visible change: queue mode stays on throughout and after, and its rows drain at end of response per (9).
 
@@ -46,12 +46,12 @@ Today, a prompt submitted while an agent controls an LRC is delivered to that ag
 
 17. A new setting, "Default long-running command submission mode", controls invariants (1)–(16). It is a dropdown with two options — "Send immediately" and "Queue until command finishes" (the default) — cloud-synced, and visible on the AI settings page directly below the "Default prompt submission mode" (queue vs. interrupt) dropdown. Its description reads: "What happens when you submit a prompt while an agent is driving a long-running command. Queued prompts are sent to the agent when the command finishes."
 18. The dropdown is only rendered while "Default prompt submission mode" is Interrupt. With Queue selected it is hidden (and ignored), since prompts already queue until the end of the full response.
-19. When set to "Send immediately", behavior during agent-controlled LRCs is unchanged from today: prompts submit immediately to the agent, and the chip/ghost text reflect only the user's own queue toggle state.
+19. When set to "Send immediately", behavior during eligible agent-requested LRCs is unchanged from today: prompts submit immediately to the agent, and the chip/ghost text reflect only the user's own queue toggle state.
 20. The setting is also settable from the Command Palette via "Set long-running command submission: …" entries, shown only while the default prompt submission mode is Interrupt.
-21. Changing the setting takes effect immediately, including mid-LRC: switching to "Send immediately" while auto-queue is active reverts the conversation to its non-LRC queue state; switching to "Queue until command finishes" while an agent controls an LRC activates auto-queue (subject to any manual override per (14)).
+21. Changing the setting takes effect immediately, including mid-LRC: switching to "Send immediately" while auto-queue is active reverts the conversation to its non-LRC queue state; switching to "Queue until command finishes" while an agent controls an eligible agent-requested LRC activates auto-queue (subject to any manual override per (14)).
 
 ### Edge cases
 
-22. If multiple exchanges occur within one conversation, each agent-controlled LRC independently triggers auto-queue on entry and reverts on exit; manual overrides per (14) never outlive the LRC they were made in.
+22. If multiple exchanges occur within one conversation, each eligible agent-requested LRC independently triggers auto-queue on entry and reverts on exit; manual overrides per (14) never outlive the LRC they were made in.
 23. Read-only shared-session viewers and other states where prompt sending is unavailable keep their existing restrictions; auto-queue does not create new send affordances there.
 24. Auto-queue never queues an empty submission; Enter on an empty input follows (7) when rows are queued, and otherwise keeps its existing behavior.

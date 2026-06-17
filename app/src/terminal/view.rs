@@ -5574,7 +5574,7 @@ impl TerminalView {
         }
     }
 
-    /// Sends every prompt that was auto-queued during an agent-controlled long-running command
+    /// Sends every prompt that was auto-queued during an agent-requested long-running command
     /// ([`QueuedQueryOrigin::LrcAutoQueue`]) to the agent, in queue order. Invoked when the
     /// command finishes — these rows were queued "until the command finishes", unlike other
     /// queued rows, which wait for the end of the full response.
@@ -26808,9 +26808,8 @@ impl TypedActionView for TerminalView {
                 else {
                     return;
                 };
-                // While an agent controls a long-running command, the toggle is scoped to
-                // that command so the conversation reverts to its pre-command queue state
-                // once the command ends.
+                // While LRC auto-queue is active, the toggle is scoped to that command so the
+                // conversation reverts to its pre-command queue state once the command ends.
                 let lrc_auto_queue_active = {
                     let terminal_model = self.model.lock();
                     is_lrc_auto_queue_active(
