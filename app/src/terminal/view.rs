@@ -406,6 +406,8 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
     CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
     MenuPositioningProvider,
@@ -6696,42 +6698,6 @@ impl TerminalView {
 
         // Focus the input
         self.redetermine_global_focus(ctx);
-    }
-
-    /// Inserts the appropriate fork-like slash command into the input:
-    /// `/continue-locally` for cloud Oz conversations, `/fork` for others.
-    pub(crate) fn insert_fork_or_continue_locally_slash_command(
-        &mut self,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let command_name = self.fork_or_continue_locally_command_name(ctx);
-        self.input.update(ctx, |input, ctx| {
-            input.replace_buffer_content(&format!("{} ", command_name), ctx);
-            ctx.focus_self();
-        });
-    }
-
-    /// Returns the slash command name for the fork button.
-    /// Delegates to `fork_button_action` to keep the command in sync with the tooltip.
-    fn fork_or_continue_locally_command_name(&self, ctx: &AppContext) -> &'static str {
-        #[cfg(target_family = "wasm")]
-        return commands::FORK.name;
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            use crate::terminal::input::slash_commands::fork_button_action;
-            let conversation_id = self
-                .agent_view_controller
-                .as_ref(ctx)
-                .agent_view_state()
-                .active_conversation_id()
-                .or_else(|| {
-                    BlocklistAIHistoryModel::as_ref(ctx)
-                        .active_conversation(self.view_id)
-                        .map(|conv| conv.id())
-                });
-            fork_button_action(conversation_id, ctx).command_name
-        }
     }
 
     fn handle_resume_conversation(
@@ -20152,7 +20118,28 @@ impl TerminalView {
                 self.handle_resume_conversation(conversation_id, ctx);
             }
             AIBlockEvent::InsertForkSlashCommand => {
-                self.insert_fork_or_continue_locally_slash_command(ctx);
+                #[cfg(target_family = "wasm")]
+                let command_name = commands::FORK.name;
+
+                #[cfg(not(target_family = "wasm"))]
+                let command_name = {
+                    let conversation_id = self
+                        .agent_view_controller
+                        .as_ref(ctx)
+                        .agent_view_state()
+                        .active_conversation_id()
+                        .or_else(|| {
+                            BlocklistAIHistoryModel::as_ref(ctx)
+                                .active_conversation(self.view_id)
+                                .map(|conv| conv.id())
+                        });
+                    fork_button_action(conversation_id, ctx).command_name
+                };
+
+                self.input.update(ctx, |input, ctx| {
+                    input.replace_buffer_content(&format!("{} ", command_name), ctx);
+                    ctx.focus_self();
+                });
             }
             AIBlockEvent::ChildViewTextSelected => {
                 self.clear_selected_text_except(Some(block.id()), ctx);

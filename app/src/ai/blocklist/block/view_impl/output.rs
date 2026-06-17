@@ -108,6 +108,8 @@ use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
 use crate::settings_view::SettingsSection;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::ShellLaunchData;
@@ -3224,16 +3226,10 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(continue_button);
     }
 
-    if !props.is_conversation_transcript_viewer && !cfg!(target_family = "wasm") {
-        // Tooltip matches the slash command the button will insert.
-        // Both are determined by fork_button_action so they always agree.
-        #[cfg(not(target_family = "wasm"))]
-        let fork_button_tooltip = {
-            use crate::terminal::input::slash_commands::fork_button_action;
-            fork_button_action(props.model.conversation_id(app), app).tooltip
-        };
-        #[cfg(target_family = "wasm")]
-        let fork_button_tooltip = "Fork conversation";
+    #[cfg(not(target_family = "wasm"))]
+    if !props.is_conversation_transcript_viewer {
+        let fork_button_tooltip = fork_button_action(props.model.conversation_id(app), app).tooltip;
+
         let ui_builder = appearance.ui_builder().clone();
         let fork_button = icon_button(
             appearance,
