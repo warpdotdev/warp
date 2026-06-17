@@ -61,7 +61,7 @@ fn test_tokenizer_warp_special_chars() {
         64,
     );
     assert_token(&tokens[15], 15, "dll", 65, 68);
-    assert_token(&tokens[16], 16, "check_status:/dev/local_state-0", 69, 99);
+    assert_token(&tokens[16], 16, "check_status:/dev/local_state-0", 69, 100);
 }
 
 #[test]

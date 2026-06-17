@@ -839,10 +839,26 @@ fn test_switch_focus_panels() {
             );
         });
 
-        // Shift focus from terminal to left panel when the resource center is open.
+        // Open the resource center through the public action path.
         workspace.update(&mut app, |view, ctx| {
-            view.current_workspace_state.is_resource_center_open = true;
-            view.focus_left_panel(ctx);
+            view.handle_action(&WorkspaceAction::ToggleKeybindingsPage, ctx);
+        });
+        workspace.update(&mut app, |view, ctx| {
+            assert!(
+                view.is_resource_center_showing(),
+                "Expected resource center to be open"
+            );
+            assert!(
+                view.resource_center_view.is_self_or_child_focused(ctx),
+                "Expected resource center to be focused"
+            );
+        });
+
+        workspace.update(&mut app, |view, ctx| {
+            view.focus_active_tab(ctx);
+        });
+        workspace.update(&mut app, |view, ctx| {
+            view.handle_action(&WorkspaceAction::FocusLeftPanel, ctx);
         });
         workspace.update(&mut app, |view, ctx| {
             assert!(
@@ -853,7 +869,7 @@ fn test_switch_focus_panels() {
 
         // Shift focus from resource center to left panel (terminal).
         workspace.update(&mut app, |view, ctx| {
-            view.focus_left_panel(ctx);
+            view.handle_action(&WorkspaceAction::FocusLeftPanel, ctx);
         });
         workspace.update(&mut app, |_view, ctx| {
             assert!(
@@ -864,8 +880,7 @@ fn test_switch_focus_panels() {
 
         // Shift focus from workspace to right panel when the resource center is open.
         workspace.update(&mut app, |view, ctx| {
-            view.current_workspace_state.is_resource_center_open = true;
-            view.focus_right_panel(ctx);
+            view.handle_action(&WorkspaceAction::FocusRightPanel, ctx);
         });
         workspace.update(&mut app, |view, ctx| {
             assert!(
@@ -876,7 +891,7 @@ fn test_switch_focus_panels() {
 
         // Shift focus from right panel to terminal
         workspace.update(&mut app, |view, ctx| {
-            view.focus_right_panel(ctx);
+            view.handle_action(&WorkspaceAction::FocusRightPanel, ctx);
         });
         workspace.update(&mut app, |_view, ctx| {
             assert!(
