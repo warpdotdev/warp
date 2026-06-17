@@ -399,12 +399,15 @@ impl platform::Delegate for AppDelegate {
     }
 
     fn set_dock_icon_visible(&self, visible: bool) {
-        dispatch::Queue::main().exec_async(move || unsafe {
-            let app_delegate: id = msg_send![NSApp(), delegate];
-            let _: BOOL = msg_send![
-                app_delegate,
-                setDockIconVisible: if visible { YES } else { NO }
-            ];
+        dispatch::Queue::main().exec_async(move || {
+            // SAFETY: the closure runs on the main dispatch queue.
+            let mtm = unsafe { MainThreadMarker::new_unchecked() };
+            let app = NSApplication::sharedApplication(mtm);
+            let app_delegate = app.delegate().expect("the warp app always has a delegate");
+            let value: BOOL = if visible { YES } else { NO };
+            // `setDockIconVisible:` is a custom warp app-delegate selector.
+            // SAFETY: messaging the app delegate on the main thread.
+            let _: BOOL = unsafe { msg_send![&*app_delegate, setDockIconVisible: value] };
         });
     }
 

@@ -62,7 +62,6 @@ pub trait AppExt {
     /// Sets the macOS dock menu constructor function.
     fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static);
 
-
     /// Sets whether the application should show its Dock icon on launch.
     fn set_show_dock_icon_on_launch(&mut self, value: bool);
 }
@@ -204,7 +203,6 @@ impl AppExt for AppBuilder {
         }
     }
 
-
     fn set_show_dock_icon_on_launch(&mut self, value: bool) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.show_dock_icon_on_launch = value,
@@ -293,13 +291,13 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
         let _: () = msg_send![&*app_delegate, setDockMenu: &*nsmenu];
     }
 
-
     let show_dock_icon = if app.show_dock_icon_on_launch {
         YES
     } else {
         NO
     };
-    let _: BOOL = msg_send![app_delegate, setDockIconVisible: show_dock_icon];
+    // `setDockIconVisible:` is a custom warp app-delegate selector.
+    let _: BOOL = msg_send![&*app_delegate, setDockIconVisible: show_dock_icon];
 }
 
 #[no_mangle]
