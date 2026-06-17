@@ -7673,16 +7673,10 @@ fn cmd_k_in_agent_view_cancels_in_progress_conversation_and_starts_new_one() {
                 history
                     .conversation_mut(&old_conversation_id)
                     .expect("conversation should exist")
-                    .append_reassigned_exchange(
-                        &stream_id,
-                        exchange,
-                        view.view_id,
-                        ctx,
-                    )
+                    .append_reassigned_exchange(&stream_id, exchange, view.view_id, ctx)
                     .expect("exchange should append");
             });
-            let stream =
-                ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+            let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
             view.ai_controller.update(ctx, |controller, ctx| {
                 controller.register_mock_stream_for_test(
                     stream_id.clone(),

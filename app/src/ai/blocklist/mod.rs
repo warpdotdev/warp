@@ -49,9 +49,9 @@ pub(crate) use context_model::{
 pub use controller::input_context::{
     BLOCK_CONTEXT_ATTACHMENT_REGEX, DIFF_HUNK_ATTACHMENT_REGEX, DRIVE_OBJECT_ATTACHMENT_REGEX,
 };
-pub(crate) use controller::response_stream::ResponseStreamId;
 #[cfg(test)]
 pub(crate) use controller::response_stream::ResponseStream;
+pub(crate) use controller::response_stream::ResponseStreamId;
 pub(crate) use controller::{
     BlocklistAIController, BlocklistAIControllerEvent, ClientIdentifiers, SessionContext,
     SlashCommandRequest,
