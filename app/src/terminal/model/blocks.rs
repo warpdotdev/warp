@@ -2740,6 +2740,8 @@ impl BlockList {
                 .flatten(),
             None,
         );
+
+        self.active_block_mut().disable_reset_grid_checks();
     }
 
     /// Splice a background block into the blocklist. This is called once the
