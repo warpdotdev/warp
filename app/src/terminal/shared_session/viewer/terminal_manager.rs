@@ -96,6 +96,7 @@ pub struct TerminalManager {
     network_state: NetworkState,
     network_resources: NetworkResources,
     current_network: Arc<FairMutex<Option<ModelHandle<Network>>>>,
+    write_to_pty_tx_for_retry: Arc<FairMutex<Option<async_channel::Sender<Vec<u8>>>>>,
     viewer_remote_update_guard: RemoteUpdateGuard,
     outbound_handlers_registered: bool,
     /// Owns child discovery + status polling for an orchestrated ambient
@@ -312,6 +313,7 @@ impl TerminalManager {
                 channel_event_proxy,
             },
             current_network: Arc::new(FairMutex::new(None)),
+            write_to_pty_tx_for_retry: Arc::new(FairMutex::new(None)),
             viewer_remote_update_guard: RemoteUpdateGuard::new(),
             outbound_handlers_registered: false,
             orchestration_viewer_model: Arc::new(FairMutex::new(None)),
@@ -421,6 +423,7 @@ impl TerminalManager {
                 self.model
                     .lock()
                     .clear_write_to_pty_events_for_shared_session_tx();
+                *self.write_to_pty_tx_for_retry.lock() = None;
                 *self.current_network.lock() = None;
                 self.network_state = NetworkState::Idle;
             }
@@ -476,7 +479,8 @@ impl TerminalManager {
         let (write_to_pty_events_tx, write_to_pty_events_rx) = async_channel::unbounded();
         self.model
             .lock()
-            .set_write_to_pty_events_for_shared_session_tx(write_to_pty_events_tx);
+            .set_write_to_pty_events_for_shared_session_tx(write_to_pty_events_tx.clone());
+        *self.write_to_pty_tx_for_retry.lock() = Some(write_to_pty_events_tx.clone());
         self.model
             .lock()
             .set_shared_session_status(SharedSessionStatus::ViewPending);
@@ -500,6 +504,7 @@ impl TerminalManager {
             &self.view,
             self.model.clone(),
             self.current_network.clone(),
+            self.write_to_pty_tx_for_retry.clone(),
             self.network_resources.prompt_type.clone(),
             self.viewer_remote_update_guard.clone(),
             self.orchestration_viewer_model.clone(),
@@ -511,6 +516,7 @@ impl TerminalManager {
                 self.current_network.clone(),
                 &self.view,
                 self.model.clone(),
+                self.write_to_pty_tx_for_retry.clone(),
                 self.viewer_remote_update_guard.clone(),
                 ctx,
             );
@@ -743,6 +749,7 @@ impl TerminalManager {
         view: &ViewHandle<TerminalView>,
         model: Arc<FairMutex<TerminalModel>>,
         current_network: Arc<FairMutex<Option<ModelHandle<Network>>>>,
+        write_to_pty_tx_for_retry: Arc<FairMutex<Option<async_channel::Sender<Vec<u8>>>>>,
         prompt_type: ModelHandle<PromptType>,
         viewer_remote_update_guard: RemoteUpdateGuard,
         orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
@@ -883,6 +890,7 @@ impl TerminalManager {
                         &view,
                         model.clone(),
                         &current_network,
+                        &write_to_pty_tx_for_retry,
                         &network,
                         ctx,
                     ) {
@@ -900,7 +908,12 @@ impl TerminalManager {
                     }
                 } else {
                     Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
-                    Self::shared_session_ended(&view, model.clone(), ctx);
+                    Self::shared_session_ended(
+                        &view,
+                        model.clone(),
+                        &write_to_pty_tx_for_retry,
+                        ctx,
+                    );
                 }
                 view.update(ctx, |terminal_view, ctx| {
                     let reason_string = session_ended_reason_string(reason);
@@ -935,7 +948,12 @@ impl TerminalManager {
                 // Viewer has been removed and will not re-attach; stop the
                 // children-polling background work.
                 Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
-                Self::shared_session_ended(&view, model.clone(), ctx);
+                Self::shared_session_ended(
+                    &view,
+                    model.clone(),
+                    &write_to_pty_tx_for_retry,
+                    ctx,
+                );
                 view.update(ctx, |terminal_view, ctx| {
                     let reason_string = viewer_removed_reason_string(reason);
                     terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
@@ -943,21 +961,34 @@ impl TerminalManager {
             }
             NetworkEvent::FailedToJoin { reason } => {
                 let session_id = network.as_ref(ctx).session_id();
+                if !Self::current_network(&current_network)
+                    .is_some_and(|current| current.as_ref(ctx).session_id() == session_id)
+                {
+                    log::debug!("Ignoring failed join from stale shared session viewer network");
+                    return;
+                }
+                let can_retry = reason.is_retryable();
+                let error = reason.user_facing_error_message().to_string();
                 log::warn!(
                     "viewer TerminalManager: NetworkEvent::FailedToJoin \
-                     session_id={session_id} reason={reason:?}; pane stays in ViewPending \
-                     until manual retry or a fresh ensure_shared_session_viewer_child_pane"
+                     session_id={session_id} reason={reason:?} can_retry={can_retry}"
                 );
+                model
+                    .lock()
+                    .clear_write_to_pty_events_for_shared_session_tx();
+                if !can_retry {
+                    *write_to_pty_tx_for_retry.lock() = None;
+                }
+                model
+                    .lock()
+                    .set_shared_session_status(SharedSessionStatus::FailedViewerJoin {
+                        error,
+                        can_retry,
+                    });
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
-                view.update(ctx, |terminal_view, ctx| {
-                    terminal_view.show_persistent_toast(
-                        reason.user_facing_error_message().to_string(),
-                        ToastFlavor::Error,
-                        ctx,
-                    );
-                });
+                view.update(ctx, |_, ctx| ctx.notify());
             }
             NetworkEvent::FailedToReconnect => {
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
@@ -966,7 +997,12 @@ impl TerminalManager {
                 // Reconnection has been abandoned; stop the children-polling
                 // background work.
                 Self::stop_orchestration_polling(&orchestration_viewer_model, ctx);
-                Self::shared_session_ended(&view, model.clone(), ctx);
+                Self::shared_session_ended(
+                    &view,
+                    model.clone(),
+                    &write_to_pty_tx_for_retry,
+                    ctx,
+                );
                 view.update(ctx, |terminal_view, ctx| {
                     terminal_view.show_persistent_toast(
                         "Failed to reconnect. Please try again later.".to_owned(),
@@ -1462,6 +1498,7 @@ impl TerminalManager {
         current_network: Arc<FairMutex<Option<ModelHandle<Network>>>>,
         view: &ViewHandle<TerminalView>,
         model: Arc<FairMutex<TerminalModel>>,
+        write_to_pty_tx_for_retry: Arc<FairMutex<Option<async_channel::Sender<Vec<u8>>>>>,
         viewer_remote_update_guard: RemoteUpdateGuard,
         ctx: &mut AppContext,
     ) {
@@ -1524,9 +1561,40 @@ impl TerminalManager {
                 }
             }
             TerminalViewEvent::RejoinCurrentSession => {
-                Self::update_current_network(&current_network, ctx, |network, ctx| {
-                    network.reauthenticate_viewer(ctx);
-                });
+                let (failed_initial_join, can_retry_failed_initial_join) = {
+                    let model = model.lock();
+                    let status = model.shared_session_status();
+                    (
+                        status.failed_viewer_join_error().is_some(),
+                        status.can_retry_failed_viewer_join(),
+                    )
+                };
+                if can_retry_failed_initial_join {
+                    Self::update_current_network(&current_network, ctx, |network, ctx| {
+                        let Some(write_to_pty_tx_for_retry) =
+                            write_to_pty_tx_for_retry.lock().clone()
+                        else {
+                            log::warn!(
+                                "Cannot retry viewer initial join because write-to-PTY sender is \
+                                 missing"
+                            );
+                            return;
+                        };
+                        let mut model = model.lock();
+                        model.set_write_to_pty_events_for_shared_session_tx(
+                            write_to_pty_tx_for_retry,
+                        );
+                        model.set_shared_session_status(SharedSessionStatus::ViewPending);
+                        drop(model);
+                        network.retry_initial_join(ctx);
+                    });
+                } else if failed_initial_join {
+                    log::debug!("Ignoring retry request for non-retryable failed viewer join");
+                } else {
+                    Self::update_current_network(&current_network, ctx, |network, ctx| {
+                        network.reauthenticate_viewer(ctx);
+                    });
+                }
             }
             TerminalViewEvent::SendAgentPrompt {
                 server_conversation_token,
@@ -1684,6 +1752,7 @@ impl TerminalManager {
     fn shared_session_ended(
         terminal_view: &ViewHandle<TerminalView>,
         model: Arc<FairMutex<TerminalModel>>,
+        write_to_pty_tx_for_retry: &Arc<FairMutex<Option<async_channel::Sender<Vec<u8>>>>>,
         ctx: &mut AppContext,
     ) {
         let terminal_view_id = terminal_view.id();
@@ -1720,12 +1789,14 @@ impl TerminalManager {
         model
             .lock()
             .clear_write_to_pty_events_for_shared_session_tx();
+        *write_to_pty_tx_for_retry.lock() = None;
     }
 
     fn end_current_ambient_session(
         terminal_view: &ViewHandle<TerminalView>,
         model: Arc<FairMutex<TerminalModel>>,
         current_network: &Arc<FairMutex<Option<ModelHandle<Network>>>>,
+        write_to_pty_tx_for_retry: &Arc<FairMutex<Option<async_channel::Sender<Vec<u8>>>>>,
         ended_network: &ModelHandle<Network>,
         ctx: &mut AppContext,
     ) -> bool {
@@ -1742,6 +1813,7 @@ impl TerminalManager {
         model
             .lock()
             .clear_write_to_pty_events_for_shared_session_tx();
+        *write_to_pty_tx_for_retry.lock() = None;
         if FeatureFlag::HandoffCloudCloud.is_enabled() {
             terminal_view.update(ctx, |terminal_view, ctx| {
                 // Owned ambient tasks remain editable Cloud Mode panes after their live shared
@@ -1822,6 +1894,7 @@ impl crate::terminal::TerminalManager for TerminalManager {
         self.model
             .lock()
             .set_shared_session_status(SharedSessionStatus::FinishedViewer);
+        *self.write_to_pty_tx_for_retry.lock() = None;
         self.view
             .update(app, |view, ctx| view.on_session_share_ended(ctx));
     }

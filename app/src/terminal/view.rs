@@ -519,7 +519,9 @@ use crate::util::file::external_editor::{settings::EditorLayout, EditorSettings}
 use crate::util::openable_file_type::{is_markdown_file, resolve_file_target, FileTarget};
 use crate::util::repo_detection::{detect_possible_git_repo, RepoDetectionSessionType};
 use crate::util::truncation::truncate_from_end;
-use crate::view_components::action_button::{ActionButton, ButtonSize, KeystrokeSource};
+use crate::view_components::action_button::{
+    ActionButton, ButtonSize, KeystrokeSource, PrimaryTheme,
+};
 use crate::view_components::find::{Event as FindEvent, Find, FindDirection, FindWithinBlockState};
 use crate::view_components::{DismissibleToast, ToastFlavor};
 use crate::workflows::workflow::Workflow;
@@ -2818,6 +2820,7 @@ pub struct TerminalView {
 
     agent_view_controller: ModelHandle<AgentViewController>,
     agent_view_back_button: ViewHandle<ActionButton>,
+    failed_viewer_join_retry_button: ViewHandle<ActionButton>,
     /// Pill bar shown above the agent view header listing the orchestrator and
     /// child agents. Always constructed; render-time guards control whether it draws anything.
     orchestration_pill_bar: ViewHandle<OrchestrationPillBar>,
@@ -4202,6 +4205,11 @@ impl TerminalView {
                     )
                 })
         });
+        let failed_viewer_join_retry_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Retry", PrimaryTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(TerminalAction::RetryFailedSharedSessionJoin)
+            })
+        });
 
         // Conversation details panel (cloud Oz runs and any active local AI conversation).
         let conversation_details_panel = ctx.add_typed_action_view(|ctx| {
@@ -4362,6 +4370,7 @@ impl TerminalView {
             use_agent_footer: use_agent_button_bar,
             agent_view_controller,
             agent_view_back_button,
+            failed_viewer_join_retry_button,
             orchestration_pill_bar,
             is_orchestration_split_off: false,
             is_using_conversation_for_pane_header_title: false,
@@ -23072,6 +23081,50 @@ impl TerminalView {
         .finish()
     }
 
+    fn render_failed_viewer_join(
+        &self,
+        error: &str,
+        can_retry: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let text_color = appearance
+            .theme()
+            .main_text_color(appearance.theme().background());
+        let sub_text_color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+        let mut content = Flex::column()
+            .with_child(
+                Text::new_inline("Unable to load session", appearance.ui_font_family(), 14.)
+                    .with_color(text_color.into())
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(error.to_owned(), appearance.ui_font_family(), 13.)
+                    .with_color(sub_text_color.into())
+                    .finish(),
+            );
+        if can_retry {
+            content.add_child(
+                Container::new(ChildView::new(&self.failed_viewer_join_retry_button).finish())
+                    .with_margin_top(8.)
+                    .finish(),
+            );
+        }
+
+        SavePosition::new(
+            Align::new(
+                content
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .finish(),
+            )
+            .finish(),
+            &self.content_element_position_id,
+        )
+        .finish()
+    }
+
     fn render_bookmark_element(
         index: BlockIndex,
         bookmark_mouse_state: MouseStateHandle,
@@ -25795,6 +25848,7 @@ impl TypedActionView for TerminalView {
             | InsertMostRecentCommandCorrection
             | StopSharingCurrentSession { .. }
             | RequestSharedSessionRole(_)
+            | RetryFailedSharedSessionJoin
             | OnboardingFlow(_)
             | ImportSettings
             | DragAndDropFiles(_)
@@ -26360,6 +26414,7 @@ impl TypedActionView for TerminalView {
             }
             OpenSharedSessionViewerRoleMenu => self.open_shared_session_viewer_role_menu(ctx),
             RequestSharedSessionRole(role) => self.request_shared_session_role(*role, ctx),
+            RetryFailedSharedSessionJoin => ctx.emit(Event::RejoinCurrentSession),
             MiddleClickOnGrid { position } => self.middle_click_on_grid(position, ctx),
             MiddleClickOnInput => self.middle_click_on_input(ctx),
             OpenSharedSessionOnDesktop { source } => {
@@ -27153,15 +27208,35 @@ impl View for TerminalView {
             TerminalSizeElement::new(resize_tx.clone(), element).finish()
         }
 
+        let failed_viewer_join_error = model
+            .shared_session_status()
+            .failed_viewer_join_error()
+            .map(|error| {
+                (
+                    error,
+                    model.shared_session_status().can_retry_failed_viewer_join(),
+                )
+            });
         let mut stack = match (
             input_mode,
             model.block_list().active_gap(),
             is_alt_screen_active,
+            failed_viewer_join_error,
         ) {
-            (InputMode::Waterfall, Some(active_gap), false) => {
+            (_, _, _, Some((error, can_retry))) => {
+                column.add_child(
+                    Expanded::new(1., self.render_failed_viewer_join(error, can_retry, app))
+                        .finish(),
+                );
+
+                Stack::new()
+                    .with_constrain_absolute_children()
+                    .with_child(column.finish())
+            }
+            (InputMode::Waterfall, Some(active_gap), false, None) => {
                 self.render_waterfall_gap_element(&model, &viewport, active_gap, appearance, app)
             }
-            (input_mode, _, _) => {
+            (input_mode, _, _, None) => {
                 if self.input.as_ref(app).is_cloud_mode_input_v2_composing(app) {
                     column.add_child(Expanded::new(1., self.render_input()).finish());
 
