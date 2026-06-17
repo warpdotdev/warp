@@ -426,14 +426,20 @@ impl Workspace {
     /// group" only when there's a destination group worth offering.
     fn tab_selection_menu_items(&self) -> Vec<MenuItem<WorkspaceAction>> {
         let shared_group = self.selection_shared_group();
-        let mut menu_items = vec![MenuItemFields::new("Create group from tabs")
+        let mut menu_items = vec![MenuItemFields::new(crate::menu_label(
+            "workspace.tab_grouping.create_group",
+            "Create group from tabs",
+        ))
             .with_on_select_action(WorkspaceAction::NewTabGroupFromSelectedTabs)
             .into_item()];
 
         // Only single-group selections have an unambiguous group to leave.
         if shared_group.is_some() {
             menu_items.push(
-                MenuItemFields::new("Remove from group")
+                MenuItemFields::new(crate::menu_label(
+                    "workspace.tab_grouping.remove_from_group",
+                    "Remove from group",
+                ))
                     .with_on_select_action(WorkspaceAction::RemoveSelectedTabsFromGroup)
                     .into_item(),
             );
@@ -445,7 +451,11 @@ impl Workspace {
             .keys()
             .any(|group_id| Some(*group_id) != shared_group);
         if has_destination_group {
-            menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
+            menu_items.push(MenuItemFields::new_submenu(crate::menu_label(
+                "workspace.tab_grouping.move_to_group",
+                MOVE_TO_GROUP_LABEL,
+            ))
+            .into_item());
         }
         menu_items
     }
@@ -657,7 +667,13 @@ impl Workspace {
                     .tab_groups
                     .get(&group_id)
                     .and_then(|g| g.name.clone())
-                    .unwrap_or_else(|| "Untitled group".to_string());
+                    .unwrap_or_else(|| {
+                        crate::menu_label(
+                            "workspace.tab_grouping.untitled_group",
+                            "Untitled group",
+                        )
+                        .to_string()
+                    });
                 let action = match tab_index {
                     Some(tab_index) => WorkspaceAction::MoveTabToGroup {
                         tab_index,
