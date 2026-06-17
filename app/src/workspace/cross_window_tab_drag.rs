@@ -922,14 +922,6 @@ impl CrossWindowTabDrag {
 
         drag.last_known_target_tab_origin_in_window = target_tab_origin_in_window;
 
-        let handoff_target = cross_window_attach_target(
-            caller_window_id,
-            drag.source_window_id,
-            drag_center_on_screen,
-            preview_window_id,
-            ctx,
-        );
-
         let new_window_origin = drag_origin_on_screen - target_tab_origin_in_window;
         let new_bounds = RectF::new(new_window_origin, drag.window_size);
         ctx.set_and_cache_window_bounds(preview_window_id, new_bounds);
@@ -946,6 +938,47 @@ impl CrossWindowTabDrag {
                 adjustment: source_window_origin - new_window_origin,
             }
         };
+
+        // Already reordering the detached placeholder in the source window: use
+        // a direct, z-order-independent stay-check instead of
+        // `cross_window_attach_target` (which only finds windows *behind* the
+        // preview). This lets the source stay focused and in front — required
+        // when returning from another window that was raised over it — without
+        // flip-flopping the preview's visibility.
+        if drag.reordering_in_source {
+            let source_window_id = drag.source_window_id;
+            let still_over_source = ctx
+                .window_bounds(&source_window_id)
+                .map(|wb| {
+                    tab_bar_rects_for_window(source_window_id, ctx)
+                        .into_iter()
+                        .any(|tb| {
+                            let on_screen = RectF::new(
+                                vec2f(wb.min_x() + tb.min_x(), wb.min_y() + tb.min_y()),
+                                tb.size(),
+                            );
+                            expanded_rect(on_screen, TAB_BAR_HIT_MARGIN)
+                                .contains_point(drag_center_on_screen)
+                        })
+                })
+                .unwrap_or(false);
+            if still_over_source {
+                return DragResult::ReorderInSource;
+            }
+            // Cursor left the source's tab bar — restore the preview to the
+            // foreground and exit source-reorder before resolving a new target.
+            drag.reordering_in_source = false;
+            ctx.windows().set_window_alpha(preview_window_id, 1.0);
+            ctx.windows().show_window_and_focus_app(preview_window_id);
+        }
+
+        let handoff_target = cross_window_attach_target(
+            caller_window_id,
+            drag.source_window_id,
+            drag_center_on_screen,
+            preview_window_id,
+            ctx,
+        );
 
         if let Some(target) = handoff_target {
             let Some(drag) = self.active_drag.as_mut() else {
@@ -964,24 +997,25 @@ impl CrossWindowTabDrag {
                 && !drag.source_placeholder_consumed;
 
             if is_source_reorder {
-                if !drag.reordering_in_source {
-                    drag.reordering_in_source = true;
-                    log::info!(
-                        "tab_drag: on_drag_while_floating -> ReorderInSource source_wid={} (reuse detached placeholder)",
-                        target.window_id
-                    );
-                    // Hide the preview (same cheap alpha trick as the
-                    // GhostInTarget entry below) so only the source's
-                    // placeholder and its own floating overlay chip show
-                    // through. Do NOT raise/focus the source:
-                    // `cross_window_attach_target` only finds windows *behind*
-                    // the preview, so bringing the source to the front would
-                    // make the next frame resolve no target, flip back to
-                    // Floating, and flash the preview back to visible.
-                    ctx.windows().set_window_alpha(preview_window_id, 0.0);
-                    if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx) {
-                        ws.update(ctx, |_, ctx| ctx.notify());
-                    }
+                // Entry into source-reorder. `reordering_in_source` is false
+                // here — a true value would have returned via the stay-check
+                // above. Raise the source to the foreground and focus it so the
+                // in-window reorder is visible and active (important when
+                // returning from another window that was raised over it), then
+                // hide the preview. Raising the source above the preview is
+                // safe: subsequent frames use the z-order-independent stay-check
+                // above, and the drop is resolved directly from
+                // `reordering_in_source` (see `on_drop`), so nothing here
+                // depends on the source staying behind the preview.
+                drag.reordering_in_source = true;
+                log::info!(
+                    "tab_drag: on_drag_while_floating -> ReorderInSource source_wid={} (reuse detached placeholder)",
+                    target.window_id
+                );
+                ctx.windows().show_window_and_focus_app(target.window_id);
+                ctx.windows().set_window_alpha(preview_window_id, 0.0);
+                if let Some(ws) = WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx) {
+                    ws.update(ctx, |_, ctx| ctx.notify());
                 }
                 // The caller reorders the placeholder and reports its new index
                 // via `set_source_placeholder_index`.
@@ -1038,17 +1072,6 @@ impl CrossWindowTabDrag {
             return drag_result;
         }
 
-        // No target (floating over empty space). If we were reordering the
-        // placeholder in the source, restore the preview's opacity so it
-        // follows the cursor again — mirrors the `on_drag_while_ghost` leave.
-        if let Some(drag) = self.active_drag.as_mut() {
-            if drag.reordering_in_source {
-                drag.reordering_in_source = false;
-                ctx.windows().set_window_alpha(preview_window_id, 1.0);
-                ctx.windows().show_window_and_focus_app(preview_window_id);
-            }
-        }
-
         drag_result
     }
 
@@ -1078,6 +1101,26 @@ impl CrossWindowTabDrag {
                 };
                 log::info!(
                     "tab_drag: on_drop GhostInTarget -> DropResult::DropInto target_wid={} insertion_index={}",
+                    target.window_id,
+                    target.insertion_index
+                );
+                return DropResult::DropInto { target };
+            }
+        }
+
+        // Source-reorder drop: the detached placeholder is already positioned
+        // in the source, so put the real tab back exactly where it sits.
+        // Resolved directly from `reordering_in_source` (not
+        // `cross_window_attach_target`) so it still works now that the source
+        // is focused and in front of the preview.
+        if let Some(drag) = self.active_drag.as_ref() {
+            if drag.reordering_in_source {
+                let target = AttachTarget {
+                    window_id: drag.source_window_id,
+                    insertion_index: drag.source_tab_index(),
+                };
+                log::info!(
+                    "tab_drag: on_drop ReorderInSource -> DropResult::DropInto target_wid={} insertion_index={}",
                     target.window_id,
                     target.insertion_index
                 );
