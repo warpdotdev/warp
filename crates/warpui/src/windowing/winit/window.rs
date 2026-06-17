@@ -1238,11 +1238,7 @@ impl Window {
                 log::warn!("Failed to set window alpha: {err:#?}");
             }
         }
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-        {
-            x11::set_window_opacity(window, alpha);
-        }
-        #[cfg(not(any(windows, target_os = "linux", target_os = "freebsd")))]
+        #[cfg(not(windows))]
         {
             // No per-window opacity support (e.g. wasm); avoid unused warnings.
             let _ = (window, alpha);

@@ -2,7 +2,6 @@ use anyhow::anyhow;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use x11rb::connection::Connection;
 use x11rb::protocol::randr::{self, MonitorInfo};
 use x11rb::protocol::xproto::{self, AtomEnum, ConnectionExt};
@@ -222,52 +221,6 @@ impl X11Manager {
             "Error getting active window. Received empty response."
         ))
     }
-}
-
-/// Sets `_NET_WM_WINDOW_OPACITY` on the given window so that compositing X11
-/// window managers render it at the requested uniform opacity (`0.0` fully
-/// transparent, `1.0` fully opaque).
-///
-/// Best-effort: a no-op (with a warning) when the window is not an X11 window
-/// (e.g. running under Wayland) or when the X11 request fails. Non-compositing
-/// window managers may also ignore `_NET_WM_WINDOW_OPACITY`.
-pub(super) fn set_window_opacity(window: &winit::window::Window, alpha: f32) {
-    let x11_window = match window.window_handle().map(|handle| handle.as_raw()) {
-        Ok(RawWindowHandle::Xlib(handle)) => handle.window as u32,
-        Ok(RawWindowHandle::Xcb(handle)) => handle.window.get(),
-        _ => {
-            log::warn!(
-                "set_window_opacity: per-window alpha is unsupported on this windowing system \
-                 (non-X11); leaving window opacity unchanged"
-            );
-            return;
-        }
-    };
-
-    if let Err(err) = set_net_wm_window_opacity(x11_window, alpha) {
-        log::warn!("set_window_opacity: failed to set _NET_WM_WINDOW_OPACITY: {err:?}");
-    }
-}
-
-fn set_net_wm_window_opacity(x11_window: xproto::Window, alpha: f32) -> anyhow::Result<()> {
-    // Use a dedicated connection (mirroring `get_monitors`) so we don't contend
-    // with the shared connection's request/reply bookkeeping.
-    let (conn, _) = RustConnection::connect(None)?;
-    let opacity_atom = conn
-        .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")?
-        .reply()?
-        .atom;
-    // `_NET_WM_WINDOW_OPACITY` is a CARDINAL in the range [0, u32::MAX].
-    let opacity = (alpha.clamp(0.0, 1.0) * u32::MAX as f32) as u32;
-    conn.change_property32(
-        xproto::PropMode::Replace,
-        x11_window,
-        opacity_atom,
-        AtomEnum::CARDINAL,
-        &[opacity],
-    )?
-    .check()?;
-    Ok(())
 }
 
 fn monitor_info_to_physical_bounds(monitor: &MonitorInfo) -> PhysicalMonitorBounds {
