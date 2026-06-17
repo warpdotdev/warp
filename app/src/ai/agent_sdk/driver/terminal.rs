@@ -56,7 +56,10 @@ impl std::fmt::Display for BootstrapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             BootstrapError::PtySpawnFailed { reason: Some(r) } => {
-                write!(f, "Shell spawn failed: {r}. Check the Warp logs for details.")
+                write!(
+                    f,
+                    "Shell spawn failed: {r}. Check the Warp logs for details."
+                )
             }
             BootstrapError::PtySpawnFailed { reason: None } => {
                 write!(f, "Shell spawn failed. Check the Warp logs for details.")
@@ -273,8 +276,7 @@ impl TerminalDriver {
             me.handle_terminal_view_event(event, &mut session_share_tx, ctx);
         });
 
-        let (bootstrap_tx_inner, bootstrap_rx) =
-            oneshot::channel::<Result<(), BootstrapError>>();
+        let (bootstrap_tx_inner, bootstrap_rx) = oneshot::channel::<Result<(), BootstrapError>>();
 
         // If bootstrap already completed before we subscribed, resolve the
         // channel immediately so `wait_for_session_bootstrapped` doesn't block.
@@ -596,8 +598,7 @@ impl TerminalDriver {
             let result = if let Some(rx) = bootstrap_rx {
                 // Map channel cancellation (sender dropped without sending)
                 // to InternalError — this shouldn't happen in practice.
-                let inner =
-                    async move { rx.await.unwrap_or(Err(BootstrapError::InternalError)) };
+                let inner = async move { rx.await.unwrap_or(Err(BootstrapError::InternalError)) };
                 match inner.with_timeout(TERMINAL_SESSION_BOOTSTRAP_TIMEOUT).await {
                     Ok(result) => result,
                     Err(_timeout) => Err(BootstrapError::TimedOut),
